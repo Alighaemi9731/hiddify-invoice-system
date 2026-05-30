@@ -108,7 +108,8 @@ fi
 # ---- 4. up ------------------------------------------------------------------
 c "Building and starting the stack (this can take a few minutes)…"
 cd "$REPO_DIR"
-docker compose -f deploy/docker-compose.prod.yml up -d --build
+# --env-file points compose at the repo-root .env (the compose file lives in deploy/).
+docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml up -d --build
 
 cat <<DONE
 
@@ -119,8 +120,8 @@ cat <<DONE
 Next:
   • Make sure $DOMAIN's A record points to this server, and ports 80/443 are open.
   • In the panel → Settings: set the Telegram bot token, USDT wallet, BscScan key.
-  • Logs:    docker compose -f deploy/docker-compose.prod.yml logs -f
-  • Restart: docker compose -f deploy/docker-compose.prod.yml restart
-  • Update:  git pull && docker compose -f deploy/docker-compose.prod.yml up -d --build
+  • Logs:    docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
+  • Restart: docker compose --env-file .env -f deploy/docker-compose.prod.yml restart
+  • Update:  git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
 ────────────────────────────────────────────────────────────
 DONE

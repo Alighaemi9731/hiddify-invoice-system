@@ -39,17 +39,17 @@ When it finishes, open `https://<your-domain>` and log in.
 ## Operations
 ```bash
 # from the project folder:
-docker compose -f deploy/docker-compose.prod.yml logs -f          # tail logs
-docker compose -f deploy/docker-compose.prod.yml restart          # restart all
-docker compose -f deploy/docker-compose.prod.yml down             # stop
-git pull && docker compose -f deploy/docker-compose.prod.yml up -d --build   # update
+docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f          # tail logs
+docker compose --env-file .env -f deploy/docker-compose.prod.yml restart          # restart all
+docker compose --env-file .env -f deploy/docker-compose.prod.yml down             # stop
+git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build   # update
 ```
 
 ## Backups
 Automatic backups (DB + settings, encrypted secrets) are sent to the owner's
 Telegram PV every 2 hours, and can be downloaded/sent on demand from
 **Account & Backup**. To restore: upload a backup zip there, or send it to the bot,
-then `docker compose -f deploy/docker-compose.prod.yml restart backend`.
+then `docker compose --env-file .env -f deploy/docker-compose.prod.yml restart backend`.
 
 ## Files
 - `docker-compose.prod.yml` — the production stack (db, backend, bot, frontend, caddy).
