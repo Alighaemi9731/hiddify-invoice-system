@@ -1,0 +1,44 @@
+export const fmtToman = (n: number) =>
+  `${Math.round(n || 0).toLocaleString("fa-IR")} تومان`;
+
+export const fmtUsdt = (n: number) =>
+  `${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+
+export const fmtGb = (n: number) =>
+  `${Math.round(n || 0).toLocaleString("fa-IR")} گیگ`;
+
+export const fmtNum = (n: number) => (n || 0).toLocaleString("fa-IR");
+
+// Compact axis labels: 1.2M / 850K / 320
+export const fmtCompact = (n: number) => {
+  const a = Math.abs(n || 0);
+  if (a >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (a >= 1e3) return (n / 1e3).toFixed(0) + "K";
+  return String(Math.round(n || 0));
+};
+
+export const fmtDate = (s?: string | null) => {
+  if (!s) return "—";
+  try {
+    return new Date(s).toLocaleDateString("fa-IR");
+  } catch {
+    return s;
+  }
+};
+
+export const INVOICE_STATUS_FA: Record<string, string> = {
+  draft: "پیش‌نویس",
+  sent: "ارسال‌شده",
+  paid: "پرداخت‌شده",
+  overdue: "سررسید گذشته",
+  enforced: "مسدود",
+  canceled: "لغو",
+};
+
+export const PAYMENT_STATUS_FA: Record<string, string> = {
+  pending: "در انتظار",
+  confirmed: "تأییدشده",
+  rejected: "ردشده",
+  duplicate: "تکراری",
+};

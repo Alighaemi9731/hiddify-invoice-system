@@ -1,0 +1,49 @@
+# ───────────────────────── SECRETS — never commit ─────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+**/wallet_seed*
+**/*xpub*
+
+# ───────────── Reference material (inputs only — not part of the app) ──────────
+# These folders contain real panel URLs, UUIDs, card numbers and a panel DB.
+# They are kept locally for reference but must never enter the repo.
+legacy invoice manual system/
+sample backup panel/
+source code panel for help/
+MY_UNDERSTANDING.md
+
+# ───────────────────────────── Python ─────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.db
+*.sqlite3
+
+# ───────────────────────────── Node / frontend ─────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ───────────────────────────── Runtime data ────────────────────────
+data/
+backend/data/
+backend/invoices/
+backend/downloads/
+invoice-backup/
+*.zip
+*.log
+
+# ───────────────────────────── OS / editor ─────────────────────────
+.DS_Store
+.idea/
+.vscode/

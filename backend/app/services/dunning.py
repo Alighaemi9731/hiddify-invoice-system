@@ -1,0 +1,131 @@
+"""
+Daily dunning: for each unpaid, delivered invoice, send reminders on a schedule and
+finally enforce. Idempotent — each step is sent at most once per invoice (deduped via
+the delivery log). Enforcement obeys the global dry-run switch.
+
+Schedule (days after the invoice was sent; all editable in settings):
+  reminder1_day → soft reminder
+  reminder2_day → reminder
+  warning_day   → hard warning (+ mark invoice overdue)
+  enforcement_day → suspend the reseller (dry-run unless enforcement_enabled)
+"""
+from __future__ import annotations
+
+import datetime as dt
+import logging
+
+from aiogram import Bot
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.bot import texts
+from app.bot.telegram import build_bot
+from app.models import DeliveryLog, Invoice, Reseller
+from app.models.enums import (
+    DeliveryKind,
+    EnforcementState,
+    InvoiceStatus,
+)
+from app.services import enforcement, notifier, settings_service
+
+log = logging.getLogger("dunning")
+
+_ACTIVE = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+
+
+async def _done_kinds(session: AsyncSession, invoice_id: int) -> set[str]:
+    rows = (
+        await session.execute(
+            select(DeliveryLog.kind).where(DeliveryLog.invoice_id == invoice_id)
+        )
+    ).scalars().all()
+    return {k.value for k in rows}
+
+
+async def _msg(session: AsyncSession, key: str, inv: Invoice, reseller: Reseller) -> str:
+    return await texts.render(
+        session, key,
+        name=reseller.name, period=inv.period_label,
+        amount_toman=f"{float(inv.amount_toman):,.0f}",
+        amount_usdt=f"{float(inv.amount_usdt):,.2f}",
+    )
+
+
+async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) -> dict:
+    now = now or dt.datetime.now(dt.timezone.utc)
+    today = now.date()
+
+    cfg = await settings_service.get_many(
+        session,
+        ["reminder1_day", "reminder2_day", "warning_day", "enforcement_day", "enforcement_enabled"],
+    )
+    d1 = int(cfg.get("reminder1_day") or 2)
+    d2 = int(cfg.get("reminder2_day") or 4)
+    dw = int(cfg.get("warning_day") or 5)
+    de = int(cfg.get("enforcement_day") or 5)
+
+    invoices = (
+        await session.execute(
+            select(Invoice).where(Invoice.status.in_(_ACTIVE), Invoice.sent_at.is_not(None))
+        )
+    ).scalars().all()
+
+    counts = {"reminder1": 0, "reminder2": 0, "warning": 0, "enforced": 0, "enforced_dry": 0, "deferred": 0}
+    enforced_links: list[str] = []  # clickable owner-facing links of enforced resellers
+    bot: Bot | None = await build_bot(session)
+    try:
+        for inv in invoices:
+            # Skip invoices whose payment was deferred to a future date.
+            if inv.deferred_until and inv.deferred_until > today:
+                counts["deferred"] += 1
+                continue
+            sent_at = inv.sent_at
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
+            days = (today - sent_at.date()).days
+            reseller = await session.get(Reseller, inv.reseller_id)
+            if reseller is None:
+                continue
+            done = await _done_kinds(session, inv.id)
+
+            if days >= d1 and DeliveryKind.reminder1.value not in done:
+                await notifier.send_to_reseller(
+                    session, reseller, await _msg(session, "tpl_reminder1", inv, reseller),
+                    kind=DeliveryKind.reminder1, invoice_id=inv.id, bot=bot,
+                )
+                counts["reminder1"] += 1
+
+            if days >= d2 and DeliveryKind.reminder2.value not in done:
+                await notifier.send_to_reseller(
+                    session, reseller, await _msg(session, "tpl_reminder2", inv, reseller),
+                    kind=DeliveryKind.reminder2, invoice_id=inv.id, bot=bot,
+                )
+                counts["reminder2"] += 1
+
+            if days >= dw and DeliveryKind.warning.value not in done:
+                await notifier.send_to_reseller(
+                    session, reseller, await _msg(session, "tpl_warning", inv, reseller),
+                    kind=DeliveryKind.warning, invoice_id=inv.id, bot=bot,
+                )
+                if inv.status == InvoiceStatus.sent:
+                    inv.status = InvoiceStatus.overdue
+                    await session.commit()
+                counts["warning"] += 1
+
+            if days >= de and reseller.enforcement_state == EnforcementState.active:
+                action = await enforcement.enforce_reseller(session, reseller, invoice_id=inv.id)
+                if action.dry_run:
+                    counts["enforced_dry"] += 1
+                else:
+                    inv.status = InvoiceStatus.enforced
+                    await session.commit()
+                    counts["enforced"] += 1
+                    from app.services.owner_notify import user_link
+
+                    enforced_links.append(user_link(reseller))
+    finally:
+        if bot is not None:
+            await bot.session.close()
+
+    log.info("Dunning run: %s", counts)
+    return {"date": today.isoformat(), "enforced_resellers": enforced_links, **counts}

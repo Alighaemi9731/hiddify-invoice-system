@@ -1,0 +1,198 @@
+"""
+Runtime settings: the values the owner edits from the web panel, stored in the
+DB `settings` table. Bootstrap (.env) values seed the initial row, after which
+the DB is the source of truth.
+
+Secret settings are encrypted at rest (see app.core.crypto) and masked by the API.
+
+Message templates use Python `str.format` placeholders, e.g. {name}, {amount_usdt}.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core import crypto
+from app.core.config import settings as boot
+from app.models.setting import Setting
+
+
+@dataclass(frozen=True)
+class SettingDef:
+    key: str
+    default: Any
+    is_secret: bool = False
+    group: str = "general"
+    label: str = ""
+
+
+# Persian-facing default message templates.
+_TPL_WELCOME = (
+    "👋 سلام {name} عزیز!\n"
+    "به ربات مدیریت فاکتورها خوش آمدید."
+)
+_TPL_MEMBERSHIP = (
+    "برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید.\n"
+    "پس از عضویت، دکمه «بررسی عضویت» را بزنید."
+)
+_TPL_MENU = "از منوی زیر یک گزینه را انتخاب کنید:"
+_TPL_LINK_MATCHED = "✅ لینک شما ثبت شد. شما به عنوان «{name}» شناسایی شدید."
+_TPL_LINK_NOT_FOUND = (
+    "❌ نتوانستیم این لینک را به هیچ نماینده‌ای متصل کنیم.\n"
+    "لطفاً لینک پنل خودتان را به‌صورت کامل ارسال کنید."
+)
+_TPL_INVOICE = (
+    "🧾 فاکتور دوره {period}\n"
+    "نماینده: {name}\n"
+    "مجموع مصرف: {usage_gb} گیگ\n"
+    "مبلغ: {amount_toman} تومان\n"
+    "معادل: {amount_usdt} USDT (شبکه BEP-20)\n\n"
+    "برای پرداخت، مبلغ USDT را به آدرس زیر ارسال کرده و سپس TXID را در ربات ثبت کنید:\n"
+    "{wallet_address}"
+)
+_TPL_REMINDER1 = (
+    "⏰ یادآوری: فاکتور دوره {period} شما هنوز پرداخت نشده است.\n"
+    "مبلغ: {amount_usdt} USDT"
+)
+_TPL_REMINDER2 = (
+    "⏰ یادآوری دوم: لطفاً فاکتور دوره {period} را پرداخت کنید.\n"
+    "مبلغ: {amount_usdt} USDT"
+)
+_TPL_WARNING = (
+    "⚠️ اخطار نهایی!\n"
+    "فاکتور دوره {period} شما پرداخت نشده است (مبلغ {amount_usdt} USDT).\n"
+    "در صورت عدم پرداخت، تمام کاربران شما و زیرمجموعه‌هایتان غیرفعال شده و "
+    "سقف کاربران شما صفر خواهد شد و امکان ویرایش در پنل را نخواهید داشت."
+)
+_TPL_PAYMENT_RECEIVED = (
+    "✅ پرداخت شما تأیید شد. با تشکر!\n"
+    "فاکتور دوره {period} تسویه شد."
+)
+
+
+DEFS: list[SettingDef] = [
+    # Telegram
+    SettingDef("telegram_bot_token", boot.telegram_bot_token, True, "telegram"),
+    SettingDef("announcement_channel_id", boot.announcement_channel_id, False, "telegram"),
+    SettingDef("announcement_channel_link", boot.announcement_channel_link, False, "telegram"),
+    # Daily channel guard: kick channel members who started the bot but are not
+    # registered resellers. Default OFF (dry-run reports only) for safety.
+    SettingDef("channel_kick_enabled", False, False, "telegram"),
+    SettingDef("one_time_invite_links", True, False, "telegram"),
+    # Payments
+    SettingDef("usdt_bep20_address", boot.usdt_bep20_address, False, "payments"),
+    SettingDef("usdt_bep20_contract", boot.usdt_bep20_contract, False, "payments"),
+    SettingDef("bscscan_api_key", boot.bscscan_api_key, True, "payments"),
+    SettingDef("bscscan_api_url", "https://api.bscscan.com/api", False, "payments"),
+    SettingDef("usdt_master_xpub", boot.usdt_master_xpub, True, "payments"),
+    SettingDef("min_confirmations", 12, False, "payments"),
+    SettingDef("payment_amount_tolerance_usdt", 0.5, False, "payments"),
+    # Pricing
+    SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
+    SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),
+    SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto
+    SettingDef("excluded_usage_gb", [1], False, "pricing"),  # test configs to skip
+    # Invoicing schedule
+    SettingDef("invoice_day_of_month", 1, False, "schedule"),  # run on the 1st for prev month
+    SettingDef("invoice_hour", 9, False, "schedule"),
+    # Dunning / enforcement
+    SettingDef("reminder1_day", 2, False, "dunning"),
+    SettingDef("reminder2_day", 4, False, "dunning"),
+    SettingDef("warning_day", 5, False, "dunning"),
+    SettingDef("enforcement_day", 5, False, "dunning"),
+    SettingDef("enforcement_enabled", False, False, "dunning"),  # False = dry-run
+    SettingDef("auto_restore_on_payment", True, False, "dunning"),
+    # Owner
+    SettingDef("owner_name", "", False, "general"),
+    SettingDef("owner_telegram", "", False, "general"),
+    # Deployment (Phase 2): domain + automatic HTTPS, applied by the installer.
+    SettingDef("server_domain", "", False, "deploy"),
+    SettingDef("https_enabled", False, False, "deploy"),
+    SettingDef("acme_email", "", False, "deploy"),
+    # Message templates
+    SettingDef("tpl_welcome", _TPL_WELCOME, False, "templates"),
+    SettingDef("tpl_membership", _TPL_MEMBERSHIP, False, "templates"),
+    SettingDef("tpl_menu", _TPL_MENU, False, "templates"),
+    SettingDef("tpl_link_matched", _TPL_LINK_MATCHED, False, "templates"),
+    SettingDef("tpl_link_not_found", _TPL_LINK_NOT_FOUND, False, "templates"),
+    SettingDef("tpl_invoice", _TPL_INVOICE, False, "templates"),
+    SettingDef("tpl_reminder1", _TPL_REMINDER1, False, "templates"),
+    SettingDef("tpl_reminder2", _TPL_REMINDER2, False, "templates"),
+    SettingDef("tpl_warning", _TPL_WARNING, False, "templates"),
+    SettingDef("tpl_payment_received", _TPL_PAYMENT_RECEIVED, False, "templates"),
+]
+
+_DEF_BY_KEY = {d.key: d for d in DEFS}
+
+
+async def seed_defaults(session: AsyncSession) -> None:
+    """Insert any missing settings rows with their default (bootstrap) values."""
+    existing = set(
+        (await session.execute(select(Setting.key))).scalars().all()
+    )
+    for d in DEFS:
+        if d.key in existing:
+            continue
+        value = d.default
+        if d.is_secret and value:
+            value = crypto.encrypt(str(value))
+        session.add(Setting(key=d.key, value=value, is_secret=d.is_secret))
+    await session.commit()
+
+
+async def get(session: AsyncSession, key: str, default: Any = None) -> Any:
+    """Read a setting (secrets returned decrypted). Falls back to the registered default."""
+    row = await session.get(Setting, key)
+    if row is None:
+        d = _DEF_BY_KEY.get(key)
+        return d.default if d else default
+    value = row.value
+    if row.is_secret and isinstance(value, str):
+        return crypto.decrypt(value)
+    return value
+
+
+async def get_many(session: AsyncSession, keys: list[str]) -> dict[str, Any]:
+    return {k: await get(session, k) for k in keys}
+
+
+async def set_value(session: AsyncSession, key: str, value: Any) -> None:
+    """Write a setting. Secret keys are encrypted at rest."""
+    d = _DEF_BY_KEY.get(key)
+    is_secret = d.is_secret if d else False
+    stored = value
+    if is_secret and value:
+        stored = crypto.encrypt(str(value))
+    row = await session.get(Setting, key)
+    if row is None:
+        row = Setting(key=key, value=stored, is_secret=is_secret)
+        session.add(row)
+    else:
+        row.value = stored
+        row.is_secret = is_secret
+    await session.commit()
+
+
+async def all_for_api(session: AsyncSession) -> list[dict]:
+    """Return all settings for the panel, masking secret values."""
+    rows = (await session.execute(select(Setting))).scalars().all()
+    out: list[dict] = []
+    for row in rows:
+        d = _DEF_BY_KEY.get(row.key)
+        if row.is_secret and isinstance(row.value, str):
+            display: Any = crypto.mask(row.value)
+        else:
+            display = row.value
+        out.append(
+            {
+                "key": row.key,
+                "value": display,
+                "is_secret": row.is_secret,
+                "group": d.group if d else "general",
+                "has_value": bool(row.value),
+            }
+        )
+    return out

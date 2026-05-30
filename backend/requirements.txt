@@ -1,0 +1,41 @@
+# Web framework
+fastapi>=0.111,<1.0
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+
+# Database
+SQLAlchemy>=2.0.30
+greenlet>=3.0          # required by SQLAlchemy async
+asyncpg>=0.29          # PostgreSQL async driver (production / docker)
+aiosqlite>=0.20        # SQLite async driver (quick local runs / tests)
+alembic>=1.13
+
+# Security
+bcrypt>=4.1
+PyJWT>=2.8
+cryptography>=42       # Fernet encryption of secret columns + JWT signing
+pyotp>=2.9             # TOTP (Google Authenticator) 2FA
+qrcode[pil]>=7.4       # QR for the 2FA setup screen
+
+# HTTP client (panel sync, BscScan)
+httpx>=0.27
+
+# Telegram bot
+aiogram>=3.7
+
+# Scheduling
+APScheduler>=3.10
+
+# Invoice PDF (Persian/RTL) — same toolchain as the legacy system
+reportlab>=4.1
+arabic-reshaper>=3.0
+python-bidi>=0.4.2,<0.5
+
+# Jalali (Persian) calendar for display
+jdatetime>=5.0
+
+# Optional — per-reseller HD-wallet deposit addresses (Phase: payments upgrade).
+# Pulls native deps (coincurve); install only when enabling HD wallets:
+#   pip install bip-utils>=2.9

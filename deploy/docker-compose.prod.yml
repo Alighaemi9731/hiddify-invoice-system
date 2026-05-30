@@ -1,0 +1,83 @@
+# Production stack (Phase 2) — one domain, automatic HTTPS via Caddy.
+#
+#   Caddy (:80/:443, auto Let's Encrypt)
+#     ├── /api/*  /health  /docs  → backend:8000
+#     └── everything else          → frontend (static SPA)
+#
+# Usage (on the server, done for you by deploy/install.sh):
+#   cp .env.example .env   # set SERVER_DOMAIN, ACME_EMAIL, SECRET_KEY, ADMIN_PASSWORD, DB creds
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-invoice}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-invoice}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-invoice} -d ${POSTGRES_DB:-invoice}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: db
+      RUN_SCHEDULER: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  bot:
+    build: ../backend
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/data
+    command: python -m app.bot.run
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # In production the SPA talks to the API on the SAME origin (Caddy proxies /api).
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    environment:
+      SERVER_DOMAIN: ${SERVER_DOMAIN:?set SERVER_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  db_data:
+  app_data:
+  caddy_data:
+  caddy_config:

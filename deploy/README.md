@@ -1,0 +1,57 @@
+# Deploy to a real server (Phase 2)
+
+Production stack: **Caddy** (automatic HTTPS) in front of the **React SPA** and the
+**FastAPI backend**, with **PostgreSQL** and the **Telegram bot** — all in Docker.
+One domain serves everything (`/api/*` → backend, the rest → SPA).
+
+## Requirements
+- A server running **Ubuntu 24.04 or 26.04** with a public IP.
+- A **domain** (or subdomain) whose **A record points to the server's IP**.
+- Ports **80** and **443** open to the internet (Caddy needs them for SSL).
+
+## One-line install
+On the server (as root), from the project folder:
+
+```bash
+sudo bash deploy/install.sh
+```
+
+It will:
+1. detect the OS and install Docker (+ compose plugin) if missing,
+2. ask for your **domain**, **SSL email**, and **admin password**,
+3. generate a secure `.env` (random `SECRET_KEY` + DB password),
+4. build and start the stack, and obtain the **HTTPS certificate automatically**.
+
+Non-interactive:
+```bash
+DOMAIN=panel.example.com ACME_EMAIL=you@mail.com ADMIN_PASSWORD='choose-a-strong-one' \
+  sudo -E bash deploy/install.sh
+```
+
+When it finishes, open `https://<your-domain>` and log in.
+
+## After install
+- **Settings tab** → set the Telegram **bot token**, **USDT wallet** (BEP-20),
+  **BscScan API key**, exchange rate, and (optionally) the **master xpub**.
+- **Panels tab** → add your real Hiddify panels (paste each admin link) and sync.
+- Certificate **renewal is automatic** (Caddy).
+
+## Operations
+```bash
+# from the project folder:
+docker compose -f deploy/docker-compose.prod.yml logs -f          # tail logs
+docker compose -f deploy/docker-compose.prod.yml restart          # restart all
+docker compose -f deploy/docker-compose.prod.yml down             # stop
+git pull && docker compose -f deploy/docker-compose.prod.yml up -d --build   # update
+```
+
+## Backups
+Automatic backups (DB + settings, encrypted secrets) are sent to the owner's
+Telegram PV every 2 hours, and can be downloaded/sent on demand from
+**Account & Backup**. To restore: upload a backup zip there, or send it to the bot,
+then `docker compose -f deploy/docker-compose.prod.yml restart backend`.
+
+## Files
+- `docker-compose.prod.yml` — the production stack (db, backend, bot, frontend, caddy).
+- `Caddyfile` — reverse-proxy + auto-TLS rules.
+- `install.sh` — the one-line installer.

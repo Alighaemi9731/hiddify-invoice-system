@@ -1,0 +1,56 @@
+"""
+Telegram `/` command menus.
+
+Two scopes:
+  * DEFAULT  — reseller commands, shown to everyone (BotCommandScopeDefault).
+  * OWNER    — admin commands, scoped to the owner's chat only, so the owner does
+               NOT see reseller-only commands like /pay or /debt.
+"""
+from __future__ import annotations
+
+import logging
+
+from aiogram import Bot
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services import settings_service
+
+log = logging.getLogger("bot.commands")
+
+RESELLER_COMMANDS = [
+    BotCommand(command="start", description="منوی اصلی"),
+    BotCommand(command="menu", description="منو"),
+    BotCommand(command="invoices", description="فاکتورهای من"),
+    BotCommand(command="pay", description="پرداخت"),
+    BotCommand(command="debt", description="بدهی من"),
+    BotCommand(command="removelink", description="حذف لینک‌های من"),
+    BotCommand(command="help", description="راهنما"),
+]
+
+OWNER_COMMANDS = [
+    BotCommand(command="start", description="منوی مدیریت"),
+    BotCommand(command="menu", description="منوی مدیریت"),
+    BotCommand(command="broadcast", description="پیام همگانی"),
+    BotCommand(command="help", description="راهنما"),
+]
+
+
+async def apply_command_menus(bot: Bot, session: AsyncSession) -> None:
+    """Set the default reseller menu, plus the owner menu scoped to the owner's chat."""
+    await bot.set_my_commands(RESELLER_COMMANDS, scope=BotCommandScopeDefault())
+    owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
+    if owner_chat.lstrip("-").isdigit():
+        try:
+            await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChat(chat_id=int(owner_chat)))
+            log.info("Owner command menu applied for chat %s", owner_chat)
+        except Exception:  # noqa: BLE001
+            log.warning("setting owner command menu failed", exc_info=True)
+
+
+async def apply_owner_menu(bot: Bot, owner_chat_id: int) -> None:
+    """Apply the owner-scoped menu for a freshly-identified owner chat."""
+    try:
+        await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChat(chat_id=owner_chat_id))
+    except Exception:  # noqa: BLE001
+        log.warning("apply_owner_menu failed", exc_info=True)
