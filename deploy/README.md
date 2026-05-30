@@ -55,3 +55,23 @@ then `docker compose -f deploy/docker-compose.prod.yml restart backend`.
 - `docker-compose.prod.yml` — the production stack (db, backend, bot, frontend, caddy).
 - `Caddyfile` — reverse-proxy + auto-TLS rules.
 - `install.sh` — the one-line installer.
+
+## Install on a fresh server from the PRIVATE GitHub repo (deploy key)
+
+One-time setup of a read-only key on the server:
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/invoice_deploy -N ''
+cat ~/.ssh/invoice_deploy.pub
+```
+Add that public key in **GitHub → repo → Settings → Deploy keys → Add deploy key**
+(leave *Allow write access* **unchecked**).
+
+Then clone + install in one go:
+```bash
+sudo REPO=git@github.com:Alighaemi9731/hiddify-invoice-system.git \
+     KEY=~/.ssh/invoice_deploy \
+     DOMAIN=panel.example.com ACME_EMAIL=you@mail.com ADMIN_PASSWORD='choose-strong' \
+     bash deploy/bootstrap.sh
+```
+This clones to `/opt/hiddify-invoice-system`, then runs `deploy/install.sh`
+(Docker + secure `.env` + Caddy auto-HTTPS). Updating later: re-run `bootstrap.sh`.
