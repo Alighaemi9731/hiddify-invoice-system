@@ -1,6 +1,11 @@
 import axios from "axios";
 
-const baseURL = (import.meta as any).env?.VITE_API_BASE_URL || "http://localhost:8000";
+// VITE_API_BASE_URL:
+//   • undefined (local dev, var not set)  → talk to the dev backend on :8000
+//   • "" (production build arg)            → same-origin (Caddy proxies /api). MUST
+//     stay "" — NOT fall back to localhost, or the browser would call the wrong host.
+const _envBase = (import.meta as any).env?.VITE_API_BASE_URL;
+const baseURL = _envBase === undefined ? "http://localhost:8000" : _envBase;
 
 export const api = axios.create({ baseURL, timeout: 120000 });
 
