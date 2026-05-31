@@ -62,6 +62,11 @@ async def create_backup(session: AsyncSession) -> tuple[bytes, str]:
         # timestamp is filled by the caller (Date.now is unavailable in some contexts);
         # here we are in normal runtime so it's fine.
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        # The encryption key, so a restore on a DIFFERENT server can still decrypt the
+        # secret settings (bot token, panel API keys, wallet xpub). Without it those
+        # secrets would be unreadable after a cross-server restore. Restore writes this
+        # back into .env. (The backup goes only to the owner's private Telegram.)
+        "secret_key": boot.secret_key,
     }
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -145,6 +150,30 @@ async def save_backup_to_disk(session: AsyncSession) -> Path:
     return path
 
 
+_ENV_PATHS = [Path("/app/.env"), Path(__file__).resolve().parents[3] / ".env"]
+
+
+def _persist_secret_key(secret_key: str) -> None:
+    """Write SECRET_KEY into .env so a cross-server restore can decrypt secrets after
+    the auto-restart. No-op on the original server (same value)."""
+    import re
+
+    if not secret_key:
+        return
+    for p in _ENV_PATHS:
+        try:
+            if not p.exists():
+                continue
+            text = p.read_text()
+            if re.search(r"^SECRET_KEY=.*$", text, flags=re.M):
+                text = re.sub(r"^SECRET_KEY=.*$", f"SECRET_KEY={secret_key}", text, flags=re.M)
+            else:
+                text += ("" if text.endswith("\n") else "\n") + f"SECRET_KEY={secret_key}\n"
+            p.write_text(text)
+        except Exception:  # noqa: BLE001
+            log.warning("could not persist SECRET_KEY to %s", p, exc_info=True)
+
+
 def restore_from_zip(zip_bytes: bytes) -> dict:
     """Restore the SQLite DB from a backup ZIP. Returns a summary.
 
@@ -157,6 +186,9 @@ def restore_from_zip(zip_bytes: bytes) -> dict:
         if "meta.json" not in names:
             raise ValueError("فایل پشتیبان معتبر نیست (meta.json یافت نشد)")
         meta = json.loads(z.read("meta.json"))
+        # Restore the original encryption key first, so the restored encrypted
+        # settings (bot token, panel API keys, wallet) decrypt after the restart.
+        _persist_secret_key(meta.get("secret_key") or "")
         if sqlite and "db.sqlite" in names:
             sqlite.parent.mkdir(parents=True, exist_ok=True)
             # Back up the current DB before overwriting.

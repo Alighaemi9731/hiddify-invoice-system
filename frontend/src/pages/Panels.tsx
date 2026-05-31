@@ -8,9 +8,11 @@ import SyncIcon from "@mui/icons-material/Sync";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import WifiTetheringIcon from "@mui/icons-material/WifiTethering";
+import KeyIcon from "@mui/icons-material/Key";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listPanels, createPanel, updatePanel, deletePanel, syncPanel, testPanel,
+  resetAdminPasswords,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -94,6 +96,11 @@ export default function Panels() {
     onSuccess: () => { show("حذف شد"); refresh(); },
     onError: (e) => show(errMsg(e), "error"),
   });
+  const doResetPw = useMutation({
+    mutationFn: (id: number) => resetAdminPasswords(id),
+    onSuccess: (r: any) => show(r.message || "انجام شد", r.status === "ok" ? "success" : "warning"),
+    onError: (e) => show(errMsg(e), "error"),
+  });
 
   const { sorted, key, dir, toggle } = useSort(data, "key", "asc");
   const edit = (p?: any) => { setForm(p ? { ...p, proxy_path: "", admin_api_key: "" } : EMPTY); setLink(""); setOpen(true); };
@@ -139,6 +146,11 @@ export default function Panels() {
                 <TableCell align="left">
                   <Tooltip title="همگام‌سازی"><IconButton onClick={() => doSync.mutate(p.id)}><SyncIcon /></IconButton></Tooltip>
                   <Tooltip title="تست اتصال"><IconButton onClick={() => doTest.mutate(p.id)}><WifiTetheringIcon /></IconButton></Tooltip>
+                  <Tooltip title="ریست رمز همهٔ ادمین‌ها به ۱۲۳">
+                    <IconButton onClick={() => confirm("رمز عبور همهٔ ادمین‌ها و زیرمجموعه‌های این پنل به «۱۲۳» تغییر کند؟") && doResetPw.mutate(p.id)}>
+                      <KeyIcon />
+                    </IconButton>
+                  </Tooltip>
                   <Tooltip title="ویرایش"><IconButton onClick={() => edit(p)}><EditIcon /></IconButton></Tooltip>
                   <Tooltip title="حذف"><IconButton color="error" onClick={() => confirm("حذف این پنل؟") && doDelete.mutate(p.id)}><DeleteIcon /></IconButton></Tooltip>
                 </TableCell>

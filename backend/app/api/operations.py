@@ -115,6 +115,24 @@ async def set_domain(body: DomainBody, session: AsyncSession = Depends(get_sessi
     return await domain_setup.set_domain(session, body.domain, body.acme_email)
 
 
+class ResetPasswordsBody(BaseModel):
+    panel_id: int | None = None   # None → all panels
+    password: str | None = None   # None → the admin_reset_password setting ("123")
+
+
+@router.post("/reset-admin-passwords")
+async def reset_admin_passwords(
+    body: ResetPasswordsBody, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Reset every panel admin's (and sub-admin's) login password to a known value
+    (default "123"), using the owner API key. Result is reported per admin."""
+    from app.services import admin_passwords
+
+    return await admin_passwords.reset_admin_passwords(
+        session, panel_id=body.panel_id, password=body.password
+    )
+
+
 @router.post("/broadcast")
 async def broadcast(body: BroadcastBody, session: AsyncSession = Depends(get_session)) -> dict:
     return await broadcast_service.broadcast(
