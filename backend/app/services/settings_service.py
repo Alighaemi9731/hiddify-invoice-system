@@ -71,6 +71,11 @@ _TPL_PAYMENT_RECEIVED = (
     "✅ پرداخت شما تأیید شد. با تشکر!\n"
     "فاکتور دوره {period} تسویه شد."
 )
+_TPL_PAYMENT_REJECTED = (
+    "❌ پرداخت شما تأیید نشد.\n"
+    "لطفاً از صحت مبلغ و شناسهٔ تراکنش/رسید مطمئن شوید و دوباره ارسال کنید، "
+    "یا برای پیگیری با پشتیبانی در تماس باشید."
+)
 
 
 DEFS: list[SettingDef] = [
@@ -136,6 +141,7 @@ DEFS: list[SettingDef] = [
     SettingDef("tpl_reminder2", _TPL_REMINDER2, False, "templates"),
     SettingDef("tpl_warning", _TPL_WARNING, False, "templates"),
     SettingDef("tpl_payment_received", _TPL_PAYMENT_RECEIVED, False, "templates"),
+    SettingDef("tpl_payment_rejected", _TPL_PAYMENT_REJECTED, False, "templates"),
 ]
 
 _DEF_BY_KEY = {d.key: d for d in DEFS}

@@ -288,6 +288,12 @@ async def _payment_received_text(session: AsyncSession, period: str) -> str:
     return await texts.render(session, "tpl_payment_received", period=period)
 
 
+async def _payment_rejected_text(session: AsyncSession, period: str) -> str:
+    from app.bot import texts
+
+    return await texts.render(session, "tpl_payment_rejected", period=period)
+
+
 def _settled_ids(payment: Payment) -> list[int]:
     """The invoice ids a payment has settled (from settled_invoice_ids, else invoice_id)."""
     if payment.settled_invoice_ids:
@@ -316,8 +322,9 @@ async def confirm_manually(
     which ones (vital for screenshots, where the amount isn't machine-readable). When None,
     falls back to settling the single invoice the payment was linked to (its oldest due).
 
-    Reversible: works on a previously rejected payment too (recovers a mis-click); the
-    reseller is notified only on the FIRST confirmation, so toggling confirm↔reject is silent.
+    Reversible: works on a previously rejected payment too (recovers a mis-click). The
+    reseller is notified only when the status actually CHANGES to confirmed (re-confirming
+    an already-confirmed payment is silent), so a double-click doesn't spam them.
     """
     payment = await session.get(Payment, payment_id)
     if payment is None:
@@ -370,13 +377,17 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     """Owner rejects a payment. Reversible: if this payment had previously CONFIRMED one or
     more invoices (a mis-click, or a change of mind), EVERY invoice it settled is reverted to
     owed (unpaid) and the ledger updated, so the accounting stays consistent. The reseller is
-    NOT auto-notified (so a mis-click + re-confirm leaves no trace), and an already-enforced
+    notified that their payment wasn't accepted — but only on a real state CHANGE to rejected
+    (re-rejecting is silent), so toggling/double-clicks don't spam them. An already-enforced
     reseller is NOT re-suspended automatically — dunning re-escalates on its normal timeline,
     or the owner suspends manually."""
     payment = await session.get(Payment, payment_id)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
+    was_rejected = payment.status == PaymentStatus.rejected
     was_confirmed = payment.status == PaymentStatus.confirmed
+    reseller = await session.get(Reseller, payment.reseller_id)
+    invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
     payment.status = PaymentStatus.rejected
     payment.verified_at = None
     if was_confirmed:
@@ -389,7 +400,15 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
                 if inv.status == InvoiceStatus.paid:
                     inv.status = InvoiceStatus.sent
                     inv.paid_at = None
-                    reseller = await session.get(Reseller, inv.reseller_id)
-                    await financial_archive.record(session, inv, reseller=reseller)
+                    r = await session.get(Reseller, inv.reseller_id)
+                    await financial_archive.record(session, inv, reseller=r)
     await session.commit()
+    # Tell the customer their payment wasn't accepted — but only on a real state change
+    # (so toggling reject→confirm→reject, or a double-click, doesn't spam them).
+    if reseller is not None and not was_rejected:
+        period = invoice.period_label if invoice else ""
+        await notifier.send_to_reseller(
+            session, reseller, await _payment_rejected_text(session, period),
+            kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
+        )
     return PaymentResult("rejected", False, "Rejected")

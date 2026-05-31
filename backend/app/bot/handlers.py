@@ -24,7 +24,7 @@ from app.models.enums import (
     PaymentMethod,
     PaymentStatus,
 )
-from app.services import settings_service
+from app.services import owner_notify, settings_service
 
 
 class BroadcastState(StatesGroup):
@@ -219,12 +219,22 @@ async def cmd_subs(message: Message) -> None:
 _AUDIENCE_FA = {"all": "همه نمایندگان", "debtors": "بدهکاران", "zero_sale": "فروش صفر این ماه"}
 
 
-async def _do_broadcast(message: Message, session, text: str, audience: str = "all") -> None:
+async def _audience_label(session, audience: str, panel_id: int | None) -> str:
+    if audience == "panel" and panel_id is not None:
+        panel = await session.get(Panel, panel_id)
+        return f"نمایندگان پنل {panel.key}" if panel else "نمایندگان یک پنل"
+    return _AUDIENCE_FA.get(audience, audience)
+
+
+async def _do_broadcast(
+    message: Message, session, text: str, audience: str = "all", panel_id: int | None = None
+) -> None:
     from app.services import broadcast as bc
 
-    counts = await bc.broadcast(session, text, audience=audience)
+    counts = await bc.broadcast(session, text, audience=audience, panel_id=panel_id)
+    label = await _audience_label(session, audience, panel_id)
     await message.answer(
-        f"📢 ارسال به «{_AUDIENCE_FA.get(audience, audience)}»:\n"
+        f"📢 ارسال به «{label}»:\n"
         f"{counts['sent']} موفق، {counts['blocked']} مسدود، "
         f"{counts['failed']} ناموفق (از {counts['total']} گیرنده)"
     )
@@ -232,15 +242,29 @@ async def _do_broadcast(message: Message, session, text: str, audience: str = "a
 
 @router.callback_query(F.data.startswith("bcaud:"))
 async def cb_broadcast_audience(cb: CallbackQuery, state: FSMContext) -> None:
+    parts = cb.data.split(":")  # bcaud:all | bcaud:panel | bcaud:panel:<id>
+    audience = parts[1]
     async with SessionLocal() as s:
         if not await _is_owner_user(s, cb.from_user):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-    audience = cb.data.split(":", 1)[1]
+        # "panel" with no id → show a panel picker first.
+        if audience == "panel" and len(parts) < 3:
+            panels = (
+                await s.execute(select(Panel.id, Panel.key).where(Panel.enabled.is_(True)).order_by(Panel.key))
+            ).all()
+            await cb.message.answer(
+                "🖥 پیام به نمایندگانِ کدام پنل ارسال شود؟",
+                reply_markup=keyboards.broadcast_panel_keyboard([(pid, key) for pid, key in panels]),
+            )
+            await cb.answer()
+            return
+        panel_id = int(parts[2]) if (audience == "panel" and len(parts) >= 3) else None
+        label = await _audience_label(s, audience, panel_id)
     await state.set_state(BroadcastState.waiting)
-    await state.update_data(audience=audience)
+    await state.update_data(audience=audience, panel_id=panel_id)
     await cb.message.answer(
-        f"📢 گیرنده: «{_AUDIENCE_FA.get(audience, audience)}»\n"
+        f"📢 گیرنده: «{label}»\n"
         f"اکنون متن پیام را ارسال کنید (یا /cancel برای لغو):"
     )
     await cb.answer()
@@ -337,6 +361,7 @@ async def cmd_broadcast(message: Message, state: FSMContext, command: CommandObj
 async def on_broadcast_text(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     audience = data.get("audience", "all")
+    panel_id = data.get("panel_id")
     await state.clear()
     async with SessionLocal() as s:
         if not await _is_owner_user(s, message.from_user):
@@ -344,7 +369,7 @@ async def on_broadcast_text(message: Message, state: FSMContext) -> None:
         if not (message.text or "").strip():
             await message.answer("متن خالی بود؛ لغو شد.")
             return
-        await _do_broadcast(message, s, message.text, audience)
+        await _do_broadcast(message, s, message.text, audience, panel_id)
 
 
 # --------------------------- reseller callbacks ---------------------------
@@ -530,9 +555,29 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
             await _owner_stats(cb.message.answer, s)
         elif action == "debtors":
             await _owner_debtors(cb.message.answer, s)
+        elif action == "zerosale":
+            await _owner_zerosale(cb.message.answer, s)
         elif action == "broadcast":
             await cb.message.answer("📢 گیرندگان پیام همگانی را انتخاب کنید:",
                                     reply_markup=keyboards.broadcast_audience_keyboard())
+        elif action == "sync":
+            from app.services import sync as sync_service
+
+            await cb.message.answer("⏳ در حال همگام‌سازی پنل‌ها…")
+            res = await sync_service.sync_all(s)
+            ok = sum(1 for r in res if r.status.value == "success")
+            await cb.message.answer(f"🔄 همگام‌سازی انجام شد: {ok}/{len(res)} پنل موفق.")
+        elif action == "backup":
+            from app.services import backup_delivery
+
+            await cb.message.answer("⏳ در حال تهیهٔ پشتیبان…")
+            r = await backup_delivery.send_backup_to_owner(s)
+            if r.get("status") == "sent":
+                await cb.message.answer("🗄 پشتیبان تهیه و برای شما ارسال شد.")
+            elif r.get("status") in ("no_owner_chat", "no_bot"):
+                await cb.message.answer(f"⚠️ پشتیبان روی سرور ذخیره شد ولی ارسال نشد ({r.get('status')}).")
+            else:
+                await cb.message.answer("❌ ارسال پشتیبان ناموفق بود.")
         elif action == "dunning":
             from app.services import dunning
 
@@ -607,6 +652,26 @@ async def _owner_debtors(answer, session) -> None:
     lines = ["💰 بدهکاران برتر:\n"]
     for i, (name, total) in enumerate(rows, 1):
         lines.append(f"{i}. {name}: {float(total):,.0f} تومان")
+    await answer("\n".join(lines))
+
+
+async def _owner_zerosale(answer, session) -> None:
+    """Bot-registered resellers whose bundle sells nothing this month (idle customers)."""
+    from app.services import invoicing
+    from app.services.periods import current_month
+
+    pairs = await invoicing.preview_bundles(session, current_month())
+    idle = [
+        b.root.name for _panel, b in pairs
+        if b.total_gb <= 0 and b.root.bot_chat_id is not None
+    ]
+    if not idle:
+        await answer(f"🟡 فروش صفر ({current_month().label}): همهٔ نمایندگانِ متصل فروش داشته‌اند.")
+        return
+    lines = [f"🟡 فروش صفر این ماه ({current_month().label}) — {len(idle)} نماینده:\n"]
+    lines += [f"• {n}" for n in idle[:40]]
+    if len(idle) > 40:
+        lines.append(f"… و {len(idle) - 40} نمایندهٔ دیگر")
     await answer("\n".join(lines))
 
 
@@ -933,7 +998,9 @@ async def on_text(message: Message) -> None:
         if parsed:
             await _handle_link(message, session, parsed)
             return
-        await message.answer("لطفاً لینک پنل یا شناسه تراکنش (TXID) را ارسال کنید.")
+        # Any other text / mistyped command → show the right main menu (owner vs reseller)
+        # instead of a dead-end hint, so the user always sees their options.
+        await _send_menu(message.answer, session, message.from_user)
 
 
 async def _handle_link(message: Message, session, parsed) -> None:
@@ -965,6 +1032,10 @@ async def _handle_link(message: Message, session, parsed) -> None:
         await message.answer("این لینک قبلاً ثبت شده بود و اطلاعاتش به‌روزرسانی شد.")
     else:
         await message.answer(await texts.render(session, "tpl_link_matched", name=reseller.name))
+        panel = await session.get(Panel, reseller.panel_id)
+        await owner_notify.notify_owner(
+            session, f"🔗 نمایندهٔ جدید در ربات ثبت شد: «{reseller.name}»"
+            + (f" (پنل {panel.key})" if panel else ""))
 
 
 async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | None:
@@ -1009,6 +1080,21 @@ async def _handle_txid(message: Message, session, txid: str) -> None:
 
     result = await verify_payment(session, payment.id)
     await message.answer(result.message_fa)
+
+    # Keep the owner in the loop: a new payment either needs their manual confirm, or was
+    # auto-confirmed on-chain (money arrived).
+    name = resellers[0].name
+    period = invoice.period_label if invoice else "—"
+    amount = f"{float(invoice.amount_usdt):,.2f} USDT" if invoice else "نامشخص"
+    if result.status == "confirmed":
+        await owner_notify.notify_owner(
+            session, f"✅ پرداخت «{name}» به‌صورت خودکار روی زنجیره تأیید شد.\n"
+            f"دوره: {period} | مبلغ فاکتور: {amount}")
+    else:
+        await owner_notify.notify_owner(
+            session, f"💳 پرداخت جدید (TXID) از «{name}» ثبت شد و منتظر تأیید شماست.\n"
+            f"دوره: {period} | مبلغ فاکتور: {amount}\n"
+            f"شناسهٔ پرداخت در پنل: #{payment.id}\nبرای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
 
 
 async def _handle_payment_proof(message: Message, session) -> None:

@@ -63,7 +63,16 @@ def broadcast_audience_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="👥 همه نمایندگان", callback_data="bcaud:all")],
             [InlineKeyboardButton(text="💰 بدهکاران", callback_data="bcaud:debtors")],
             [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="bcaud:zero_sale")],
+            [InlineKeyboardButton(text="🖥 نمایندگان یک پنل", callback_data="bcaud:panel")],
         ]
+    )
+
+
+def broadcast_panel_keyboard(panels: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Pick which panel's resellers receive the broadcast. data: bcaud:panel:<panel_id>."""
+    rows = [[InlineKeyboardButton(text=name, callback_data=f"bcaud:panel:{pid}")] for pid, name in panels]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )
 
 
@@ -75,13 +84,17 @@ def support_reply_keyboard(user_id: int, message_id: int) -> InlineKeyboardMarku
 
 
 def owner_menu_keyboard() -> InlineKeyboardMarkup:
-    # Note: invoicing + reminders run automatically on a schedule; their manual
-    # "run now" triggers live in the web panel to avoid accidental taps in the bot.
+    # Heavy/irreversible actions (monthly invoice issue+send) stay in the web panel to
+    # avoid accidental taps. The bot exposes the safe, frequently-useful ones.
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 آمار کلی", callback_data="owner:stats")],
             [InlineKeyboardButton(text="💰 بدهکاران", callback_data="owner:debtors")],
+            [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="owner:zerosale")],
             [InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast")],
+            [InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync")],
+            [InlineKeyboardButton(text="🔔 اجرای یادآوری‌ها", callback_data="owner:dunning")],
+            [InlineKeyboardButton(text="🗄 پشتیبان‌گیری اکنون", callback_data="owner:backup")],
         ]
     )
 
