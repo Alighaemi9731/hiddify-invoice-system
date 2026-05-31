@@ -23,8 +23,10 @@ import MenuIcon from "@mui/icons-material/Menu";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import DarkModeIcon from "@mui/icons-material/DarkModeOutlined";
 import LightModeIcon from "@mui/icons-material/LightModeOutlined";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../auth/AuthContext";
 import { useColorMode } from "../colorMode";
+import { getInfo } from "../api/client";
 import ErrorBoundary from "./ErrorBoundary";
 
 const WIDTH = 256;
@@ -54,6 +56,7 @@ export default function Layout() {
   const { username, logout } = useAuth();
   const { mode, toggle } = useColorMode();
   const primary = theme.palette.primary.main;
+  const { data: info } = useQuery({ queryKey: ["app-info"], queryFn: getInfo, staleTime: 600000 });
 
   const navItemSx = (selected: boolean) => ({
     borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.85,
@@ -105,6 +108,11 @@ export default function Layout() {
           <ListItemText primary="خروج" primaryTypographyProps={{ fontWeight: 600, fontSize: 14.5 }} />
         </ListItemButton>
       </List>
+      <Box sx={{ mt: "auto", py: 1.5, textAlign: "center" }}>
+        <Typography variant="caption" color="text.secondary" dir="ltr">
+          {info?.version ? `v${info.version}` : "…"}
+        </Typography>
+      </Box>
     </Box>
   );
 

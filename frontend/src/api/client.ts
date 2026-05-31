@@ -45,6 +45,10 @@ export async function openInvoicePdf(invoiceId: number) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// ---- meta ----
+export const getInfo = () =>
+  api.get("/api/info").then((r) => r.data as { name: string; version: string; env: string });
+
 // ---- setup (first-run wizard) ----
 export const getSetupStatus = () =>
   api.get("/api/setup/status").then((r) => r.data as { setup_done: boolean; domain: string; https_enabled: boolean });
