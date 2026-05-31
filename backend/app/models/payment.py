@@ -55,3 +55,6 @@ class Payment(Base, TimestampMixin):
     # Path to a deposit screenshot the reseller sent (method=screenshot), served to the
     # owner in the panel for manual confirmation. Relative to the backend working dir.
     proof_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Comma-separated invoice ids this payment settled (one payment can clear several
+    # invoices). Used so a later reject reverts EXACTLY the invoices it had paid.
+    settled_invoice_ids: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -259,6 +259,7 @@ async def verify_payment(
     payment.verified_at = dt.datetime.now(dt.timezone.utc)
     if settled:
         payment.invoice_id = settled[0].id
+        payment.settled_invoice_ids = ",".join(str(i.id) for i in settled)
     await session.commit()
     # Restore any suspended reseller whose invoice was just settled.
     for rid in {i.reseller_id for i in settled}:
@@ -287,64 +288,108 @@ async def _payment_received_text(session: AsyncSession, period: str) -> str:
     return await texts.render(session, "tpl_payment_received", period=period)
 
 
-async def _apply_confirmed(
-    session: AsyncSession, payment: Payment, invoice: Invoice | None, reseller: Reseller | None
+def _settled_ids(payment: Payment) -> list[int]:
+    """The invoice ids a payment has settled (from settled_invoice_ids, else invoice_id)."""
+    if payment.settled_invoice_ids:
+        return [int(x) for x in payment.settled_invoice_ids.split(",") if x.strip().isdigit()]
+    return [payment.invoice_id] if payment.invoice_id else []
+
+
+async def _mark_invoices_paid(
+    session: AsyncSession, invoices: list[Invoice], payment: Payment
 ) -> None:
-    payment.status = PaymentStatus.confirmed
-    payment.verified_at = dt.datetime.now(dt.timezone.utc)
-    if invoice is not None:
-        invoice.status = InvoiceStatus.paid
-        invoice.paid_at = dt.datetime.now(dt.timezone.utc)
-        await financial_archive.record(session, invoice, reseller=reseller, txid=payment.txid)
-    await session.commit()
-
-    # Auto-restore panel access if the reseller had been enforced.
-    await _maybe_restore(session, reseller)
+    now = dt.datetime.now(dt.timezone.utc)
+    for inv in invoices:
+        inv.status = InvoiceStatus.paid
+        inv.paid_at = now
+        reseller = await session.get(Reseller, inv.reseller_id)
+        await financial_archive.record(session, inv, reseller=reseller, txid=payment.txid)
 
 
-async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentResult:
+async def confirm_manually(
+    session: AsyncSession, payment_id: int, invoice_ids: list[int] | None = None
+) -> PaymentResult:
     """Owner override: mark a payment confirmed without on-chain verification.
 
-    Reversible: works on a previously rejected payment too (recovers from a mis-click),
-    re-marking its invoice paid and restoring the reseller. The reseller is notified only
-    on the FIRST confirmation, so toggling confirm↔reject doesn't spam them."""
+    `invoice_ids` (optional): the exact set of the customer's OWED invoices this payment
+    covers — so one transfer can settle several invoices, and the owner stays in control of
+    which ones (vital for screenshots, where the amount isn't machine-readable). When None,
+    falls back to settling the single invoice the payment was linked to (its oldest due).
+
+    Reversible: works on a previously rejected payment too (recovers a mis-click); the
+    reseller is notified only on the FIRST confirmation, so toggling confirm↔reject is silent.
+    """
     payment = await session.get(Payment, payment_id)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_confirmed = payment.status == PaymentStatus.confirmed
-    invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
     reseller = await session.get(Reseller, payment.reseller_id)
+    rids = set(await _chat_reseller_ids(session, reseller))
+
+    if invoice_ids:
+        rows = (
+            await session.execute(select(Invoice).where(Invoice.id.in_(invoice_ids)))
+        ).scalars().all()
+        # Only the customer's own invoices that are owed (or already paid by THIS payment,
+        # so a re-confirm after reject still works), oldest first.
+        targets = [
+            i for i in rows
+            if i.reseller_id in rids and (i.status in _OWED or i.id in set(_settled_ids(payment)))
+        ]
+        targets.sort(key=lambda i: i.period_start)
+    else:
+        inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+        targets = [inv] if inv is not None else []
+
+    await _mark_invoices_paid(session, targets, payment)
+    payment.status = PaymentStatus.confirmed
+    payment.verified_at = dt.datetime.now(dt.timezone.utc)
+    if targets:
+        payment.invoice_id = targets[0].id
+        payment.settled_invoice_ids = ",".join(str(i.id) for i in targets)
+        if not payment.amount_usdt:
+            payment.amount_usdt = float(sum(Decimal(str(i.amount_usdt or 0)) for i in targets))
     if "[manually confirmed]" not in (payment.note or ""):
         payment.note = (payment.note or "") + " [manually confirmed]"
-    await _apply_confirmed(session, payment, invoice, reseller)
+    await session.commit()
+
+    # Restore any reseller whose invoice we just settled (covers sub-rows of one customer).
+    for rid in ({i.reseller_id for i in targets} or {payment.reseller_id}):
+        await _maybe_restore(session, await session.get(Reseller, rid))
+
     if reseller is not None and not was_confirmed:
-        period = invoice.period_label if invoice else ""
+        periods = "، ".join(i.period_label for i in targets)
         await notifier.send_to_reseller(
-            session, reseller, await _payment_received_text(session, period),
+            session, reseller, await _payment_received_text(session, periods),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
     return PaymentResult("confirmed", True, "Confirmed")
 
 
 async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResult:
-    """Owner rejects a payment. Reversible: if this payment had previously CONFIRMED its
-    invoice (e.g. the owner mis-clicked confirm, or is changing their mind), the invoice is
-    reverted to owed (unpaid) and the ledger updated, so the accounting stays consistent.
-    The reseller is NOT auto-notified (so a mis-click + re-confirm leaves no trace), and an
-    already-enforced reseller is NOT re-suspended automatically — dunning will re-escalate
-    on its normal timeline, or the owner can suspend manually."""
+    """Owner rejects a payment. Reversible: if this payment had previously CONFIRMED one or
+    more invoices (a mis-click, or a change of mind), EVERY invoice it settled is reverted to
+    owed (unpaid) and the ledger updated, so the accounting stays consistent. The reseller is
+    NOT auto-notified (so a mis-click + re-confirm leaves no trace), and an already-enforced
+    reseller is NOT re-suspended automatically — dunning re-escalates on its normal timeline,
+    or the owner suspends manually."""
     payment = await session.get(Payment, payment_id)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_confirmed = payment.status == PaymentStatus.confirmed
     payment.status = PaymentStatus.rejected
     payment.verified_at = None
-    invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-    if was_confirmed and invoice is not None and invoice.status == InvoiceStatus.paid:
-        # Undo the payment's effect on the invoice (revert to owed).
-        invoice.status = InvoiceStatus.sent
-        invoice.paid_at = None
-        reseller = await session.get(Reseller, invoice.reseller_id)
-        await financial_archive.record(session, invoice, reseller=reseller)
+    if was_confirmed:
+        ids = _settled_ids(payment)
+        if ids:
+            rows = (
+                await session.execute(select(Invoice).where(Invoice.id.in_(ids)))
+            ).scalars().all()
+            for inv in rows:
+                if inv.status == InvoiceStatus.paid:
+                    inv.status = InvoiceStatus.sent
+                    inv.paid_at = None
+                    reseller = await session.get(Reseller, inv.reseller_id)
+                    await financial_archive.record(session, inv, reseller=reseller)
     await session.commit()
     return PaymentResult("rejected", False, "Rejected")

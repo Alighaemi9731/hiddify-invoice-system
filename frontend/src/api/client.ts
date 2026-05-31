@@ -116,8 +116,11 @@ export const deferInvoice = (id: number, body: { deferred_until: string | null; 
 export const listPayments = (params: any = {}) =>
   api.get("/api/payments", { params }).then((r) => r.data);
 export const verifyPayment = (id: number) => api.post(`/api/payments/${id}/verify`).then((r) => r.data);
-export const confirmPayment = (id: number) => api.post(`/api/payments/${id}/confirm`).then((r) => r.data);
+export const confirmPayment = (id: number, invoice_ids?: number[]) =>
+  api.post(`/api/payments/${id}/confirm`, { invoice_ids: invoice_ids ?? null }).then((r) => r.data);
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);
+export const getDueInvoices = (id: number) =>
+  api.get(`/api/payments/${id}/due-invoices`).then((r) => r.data);
 // Fetch the deposit screenshot (authenticated) as a blob and open it in a new tab.
 export const openPaymentProof = async (id: number) => {
   const r = await api.get(`/api/payments/${id}/proof`, { responseType: "blob" });

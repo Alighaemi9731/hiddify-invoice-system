@@ -30,6 +30,22 @@ class ManualPaymentCreate(BaseModel):
     note: str | None = None
 
 
+class ConfirmPaymentBody(BaseModel):
+    # The exact invoices this payment covers (owner-selected). None → settle the single
+    # invoice the payment was linked to (backward compatible).
+    invoice_ids: list[int] | None = None
+
+
+class DueInvoiceOut(BaseModel):
+    id: int
+    period_label: str
+    reseller_name: str
+    panel_key: str
+    amount_usdt: float
+    amount_toman: float
+    status: str
+
+
 class PaymentActionResult(BaseModel):
     status: str
     paid: bool
