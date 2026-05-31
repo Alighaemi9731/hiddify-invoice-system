@@ -112,10 +112,22 @@ async def enforce_reseller(
     client = AdminApiClient()
     errors: list[str] = []
 
-    # 1) Zero every admin's limits — BEST-EFFORT. Setting max_active_users=0 is what
-    # actually blocks the reseller's users from connecting, so this is the primary
-    # lever. A stale/failed sub-admin must NOT abort the whole enforcement; we only
-    # hard-fail if we couldn't zero the RESELLER'S OWN limits.
+    # 1) Disable end-users FIRST — while every admin still has its full limits, so a
+    # just-capped admin can never be the reason a user-disable is rejected. Each user is
+    # disabled authenticated AS its creating admin (added_by). BEST-EFFORT: a slow/failed
+    # per-user PATCH (the panel reapplies the whole proxy each time) must not abort.
+    # Disabling the users is what actually cuts off existing connections.
+    disabled = 0
+    for u in users:
+        try:
+            await _disable_user(client, panel, u)
+            u.enable = False
+            disabled += 1
+        except Exception as ue:  # noqa: BLE001
+            errors.append(f"{(u.name or u.user_uuid)[:18]}: {str(ue)[:100]}")
+
+    # 2) THEN zero every admin's limits (prevents creating/re-activating users). Snapshot
+    # prior values for exact restore. BEST-EFFORT: a stale sub-admin must not abort.
     root_ok = False
     for d in descendants:
         d.max_users_snapshot = d.panel_max_users
@@ -126,35 +138,25 @@ async def enforce_reseller(
                 root_ok = True
         except Exception as le:  # noqa: BLE001
             errors.append(f"limit {(d.name or d.admin_uuid)[:18]}: {str(le)[:100]}")
-    if not root_ok:
+
+    # Enforcement counts as done if we made real progress: users disabled (existing
+    # connections cut) OR the reseller's own limits zeroed. Only a total no-op is a failure.
+    if disabled == 0 and not root_ok:
         action.status = EnforcementActionStatus.failed
-        action.error = ("could not zero the reseller's own limits — " + " | ".join(errors))[:1000]
+        action.error = ("enforcement did nothing — " + " | ".join(errors))[:1000]
         await session.commit()
         log.warning("Enforcement failed for reseller %s: %s", reseller.name, action.error)
         return action
-
-    # 2) Disable each end-user BEST-EFFORT (the per-user PATCH triggers a full proxy
-    # reapply, so it's slow and may time out). A failure here no longer aborts: the
-    # reseller is already suspended via max_active_users=0, and we still flip to
-    # `enforced` so the «release» option appears. We record any users we couldn't disable.
-    disabled = 0
-    for u in users:
-        try:
-            await _disable_user(client, panel, u)
-            u.enable = False
-            disabled += 1
-        except Exception as ue:  # noqa: BLE001
-            errors.append(f"{(u.name or u.user_uuid)[:18]}: {str(ue)[:100]}")
 
     reseller.enforcement_state = EnforcementState.enforced
     action.status = EnforcementActionStatus.done
     action.affected_count = disabled
     if errors:
-        action.error = (f"limits zeroed; {disabled}/{len(users)} users disabled; "
+        action.error = (f"{disabled}/{len(users)} users disabled; root_limits={root_ok}; "
                         f"{len(errors)} issue(s): " + " | ".join(errors[:8]))[:1000]
     await session.commit()
-    log.info("Enforced reseller %s: zeroed limits, disabled %d/%d users (%d issues)",
-             reseller.name, disabled, len(users), len(errors))
+    log.info("Enforced reseller %s: disabled %d/%d users, root_limits=%s (%d issues)",
+             reseller.name, disabled, len(users), root_ok, len(errors))
     return action
 
 
