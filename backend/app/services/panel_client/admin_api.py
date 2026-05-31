@@ -25,10 +25,11 @@ class AdminApiClient(PanelClient):
         # while on a busy panel — keep a generous timeout so disabling users doesn't fail.
         self.timeout = timeout
 
-    def _headers(self, panel) -> dict:  # noqa: ANN001
-        # In Hiddify v2 the API key IS the admin uuid, so fall back to the owner uuid
-        # when no separate key is configured.
-        key = panel.admin_api_key or panel.owner_uuid
+    def _headers(self, panel, api_key: str | None = None) -> dict:  # noqa: ANN001
+        # In Hiddify v2 the API key IS an admin's uuid. `api_key` lets a caller act AS a
+        # specific admin (needed because the panel only lets you edit a user if you're the
+        # super-admin OR the user's own creator). Falls back to the configured key / owner.
+        key = api_key or panel.admin_api_key or panel.owner_uuid
         if not key:
             raise RuntimeError(f"Panel '{panel.key}' has no admin API key / owner uuid")
         return {"Hiddify-API-Key": key, "Accept": "application/json"}
@@ -41,10 +42,14 @@ class AdminApiClient(PanelClient):
             resp.raise_for_status()
             return parse_backup(resp.json())
 
-    async def set_user_enabled(self, panel, user_uuid: str, enabled: bool) -> None:  # noqa: ANN001
+    async def set_user_enabled(  # noqa: ANN001
+        self, panel, user_uuid: str, enabled: bool, *, api_key: str | None = None
+    ) -> None:
         url = f"{panel.admin_api_base}/user/{user_uuid}/"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.patch(url, headers=self._headers(panel), json={"enable": enabled})
+            resp = await client.patch(
+                url, headers=self._headers(panel, api_key), json={"enable": enabled}
+            )
             # Surface the panel's actual response body on error (status code alone is
             # rarely enough to diagnose why a disable was rejected).
             if resp.status_code >= 400:
