@@ -30,6 +30,13 @@ else
 fi
 
 cd "$DEST"
+# FRESH=1 → start over: drop containers+volumes and regenerate .env.
+if [[ "${FRESH:-}" == "1" ]]; then
+  c "FRESH install: removing old stack + .env …"
+  docker compose --env-file .env -f deploy/docker-compose.prod.yml down -v 2>/dev/null || true
+  rm -f .env
+fi
+
 DOMAIN="${DOMAIN:-}" ACME_EMAIL="${ACME_EMAIL:-}" \
   ADMIN_USERNAME="${ADMIN_USERNAME:-owner}" ADMIN_PASSWORD="${ADMIN_PASSWORD:-}" \
   bash deploy/install.sh

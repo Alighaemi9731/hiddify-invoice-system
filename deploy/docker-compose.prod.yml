@@ -69,7 +69,9 @@ services:
       - backend
       - frontend
     environment:
-      SERVER_DOMAIN: ${SERVER_DOMAIN:?set SERVER_DOMAIN in .env}
+      # Empty → Caddy serves plain HTTP on :80 (reachable at http://<server-ip>).
+      # Set a real domain (here or via the panel) to switch on automatic HTTPS.
+      SERVER_DOMAIN: ${SERVER_DOMAIN:-:80}
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
     ports:
       - "80:80"
