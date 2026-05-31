@@ -1,8 +1,11 @@
+import { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Box, CircularProgress } from "@mui/material";
 import { useAuth } from "./auth/AuthContext";
+import { getSetupStatus } from "./api/client";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
+import Setup from "./pages/Setup";
 import Dashboard from "./pages/Dashboard";
 import Panels from "./pages/Panels";
 import Resellers from "./pages/Resellers";
@@ -29,7 +32,28 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function Spinner() {
+  return (
+    <Box sx={{ display: "grid", placeItems: "center", height: "100vh" }}>
+      <CircularProgress />
+    </Box>
+  );
+}
+
 export default function App() {
+  // Gate everything on the one-time setup state. Until the owner completes setup,
+  // the wizard is shown for ANY path; afterwards it's never shown again.
+  const [setupDone, setSetupDone] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getSetupStatus()
+      .then((s) => setSetupDone(s.setup_done))
+      .catch(() => setSetupDone(true)); // if status fails, don't block login
+  }, []);
+
+  if (setupDone === null) return <Spinner />;
+  if (!setupDone) return <Setup onDone={() => setSetupDone(true)} />;
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

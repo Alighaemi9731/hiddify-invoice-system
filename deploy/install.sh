@@ -34,20 +34,15 @@ if [[ -r /etc/os-release ]]; then
 fi
 
 # ---- 1. inputs --------------------------------------------------------------
-# Fully non-interactive by default: domain is OPTIONAL (set it later in the panel),
-# and the admin password is auto-generated if not provided (printed at the end).
+# Fully non-interactive. By default NOTHING is asked: the panel's first-run wizard
+# (in the browser) collects username/password/domain. Power users can still preseed
+# DOMAIN/ADMIN_PASSWORD via env to skip the wizard.
 DOMAIN="${DOMAIN:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-owner}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"   # empty → setup wizard runs in the browser
 
 rand() { openssl rand -base64 "${1:-48}" | tr -dc 'A-Za-z0-9' | cut -c1-"${2:-44}"; }
-
-GENERATED_PW=""
-if [[ -z "$ADMIN_PASSWORD" ]]; then
-  ADMIN_PASSWORD="$(rand 24 16)"
-  GENERATED_PW="$ADMIN_PASSWORD"
-fi
 
 SERVER_IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
@@ -115,28 +110,30 @@ cd "$REPO_DIR"
 # --env-file points compose at the repo-root .env (the compose file lives in deploy/).
 docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml up -d --build
 
-if [[ -n "$DOMAIN" ]]; then
-  URL="https://$DOMAIN"
-  DOMAIN_NOTE="• مطمئن شوید رکورد A دامنهٔ $DOMAIN به IP این سرور ($SERVER_IP) اشاره می‌کند و پورت‌های ۸۰/۴۴۳ باز است."
-else
-  URL="http://$SERVER_IP"
-  DOMAIN_NOTE="• بدون دامنه نصب شد. برای فعال‌سازی HTTPS، وارد پنل شوید → «حساب و پشتیبان» → «دامنه و HTTPS» و دامنه را وارد کنید."
-fi
+URL="http://$SERVER_IP"
 
-PW_LINE="رمز عبور: همان رمزی که وارد کردید"
-[[ -n "$GENERATED_PW" ]] && PW_LINE="رمز عبور (به‌صورت خودکار ساخته شد): $GENERATED_PW"
+if [[ -n "$ADMIN_PASSWORD" ]]; then
+  # Scripted install (password preseeded) → owner created at boot, no browser wizard.
+  CRED_LINE="   نام کاربری:  $ADMIN_USERNAME
+   رمز عبور:  همان رمزی که تعیین کردید"
+  SETUP_NOTE="• حساب مدیر از قبل ساخته شد. مستقیم وارد شوید."
+else
+  # Default path → the in-browser «راه‌اندازی اولیه» wizard collects everything.
+  CRED_LINE=""
+  SETUP_NOTE="• آدرس بالا را در مرورگر باز کنید؛ صفحهٔ «راه‌اندازی اولیه» نام کاربری، رمز عبور و دامنه را می‌گیرد و خودش SSL را فعال می‌کند."
+fi
 
 cat <<DONE
 
 ────────────────────────────────────────────────────────────
 ✅ نصب کامل شد.
 
-   آدرس ورود:  $URL
-   نام کاربری:  $ADMIN_USERNAME
-   $PW_LINE
+   این آدرس را در مرورگر باز کنید:
+   $URL
+$CRED_LINE
 
 نکته‌ها:
-  $DOMAIN_NOTE
+  $SETUP_NOTE
   • پس از ورود، در «تنظیمات» توکن ربات، کیف پول USDT و کلید BscScan را وارد کنید.
   • لاگ‌ها:   docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
   • ری‌استارت: docker compose --env-file .env -f deploy/docker-compose.prod.yml restart

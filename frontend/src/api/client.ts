@@ -45,6 +45,12 @@ export async function openInvoicePdf(invoiceId: number) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// ---- setup (first-run wizard) ----
+export const getSetupStatus = () =>
+  api.get("/api/setup/status").then((r) => r.data as { setup_done: boolean; domain: string; https_enabled: boolean });
+export const doSetup = (body: { username: string; password: string; domain?: string; acme_email?: string }) =>
+  api.post("/api/setup", body).then((r) => r.data);
+
 // ---- auth ----
 export const getCaptcha = () =>
   api.get("/api/auth/captcha").then((r) => r.data as { captcha_id: string; image: string });

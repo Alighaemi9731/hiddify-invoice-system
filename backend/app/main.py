@@ -18,6 +18,7 @@ from app.api import (
     payments,
     reports,
     resellers,
+    setup as setup_api,
     settings as settings_api,
 )
 from app.core.config import settings
@@ -83,6 +84,7 @@ app.add_middleware(
 )
 
 app.include_router(meta.router)
+app.include_router(setup_api.router)
 app.include_router(auth.router)
 app.include_router(panels.router)
 app.include_router(resellers.router)

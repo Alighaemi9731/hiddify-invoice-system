@@ -64,23 +64,35 @@ async def _caddy_set_domain(domain: str, email: str | None) -> tuple[bool, str]:
                 "servers": {
                     "srv0": {
                         "listen": [":443", ":80"],
-                        "routes": [{
-                            "match": [{"host": [domain]}],
-                            "handle": [{
-                                "handler": "subroute",
-                                "routes": [
-                                    {
-                                        "match": [{"path": ["/api/*", "/health", "/docs", "/openapi.json"]}],
-                                        "handle": [{"handler": "reverse_proxy",
-                                                    "upstreams": [{"dial": "backend:8000"}]}],
-                                    },
-                                    {
-                                        "handle": [{"handler": "reverse_proxy",
-                                                    "upstreams": [{"dial": "frontend:80"}]}],
-                                    },
-                                ],
-                            }],
-                        }],
+                        "routes": [
+                            {
+                                # The domain: proxy API → backend, everything else → SPA.
+                                "match": [{"host": [domain]}],
+                                "handle": [{
+                                    "handler": "subroute",
+                                    "routes": [
+                                        {
+                                            "match": [{"path": ["/api/*", "/health", "/docs", "/openapi.json"]}],
+                                            "handle": [{"handler": "reverse_proxy",
+                                                        "upstreams": [{"dial": "backend:8000"}]}],
+                                        },
+                                        {
+                                            "handle": [{"handler": "reverse_proxy",
+                                                        "upstreams": [{"dial": "frontend:80"}]}],
+                                        },
+                                    ],
+                                }],
+                            },
+                            {
+                                # Anything else (bare IP, other host) → permanent redirect
+                                # to the domain, so the IP address is no longer usable.
+                                "handle": [{
+                                    "handler": "static_response",
+                                    "status_code": 308,
+                                    "headers": {"Location": [f"https://{domain}{{http.request.uri}}"]},
+                                }],
+                            },
+                        ],
                     }
                 }
             }
@@ -114,10 +126,12 @@ async def set_domain(session: AsyncSession, domain: str, email: str | None = Non
     await settings_service.set_value(session, "server_domain", domain)
     if email:
         await settings_service.set_value(session, "acme_email", email)
-    await settings_service.set_value(session, "https_enabled", True)
     persisted = _persist_env(domain, email)
 
     applied, msg = await _caddy_set_domain(domain, email)
+    # Only flag HTTPS as live (and thus lock the IP→domain redirect) when Caddy
+    # actually accepted the config. On failure we stay on the IP and let the user retry.
+    await settings_service.set_value(session, "https_enabled", bool(applied))
     return {
         "ok": applied,
         "domain": domain,

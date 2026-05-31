@@ -95,6 +95,7 @@ DEFS: list[SettingDef] = [
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),
     SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto
     SettingDef("excluded_usage_gb", [1], False, "pricing"),  # test configs to skip
+    SettingDef("min_sale_toman", 0, False, "pricing"),  # 0 = no minimum-sale floor
     # Invoicing schedule
     SettingDef("invoice_day_of_month", 1, False, "schedule"),  # run on the 1st for prev month
     SettingDef("invoice_hour", 9, False, "schedule"),
@@ -108,6 +109,12 @@ DEFS: list[SettingDef] = [
     # Owner
     SettingDef("owner_name", "", False, "general"),
     SettingDef("owner_telegram", "", False, "general"),
+    SettingDef("owner_chat_id", "", False, "general"),
+    # First-run setup wizard state (locked once the owner completes setup).
+    SettingDef("setup_done", False, False, "general"),
+    # Automatic backups to the owner's Telegram.
+    SettingDef("backup_enabled", True, False, "backup"),
+    SettingDef("backup_interval_hours", 2, False, "backup"),
     # Deployment (Phase 2): domain + automatic HTTPS, applied by the installer.
     SettingDef("server_domain", "", False, "deploy"),
     SettingDef("https_enabled", False, False, "deploy"),
