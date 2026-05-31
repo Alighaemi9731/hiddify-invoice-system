@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections import defaultdict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,22 +37,32 @@ async def _bundle(session: AsyncSession, reseller: Reseller) -> list[Reseller]:
     return collect_descendants(reseller, children)
 
 
-async def _set_user_enabled(client: AdminApiClient, panel, snapshot, enabled: bool) -> None:
+async def _set_user_enabled_uuid(
+    client: AdminApiClient, panel, user_uuid: str, creator: str | None, enabled: bool
+) -> None:
     """Enable/disable a user, authenticating AS its creating admin (added_by_uuid) so the
     panel's has_permission passes even when the configured key isn't the super-admin.
     Falls back to the panel's configured key."""
-    creator = getattr(snapshot, "added_by_uuid", None)
     if creator:
         try:
-            await client.set_user_enabled(panel, snapshot.user_uuid, enabled, api_key=creator)
+            await client.set_user_enabled(panel, user_uuid, enabled, api_key=creator)
             return
         except Exception:  # noqa: BLE001 — fall back to the panel/owner key
             pass
-    await client.set_user_enabled(panel, snapshot.user_uuid, enabled)
+    await client.set_user_enabled(panel, user_uuid, enabled)
 
 
-async def _disable_user(client: AdminApiClient, panel, snapshot) -> None:
-    await _set_user_enabled(client, panel, snapshot, False)
+async def _set_admin_limits(client: AdminApiClient, panel, admin: Reseller, mu: int, mau: int) -> None:
+    """Set an admin's limits, authenticating AS that admin's PARENT (has_permission for an
+    AdminUser passes when parent_admin_id == the acting account). Falls back to panel key."""
+    parent = admin.parent_admin_uuid
+    if parent:
+        try:
+            await client.set_admin_limits(panel, admin.admin_uuid, mu, mau, api_key=parent)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    await client.set_admin_limits(panel, admin.admin_uuid, mu, mau)
 
 
 async def _enabled_users(session: AsyncSession, panel_id: int, admin_uuids: set[str]) -> list[EndUserSnapshot]:
@@ -91,7 +102,9 @@ async def enforce_reseller(
             }
             for d in descendants
         },
-        "users": {u.user_uuid: True for u in users},  # prior enable state (all True here)
+        # user_uuid → creating admin (added_by), so restore can re-enable each user
+        # authenticated as the same admin.
+        "users": {u.user_uuid: (u.added_by_uuid or "") for u in users},
     }
 
     action = EnforcementAction(
@@ -111,33 +124,35 @@ async def enforce_reseller(
 
     client = AdminApiClient()
     errors: list[str] = []
-
-    # 1) Disable end-users FIRST — while every admin still has its full limits, so a
-    # just-capped admin can never be the reason a user-disable is rejected. Each user is
-    # disabled authenticated AS its creating admin (added_by). BEST-EFFORT: a slow/failed
-    # per-user PATCH (the panel reapplies the whole proxy each time) must not abort.
-    # Disabling the users is what actually cuts off existing connections.
-    disabled = 0
+    users_by_admin: dict[str, list] = defaultdict(list)
     for u in users:
-        try:
-            await _disable_user(client, panel, u)
-            u.enable = False
-            disabled += 1
-        except Exception as ue:  # noqa: BLE001
-            errors.append(f"{(u.name or u.user_uuid)[:18]}: {str(ue)[:100]}")
+        users_by_admin[u.added_by_uuid or ""].append(u)
 
-    # 2) THEN zero every admin's limits (prevents creating/re-activating users). Snapshot
-    # prior values for exact restore. BEST-EFFORT: a stale sub-admin must not abort.
+    # Walk the tree BOTTOM-UP (deepest sub-resellers before their parent — `descendants`
+    # is breadth-first from the root, so reversed() yields children before parents). For
+    # each admin: (1) disable ITS users, then (2) zero ITS limits. Doing users-before-
+    # limits per node means a node is never capped while we still need to edit its users,
+    # and processing children first means a parent's cap can't interfere with a child.
+    # Users are edited AS their creator and limits AS the admin's parent, so the panel's
+    # permission check passes even when the configured key isn't the super-admin.
+    disabled = 0
     root_ok = False
-    for d in descendants:
+    for d in reversed(descendants):
+        for u in users_by_admin.get(d.admin_uuid, []):
+            try:
+                await _set_user_enabled_uuid(client, panel, u.user_uuid, u.added_by_uuid, False)
+                u.enable = False
+                disabled += 1
+            except Exception as ue:  # noqa: BLE001
+                errors.append(f"user {(u.name or u.user_uuid)[:16]}: {str(ue)[:90]}")
         d.max_users_snapshot = d.panel_max_users
         d.max_active_users_snapshot = d.panel_max_active_users
         try:
-            await client.set_admin_limits(panel, d.admin_uuid, 0, 0)
+            await _set_admin_limits(client, panel, d, 0, 0)
             if d.admin_uuid == reseller.admin_uuid:
                 root_ok = True
         except Exception as le:  # noqa: BLE001
-            errors.append(f"limit {(d.name or d.admin_uuid)[:18]}: {str(le)[:100]}")
+            errors.append(f"limit {(d.name or d.admin_uuid)[:16]}: {str(le)[:90]}")
 
     # Enforcement counts as done if we made real progress: users disabled (existing
     # connections cut) OR the reseller's own limits zeroed. Only a total no-op is a failure.
@@ -181,6 +196,9 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
     panel = await session.get(Panel, reseller.panel_id)
     snapshot = last.snapshot if last else {"limits": {}, "users": {}}
     client = AdminApiClient()
+    descendants = await _bundle(session, reseller)
+    limits_map = snapshot.get("limits") or {}
+    users_map = snapshot.get("users") or {}  # {user_uuid: creating admin uuid}
 
     restore = EnforcementAction(
         reseller_id=reseller.id, action=EnforcementActionType.restore,
@@ -188,42 +206,53 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
     )
     session.add(restore)
     errors: list[str] = []
-    try:
-        for admin_uuid, lim in (snapshot.get("limits") or {}).items():
-            mu = lim.get("max_users")
-            mau = lim.get("max_active_users")
-            if mu is None and mau is None:
-                continue
-            await client.set_admin_limits(panel, admin_uuid, mu or 0, mau or 0)
-    except Exception as exc:  # noqa: BLE001 — restoring limits is the critical step
+
+    # Reverse of enforce: TOP-DOWN (root first). For each admin restore ITS limits FIRST,
+    # then re-enable ITS users — because the panel REJECTS enabling a user while its
+    # admin's max is still 0 (an active user can't exceed the cap). Limits are set AS the
+    # admin's parent, users AS their creator, so permission passes without the super key.
+    root_failed = False
+    for d in descendants:  # breadth-first = root before children
+        lim = limits_map.get(d.admin_uuid)
+        if lim and not (lim.get("max_users") is None and lim.get("max_active_users") is None):
+            try:
+                await _set_admin_limits(client, panel, d,
+                                        lim.get("max_users") or 0, lim.get("max_active_users") or 0)
+            except Exception as le:  # noqa: BLE001
+                errors.append(f"limit {(d.name or d.admin_uuid)[:16]}: {str(le)[:90]}")
+                if d.admin_uuid == reseller.admin_uuid:
+                    root_failed = True
+    if root_failed:
+        # Couldn't lift the reseller's own cap → users can't be re-enabled; report failure.
         restore.status = EnforcementActionStatus.failed
-        restore.error = f"restore admin limits failed: {str(exc)[:900]}"
+        restore.error = ("could not restore the reseller's own limits — " + " | ".join(errors))[:1000]
         await session.commit()
-        log.exception("Restore (admin limits) failed for reseller %s", reseller.name)
+        log.warning("Restore failed for reseller %s: %s", reseller.name, restore.error)
         return restore
 
-    # Re-enable users BEST-EFFORT, authenticated as each user's creator (added_by) so the
-    # panel permits it; one failure must not leave a paid reseller stuck enforced. We work
-    # off the live snapshot rows (which carry added_by_uuid).
-    user_uuids = list((snapshot.get("users") or {}).keys())
+    # Now re-enable users (caps are lifted), each as its creating admin.
     re_enabled = 0
-    rows = []
-    if user_uuids:
-        rows = (
-            await session.execute(
-                select(EndUserSnapshot).where(
-                    EndUserSnapshot.panel_id == panel.id,
-                    EndUserSnapshot.user_uuid.in_(user_uuids),
+    rows = {}
+    if users_map:
+        rows = {
+            r.user_uuid: r for r in (
+                await session.execute(
+                    select(EndUserSnapshot).where(
+                        EndUserSnapshot.panel_id == panel.id,
+                        EndUserSnapshot.user_uuid.in_(list(users_map.keys())),
+                    )
                 )
-            )
-        ).scalars().all()
-    for r in rows:
+            ).scalars().all()
+        }
+    for uuid, creator in users_map.items():
         try:
-            await _set_user_enabled(client, panel, r, True)
-            r.enable = True
+            await _set_user_enabled_uuid(client, panel, uuid, creator or None, True)
+            if uuid in rows:
+                rows[uuid].enable = True
             re_enabled += 1
         except Exception as ue:  # noqa: BLE001
-            errors.append(f"{r.user_uuid[-6:]}: {str(ue)[:120]}")
+            errors.append(f"user {uuid[-6:]}: {str(ue)[:90]}")
+
     reseller.enforcement_state = EnforcementState.active
     reseller.max_users_snapshot = None
     reseller.max_active_users_snapshot = None
@@ -232,9 +261,9 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
     restore.status = EnforcementActionStatus.done
     restore.affected_count = re_enabled
     if errors:
-        restore.error = (f"{re_enabled}/{len(user_uuids)} re-enabled; "
-                         f"{len(errors)} failed: " + " | ".join(errors[:8]))[:1000]
+        restore.error = (f"{re_enabled}/{len(users_map)} re-enabled; "
+                         f"{len(errors)} issue(s): " + " | ".join(errors[:8]))[:1000]
     await session.commit()
-    log.info("Restored reseller %s: re-enabled %d/%d users (%d errors)",
-             reseller.name, re_enabled, len(user_uuids), len(errors))
+    log.info("Restored reseller %s: re-enabled %d/%d users (%d issues)",
+             reseller.name, re_enabled, len(users_map), len(errors))
     return restore
