@@ -33,7 +33,11 @@ async def sync_panel(
     source: SyncSource = SyncSource.backup_json,
 ) -> SyncRun:
     """Sync one panel. If `data` is given, it's used directly (e.g. sample seed)."""
-    run = SyncRun(panel_id=panel.id, source=source, status=SyncStatus.running)
+    # Capture the id NOW: session.rollback() in the except block expires every attribute,
+    # so reading panel.id afterwards would trigger a sync lazy-load (MissingGreenlet) and
+    # mask the real error / abort the whole run.
+    panel_id = panel.id
+    run = SyncRun(panel_id=panel_id, source=source, status=SyncStatus.running)
     session.add(run)
     await session.flush()
 
@@ -62,12 +66,12 @@ async def sync_panel(
         # The flushed run row is gone after rollback; record a fresh failure row.
         await session.rollback()
         err = str(exc)[:1000]
-        panel = await session.get(Panel, panel.id)  # re-attach after rollback
+        panel = await session.get(Panel, panel_id)  # re-attach after rollback
         if panel is not None:
             panel.status = PanelStatus.error
             panel.last_error = err
         run = SyncRun(
-            panel_id=panel.id if panel else None,
+            panel_id=panel_id,
             source=source,
             status=SyncStatus.failed,
             error=err,
@@ -172,5 +176,9 @@ async def sync_all(session: AsyncSession) -> list[SyncRun]:
     ).scalars().all()
     runs: list[SyncRun] = []
     for panel in panels:
-        runs.append(await sync_panel(session, panel))
+        try:
+            runs.append(await sync_panel(session, panel))
+        except Exception:  # noqa: BLE001 — one bad panel must not abort the rest
+            log.exception("sync_all: panel %s failed", getattr(panel, "key", "?"))
+            await session.rollback()
     return runs

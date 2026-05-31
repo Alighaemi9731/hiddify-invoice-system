@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
-    DeliveryLog, EndUserSnapshot, EnforcementAction, Invoice, InvoiceLine,
-    Panel, Payment, Reseller, SyncRun,
+    BotUser, DeliveryLog, EndUserSnapshot, EnforcementAction, Invoice, InvoiceLine,
+    Panel, Payment, Reseller, SyncRun, UsageMeter,
 )
 from app.services import (
     backup as backup_service,
@@ -97,14 +97,17 @@ async def wipe_data(body: WipeBody, session: AsyncSession = Depends(get_session)
     logs). Keeps the owner login and settings. Irreversible — guard with confirm."""
     if body.confirm != "DELETE":
         raise HTTPException(400, "برای تأیید باید عبارت DELETE ارسال شود")
-    # Order matters for FK constraints: children before parents.
+    # Order matters for FK constraints: children before parents. UsageMeter and BotUser
+    # have NO foreign keys, so stale rows would otherwise survive a wipe and (for meters)
+    # be re-billed against a freshly-seeded panel. FinancialRecord is intentionally kept
+    # (durable ledger); app_users + settings are kept (owner login + config).
     for model in (
         InvoiceLine, Payment, DeliveryLog, EnforcementAction, Invoice,
-        EndUserSnapshot, SyncRun, Reseller, Panel,
+        UsageMeter, EndUserSnapshot, SyncRun, BotUser, Reseller, Panel,
     ):
         await session.execute(delete(model))
     await session.commit()
-    return {"status": "ok", "message": "همهٔ داده‌ها پاک شد (به‌جز حساب مدیر و تنظیمات)."}
+    return {"status": "ok", "message": "همهٔ داده‌ها پاک شد (به‌جز حساب مدیر، تنظیمات و تاریخچهٔ مالی)."}
 
 
 @router.post("/set-domain")

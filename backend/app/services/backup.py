@@ -127,7 +127,9 @@ def _pg_restore(sql: bytes) -> bool:
             capture_output=True, timeout=60,
         )
         out = subprocess.run(
-            ["psql", "--dbname", _pg_url(), "-v", "ON_ERROR_STOP=0"],
+            # ON_ERROR_STOP=1 so a failed statement aborts and is reported as failure
+            # (→ caller keeps the .sql for manual import) instead of a false "ok".
+            ["psql", "--dbname", _pg_url(), "-v", "ON_ERROR_STOP=1"],
             input=sql, capture_output=True, timeout=300,
         )
         if out.returncode != 0:
@@ -158,7 +160,11 @@ def _persist_secret_key(secret_key: str) -> None:
     the auto-restart. No-op on the original server (same value)."""
     import re
 
-    if not secret_key:
+    # Restore reads this from an uploaded backup's meta.json; reject anything that
+    # isn't a plain token so a tampered backup can't inject extra .env lines.
+    if not secret_key or not re.fullmatch(r"[A-Za-z0-9_\-+/=]{16,128}", secret_key):
+        if secret_key:
+            log.warning("restore: ignoring malformed secret_key from backup meta")
         return
     for p in _ENV_PATHS:
         try:

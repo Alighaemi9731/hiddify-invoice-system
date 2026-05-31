@@ -252,40 +252,58 @@ async def defer_invoice(
         )
         if inv.status == InvoiceStatus.overdue:
             inv.status = InvoiceStatus.sent
-        # If the reseller was suspended, give their service back during the new window.
-        if inv.status == InvoiceStatus.enforced or (
+        # If the reseller was suspended, give their service back for the new window —
+        # but ONLY if they have no OTHER still-due (non-deferred) invoice keeping them
+        # owing; otherwise the grace on this one would wrongly un-suspend a debtor.
+        was_enforced = inv.status == InvoiceStatus.enforced or (
             reseller and reseller.enforcement_state == EnforcementState.enforced
-        ):
-            try:
-                from app.services import enforcement
+        )
+        if was_enforced and reseller:
+            today = dt.date.today()
+            others = (
+                await session.execute(
+                    select(Invoice).where(
+                        Invoice.reseller_id == reseller.id,
+                        Invoice.id != inv.id,
+                        Invoice.status.in_(
+                            (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+                        ),
+                    )
+                )
+            ).scalars().all()
+            still_owes = any(not (o.deferred_until and o.deferred_until > today) for o in others)
+            if not still_owes:
+                try:
+                    from app.services import enforcement
 
-                await enforcement.restore_reseller(session, reseller)
-                inv.status = InvoiceStatus.sent
-            except Exception:  # noqa: BLE001 — API creds may be absent; deadline still set
-                pass
+                    await enforcement.restore_reseller(session, reseller)
+                    inv.status = InvoiceStatus.sent
+                except Exception:  # noqa: BLE001 — API creds may be absent; deadline still set
+                    pass
 
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
 
 
-@router.post("/{invoice_id}/recompute", response_model=InvoiceOut)
+@router.post("/{invoice_id}/recompute")
 async def recompute_invoice(
     invoice_id: int, sync: bool = True, session: AsyncSession = Depends(get_session)
-) -> InvoiceOut:
+) -> dict:
     """Refresh this invoice's numbers from the panel's CURRENT data (syncs the panel
-    first by default), keeping its status. For correcting an already-sent invoice."""
+    first by default), keeping its status. For correcting an already-sent invoice.
+    Returns the updated invoice plus `synced` (whether the panel sync succeeded)."""
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
     try:
-        await invoicing.recompute_invoice(session, inv, sync_first=sync)
+        result = await invoicing.recompute_invoice(session, inv, sync_first=sync)
     except ValueError:
         raise HTTPException(400, "فاکتور پرداخت‌شده را نمی‌توان بازمحاسبه کرد؛ ابتدا «لغو پرداخت» را بزنید.")
     inv = await session.get(Invoice, invoice_id)
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)
-    return _to_out(inv, reseller.name, panel.key)
+    return {**_to_out(inv, reseller.name, panel.key).model_dump(), "synced": bool(result.get("synced"))}
 
 
 @router.post("/{invoice_id}/send")

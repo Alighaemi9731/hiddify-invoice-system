@@ -47,9 +47,20 @@ export default function App() {
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
 
   useEffect(() => {
-    getSetupStatus()
-      .then((s) => setSetupDone(s.setup_done))
-      .catch(() => setSetupDone(true)); // if status fails, don't block login
+    let cancelled = false;
+    // Retry a few times on transient errors so a brief backend hiccup on a fresh
+    // install doesn't skip the setup wizard and strand the user on a login they can't use.
+    const attempt = (n: number) => {
+      getSetupStatus()
+        .then((s) => { if (!cancelled) setSetupDone(s.setup_done); })
+        .catch(() => {
+          if (cancelled) return;
+          if (n > 0) setTimeout(() => attempt(n - 1), 1500);
+          else setSetupDone(true); // give up after retries → show login
+        });
+    };
+    attempt(4);
+    return () => { cancelled = true; };
   }, []);
 
   if (setupDone === null) return <Spinner />;

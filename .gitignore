@@ -14,6 +14,11 @@ secrets/
 legacy invoice manual system/
 sample backup panel/
 source code panel for help/
+# Merged/renamed reference folder + any Hiddify source/panel backups dropped in locally.
+source-sampleBackupFile-legacyManualInvoiceSystem/
+Hiddify-Manager-*/
+hiddify-*.json
+*.DS_Store
 MY_UNDERSTANDING.md
 
 # ───────────────────────────── Python ─────────────────────────────

@@ -91,14 +91,23 @@ async def _settle_due_now(
     settled: list[Invoice] = []
     for inv in await _due_now_invoices(session, reseller_ids):
         amt = Decimal(str(inv.amount_usdt or 0))
-        if remaining + tolerance >= amt:
+        if remaining >= amt:
+            remaining -= amt
+        elif remaining + tolerance >= amt:
+            # Boundary invoice: cover it using the single rounding tolerance, then stop —
+            # tolerance is slack on the WHOLE transfer, not free per-invoice slack.
+            remaining = Decimal("0")
             inv.status = InvoiceStatus.paid
             inv.paid_at = now
             await financial_archive.record(session, inv)
-            remaining -= amt
             settled.append(inv)
+            break
         else:
-            break  # can't fully cover this (oldest remaining) invoice → stop
+            break  # can't cover this (oldest remaining) invoice → stop
+        inv.status = InvoiceStatus.paid
+        inv.paid_at = now
+        await financial_archive.record(session, inv)
+        settled.append(inv)
     return settled
 
 
@@ -154,8 +163,12 @@ async def _bscscan_tokentx(
     return _ChainCheck(False, None, None, Decimal(0), 0, error="transaction not found for this wallet")
 
 
-async def verify_payment(session: AsyncSession, payment_id: int) -> PaymentResult:
-    """Verify a pending TXID payment on-chain and apply it. Idempotent-ish."""
+async def verify_payment(
+    session: AsyncSession, payment_id: int, *, notify_reseller: bool = False
+) -> PaymentResult:
+    """Verify a pending TXID payment on-chain and apply it. Idempotent-ish.
+    `notify_reseller=True` (panel-triggered) sends the confirmation to the reseller's
+    Telegram; the bot path leaves it False because it answers the chat inline."""
     payment = await session.get(Payment, payment_id)
     if payment is None:
         return PaymentResult("rejected", False, "پرداخت یافت نشد.")
@@ -257,6 +270,14 @@ async def verify_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     if leftover:
         rest = sum(float(i.amount_usdt or 0) for i in leftover)
         msg += f"\n\nهنوز {rest:.2f} USDT بابت {len(leftover)} فاکتور دیگر باقی است."
+    if notify_reseller:
+        # Panel-triggered verify: tell the resellers whose invoices were settled.
+        for rid in {i.reseller_id for i in settled}:
+            r = await session.get(Reseller, rid)
+            if r is not None:
+                await notifier.send_to_reseller(
+                    session, r, msg, kind=DeliveryKind.payment_ack
+                )
     return PaymentResult("confirmed", True, msg)
 
 

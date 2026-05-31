@@ -60,7 +60,7 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
 async def verify(payment_id: int, session: AsyncSession = Depends(get_session)) -> PaymentActionResult:
     if not await session.get(Payment, payment_id):
         raise HTTPException(404, "Payment not found")
-    r = await payments_service.verify_payment(session, payment_id)
+    r = await payments_service.verify_payment(session, payment_id, notify_reseller=True)
     return PaymentActionResult(status=r.status, paid=r.paid, message=r.detail or r.message_fa)
 
 

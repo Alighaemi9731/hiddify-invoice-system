@@ -63,8 +63,10 @@ async def send_invoice(
         bot = await build_bot(session)
         own_bot = True
 
-    # Resend cleanup: remove the previously delivered message for THIS invoice so the
-    # reseller's chat shows only the latest (corrected) version.
+    # Resend cleanup: find the previously delivered message for THIS invoice. We DELETE
+    # it only AFTER the new message is sent successfully, so a failed resend never leaves
+    # the reseller with no invoice in their chat.
+    prior_msg_id: int | None = None
     if bot is not None:
         prior = (
             await session.execute(
@@ -78,11 +80,7 @@ async def send_invoice(
                 .limit(1)
             )
         ).scalar_one_or_none()
-        if prior and prior.tg_message_id:
-            try:
-                await bot.delete_message(reseller.bot_chat_id, prior.tg_message_id)
-            except Exception:  # noqa: BLE001 — old message may be deleted/too old to remove
-                pass
+        prior_msg_id = prior.tg_message_id if prior else None
 
     status = DeliveryStatus.sent
     error: str | None = None
@@ -106,6 +104,13 @@ async def send_invoice(
             msg_id = sent.message_id
         except Exception as exc2:  # noqa: BLE001
             status, error = DeliveryStatus.failed, str(exc2)[:500]
+
+    # New message is out → now it's safe to remove the previous one.
+    if status == DeliveryStatus.sent and prior_msg_id and bot is not None:
+        try:
+            await bot.delete_message(reseller.bot_chat_id, prior_msg_id)
+        except Exception:  # noqa: BLE001 — old message may be deleted/too old to remove
+            pass
 
     dl = DeliveryLog(
         reseller_id=reseller.id, invoice_id=inv.id, kind=DeliveryKind.invoice,

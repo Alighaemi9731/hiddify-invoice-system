@@ -2,10 +2,11 @@
 Write adapter: Hiddify Admin REST API (v2). Used for enforcement (disable users,
 zero an admin's limits) and restore. Needs the per-panel admin API key.
 
-Endpoints (relative to https://<host>/<proxy_path>/<owner_uuid>/api/v2/admin):
+Endpoints (relative to https://<host>/<proxy_path>/api/v2/admin — the admin UUID is
+NOT in the path; it travels in the Hiddify-API-Key header):
   PATCH /user/{uuid}/        body {"enable": false}
   PATCH /admin_user/{uuid}/  body {"max_users": 0, "max_active_users": 0}
-Auth header: Hiddify-API-Key: <admin_api_key>
+Auth header: Hiddify-API-Key: <admin_api_key (the admin uuid)>
 """
 from __future__ import annotations
 

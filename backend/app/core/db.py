@@ -79,14 +79,18 @@ def _sync_missing_columns(sync_conn) -> None:
                 type_sql = column.type.compile(dialect=dialect)
             except Exception:  # noqa: BLE001
                 type_sql = "VARCHAR"
-            # Default so existing rows get a value (and NOT NULL stays satisfiable).
-            # NOTE: Postgres rejects `DEFAULT 0` for BOOLEAN — must be FALSE.
-            if isinstance(column.type, Boolean):
+            # Give NOT NULL columns a type-appropriate default so the ADD COLUMN succeeds
+            # on a populated table and existing rows get a sane value. Nullable columns
+            # need no default (NULL is fine), which also avoids an invalid `DEFAULT ''`
+            # on a date/datetime column. NOTE: Postgres rejects `DEFAULT 0` for BOOLEAN.
+            if column.nullable:
+                default = ""
+            elif isinstance(column.type, Boolean):
                 default = " DEFAULT FALSE"
             elif isinstance(column.type, (Integer, Numeric)):
                 default = " DEFAULT 0"
             else:
-                default = ""
+                default = " DEFAULT ''"  # String / Enum (native_enum=False, stored VARCHAR)
             ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {type_sql}{default}'
             try:
                 sync_conn.exec_driver_sql(ddl)

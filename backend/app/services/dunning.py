@@ -20,9 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.telegram import build_bot
-from app.models import DeliveryLog, Invoice, Reseller
+from app.models import DeliveryLog, EnforcementAction, Invoice, Reseller
 from app.models.enums import (
     DeliveryKind,
+    DeliveryStatus,
     EnforcementState,
     InvoiceStatus,
 )
@@ -34,9 +35,15 @@ _ACTIVE = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 
 
 async def _done_kinds(session: AsyncSession, invoice_id: int) -> set[str]:
+    # Only count SUCCESSFULLY-sent deliveries as "done", so a reminder that failed
+    # (transient Telegram error) or was unmatched (reseller hadn't registered yet) is
+    # retried on the next run instead of being skipped forever.
     rows = (
         await session.execute(
-            select(DeliveryLog.kind).where(DeliveryLog.invoice_id == invoice_id)
+            select(DeliveryLog.kind).where(
+                DeliveryLog.invoice_id == invoice_id,
+                DeliveryLog.status == DeliveryStatus.sent,
+            )
         )
     ).scalars().all()
     return {k.value for k in rows}
@@ -120,6 +127,20 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                 counts["warning"] += 1
 
             if days >= de and reseller.enforcement_state == EnforcementState.active:
+                # A live enforcement flips enforcement_state away from `active`, so it's
+                # naturally skipped next run. A DRY-RUN doesn't change state, so without a
+                # guard it would log a fresh EnforcementAction every single day. In
+                # dry-run, log at most once per invoice; live failures still retry.
+                if not bool(cfg.get("enforcement_enabled")):
+                    already = (
+                        await session.execute(
+                            select(EnforcementAction.id)
+                            .where(EnforcementAction.invoice_id == inv.id)
+                            .limit(1)
+                        )
+                    ).first()
+                    if already:
+                        continue
                 action = await enforcement.enforce_reseller(session, reseller, invoice_id=inv.id)
                 if action.dry_run:
                     counts["enforced_dry"] += 1

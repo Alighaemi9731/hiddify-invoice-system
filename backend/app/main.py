@@ -70,11 +70,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-# CORS. In production the SPA is same-origin (served via Caddy), so no cross-origin
-# is needed; in local dev we allow the Vite origin.
-_cors_origins = ["*"] if settings.app_env != "production" else [
-    f"https://{settings.server_domain}" if getattr(settings, "server_domain", "") else "*",
-]
+# CORS. In production the SPA is same-origin (served via Caddy), so cross-origin is not
+# needed and we keep it CLOSED (only the configured domain, if any). In local dev we
+# allow any origin for the Vite server.
+if settings.app_env != "production":
+    _cors_origins = ["*"]
+elif getattr(settings, "server_domain", ""):
+    _cors_origins = [f"https://{settings.server_domain}"]
+else:
+    _cors_origins = []  # same-origin only (behind Caddy); do NOT fall open to "*"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
