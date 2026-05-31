@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import FinancialRecord, Invoice, Panel, Reseller
+from app.models.enums import InvoiceStatus
 
 log = logging.getLogger("financial_archive")
+
+
+def _status_str(status) -> str:
+    return status.value if hasattr(status, "value") else str(status)
 
 
 async def record(
@@ -26,8 +31,20 @@ async def record(
     txid: str | None = None,
     commit: bool = False,
 ) -> None:
-    """Upsert the ledger row for `invoice`. Best-effort: never raises into callers."""
+    """Upsert the ledger row for `invoice`. Best-effort: never raises into callers.
+
+    Drafts are NOT recorded (they're transient until sent); if an invoice reverts to
+    draft, its ledger row is removed — so the durable ledger only ever holds real
+    (sent / paid / overdue / enforced / canceled) invoices."""
     try:
+        if _status_str(invoice.status) == InvoiceStatus.draft.value:
+            await session.execute(
+                delete(FinancialRecord).where(FinancialRecord.invoice_id == invoice.id)
+            )
+            if commit:
+                await session.commit()
+            return
+
         if panel is None:
             panel = await session.get(Panel, invoice.panel_id)
         if reseller is None:

@@ -57,6 +57,8 @@ For each reseller **and its descendant sub-resellers** (bundle via `parent_admin
 
 `amount_toman = Σ usage_limit_GB × price_per_GB` (default 1000 T/GB; per-reseller override). **No** prior-unpaid carry-over. Convert to USDT via the configurable `toman_per_usdt` rate. The **Owner** (super_admin) and `exclude_from_billing` resellers are never billed.
 
+**Re-generation safety:** one invoice per `(reseller, period)` (unique constraint). Re-running «صدور فاکتورهای دوره» recomputes only DRAFTs; **paid** invoices are never recomputed (even with `force`), and other delivered (sent/overdue/enforced) are skipped unless `force`. So generating twice / regenerating a past month never duplicates or disturbs settled accounting. «حذف پیش‌نویس‌ها» (`POST /api/invoices/discard-drafts`) deletes only DRAFT invoices (a run you don't want to keep) — delivered ones are untouched. Drafts are NOT written to the financial ledger; an invoice enters the ledger only when sent/paid.
+
 **Durable financial ledger:** every invoice's money facts (panel, reseller, month, GB, amount, paid/unpaid, txid) are mirrored into `financial_records` (denormalized, no FK). This ledger is **never** deleted by the "wipe data" reset and survives panel/reseller removal — viewable under «تاریخچهٔ مالی». Written by `app/services/financial_archive.py` on generate/pay/edit/cancel/defer.
 
 ## Dunning & enforcement (real Admin-API actions; auto-suspend OFF by default)

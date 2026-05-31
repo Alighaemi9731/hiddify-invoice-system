@@ -92,6 +92,10 @@ async def send_invoice(
     if status == DeliveryStatus.sent and inv.status == InvoiceStatus.draft:
         inv.status = InvoiceStatus.sent
         inv.sent_at = dt.datetime.now(dt.timezone.utc)
+        # Now it's a real, delivered invoice → enter the durable financial ledger.
+        from app.services import financial_archive
+
+        await financial_archive.record(session, inv, reseller=reseller)
     await session.commit()
 
     if own_bot and bot is not None:

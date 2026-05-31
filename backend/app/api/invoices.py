@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import DeliveryLog, Invoice, InvoiceLine, Panel, Reseller
+from app.models import DeliveryLog, FinancialRecord, Invoice, InvoiceLine, Panel, Reseller
 from app.models.enums import DeliveryKind, EnforcementState, InvoiceStatus
 from app.schemas.invoice import (
     GenerateRequest,
@@ -65,6 +65,29 @@ async def generate(body: GenerateRequest, session: AsyncSession = Depends(get_se
         session, period, panel_id=body.panel_id, force=body.force
     )
     return GenerateResult(**summary.__dict__)
+
+
+@router.post("/discard-drafts")
+async def discard_drafts(
+    period: str | None = None,
+    panel_id: int | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Delete DRAFT invoices (never sent) — for a period, a panel, or all. Sent/paid/
+    overdue/enforced invoices are never touched. Use to throw away a draft run you
+    don't want to keep or send."""
+    q = select(Invoice.id).where(Invoice.status == InvoiceStatus.draft)
+    if period:
+        q = q.where(Invoice.period_label == period)
+    if panel_id is not None:
+        q = q.where(Invoice.panel_id == panel_id)
+    ids = (await session.execute(q)).scalars().all()
+    if ids:
+        await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id.in_(ids)))
+        await session.execute(delete(FinancialRecord).where(FinancialRecord.invoice_id.in_(ids)))
+        await session.execute(delete(Invoice).where(Invoice.id.in_(ids)))
+        await session.commit()
+    return {"discarded": len(ids), "period": period}
 
 
 @router.get("", response_model=list[InvoiceOut])

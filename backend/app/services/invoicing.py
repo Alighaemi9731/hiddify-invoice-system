@@ -144,6 +144,12 @@ async def _persist_bundle(
         )
     ).scalar_one_or_none()
 
+    # A PAID invoice is settled accounting — NEVER recompute it, even with force.
+    if existing and existing.status == InvoiceStatus.paid:
+        summary.skipped_existing += 1
+        return
+    # Other already-delivered invoices (sent/overdue/enforced) are left as-is unless
+    # the caller explicitly forces a recompute.
     if existing and existing.status != InvoiceStatus.draft and not force:
         summary.skipped_existing += 1
         return

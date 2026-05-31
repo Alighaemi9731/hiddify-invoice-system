@@ -15,6 +15,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
+  discardDrafts,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -47,7 +48,19 @@ export default function Invoices() {
   const mut = (fn: any, ok: any) =>
     useMutation({ mutationFn: fn, onSuccess: (r: any) => { show(typeof ok === "function" ? ok(r) : ok); refresh(); }, onError: (e) => show(errMsg(e), "error") });
 
-  const gen = mut(() => generateInvoices({ period }), (r: any) => `${r.created} فاکتور صادر شد (${fmtToman(r.total_amount_toman)})`);
+  const gen = mut(
+    () => generateInvoices({ period }),
+    (r: any) => {
+      const parts = [`${r.created} فاکتور جدید`];
+      if (r.updated) parts.push(`${r.updated} پیش‌نویس بازمحاسبه`);
+      if (r.skipped_existing) parts.push(`${r.skipped_existing} ارسال/پرداخت‌شده دست‌نخورده`);
+      return `${parts.join(" • ")} (${fmtToman(r.total_amount_toman)})`;
+    },
+  );
+  const discard = mut(
+    () => discardDrafts(period),
+    (r: any) => (r.discarded ? `${r.discarded} پیش‌نویس حذف شد` : "پیش‌نویسی برای حذف نبود"),
+  );
   const sendAll = mut(() => sendPeriod(period), (r: any) => `ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون ربات، ${r.failed || 0} ناموفق`);
   const sendOne = mut((id: number) => sendInvoice(id), (r: any) => `ارسال: ${r.delivery_status}`);
   const pay = mut((id: number) => markInvoicePaid(id), "به‌عنوان پرداخت‌شده ثبت شد");
@@ -81,6 +94,9 @@ export default function Invoices() {
         </TextField>
         <Box sx={{ flexGrow: 1 }} />
         <Button variant="outlined" onClick={() => gen.mutate()} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
+        <Button variant="outlined" color="warning" onClick={() => {
+          if (confirm(`همهٔ پیش‌نویس‌های دوره ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده می‌مانند)`)) discard.mutate();
+        }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>
         <Button variant="contained" startIcon={<SendIcon />} onClick={() => sendAll.mutate()} disabled={sendAll.isPending}>ارسال همه پیش‌نویس‌ها</Button>
       </Stack>
 

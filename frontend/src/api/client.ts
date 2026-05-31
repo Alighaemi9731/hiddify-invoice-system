@@ -95,6 +95,8 @@ export const listInvoices = (params: any = {}) =>
   api.get("/api/invoices", { params }).then((r) => r.data);
 export const getInvoice = (id: number) => api.get(`/api/invoices/${id}`).then((r) => r.data);
 export const generateInvoices = (b: any) => api.post("/api/invoices/generate", b).then((r) => r.data);
+export const discardDrafts = (period?: string) =>
+  api.post("/api/invoices/discard-drafts", null, { params: { period } }).then((r) => r.data);
 export const sendInvoice = (id: number) => api.post(`/api/invoices/${id}/send`).then((r) => r.data);
 export const sendPeriod = (period: string) =>
   api.post("/api/invoices/send-period", null, { params: { period } }).then((r) => r.data);
