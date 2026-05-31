@@ -93,23 +93,42 @@ async def enforce_reseller(
 
     client = AdminApiClient()
     try:
+        # 1) Zero the admins' limits (fast). If THIS fails, it's a real failure.
         for d in descendants:
             d.max_users_snapshot = d.panel_max_users
             d.max_active_users_snapshot = d.panel_max_active_users
             await client.set_admin_limits(panel, d.admin_uuid, 0, 0)
-        for u in users:
-            await client.set_user_enabled(panel, u.user_uuid, False)
-            u.enable = False
-        reseller.enforcement_state = EnforcementState.enforced
-        action.status = EnforcementActionStatus.done
-        await session.commit()
-        log.info("Enforced reseller %s: disabled %d users, zeroed %d admins",
-                 reseller.name, len(users), len(descendants))
     except Exception as exc:  # noqa: BLE001
         action.status = EnforcementActionStatus.failed
-        action.error = str(exc)[:1000]
+        action.error = f"set_admin_limits failed: {str(exc)[:900]}"
         await session.commit()
-        log.exception("Enforcement failed for reseller %s", reseller.name)
+        log.exception("Enforcement (admin limits) failed for reseller %s", reseller.name)
+        return action
+
+    # 2) Disable each end-user BEST-EFFORT. The panel reapplies the proxy on every
+    # user PATCH (slow), so one timeout/error must not abort the whole enforcement —
+    # otherwise the reseller is left half-suspended with no «release» option. We still
+    # flip to `enforced` (limits are zeroed) so the owner/reseller can restore, and we
+    # record which users couldn't be disabled.
+    disabled = 0
+    errors: list[str] = []
+    for u in users:
+        try:
+            await client.set_user_enabled(panel, u.user_uuid, False)
+            u.enable = False
+            disabled += 1
+        except Exception as ue:  # noqa: BLE001
+            errors.append(f"{(u.name or u.user_uuid)[:20]}: {str(ue)[:120]}")
+
+    reseller.enforcement_state = EnforcementState.enforced
+    action.status = EnforcementActionStatus.done
+    action.affected_count = disabled
+    if errors:
+        action.error = (f"{disabled}/{len(users)} users disabled; "
+                        f"{len(errors)} failed: " + " | ".join(errors[:8]))[:1000]
+    await session.commit()
+    log.info("Enforced reseller %s: disabled %d/%d users, zeroed %d admins (%d errors)",
+             reseller.name, disabled, len(users), len(descendants), len(errors))
     return action
 
 
@@ -140,6 +159,7 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
         dry_run=False, snapshot=snapshot, status=EnforcementActionStatus.planned,
     )
     session.add(restore)
+    errors: list[str] = []
     try:
         for admin_uuid, lim in (snapshot.get("limits") or {}).items():
             mu = lim.get("max_users")
@@ -147,33 +167,45 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
             if mu is None and mau is None:
                 continue
             await client.set_admin_limits(panel, admin_uuid, mu or 0, mau or 0)
-        user_uuids = list((snapshot.get("users") or {}).keys())
-        for uuid in user_uuids:
-            await client.set_user_enabled(panel, uuid, True)
-        # Reflect locally.
-        if user_uuids:
-            rows = (
-                await session.execute(
-                    select(EndUserSnapshot).where(
-                        EndUserSnapshot.panel_id == panel.id,
-                        EndUserSnapshot.user_uuid.in_(user_uuids),
-                    )
-                )
-            ).scalars().all()
-            for r in rows:
-                r.enable = True
-        reseller.enforcement_state = EnforcementState.active
-        reseller.max_users_snapshot = None
-        reseller.max_active_users_snapshot = None
-        if last:
-            last.status = EnforcementActionStatus.reverted
-        restore.status = EnforcementActionStatus.done
-        restore.affected_count = len(user_uuids)
-        await session.commit()
-        log.info("Restored reseller %s: re-enabled %d users", reseller.name, len(user_uuids))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — restoring limits is the critical step
         restore.status = EnforcementActionStatus.failed
-        restore.error = str(exc)[:1000]
+        restore.error = f"restore admin limits failed: {str(exc)[:900]}"
         await session.commit()
-        log.exception("Restore failed for reseller %s", reseller.name)
+        log.exception("Restore (admin limits) failed for reseller %s", reseller.name)
+        return restore
+
+    # Re-enable users BEST-EFFORT (same slow per-user proxy reapply as enforce); one
+    # failure must not leave the reseller stuck enforced after they've paid.
+    user_uuids = list((snapshot.get("users") or {}).keys())
+    re_enabled = 0
+    for uuid in user_uuids:
+        try:
+            await client.set_user_enabled(panel, uuid, True)
+            re_enabled += 1
+        except Exception as ue:  # noqa: BLE001
+            errors.append(f"{uuid[-6:]}: {str(ue)[:120]}")
+    if user_uuids:
+        rows = (
+            await session.execute(
+                select(EndUserSnapshot).where(
+                    EndUserSnapshot.panel_id == panel.id,
+                    EndUserSnapshot.user_uuid.in_(user_uuids),
+                )
+            )
+        ).scalars().all()
+        for r in rows:
+            r.enable = True
+    reseller.enforcement_state = EnforcementState.active
+    reseller.max_users_snapshot = None
+    reseller.max_active_users_snapshot = None
+    if last:
+        last.status = EnforcementActionStatus.reverted
+    restore.status = EnforcementActionStatus.done
+    restore.affected_count = re_enabled
+    if errors:
+        restore.error = (f"{re_enabled}/{len(user_uuids)} re-enabled; "
+                         f"{len(errors)} failed: " + " | ".join(errors[:8]))[:1000]
+    await session.commit()
+    log.info("Restored reseller %s: re-enabled %d/%d users (%d errors)",
+             reseller.name, re_enabled, len(user_uuids), len(errors))
     return restore

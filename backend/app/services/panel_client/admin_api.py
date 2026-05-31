@@ -20,7 +20,9 @@ log = logging.getLogger("panel.admin_api")
 
 
 class AdminApiClient(PanelClient):
-    def __init__(self, timeout: float = 30.0) -> None:
+    def __init__(self, timeout: float = 90.0) -> None:
+        # Hiddify reapplies the whole proxy config on each user PATCH, which can take a
+        # while on a busy panel — keep a generous timeout so disabling users doesn't fail.
         self.timeout = timeout
 
     def _headers(self, panel) -> dict:  # noqa: ANN001
@@ -43,7 +45,10 @@ class AdminApiClient(PanelClient):
         url = f"{panel.admin_api_base}/user/{user_uuid}/"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.patch(url, headers=self._headers(panel), json={"enable": enabled})
-            resp.raise_for_status()
+            # Surface the panel's actual response body on error (status code alone is
+            # rarely enough to diagnose why a disable was rejected).
+            if resp.status_code >= 400:
+                raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
 
     async def set_admin_limits(
         self, panel, admin_uuid: str, max_users: int, max_active_users: int  # noqa: ANN001
@@ -52,4 +57,5 @@ class AdminApiClient(PanelClient):
         body = {"max_users": max_users, "max_active_users": max_active_users}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.patch(url, headers=self._headers(panel), json=body)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise RuntimeError(f"PATCH admin_user {resp.status_code}: {resp.text[:300]}")

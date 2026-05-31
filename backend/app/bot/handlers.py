@@ -410,10 +410,13 @@ async def cb_sub_enforce(cb: CallbackQuery) -> None:
         # independent of the global automatic-dunning enforcement switch.
         action = await enforcement.enforce_reseller(s, sub, dry_run=False)
         if action.status == EnforcementActionStatus.done:
-            await cb.message.answer(
+            msg = (
                 f"⛔️ «{sub.name}» مسدود شد: {action.affected_count} کاربر غیرفعال و "
                 f"سقف کاربران (max users / max active users) صفر شد."
             )
+            if action.error:  # some users couldn't be disabled (logged for the owner)
+                msg += "\n⚠️ برخی کاربران غیرفعال نشدند؛ دوباره تلاش کنید یا گزارش را ببینید."
+            await cb.message.answer(msg)
         else:
             await cb.message.answer(
                 "❌ مسدودسازی ناموفق بود. مطمئن شوید کلید API پنل در تنظیمات ثبت شده است.\n"
