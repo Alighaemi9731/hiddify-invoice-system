@@ -83,7 +83,20 @@ def apply(
             meter.quota_added_gb = float(meter.quota_added_gb or 0) + new_limit
         return
 
-    # Quota increase = new sale / top-up / renewal.
+    prev_start = snapshot.start_date  # not yet overwritten by the caller
+
+    # LEGITIMATE renewal: the renew button advances start_date (and usually resets
+    # current_usage). That's a fresh cycle with a fresh quota — re-baseline so the
+    # PREVIOUS cycle's consumption can't show up as "overage" against the new quota.
+    # (The new package is billed by the normal start_date rule, not here.)
+    if start_date is not None and (prev_start is None or start_date > prev_start):
+        snapshot.meter_provisioned_gb = new_limit
+        snapshot.meter_consumed_gb = new_used
+        if in_period:
+            meter.quota_added_gb = float(meter.quota_added_gb or 0) + new_limit
+        return
+
+    # Quota increase = new sale / top-up / renewal-by-edit (start_date unchanged).
     add = new_limit - prev_limit
     if add > _EPS:
         meter.quota_added_gb = float(meter.quota_added_gb or 0) + add
