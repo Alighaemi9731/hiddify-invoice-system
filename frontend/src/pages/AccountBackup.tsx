@@ -8,10 +8,11 @@ import TelegramIcon from "@mui/icons-material/Telegram";
 import RestoreIcon from "@mui/icons-material/Restore";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import ShieldIcon from "@mui/icons-material/Shield";
+import LanguageIcon from "@mui/icons-material/Language";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   updateAccount, downloadBackup, sendBackupToTelegram, restoreBackup, setToken, wipeData,
-  getMe, totpSetup, totpEnable, totpDisable,
+  getMe, totpSetup, totpEnable, totpDisable, setDomain,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 
@@ -28,6 +29,16 @@ export default function AccountBackup() {
   const [setup, setSetup] = useState<any>(null);   // {secret, otpauth_uri, qr}
   const [code, setCode] = useState("");
   const [disablePass, setDisablePass] = useState("");
+
+  // domain / SSL
+  const [domain, setDomainVal] = useState("");
+  const [acmeEmail, setAcmeEmail] = useState("");
+  const [domainResult, setDomainResult] = useState("");
+  const domainMut = useMutation({
+    mutationFn: () => setDomain(domain, acmeEmail || undefined),
+    onSuccess: (r: any) => { setDomainResult(r.message || ""); show(r.ok ? "دامنه اعمال شد" : "دامنه ذخیره شد", r.ok ? "success" : "info"); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
 
   const startSetup = useMutation({
     mutationFn: () => totpSetup(),
@@ -188,6 +199,34 @@ export default function AccountBackup() {
             disabled={restore.isPending} onClick={() => fileRef.current?.click()}>
             بارگذاری فایل پشتیبان و بازیابی
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Domain & HTTPS */}
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+            <LanguageIcon color="primary" />
+            <Typography variant="h6">دامنه و HTTPS</Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            دامنهٔ خود را وارد کنید (رکورد A آن باید به IP این سرور اشاره کند). سامانه به‌صورت
+            خودکار گواهی SSL می‌گیرد و پنل روی همان دامنه با HTTPS در دسترس می‌شود.
+          </Typography>
+          <Stack spacing={2} sx={{ maxWidth: 420 }}>
+            <TextField label="دامنه" dir="ltr" placeholder="panel.example.com"
+              value={domain} onChange={(e) => setDomainVal(e.target.value)} />
+            <TextField label="ایمیل برای گواهی SSL (اختیاری)" dir="ltr"
+              value={acmeEmail} onChange={(e) => setAcmeEmail(e.target.value)} />
+            {domainResult && <Alert severity="success">{domainResult}</Alert>}
+            <Box>
+              <Button variant="contained" startIcon={<LanguageIcon />}
+                disabled={!domain.trim() || domainMut.isPending}
+                onClick={() => domainMut.mutate()}>
+                ثبت دامنه و فعال‌سازی HTTPS
+              </Button>
+            </Box>
+          </Stack>
         </CardContent>
       </Card>
 

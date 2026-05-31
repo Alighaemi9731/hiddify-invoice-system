@@ -120,6 +120,8 @@ export const runMonthly = (params: any = {}) =>
 export const broadcastMessage = (body: { text: string; audience?: string; panel_id?: number }) =>
   api.post("/api/ops/broadcast", body).then((r) => r.data);
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);
+export const setDomain = (domain: string, acme_email?: string) =>
+  api.post("/api/ops/set-domain", { domain, acme_email }).then((r) => r.data);
 
 // ---- account ----
 export const updateAccount = (body: { current_password: string; new_username?: string; new_password?: string }) =>

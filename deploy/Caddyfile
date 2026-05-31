@@ -1,18 +1,27 @@
-# Caddy auto-HTTPS reverse proxy.
-# Enter your domain via SERVER_DOMAIN in .env; Caddy obtains + renews the TLS
-# certificate automatically (Let's Encrypt) using ACME_EMAIL.
+# Caddy reverse proxy.
+#
+# SERVER_DOMAIN controls the site address:
+#   • a real domain  → automatic HTTPS (Let's Encrypt).
+#   • empty          → defaults to ":80" (plain HTTP on the server IP), so the panel
+#     is reachable at http://<ip> right after install. You then enter your domain in
+#     the panel → it reloads Caddy via the admin API → HTTPS turns on automatically.
+#
+# Routing (same in both modes):
+#   /api/*  /health  /docs  /openapi.json → backend:8000
+#   everything else                        → frontend (static SPA)
 
-{$SERVER_DOMAIN} {
+{
+	admin 0.0.0.0:2019
+	email {$ACME_EMAIL}
+}
+
+{$SERVER_DOMAIN::80} {
 	encode zstd gzip
-	tls {$ACME_EMAIL}
 
-	# API + docs + health → backend. (handle_path strips nothing; backend owns /api.)
 	@api path /api/* /health /docs /openapi.json
 	handle @api {
 		reverse_proxy backend:8000
 	}
-
-	# Everything else → the static SPA (nginx serving the built React app).
 	handle {
 		reverse_proxy frontend:80
 	}

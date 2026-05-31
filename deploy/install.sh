@@ -34,16 +34,22 @@ if [[ -r /etc/os-release ]]; then
 fi
 
 # ---- 1. inputs --------------------------------------------------------------
+# Fully non-interactive by default: domain is OPTIONAL (set it later in the panel),
+# and the admin password is auto-generated if not provided (printed at the end).
 DOMAIN="${DOMAIN:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-owner}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 
-if [[ -z "$DOMAIN" ]]; then read -rp "Domain (A record must point to THIS server's IP): " DOMAIN; fi
-if [[ -z "$ACME_EMAIL" ]]; then read -rp "Email for SSL certificate (Let's Encrypt): " ACME_EMAIL; fi
-if [[ -z "$ADMIN_PASSWORD" ]]; then read -rsp "Admin panel password: " ADMIN_PASSWORD; echo; fi
+rand() { openssl rand -base64 "${1:-48}" | tr -dc 'A-Za-z0-9' | cut -c1-"${2:-44}"; }
 
-[[ -z "$DOMAIN" || -z "$ADMIN_PASSWORD" ]] && { err "Domain and admin password are required."; exit 1; }
+GENERATED_PW=""
+if [[ -z "$ADMIN_PASSWORD" ]]; then
+  ADMIN_PASSWORD="$(rand 24 16)"
+  GENERATED_PW="$ADMIN_PASSWORD"
+fi
+
+SERVER_IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
 # ---- 2. docker --------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
@@ -64,8 +70,6 @@ else
 fi
 
 # ---- 3. .env ----------------------------------------------------------------
-rand() { openssl rand -base64 "${1:-48}" | tr -d '\n/+=' | cut -c1-"${2:-44}"; }
-
 if [[ ! -f "$ENV_FILE" ]]; then
   c "Generating $ENV_FILE …"
   SECRET_KEY="$(rand 48 44)"
@@ -111,17 +115,31 @@ cd "$REPO_DIR"
 # --env-file points compose at the repo-root .env (the compose file lives in deploy/).
 docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml up -d --build
 
+if [[ -n "$DOMAIN" ]]; then
+  URL="https://$DOMAIN"
+  DOMAIN_NOTE="• مطمئن شوید رکورد A دامنهٔ $DOMAIN به IP این سرور ($SERVER_IP) اشاره می‌کند و پورت‌های ۸۰/۴۴۳ باز است."
+else
+  URL="http://$SERVER_IP"
+  DOMAIN_NOTE="• بدون دامنه نصب شد. برای فعال‌سازی HTTPS، وارد پنل شوید → «حساب و پشتیبان» → «دامنه و HTTPS» و دامنه را وارد کنید."
+fi
+
+PW_LINE="رمز عبور: همان رمزی که وارد کردید"
+[[ -n "$GENERATED_PW" ]] && PW_LINE="رمز عبور (به‌صورت خودکار ساخته شد): $GENERATED_PW"
+
 cat <<DONE
 
 ────────────────────────────────────────────────────────────
-✅ Done. Open:  https://$DOMAIN
-   Login:  $ADMIN_USERNAME  /  (the password you entered)
+✅ نصب کامل شد.
 
-Next:
-  • Make sure $DOMAIN's A record points to this server, and ports 80/443 are open.
-  • In the panel → Settings: set the Telegram bot token, USDT wallet, BscScan key.
-  • Logs:    docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
-  • Restart: docker compose --env-file .env -f deploy/docker-compose.prod.yml restart
-  • Update:  git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
+   آدرس ورود:  $URL
+   نام کاربری:  $ADMIN_USERNAME
+   $PW_LINE
+
+نکته‌ها:
+  $DOMAIN_NOTE
+  • پس از ورود، در «تنظیمات» توکن ربات، کیف پول USDT و کلید BscScan را وارد کنید.
+  • لاگ‌ها:   docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
+  • ری‌استارت: docker compose --env-file .env -f deploy/docker-compose.prod.yml restart
+  • به‌روزرسانی: git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
 ────────────────────────────────────────────────────────────
 DONE

@@ -31,11 +31,14 @@ services:
     environment:
       POSTGRES_HOST: db
       RUN_SCHEDULER: "true"
+      CADDY_ADMIN: "http://caddy:2019"
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - app_data:/app/data
+      # Mount the repo-root .env so the in-panel "set domain" can persist SERVER_DOMAIN.
+      - ../.env:/app/.env
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   bot:

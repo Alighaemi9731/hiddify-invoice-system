@@ -36,6 +36,11 @@ class WipeBody(BaseModel):
     confirm: str  # must equal "DELETE" to proceed
 
 
+class DomainBody(BaseModel):
+    domain: str
+    acme_email: str | None = None
+
+
 class BroadcastBody(BaseModel):
     text: str
     audience: str = "all"          # all | debtors | panel
@@ -81,6 +86,14 @@ async def wipe_data(body: WipeBody, session: AsyncSession = Depends(get_session)
         await session.execute(delete(model))
     await session.commit()
     return {"status": "ok", "message": "همهٔ داده‌ها پاک شد (به‌جز حساب مدیر و تنظیمات)."}
+
+
+@router.post("/set-domain")
+async def set_domain(body: DomainBody, session: AsyncSession = Depends(get_session)) -> dict:
+    """Set the panel's public domain and trigger automatic HTTPS via Caddy."""
+    from app.services import domain_setup
+
+    return await domain_setup.set_domain(session, body.domain, body.acme_email)
 
 
 @router.post("/broadcast")

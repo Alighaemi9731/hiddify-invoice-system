@@ -95,30 +95,48 @@ def verify_captcha(captcha_id: str, answer: str) -> bool:
     return (answer or "").strip().upper() == code
 
 
-def _render_png(code: str) -> str:
-    """Render the code to a small noisy PNG, returned as a data: URI."""
-    from PIL import Image, ImageDraw, ImageFont
+def _captcha_font(size: int):
+    """A TrueType font that exists on the server. Uses the bundled DejaVuSans
+    (shipped with the app for PDFs) and never the macOS-only path."""
+    from pathlib import Path
 
-    w, h = 160, 56
+    from PIL import ImageFont
+
+    candidates = [
+        Path(__file__).resolve().parents[1] / "assets" / "fonts" / "DejaVuSans.ttf",
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                return ImageFont.truetype(str(p), size)
+        except Exception:  # noqa: BLE001
+            continue
+    return ImageFont.load_default()
+
+
+def _render_png(code: str) -> str:
+    """Render the code to a noisy PNG, returned as a data: URI."""
+    from PIL import Image, ImageDraw
+
+    w, h = 180, 60
     img = Image.new("RGB", (w, h), (240, 243, 250))
     d = ImageDraw.Draw(img)
     # speckle noise
-    for _ in range(380):
+    for _ in range(420):
         d.point((secrets.randbelow(w), secrets.randbelow(h)),
                 fill=(secrets.randbelow(200) + 30,) * 3)
     for _ in range(5):  # a few distractor lines
         d.line((secrets.randbelow(w), secrets.randbelow(h),
                 secrets.randbelow(w), secrets.randbelow(h)),
                fill=(150, 160, 180), width=1)
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 34)
-    except Exception:  # noqa: BLE001
-        font = ImageFont.load_default()
-    x = 16
+    font = _captcha_font(34)
+    x = 18
     for ch in code:
-        y = 6 + secrets.randbelow(8)
+        y = 8 + secrets.randbelow(8)
         d.text((x, y), ch, font=font, fill=(31, 59, 115))
-        x += 26
+        x += 30
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
