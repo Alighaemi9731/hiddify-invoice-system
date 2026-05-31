@@ -137,6 +137,7 @@ async def enforce_reseller(
     # permission check passes even when the configured key isn't the super-admin.
     disabled = 0
     root_ok = False
+    captured_limits: dict[str, dict] = {}
     for d in reversed(descendants):
         for u in users_by_admin.get(d.admin_uuid, []):
             try:
@@ -145,14 +146,29 @@ async def enforce_reseller(
                 disabled += 1
             except Exception as ue:  # noqa: BLE001
                 errors.append(f"user {(u.name or u.user_uuid)[:16]}: {str(ue)[:90]}")
-        d.max_users_snapshot = d.panel_max_users
-        d.max_active_users_snapshot = d.panel_max_active_users
+        # Read the admin's REAL current limits from the API (the backup sync may not
+        # carry max_users), so restore puts back the true values — not a stale 0/None.
+        try:
+            real_mu, real_mau = await client.get_admin_limits(
+                panel, d.admin_uuid, api_key=d.parent_admin_uuid
+            )
+        except Exception:  # noqa: BLE001
+            real_mu = real_mau = None
+        if real_mu is None:
+            real_mu = d.panel_max_users
+        if real_mau is None:
+            real_mau = d.panel_max_active_users
+        d.max_users_snapshot = real_mu
+        d.max_active_users_snapshot = real_mau
+        captured_limits[d.admin_uuid] = {"max_users": real_mu, "max_active_users": real_mau}
         try:
             await _set_admin_limits(client, panel, d, 0, 0)
             if d.admin_uuid == reseller.admin_uuid:
                 root_ok = True
         except Exception as le:  # noqa: BLE001
             errors.append(f"limit {(d.name or d.admin_uuid)[:16]}: {str(le)[:90]}")
+    # Persist the accurate prior limits into the action snapshot for restore.
+    action.snapshot = {"limits": captured_limits, "users": snapshot["users"]}
 
     # Enforcement counts as done if we made real progress: users disabled (existing
     # connections cut) OR the reseller's own limits zeroed. Only a total no-op is a failure.

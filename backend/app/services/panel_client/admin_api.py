@@ -55,12 +55,38 @@ class AdminApiClient(PanelClient):
             if resp.status_code >= 400:
                 raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
 
-    async def set_admin_limits(
-        self, panel, admin_uuid: str, max_users: int, max_active_users: int  # noqa: ANN001
+    async def get_admin_limits(  # noqa: ANN001
+        self, panel, admin_uuid: str, *, api_key: str | None = None
+    ) -> tuple[int | None, int | None]:
+        """Return (max_users, max_active_users) for an admin, or (None, None)."""
+        url = f"{panel.admin_api_base}/admin_user/{admin_uuid}/"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, headers=self._headers(panel, api_key))
+            if resp.status_code >= 400:
+                return (None, None)
+            d = resp.json()
+            return (d.get("max_users"), d.get("max_active_users"))
+
+    async def set_admin_limits(  # noqa: ANN001
+        self, panel, admin_uuid: str, max_users: int, max_active_users: int,
+        *, api_key: str | None = None,
     ) -> None:
         url = f"{panel.admin_api_base}/admin_user/{admin_uuid}/"
         body = {"max_users": max_users, "max_active_users": max_active_users}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.patch(url, headers=self._headers(panel), json=body)
-            if resp.status_code >= 400:
-                raise RuntimeError(f"PATCH admin_user {resp.status_code}: {resp.text[:300]}")
+            resp = await client.patch(url, headers=self._headers(panel, api_key), json=body)
+            if resp.status_code < 400:
+                return
+            # KNOWN Hiddify v12 bug: the admin_user PATCH applies the change but then
+            # crashes on `return admins` (undefined) → HTTP 500 {"msg":"name 'admins'
+            # is not defined"}. Verify via GET and accept it if the change really applied.
+            try:
+                check = await client.get(url, headers=self._headers(panel, api_key))
+                if check.status_code < 400:
+                    d = check.json()
+                    if (d.get("max_users") == max_users
+                            and d.get("max_active_users") == max_active_users):
+                        return
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"PATCH admin_user {resp.status_code}: {resp.text[:300]}")
