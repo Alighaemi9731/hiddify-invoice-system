@@ -103,13 +103,26 @@ def _pg_dump() -> str | None:
         return None
 
 
+_TERMINATE_SQL = (
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+    "WHERE datname = current_database() AND pid <> pg_backend_pid();"
+)
+
+
 def _pg_restore(sql: bytes) -> bool:
-    """Import a pg_dump SQL file into the live database via psql. Returns success."""
+    """Import a pg_dump SQL file into the live database via psql. Returns success.
+
+    First terminates other DB connections (the bot/backend pools) so the dump's
+    `DROP ... ` statements aren't blocked on locks; those services reconnect after."""
     import subprocess
 
     try:
+        subprocess.run(
+            ["psql", "--dbname", _pg_url(), "-c", _TERMINATE_SQL],
+            capture_output=True, timeout=60,
+        )
         out = subprocess.run(
-            ["psql", "--dbname", _pg_url()],
+            ["psql", "--dbname", _pg_url(), "-v", "ON_ERROR_STOP=0"],
             input=sql, capture_output=True, timeout=300,
         )
         if out.returncode != 0:
@@ -156,7 +169,7 @@ def restore_from_zip(zip_bytes: bytes) -> dict:
             sql = z.read("db.sql")
             if _pg_restore(sql):
                 return {"status": "ok", "db_kind": "postgres", "restored": True,
-                        "note": "بازیابی انجام شد. سرویس بک‌اند را یک‌بار ری‌استارت کنید.",
+                        "note": "بازیابی انجام شد؛ سرویس‌ها به‌صورت خودکار به دادهٔ جدید وصل می‌شوند.",
                         "meta": meta}
             # Fallback: keep the SQL on disk for a manual psql import.
             out = BACKUP_DIR / "restore.sql"

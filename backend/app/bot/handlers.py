@@ -16,7 +16,13 @@ from app.bot import keyboards, texts
 from app.bot.matching import parse_link
 from app.core.db import SessionLocal
 from app.models import BotUser, Invoice, Panel, Payment, Reseller
-from app.models.enums import InvoiceStatus, PaymentMethod, PaymentStatus
+from app.models.enums import (
+    EnforcementActionStatus,
+    EnforcementState,
+    InvoiceStatus,
+    PaymentMethod,
+    PaymentStatus,
+)
 from app.services import settings_service
 
 
@@ -202,6 +208,12 @@ async def cmd_removelink(message: Message) -> None:
         await _send_removelink(message.answer, message.from_user.id, s)
 
 
+@router.message(Command("subs"))
+async def cmd_subs(message: Message) -> None:
+    async with SessionLocal() as s:
+        await _send_sub_panels(message.answer, message.from_user.id, s)
+
+
 # --------------------------- broadcast (owner) ---------------------------
 _AUDIENCE_FA = {"all": "همه نمایندگان", "debtors": "بدهکاران", "zero_sale": "فروش صفر این ماه"}
 
@@ -356,6 +368,81 @@ async def cb_register(cb: CallbackQuery) -> None:
 async def cb_panels(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_panels(cb.message.answer, cb.from_user.id, s)
+    await cb.answer()
+
+
+# --------------------------- sub-reseller management ---------------------------
+@router.callback_query(F.data == "menu:subs")
+async def cb_subs(cb: CallbackQuery) -> None:
+    async with SessionLocal() as s:
+        await _send_sub_panels(cb.message.answer, cb.from_user.id, s)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("subp:"))
+async def cb_sub_panel(cb: CallbackQuery) -> None:
+    parent_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        await _send_sub_list(cb.message.answer, cb.from_user.id, parent_id, s)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("subv:"))
+async def cb_sub_view(cb: CallbackQuery) -> None:
+    sub_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        await _send_sub_detail(cb.message.answer, cb.from_user.id, sub_id, s)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("subx:"))
+async def cb_sub_enforce(cb: CallbackQuery) -> None:
+    sub_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sub = await s.get(Reseller, sub_id)
+        if not sub or not await _owns_sub(s, cb.from_user.id, sub):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await cb.message.answer(f"⏳ در حال مسدودسازی «{sub.name}»...")
+        from app.services import enforcement
+
+        # Reseller-initiated manual action → force the real write (dry_run=False),
+        # independent of the global automatic-dunning enforcement switch.
+        action = await enforcement.enforce_reseller(s, sub, dry_run=False)
+        if action.status == EnforcementActionStatus.done:
+            await cb.message.answer(
+                f"⛔️ «{sub.name}» مسدود شد: {action.affected_count} کاربر غیرفعال و "
+                f"سقف کاربران (max users / max active users) صفر شد."
+            )
+        else:
+            await cb.message.answer(
+                "❌ مسدودسازی ناموفق بود. مطمئن شوید کلید API پنل در تنظیمات ثبت شده است.\n"
+                f"{action.error or ''}"
+            )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("subr:"))
+async def cb_sub_restore(cb: CallbackQuery) -> None:
+    sub_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sub = await s.get(Reseller, sub_id)
+        if not sub or not await _owns_sub(s, cb.from_user.id, sub):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await cb.message.answer(f"⏳ در حال آزادسازی «{sub.name}»...")
+        from app.services import enforcement
+
+        action = await enforcement.restore_reseller(s, sub)
+        if action is None:
+            await cb.message.answer("این زیرمجموعه مسدود نیست.")
+        elif action.status == EnforcementActionStatus.done:
+            await cb.message.answer(
+                f"✅ «{sub.name}» آزاد شد: {action.affected_count} کاربر دوباره فعال و "
+                f"سقف‌ها به حالت قبل برگشت."
+            )
+        else:
+            await cb.message.answer(f"❌ آزادسازی ناموفق بود.\n{action.error or ''}")
     await cb.answer()
 
 
@@ -605,6 +692,102 @@ async def _send_panels(answer, chat_id: int, session) -> None:
     await answer("\n".join(lines))
 
 
+# --------------------------- sub-reseller management helpers ---------------------------
+async def _owns_sub(session, chat_id: int, sub: Reseller) -> bool:
+    """True if `sub` is a descendant of one of the chat's own resellers (same panel).
+    Guards every management action so a reseller can only touch their own subtree."""
+    from app.services.reseller_report import node_descendants
+
+    mine = [r for r in await _resellers_for_chat(session, chat_id) if r.panel_id == sub.panel_id]
+    for r in mine:
+        if r.id == sub.id:
+            continue
+        if any(d.id == sub.id for d in await node_descendants(session, r)):
+            return True
+    return False
+
+
+async def _send_sub_panels(answer, chat_id: int, session) -> None:
+    mine = await _resellers_for_chat(session, chat_id)
+    if not mine:
+        await answer(await texts.render(session, "tpl_link_not_found"))
+        return
+    items: list[tuple[int, str]] = []
+    for r in mine:
+        subs = (
+            await session.execute(
+                select(func.count(Reseller.id)).where(
+                    Reseller.panel_id == r.panel_id,
+                    Reseller.parent_admin_uuid == r.admin_uuid,
+                )
+            )
+        ).scalar_one()
+        if subs > 0:
+            panel = await session.get(Panel, r.panel_id)
+            items.append((r.id, f"{panel.name or panel.key} — {r.name} ({subs})"))
+    if not items:
+        await answer("شما زیرمجموعه‌ای ندارید.")
+        return
+    await answer(
+        "👥 مدیریت زیرمجموعه‌ها\nیک پنل را انتخاب کنید:",
+        reply_markup=keyboards.sub_panels_keyboard(items),
+    )
+
+
+async def _send_sub_list(answer, chat_id: int, parent_id: int, session) -> None:
+    parent = await session.get(Reseller, parent_id)
+    if not parent or parent.bot_chat_id != chat_id:
+        await answer("دسترسی ندارید.")
+        return
+    subs = (
+        await session.execute(
+            select(Reseller)
+            .where(
+                Reseller.panel_id == parent.panel_id,
+                Reseller.parent_admin_uuid == parent.admin_uuid,
+            )
+            .order_by(Reseller.name)
+        )
+    ).scalars().all()
+    if not subs:
+        await answer("زیرمجموعه‌ای ندارید.")
+        return
+    items = [
+        (s.id, f"{'⛔️' if s.enforcement_state == EnforcementState.enforced else '🟢'} {s.name}")
+        for s in subs
+    ]
+    await answer(
+        f"زیرمجموعه‌های «{parent.name}» — یکی را برای مشاهده/مدیریت انتخاب کنید:",
+        reply_markup=keyboards.sub_list_keyboard(items),
+    )
+
+
+async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
+    sub = await session.get(Reseller, sub_id)
+    if not sub or not await _owns_sub(session, chat_id, sub):
+        await answer("دسترسی ندارید.")
+        return
+    from app.services import reseller_report
+
+    rep = await reseller_report.node_report(session, sub, months=3)
+    enforced = sub.enforcement_state == EnforcementState.enforced
+    lines = [
+        f"👤 زیرمجموعه: {rep['name']}",
+        f"وضعیت: {'⛔️ مسدود' if enforced else '🟢 فعال'}",
+        f"تعداد کاربران: {rep['total_users']} (فعال: {rep['enabled_users']})",
+    ]
+    if rep["sub_count"]:
+        lines.append(f"زیرمجموعه‌های این نماینده: {rep['sub_count']}")
+    lines.append(f"قیمت هر گیگ: {rep['price_per_gb']:,} تومان")
+    lines.append("\n📊 فروش ماهانه (سهمیهٔ فروخته‌شده):")
+    for m in rep["months"]:
+        lines.append(
+            f"• {m['label']}: {m['gb']:g} گیگ — {m['amount_toman']:,} تومان "
+            f"({m['new_services']} سرویس جدید)"
+        )
+    await answer("\n".join(lines), reply_markup=keyboards.sub_detail_keyboard(sub.id, enforced))
+
+
 # --------------------------- forwarded channel post (owner) ---------------------------
 @router.message(F.forward_origin)
 async def on_forward(message: Message) -> None:
@@ -639,6 +822,11 @@ async def on_document(message: Message) -> None:
 
         buf = await message.bot.download(doc)
         result = backup_service.restore_from_zip(buf.read())
+        if result.get("restored"):
+            # Drop the bot's pooled connections so it reconnects to the restored data.
+            from app.core.db import engine
+
+            await engine.dispose()
         await message.answer(
             f"✅ بازیابی انجام شد ({result.get('db_kind')}).\n{result.get('note', '')}"
         )

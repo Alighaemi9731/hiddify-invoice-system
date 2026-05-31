@@ -1,7 +1,11 @@
 """On-demand operations the owner can trigger from the panel (mirrors scheduler jobs)."""
 from __future__ import annotations
 
+import asyncio
 import io
+import logging
+import os
+import signal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -27,9 +31,24 @@ from app.services import (
 )
 from app.services.periods import parse_period, previous_month
 
+log = logging.getLogger("operations")
+
 router = APIRouter(
     prefix="/api/ops", tags=["operations"], dependencies=[Depends(get_current_subject)]
 )
+
+
+def _schedule_self_restart(delay: float = 1.0) -> None:
+    """Gracefully exit the process after `delay`s. Docker's `restart: unless-stopped`
+    brings the backend straight back up — so the owner never needs the server terminal."""
+    def _stop() -> None:
+        log.info("self-restart: sending SIGTERM to pid %s", os.getpid())
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    try:
+        asyncio.get_event_loop().call_later(delay, _stop)
+    except Exception:  # noqa: BLE001
+        log.warning("self-restart scheduling failed", exc_info=True)
 
 
 class WipeBody(BaseModel):
@@ -127,11 +146,29 @@ async def backup_send(session: AsyncSession = Depends(get_session)) -> dict:
 
 @router.post("/backup/restore")
 async def backup_restore(file: UploadFile, session: AsyncSession = Depends(get_session)) -> dict:
-    """Restore the system from an uploaded backup .zip (SQLite). Restart the backend after."""
+    """Restore the system from an uploaded backup .zip. On success the backend
+    reconnects and restarts itself automatically — no server terminal needed."""
     if not (file.filename or "").endswith(".zip"):
         raise HTTPException(400, "فایل باید زیپ (.zip) باشد")
     try:
         content = await file.read()
-        return backup_service.restore_from_zip(content)
+        result = backup_service.restore_from_zip(content)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"بازیابی ناموفق بود: {exc}")
+
+    if result.get("restored"):
+        # Drop pooled connections (they point at the pre-restore DB) and restart so
+        # everything comes up cleanly against the restored data.
+        from app.core.db import engine
+
+        await engine.dispose()
+        result["note"] = "بازیابی انجام شد. سرویس به‌صورت خودکار ری‌استارت می‌شود (چند ثانیه صبر کنید)."
+        _schedule_self_restart(1.5)
+    return result
+
+
+@router.post("/restart")
+async def restart_service() -> dict:
+    """Restart the backend service from the panel (no server terminal needed)."""
+    _schedule_self_restart(1.0)
+    return {"status": "restarting", "message": "سرویس در حال راه‌اندازی مجدد است (چند ثانیه صبر کنید)."}

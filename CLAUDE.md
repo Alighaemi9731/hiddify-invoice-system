@@ -105,6 +105,7 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 - [x] **M7** React RTL/Persian SPA (login, dashboard charts, panels, resellers, invoices, payments, debts, sales, logs, settings)
 - [x] **M8** polish: unit tests (`backend/tests`), run docs
 - [x] **M9** Phase 2 deploy: one-line installer/updater (latest release, DB preserved), Caddy auto-HTTPS, first-run setup wizard, security (captcha + rate-limit + TOTP 2FA), durable financial ledger. Single production-only code path (dev compose/Makefile/seeds removed).
+- [x] **M10** No-terminal ops: panel «راه‌اندازی مجدد سرویس» button + auto-restart after restore (`/api/ops/restart`, process exits → Docker `unless-stopped` restarts; pooled conns dropped via `engine.dispose()`/`pool_pre_ping`). Bot sub-reseller management: a reseller picks a panel → lists their sub-resellers → views a report (user count, per-month sold-quota sales via `reseller_report.node_report`) → **suspend/restore** that sub-reseller (reuses `enforcement.enforce_reseller`/`restore_reseller` with `dry_run=False`; ownership-gated by `_owns_sub`).
 
 **Phase 1 MVP is complete and runnable.** Phase 2 (installer/domain/SSL/systemd) is intentionally NOT built.
 

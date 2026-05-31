@@ -12,8 +12,9 @@ import LanguageIcon from "@mui/icons-material/Language";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   updateAccount, downloadBackup, sendBackupToTelegram, restoreBackup, setToken, wipeData,
-  getMe, totpSetup, totpEnable, totpDisable, setDomain,
+  getMe, totpSetup, totpEnable, totpDisable, setDomain, restartService,
 } from "../api/client";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useToast, errMsg } from "../components/Toast";
 
 export default function AccountBackup() {
@@ -88,6 +89,12 @@ export default function AccountBackup() {
   const wipe = useMutation({
     mutationFn: () => wipeData(),
     onSuccess: (r: any) => show(r.message || "داده‌ها پاک شد", "success"),
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
+  const restart = useMutation({
+    mutationFn: () => restartService(),
+    onSuccess: () => show("سرویس در حال راه‌اندازی مجدد است؛ چند ثانیه صبر کنید و صفحه را تازه کنید.", "info"),
     onError: (e) => show(errMsg(e), "error"),
   });
 
@@ -198,6 +205,15 @@ export default function AccountBackup() {
           <Button variant="contained" color="warning" startIcon={<RestoreIcon />}
             disabled={restore.isPending} onClick={() => fileRef.current?.click()}>
             بارگذاری فایل پشتیبان و بازیابی
+          </Button>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            اگر لازم شد سرویس را یک‌بار راه‌اندازی مجدد کنید، از این دکمه استفاده کنید — نیازی به
+            ترمینال سرور نیست. (بازیابی به‌صورت خودکار این کار را انجام می‌دهد.)
+          </Typography>
+          <Button variant="outlined" startIcon={<RestartAltIcon />} disabled={restart.isPending}
+            onClick={() => { if (confirm("سرویس یک‌بار راه‌اندازی مجدد شود؟")) restart.mutate(); }}>
+            راه‌اندازی مجدد سرویس
           </Button>
         </CardContent>
       </Card>

@@ -24,6 +24,7 @@ RESELLER_COMMANDS = [
     BotCommand(command="invoices", description="فاکتورهای من"),
     BotCommand(command="pay", description="پرداخت"),
     BotCommand(command="debt", description="بدهی من"),
+    BotCommand(command="subs", description="مدیریت زیرمجموعه‌ها"),
     BotCommand(command="removelink", description="حذف لینک‌های من"),
     BotCommand(command="help", description="راهنما"),
 ]

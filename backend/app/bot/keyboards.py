@@ -17,6 +17,7 @@ def reseller_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
             [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels")],
+            [InlineKeyboardButton(text="👥 مدیریت زیرمجموعه‌ها", callback_data="menu:subs")],
             [InlineKeyboardButton(text="🧾 فاکتورهای من", callback_data="menu:invoices")],
             [InlineKeyboardButton(text="💳 پرداخت", callback_data="menu:pay")],
             [InlineKeyboardButton(text="📊 بدهی من", callback_data="menu:debt")],
@@ -24,6 +25,31 @@ def reseller_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🗑 حذف لینک‌های من", callback_data="menu:removelink")],
         ]
     )
+
+
+def sub_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """One button per panel the reseller has sub-resellers on. data: subp:<reseller_id>."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"subp:{rid}")] for rid, label in items]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
+    )
+
+
+def sub_list_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """One button per sub-reseller. data: subv:<sub_id>. Plus a back button."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"subv:{sid}")] for sid, label in items]
+    rows.append([InlineKeyboardButton(text="« بازگشت", callback_data="menu:subs")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def sub_detail_keyboard(sub_id: int, enforced: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if enforced:
+        rows.append([InlineKeyboardButton(text="✅ آزادسازی", callback_data=f"subr:{sub_id}")])
+    else:
+        rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی", callback_data=f"subx:{sub_id}")])
+    rows.append([InlineKeyboardButton(text="« بازگشت", callback_data="menu:subs")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def broadcast_audience_keyboard() -> InlineKeyboardMarkup:
