@@ -115,15 +115,29 @@ COMPOSE="docker compose --env-file $ENV_FILE -f deploy/docker-compose.prod.yml"
 $COMPOSE down --remove-orphans 2>/dev/null || true
 $COMPOSE up -d --build --force-recreate
 
-URL="http://$SERVER_IP"
+# If a domain was already configured (kept in .env from a prior install), the panel
+# lives at https://<domain> and the bare IP redirects there — so point the user at
+# the domain, not the (now-redirecting) IP.
+EXISTING_DOMAIN="$(grep -E '^SERVER_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')"
+if [[ -n "$EXISTING_DOMAIN" ]]; then
+  URL="https://$EXISTING_DOMAIN"
+  DOMAIN_NOTE="• دامنه از قبل تنظیم شده؛ پنل روی همین آدرس است و http://$SERVER_IP به آن هدایت می‌شود."
+else
+  URL="http://$SERVER_IP"
+  DOMAIN_NOTE=""
+fi
 
 if [[ -n "$ADMIN_PASSWORD" ]]; then
   # Scripted install (password preseeded) → owner created at boot, no browser wizard.
   CRED_LINE="   نام کاربری:  $ADMIN_USERNAME
    رمز عبور:  همان رمزی که تعیین کردید"
   SETUP_NOTE="• حساب مدیر از قبل ساخته شد. مستقیم وارد شوید."
+elif [[ -n "$EXISTING_DOMAIN" ]]; then
+  # Re-install over an existing setup → wizard already done, just log in.
+  CRED_LINE=""
+  SETUP_NOTE="• راه‌اندازی قبلاً انجام شده؛ با همان نام کاربری/رمز قبلی وارد شوید (داده‌ها حفظ شده‌اند)."
 else
-  # Default path → the in-browser «راه‌اندازی اولیه» wizard collects everything.
+  # Fresh install → the in-browser «راه‌اندازی اولیه» wizard collects everything.
   CRED_LINE=""
   SETUP_NOTE="• آدرس بالا را در مرورگر باز کنید؛ صفحهٔ «راه‌اندازی اولیه» نام کاربری، رمز عبور و دامنه را می‌گیرد و خودش SSL را فعال می‌کند."
 fi
@@ -139,6 +153,7 @@ $CRED_LINE
 
 نکته‌ها:
   $SETUP_NOTE
+  $DOMAIN_NOTE
   • پس از ورود، در «تنظیمات» توکن ربات، کیف پول USDT و کلید BscScan را وارد کنید.
   • لاگ‌ها:   docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
   • ری‌استارت: docker compose --env-file .env -f deploy/docker-compose.prod.yml restart

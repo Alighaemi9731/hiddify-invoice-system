@@ -73,6 +73,11 @@ services:
       # Set a real domain (here or via the panel) to switch on automatic HTTPS.
       SERVER_DOMAIN: ${SERVER_DOMAIN:-:80}
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    # --resume: when a domain has been set in the panel, the live config (domain +
+    # auto-HTTPS + the bare-IP → https://domain redirect) is autosaved to /config and
+    # RESTORED on restart/rebuild. On a fresh install (no autosave) it falls back to
+    # the Caddyfile (:80 on the server IP) until the setup wizard sets a domain.
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --resume
     ports:
       - "80:80"
       - "443:443"
