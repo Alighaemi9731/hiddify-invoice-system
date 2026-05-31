@@ -80,18 +80,44 @@ async def create_backup(session: AsyncSession) -> tuple[bytes, str]:
     return buf.read(), f"invoice-backup-{stamp}.zip"
 
 
+def _pg_url() -> str:
+    # asyncpg DSN → libpq DSN that pg_dump/psql understand.
+    return boot.sqlalchemy_url.replace("+asyncpg", "")
+
+
 def _pg_dump() -> str | None:
     import subprocess
 
     try:
-        url = boot.sqlalchemy_url.replace("+asyncpg", "")
         out = subprocess.run(
-            ["pg_dump", "--no-owner", "--dbname", url],
-            capture_output=True, text=True, timeout=120,
+            # --clean --if-exists so the dump drops+recreates objects on restore.
+            ["pg_dump", "--no-owner", "--clean", "--if-exists", "--dbname", _pg_url()],
+            capture_output=True, text=True, timeout=300,
         )
-        return out.stdout if out.returncode == 0 else None
+        if out.returncode != 0:
+            log.warning("pg_dump failed: %s", (out.stderr or "")[:300])
+            return None
+        return out.stdout
     except Exception:  # noqa: BLE001
+        log.warning("pg_dump unavailable", exc_info=True)
         return None
+
+
+def _pg_restore(sql: bytes) -> bool:
+    """Import a pg_dump SQL file into the live database via psql. Returns success."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["psql", "--dbname", _pg_url()],
+            input=sql, capture_output=True, timeout=300,
+        )
+        if out.returncode != 0:
+            log.warning("psql restore failed: %s", (out.stderr or b"")[:300])
+        return out.returncode == 0
+    except Exception:  # noqa: BLE001
+        log.warning("psql restore unavailable", exc_info=True)
+        return False
 
 
 async def save_backup_to_disk(session: AsyncSession) -> Path:
@@ -127,9 +153,15 @@ def restore_from_zip(zip_bytes: bytes) -> dict:
             return {"status": "ok", "db_kind": "sqlite", "restored": True,
                     "note": "سرویس بک‌اند باید یک‌بار ری‌استارت شود.", "meta": meta}
         if "db.sql" in names:
+            sql = z.read("db.sql")
+            if _pg_restore(sql):
+                return {"status": "ok", "db_kind": "postgres", "restored": True,
+                        "note": "بازیابی انجام شد. سرویس بک‌اند را یک‌بار ری‌استارت کنید.",
+                        "meta": meta}
+            # Fallback: keep the SQL on disk for a manual psql import.
             out = BACKUP_DIR / "restore.sql"
             BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(z.read("db.sql"))
+            out.write_bytes(sql)
             return {"status": "manual", "db_kind": "postgres", "sql_path": str(out),
-                    "note": "برای بازیابی Postgres این فایل را با psql وارد کنید.", "meta": meta}
+                    "note": "بازیابی خودکار ناموفق بود؛ این فایل را با psql وارد کنید.", "meta": meta}
     raise ValueError("محتوای پشتیبان با نوع دیتابیس فعلی سازگار نیست")

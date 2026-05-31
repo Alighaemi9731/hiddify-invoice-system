@@ -113,11 +113,18 @@ def select_billable_roots(resellers: list[Any]) -> list[Any]:
 
 
 # ----------------------------- billing -----------------------------
-def _excluded(usage_gb: float, excluded: set[int]) -> bool:
+def _excluded(usage_gb: float, excluded: set[int], free_threshold_gb: float) -> bool:
+    """A config is a free test config when its quota is <= the free threshold
+    (default 1 GB → 0.5 GB and 1 GB are free), OR it exactly matches an extra
+    excluded size. Uses exact (not rounded) comparison so a real 1.3 GB package
+    is NOT mistaken for a 1 GB test config."""
     try:
-        return int(round(float(usage_gb))) in excluded
+        gb = float(usage_gb or 0)
     except (TypeError, ValueError):
         return False
+    if gb <= free_threshold_gb + 1e-9:
+        return True
+    return any(abs(gb - e) < 1e-9 for e in excluded)
 
 
 def compute_invoices(
@@ -128,6 +135,7 @@ def compute_invoices(
     default_price_per_gb: int,
     excluded_usage_gb: set[int],
     default_min_sale_toman: int = 0,
+    free_threshold_gb: float = 1.0,
 ) -> list[BundleResult]:
     """Return one BundleResult per billable top-level reseller (including zero ones)."""
     children_map = build_children_map(resellers)
@@ -150,7 +158,7 @@ def compute_invoices(
                 if not period.contains(u.start_date):
                     continue
                 gb = float(u.usage_limit_gb or 0)
-                if _excluded(gb, excluded_usage_gb):
+                if _excluded(gb, excluded_usage_gb, free_threshold_gb):
                     continue
                 lines.append(LineResult(
                     user_uuid=u.user_uuid, name=u.name or "", start_date=u.start_date,

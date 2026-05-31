@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  True one-line installer — public repo, no key needed.
+#  One-line installer / updater — public repo, no key, no questions.
 #
 #    curl -fsSL https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh | sudo bash
 #
-#  Clones the repo to /opt/hiddify-invoice-system and runs deploy/install.sh.
-#  Installs with NO domain by default → reachable at http://<server-ip> right away;
-#  set your domain later inside the panel (Account & Backup → دامنه و HTTPS).
+#  Run it the FIRST time to install, and run the SAME command any time to update
+#  to the latest release. It always rebuilds from scratch to the newest version,
+#  but your DATABASE is PRESERVED across installs (data is never wiped here).
+#  To erase data, use the panel: «حساب و پشتیبان → پاک‌سازی کامل داده‌ها».
 #
-#  Optional overrides (env):
-#    REPO_URL, DEST, BRANCH, DOMAIN, ACME_EMAIL, ADMIN_USERNAME, ADMIN_PASSWORD
+#  After install it prints http://<server-ip> — open it and the first-run wizard
+#  asks for username / password / domain.
+#
+#  Optional overrides (env): REPO_URL, DEST, BRANCH, DOMAIN, ACME_EMAIL,
+#  ADMIN_USERNAME, ADMIN_PASSWORD (set the last two only to skip the wizard).
 # ============================================================================
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/Alighaemi9731/hiddify-invoice-system.git}"
 DEST="${DEST:-/opt/hiddify-invoice-system}"
-BRANCH="${BRANCH:-main}"
 
 c() { printf "\033[1;36m%s\033[0m\n" "$*"; }
 err() { printf "\033[1;31m%s\033[0m\n" "$*" >&2; }
@@ -24,18 +27,26 @@ err() { printf "\033[1;31m%s\033[0m\n" "$*" >&2; }
 command -v git >/dev/null 2>&1 || { apt-get update -y && apt-get install -y git; }
 
 if [[ -d "$DEST/.git" ]]; then
-  c "Updating $DEST …"; git -C "$DEST" fetch -q --all; git -C "$DEST" checkout -q "$BRANCH"; git -C "$DEST" pull -q
+  c "Updating $DEST …"
+  git -C "$DEST" fetch -q --all --tags --prune
 else
-  c "Cloning into $DEST …"; git clone -q --branch "$BRANCH" "$REPO_URL" "$DEST"
+  c "Cloning into $DEST …"
+  git clone -q "$REPO_URL" "$DEST"
+  git -C "$DEST" fetch -q --tags
 fi
 
 cd "$DEST"
-# FRESH=1 → start over: drop containers+volumes and regenerate .env.
-if [[ "${FRESH:-}" == "1" ]]; then
-  c "FRESH install: removing old stack + .env …"
-  docker compose --env-file .env -f deploy/docker-compose.prod.yml down -v 2>/dev/null || true
-  rm -f .env
+# Install the latest RELEASE tag (override with BRANCH=main for the dev tip).
+if [[ -n "${BRANCH:-}" ]]; then
+  TARGET="$BRANCH"
+else
+  TARGET="$(git tag -l 'v*' | sort -V | tail -n1)"
+  [[ -z "$TARGET" ]] && TARGET="main"
 fi
+c "Deploying $TARGET …"
+git checkout -q -f "$TARGET"
+# For a branch target keep it current; for a tag (detached HEAD) this is a no-op.
+git pull -q --ff-only 2>/dev/null || true
 
 DOMAIN="${DOMAIN:-}" ACME_EMAIL="${ACME_EMAIL:-}" \
   ADMIN_USERNAME="${ADMIN_USERNAME:-owner}" ADMIN_PASSWORD="${ADMIN_PASSWORD:-}" \

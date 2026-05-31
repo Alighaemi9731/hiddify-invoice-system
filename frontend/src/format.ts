@@ -4,8 +4,14 @@ export const fmtToman = (n: number) =>
 export const fmtUsdt = (n: number) =>
   `${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
 
-export const fmtGb = (n: number) =>
-  `${Math.round(n || 0).toLocaleString("fa-IR")} گیگ`;
+// Show real (possibly fractional) GB — e.g. 0.5 GB must not round to "۱ گیگ".
+export const fmtGb = (n: number) => {
+  const v = n || 0;
+  const s = Number.isInteger(v)
+    ? v.toLocaleString("fa-IR")
+    : v.toLocaleString("fa-IR", { maximumFractionDigits: 2 });
+  return `${s} گیگ`;
+};
 
 export const fmtNum = (n: number) => (n || 0).toLocaleString("fa-IR");
 

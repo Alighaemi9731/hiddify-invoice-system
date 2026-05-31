@@ -2,6 +2,7 @@
 from app.models.app_user import AppUser
 from app.models.bot_user import BotUser
 from app.models.end_user import EndUserSnapshot
+from app.models.financial_record import FinancialRecord
 from app.models.enums import (
     DeliveryKind,
     DeliveryStatus,
@@ -30,6 +31,7 @@ __all__ = [
     "EndUserSnapshot",
     "Invoice",
     "InvoiceLine",
+    "FinancialRecord",
     "Payment",
     "Setting",
     "DeliveryLog",

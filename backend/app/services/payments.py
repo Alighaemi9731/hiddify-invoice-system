@@ -27,7 +27,7 @@ from app.models.enums import (
     InvoiceStatus,
     PaymentStatus,
 )
-from app.services import notifier, settings_service
+from app.services import financial_archive, notifier, settings_service
 
 log = logging.getLogger("payments")
 
@@ -182,6 +182,7 @@ async def _apply_confirmed(
     if invoice is not None:
         invoice.status = InvoiceStatus.paid
         invoice.paid_at = dt.datetime.now(dt.timezone.utc)
+        await financial_archive.record(session, invoice, reseller=reseller, txid=payment.txid)
     await session.commit()
 
     # Auto-restore panel access if the reseller had been enforced.

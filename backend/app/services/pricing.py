@@ -43,7 +43,7 @@ async def get_default_min_sale(session: AsyncSession) -> int:
 
 
 async def get_excluded_usage_gb(session: AsyncSession) -> set[int]:
-    """Package sizes (GB) treated as test configs and skipped (default {1})."""
+    """Extra exact package sizes (GB) treated as test configs and skipped."""
     value = await settings_service.get(session, "excluded_usage_gb", [1])
     out: set[int] = set()
     if isinstance(value, (list, tuple)):
@@ -52,4 +52,13 @@ async def get_excluded_usage_gb(session: AsyncSession) -> set[int]:
                 out.add(int(v))
             except (TypeError, ValueError):
                 continue
-    return out or {1}
+    return out
+
+
+async def get_free_threshold_gb(session: AsyncSession) -> float:
+    """Configs with quota <= this many GB are free test configs (default 1 GB)."""
+    value = await settings_service.get(session, "free_under_gb", 1)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 1.0

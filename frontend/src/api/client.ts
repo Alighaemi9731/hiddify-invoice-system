@@ -123,6 +123,8 @@ export const getDeliveryLog = (params: any = {}) =>
   api.get("/api/reports/delivery-log", { params }).then((r) => r.data);
 export const getEnforcementActions = () =>
   api.get("/api/reports/enforcement-actions").then((r) => r.data);
+export const getFinancialHistory = (params: any = {}) =>
+  api.get("/api/reports/financial-history", { params }).then((r) => r.data);
 
 // ---- operations ----
 export const runDunning = () => api.post("/api/ops/dunning/run").then((r) => r.data);

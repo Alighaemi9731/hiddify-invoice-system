@@ -12,6 +12,7 @@ import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import PaymentsIcon from "@mui/icons-material/Payments";
 import MoneyOffIcon from "@mui/icons-material/MoneyOff";
 import BarChartIcon from "@mui/icons-material/BarChart";
+import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import HistoryIcon from "@mui/icons-material/History";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
@@ -36,6 +37,7 @@ const NAV = [
   { to: "/payments", label: "پرداخت‌ها", icon: <PaymentsIcon /> },
   { to: "/debts", label: "بدهی‌ها", icon: <MoneyOffIcon /> },
   { to: "/sales", label: "فروش نمایندگان", icon: <BarChartIcon /> },
+  { to: "/financial-history", label: "تاریخچهٔ مالی", icon: <AccountBalanceIcon /> },
   { to: "/broadcast", label: "پیام همگانی", icon: <CampaignIcon /> },
   { to: "/logs", label: "گزارش‌ها", icon: <HistoryIcon /> },
   { to: "/account", label: "حساب و پشتیبان", icon: <ManageAccountsIcon /> },

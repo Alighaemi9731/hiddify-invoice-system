@@ -107,8 +107,13 @@ fi
 # ---- 4. up ------------------------------------------------------------------
 c "Building and starting the stack (this can take a few minutes)…"
 cd "$REPO_DIR"
-# --env-file points compose at the repo-root .env (the compose file lives in deploy/).
-docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml up -d --build
+COMPOSE="docker compose --env-file $ENV_FILE -f deploy/docker-compose.prod.yml"
+# Clean rebuild to the latest release. `down` (WITHOUT -v) removes the old
+# containers/network but KEEPS the named volumes — so the Postgres database
+# (db_data) and Caddy certs survive across re-installs. Only the panel's
+# «پاک‌سازی داده‌ها» wipes data.
+$COMPOSE down --remove-orphans 2>/dev/null || true
+$COMPOSE up -d --build --force-recreate
 
 URL="http://$SERVER_IP"
 

@@ -6,9 +6,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Minimal build deps (most wheels are prebuilt; keep image small).
+# Minimal deps. postgresql-client provides pg_dump/psql for DB backup & restore.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

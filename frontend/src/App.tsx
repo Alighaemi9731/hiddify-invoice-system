@@ -13,6 +13,7 @@ import Invoices from "./pages/Invoices";
 import Payments from "./pages/Payments";
 import Debts from "./pages/Debts";
 import Sales from "./pages/Sales";
+import FinancialHistory from "./pages/FinancialHistory";
 import Logs from "./pages/Logs";
 import Broadcast from "./pages/Broadcast";
 import AccountBackup from "./pages/AccountBackup";
@@ -71,6 +72,7 @@ export default function App() {
         <Route path="/payments" element={<Payments />} />
         <Route path="/debts" element={<Debts />} />
         <Route path="/sales" element={<Sales />} />
+        <Route path="/financial-history" element={<FinancialHistory />} />
         <Route path="/broadcast" element={<Broadcast />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/account" element={<AccountBackup />} />

@@ -80,9 +80,10 @@ def _sync_missing_columns(sync_conn) -> None:
             except Exception:  # noqa: BLE001
                 type_sql = "VARCHAR"
             # Default so existing rows get a value (and NOT NULL stays satisfiable).
-            if isinstance(column.type, (Integer, Numeric)):
-                default = " DEFAULT 0"
-            elif isinstance(column.type, Boolean):
+            # NOTE: Postgres rejects `DEFAULT 0` for BOOLEAN — must be FALSE.
+            if isinstance(column.type, Boolean):
+                default = " DEFAULT FALSE"
+            elif isinstance(column.type, (Integer, Numeric)):
                 default = " DEFAULT 0"
             else:
                 default = ""

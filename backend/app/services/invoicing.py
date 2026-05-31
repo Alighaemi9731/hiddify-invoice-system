@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Invoice, InvoiceLine, Panel, Reseller
 from app.models.enums import InvoiceStatus
-from app.services import pricing
+from app.services import financial_archive, pricing
 from app.services.invoice_engine import BundleResult, compute_invoices
 from app.services.periods import Period
 
@@ -47,6 +47,7 @@ async def generate_invoices(
     unless `force=True`. Draft invoices for the period are recomputed in place."""
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
+    free_threshold = await pricing.get_free_threshold_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
     rate = await pricing.get_rate(session)
 
@@ -70,7 +71,7 @@ async def generate_invoices(
         bundles = compute_invoices(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
-            default_min_sale_toman=default_min_sale,
+            default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
         )
         for bundle in bundles:
             if bundle.total_gb <= 0:
@@ -93,6 +94,7 @@ async def preview_bundles(
     """Compute bundles for a period WITHOUT persisting (used for the zero-invoice view)."""
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
+    free_threshold = await pricing.get_free_threshold_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
 
     panel_q = select(Panel).where(Panel.enabled.is_(True))
@@ -113,7 +115,7 @@ async def preview_bundles(
         for b in compute_invoices(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
-            default_min_sale_toman=default_min_sale,
+            default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
         ):
             out.append((panel, b))
     return out
@@ -186,6 +188,9 @@ async def _persist_bundle(
                 sub_reseller_name=(line.sub_reseller_name or "")[:255],
             )
         )
+
+    # Mirror into the durable financial ledger (survives wipes / panel removal).
+    await financial_archive.record(session, invoice, panel=panel, reseller=reseller)
 
     summary.total_amount_toman += amount_toman
     summary.total_amount_usdt += amount_usdt

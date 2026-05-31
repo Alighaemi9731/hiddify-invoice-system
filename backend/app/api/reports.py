@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import DeliveryLog, EnforcementAction, Invoice, Panel, Reseller
+from app.models import (
+    DeliveryLog, EnforcementAction, FinancialRecord, Invoice, Panel, Reseller,
+)
 from app.models.enums import InvoiceStatus
 from app.schemas.reports import (
     DashboardSummary,
@@ -172,6 +174,50 @@ async def enforcement_actions(
             affected_count=a.affected_count, error=a.error, created_at=a.created_at,
         )
         for a, name in rows
+    ]
+
+
+@router.get("/financial-history")
+async def financial_history(
+    period: str | None = None,
+    panel_key: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = Query(1000, le=10000),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Durable ledger: panel, reseller, month, amount, paid/unpaid — kept permanently
+    even after a data wipe or panel/reseller removal."""
+    query = select(FinancialRecord).order_by(
+        FinancialRecord.period_label.desc(), FinancialRecord.amount_toman.desc()
+    )
+    if period:
+        query = query.where(FinancialRecord.period_label == period)
+    if panel_key:
+        query = query.where(FinancialRecord.panel_key == panel_key)
+    if status:
+        query = query.where(FinancialRecord.status == status)
+    if q:
+        query = query.where(FinancialRecord.reseller_name.ilike(f"%{q}%"))
+    rows = (await session.execute(query.limit(limit))).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "invoice_id": r.invoice_id,
+            "panel_key": r.panel_key,
+            "reseller_name": r.reseller_name,
+            "reseller_admin_uuid": r.reseller_admin_uuid,
+            "period_label": r.period_label,
+            "usage_gb": float(r.usage_gb or 0),
+            "price_per_gb": int(r.price_per_gb or 0),
+            "amount_toman": float(r.amount_toman or 0),
+            "amount_usdt": float(r.amount_usdt or 0),
+            "status": r.status,
+            "paid_at": r.paid_at,
+            "txid": r.txid,
+            "created_at": r.created_at,
+        }
+        for r in rows
     ]
 
 

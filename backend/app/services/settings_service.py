@@ -94,7 +94,10 @@ DEFS: list[SettingDef] = [
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),
     SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto
-    SettingDef("excluded_usage_gb", [1], False, "pricing"),  # test configs to skip
+    SettingDef("excluded_usage_gb", [1], False, "pricing"),  # extra exact sizes to skip
+    # Any config whose quota is <= this many GB is a free test config and is NOT
+    # billed (e.g. 1 → both 0.5 GB and 1 GB are free; 1.5+ GB is billed).
+    SettingDef("free_under_gb", 1, False, "pricing"),
     SettingDef("min_sale_toman", 0, False, "pricing"),  # 0 = no minimum-sale floor
     # Invoicing schedule
     SettingDef("invoice_day_of_month", 1, False, "schedule"),  # run on the 1st for prev month

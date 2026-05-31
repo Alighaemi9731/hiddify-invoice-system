@@ -75,14 +75,21 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
     bot: Bot | None = await build_bot(session)
     try:
         for inv in invoices:
-            # Skip invoices whose payment was deferred to a future date.
-            if inv.deferred_until and inv.deferred_until > today:
+            # Dunning anchor: a set payment deadline (deferred_until) RESTARTS the whole
+            # reminder/enforcement cycle from that date — reminders at +d1/+d2, warning &
+            # cutoff at +dw/+de days after the deadline. Otherwise count from sent_at.
+            if inv.deferred_until:
+                anchor = inv.deferred_until
+            else:
+                sent_at = inv.sent_at
+                if sent_at.tzinfo is None:
+                    sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
+                anchor = sent_at.date()
+            days = (today - anchor).days
+            if days < 0:
+                # Deadline still in the future → fully paused.
                 counts["deferred"] += 1
                 continue
-            sent_at = inv.sent_at
-            if sent_at.tzinfo is None:
-                sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
-            days = (today - sent_at.date()).days
             reseller = await session.get(Reseller, inv.reseller_id)
             if reseller is None:
                 continue

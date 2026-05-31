@@ -53,13 +53,15 @@ docs/      ARCHITECTURE.md + Mermaid diagrams
 For each reseller **and its descendant sub-resellers** (bundle via `parent_admin_uuid`), sum **`usage_limit_GB` (quota SOLD, not consumed)** of every end-user where:
 - `added_by_uuid` ∈ the reseller/descendants, AND
 - `start_date` is within the billing **Gregorian month** (service created that month), AND
-- `usage_limit_GB != 1` (1 GB = test config; **5 GB now counts as normal traffic and IS billed**).
+- `usage_limit_GB > free_under_gb` — configs at/under the free threshold (default **1 GB**, so both 0.5 GB and 1 GB) are free test configs; **anything above (1.5, 5, …) IS billed**. Comparison is exact (not rounded), so a real 1.3 GB package is never mistaken for a test config. (`free_under_gb` is editable in Settings/pricing.)
 
 `amount_toman = Σ usage_limit_GB × price_per_GB` (default 1000 T/GB; per-reseller override). **No** prior-unpaid carry-over. Convert to USDT via the configurable `toman_per_usdt` rate. The **Owner** (super_admin) and `exclude_from_billing` resellers are never billed.
 
-## Dunning & enforcement (build now, dry-run by default)
+**Durable financial ledger:** every invoice's money facts (panel, reseller, month, GB, amount, paid/unpaid, txid) are mirrored into `financial_records` (denormalized, no FK). This ledger is **never** deleted by the "wipe data" reset and survives panel/reseller removal — viewable under «تاریخچهٔ مالی». Written by `app/services/financial_archive.py` on generate/pay/edit/cancel/defer.
 
-Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D+4** reminder, **D+5** hard warning + **enforcement** — via the Hiddify **Admin REST API**: disable the reseller's + sub-resellers' end-users and set the reseller's `max_active_users`/`max_users` to 0 (snapshot prior values first). `enforcement_enabled` defaults **False** (dry-run: logs intended actions). On **confirmed payment**, auto-restore the snapshot.
+## Dunning & enforcement (real Admin-API actions; auto-suspend OFF by default)
+
+Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D+4** reminder, **D+5** hard warning + **enforcement** — via the Hiddify **Admin REST API**: disable the reseller's + sub-resellers' end-users and set the reseller's `max_active_users`/`max_users` to 0 (snapshot prior values first). The day-count anchors on `sent_at`, UNLESS a **payment deadline** (`deferred_until`) is set on the invoice — then the whole cycle **restarts from the deadline date** (paused until then; the defer endpoint clears prior reminder marks and restores an already-suspended reseller for the new window). `enforcement_enabled` defaults **False** (dry-run logs intended actions); the live API path is fully implemented — flip it on in Settings. On **confirmed payment**, auto-restore the snapshot.
 
 ## Security conventions
 
@@ -75,25 +77,22 @@ Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D
 - Panel access goes through the `PanelClient` interface so read (backup JSON) and write (Admin API) adapters are swappable.
 - Money: Toman as integer/Numeric; USDT as Numeric(…,6).
 
-## Local run
+## Install & run (single production path — no separate local/dev version)
 
-**Docker (full stack):**
+One command installs AND updates; re-running rebuilds to the latest release but
+**preserves the database** (data is wiped only from the panel's «پاک‌سازی داده‌ها»):
+
 ```bash
-cp .env.example .env        # then edit SECRET_KEY, ADMIN_PASSWORD, etc.
-docker compose up --build
-# API → http://localhost:8000/docs   SPA → http://localhost:5173
+curl -fsSL https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh | sudo bash
 ```
 
-**Backend only (no Docker), quick SQLite run:**
-```bash
-cd backend
-python3.12 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-export DATABASE_URL="sqlite+aiosqlite:///./data/app.db" SECRET_KEY=dev ADMIN_PASSWORD=dev123
-uvicorn app.main:app --reload
-```
-
-Seed demo data from the sample backup: `python -m app.cli.seed_sample` (added in M2).
+It prints `http://<server-ip>`; the first visit shows the one-time **setup wizard**
+(username / password / domain → auto-HTTPS). Stack = Caddy + SPA + FastAPI(+scheduler)
++ bot + Postgres, via `deploy/docker-compose.prod.yml`. The DB is Postgres only; the
+backend image bundles `postgresql-client` so auto-backups capture a real `pg_dump` and
+restores import via `psql`. Schema evolves on boot via `init_models()` +
+`_sync_missing_columns` (dialect-aware `ADD COLUMN`). Running `backend/tests` (pytest,
+`requirements-dev.txt`) is the only thing that touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
@@ -104,7 +103,8 @@ Seed demo data from the sample backup: `python -m app.cli.seed_sample` (added in
 - [x] **M5** BEP-20 payment verification (BscScan TXID) + auto mark-paid + auto-restore hook
 - [x] **M6** dunning + enforcement (Admin-API write adapter, reminders D+2/D+4/D+5, suspend/restore, dry-run default)
 - [x] **M7** React RTL/Persian SPA (login, dashboard charts, panels, resellers, invoices, payments, debts, sales, logs, settings)
-- [x] **M8** polish: unit tests (`backend/tests`), synthetic demo seed (`app.cli.seed_demo`), Makefile, run docs
+- [x] **M8** polish: unit tests (`backend/tests`), run docs
+- [x] **M9** Phase 2 deploy: one-line installer/updater (latest release, DB preserved), Caddy auto-HTTPS, first-run setup wizard, security (captcha + rate-limit + TOTP 2FA), durable financial ledger. Single production-only code path (dev compose/Makefile/seeds removed).
 
 **Phase 1 MVP is complete and runnable.** Phase 2 (installer/domain/SSL/systemd) is intentionally NOT built.
 
