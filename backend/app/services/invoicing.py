@@ -121,6 +121,84 @@ async def preview_bundles(
     return out
 
 
+async def recompute_invoice(
+    session: AsyncSession, invoice: Invoice, *, sync_first: bool = True
+) -> dict:
+    """Refresh ONE invoice's figures from the panel's CURRENT data, keeping its status
+    (sent/overdue/…). Used to correct an already-sent invoice after the reseller fixed
+    a mistake (e.g. removed a wrong user) in the panel. Paid invoices are protected."""
+    if invoice.status == InvoiceStatus.paid:
+        raise ValueError("paid invoice cannot be recomputed")
+
+    panel = await session.get(Panel, invoice.panel_id)
+    if panel is None:
+        raise ValueError("panel not found")
+
+    synced = False
+    if sync_first:
+        try:
+            from app.models.enums import SyncStatus
+            from app.services import sync as sync_service
+
+            run = await sync_service.sync_panel(session, panel)
+            synced = run.status == SyncStatus.success
+            panel = await session.get(Panel, invoice.panel_id)        # re-attach post-commit
+            invoice = await session.get(Invoice, invoice.id)
+        except Exception:  # noqa: BLE001 — fall back to existing snapshots
+            log.warning("recompute: panel sync failed, using existing snapshots", exc_info=True)
+
+    period = Period(invoice.period_start, invoice.period_end)
+    default_price = await pricing.get_default_price_per_gb(session)
+    excluded = await pricing.get_excluded_usage_gb(session)
+    free_threshold = await pricing.get_free_threshold_gb(session)
+    default_min_sale = await pricing.get_default_min_sale(session)
+    rate = await pricing.get_rate(session) or int(invoice.usdt_rate or 0)
+
+    resellers = (
+        await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
+    ).scalars().all()
+    users = (
+        await session.execute(select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id))
+    ).scalars().all()
+    bundles = compute_invoices(
+        resellers, users, period,
+        default_price_per_gb=default_price, excluded_usage_gb=excluded,
+        default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
+    )
+    bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
+
+    await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id))
+    if bundle is None:
+        # Reseller billed nothing this period now (or no longer a billable root).
+        invoice.usage_gb = 0
+        invoice.users_count = 0
+        invoice.base_amount_toman = 0
+        invoice.min_sale_toman = 0
+        invoice.floor_applied = False
+        invoice.amount_toman = 0
+    else:
+        invoice.usage_gb = bundle.total_gb
+        invoice.users_count = bundle.users_count
+        invoice.price_per_gb = bundle.price_per_gb
+        invoice.base_amount_toman = bundle.base_amount_toman
+        invoice.min_sale_toman = bundle.min_sale_toman
+        invoice.floor_applied = bundle.floor_applied
+        invoice.amount_toman = bundle.amount_toman
+        for line in bundle.lines:
+            session.add(InvoiceLine(
+                invoice_id=invoice.id, end_user_uuid=line.user_uuid, name=line.name[:255],
+                start_date=line.start_date, usage_gb=line.usage_gb,
+                added_by_uuid=line.added_by_uuid,
+                sub_reseller_name=(line.sub_reseller_name or "")[:255],
+            ))
+    invoice.usdt_rate = rate
+    invoice.amount_usdt = float(pricing.toman_to_usdt(invoice.amount_toman, rate))
+    await financial_archive.record(session, invoice)
+    await session.commit()
+    return {"synced": synced, "found": bundle is not None,
+            "amount_toman": float(invoice.amount_toman), "usage_gb": float(invoice.usage_gb)}
+
+
 async def _persist_bundle(
     session: AsyncSession,
     panel: Panel,

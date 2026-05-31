@@ -63,15 +63,38 @@ async def send_invoice(
         bot = await build_bot(session)
         own_bot = True
 
+    # Resend cleanup: remove the previously delivered message for THIS invoice so the
+    # reseller's chat shows only the latest (corrected) version.
+    if bot is not None:
+        prior = (
+            await session.execute(
+                select(DeliveryLog)
+                .where(
+                    DeliveryLog.invoice_id == inv.id,
+                    DeliveryLog.kind == DeliveryKind.invoice,
+                    DeliveryLog.tg_message_id.is_not(None),
+                )
+                .order_by(DeliveryLog.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior and prior.tg_message_id:
+            try:
+                await bot.delete_message(reseller.bot_chat_id, prior.tg_message_id)
+            except Exception:  # noqa: BLE001 — old message may be deleted/too old to remove
+                pass
+
     status = DeliveryStatus.sent
     error: str | None = None
+    msg_id: int | None = None
     try:
         if bot is None:
             raise RuntimeError("no telegram bot token configured")
         path, _ = await invoice_pdf.render_invoice_pdf(session, inv)
         # Caption carries the invoice text; overflow goes as a follow-up message.
         caption = text if len(text) <= _CAPTION_MAX else None
-        await bot.send_document(reseller.bot_chat_id, FSInputFile(path), caption=caption)
+        sent = await bot.send_document(reseller.bot_chat_id, FSInputFile(path), caption=caption)
+        msg_id = sent.message_id
         if caption is None:
             await bot.send_message(reseller.bot_chat_id, text)
     except TelegramForbiddenError:
@@ -79,13 +102,14 @@ async def send_invoice(
     except Exception as exc:  # noqa: BLE001 — fall back to text-only
         log.warning("PDF delivery failed for invoice %s: %s", inv.id, exc)
         try:
-            await bot.send_message(reseller.bot_chat_id, text)
+            sent = await bot.send_message(reseller.bot_chat_id, text)
+            msg_id = sent.message_id
         except Exception as exc2:  # noqa: BLE001
             status, error = DeliveryStatus.failed, str(exc2)[:500]
 
     dl = DeliveryLog(
         reseller_id=reseller.id, invoice_id=inv.id, kind=DeliveryKind.invoice,
-        status=status, error=error, message_preview=text[:200],
+        status=status, error=error, message_preview=text[:200], tg_message_id=msg_id,
     )
     session.add(dl)
 

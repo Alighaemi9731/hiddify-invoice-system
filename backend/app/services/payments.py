@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Invoice, Payment, Reseller
@@ -32,6 +33,73 @@ from app.services import financial_archive, notifier, settings_service
 log = logging.getLogger("payments")
 
 USDT_DECIMALS = 18
+
+# Owed = delivered but not yet paid.
+_OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+
+
+async def _chat_reseller_ids(session: AsyncSession, reseller: Reseller | None) -> list[int]:
+    """All reseller rows that belong to the same Telegram user (one customer can be an
+    admin on several panels). Used so one payment can clear debt across all of them."""
+    if reseller is None:
+        return []
+    if reseller.bot_chat_id is None:
+        return [reseller.id]
+    rows = (
+        await session.execute(
+            select(Reseller.id).where(Reseller.bot_chat_id == reseller.bot_chat_id)
+        )
+    ).scalars().all()
+    return list(rows) or [reseller.id]
+
+
+async def _due_now_invoices(session: AsyncSession, reseller_ids: list[int]) -> list[Invoice]:
+    """Outstanding invoices that are due NOW (oldest first) — owed and NOT deferred to a
+    future date. Deferred invoices wait until their deadline."""
+    if not reseller_ids:
+        return []
+    today = dt.date.today()
+    rows = (
+        await session.execute(
+            select(Invoice)
+            .where(Invoice.reseller_id.in_(reseller_ids), Invoice.status.in_(_OWED))
+            .order_by(Invoice.period_start.asc())
+        )
+    ).scalars().all()
+    return [i for i in rows if not (i.deferred_until and i.deferred_until > today)]
+
+
+async def _maybe_restore(session: AsyncSession, reseller: Reseller | None) -> None:
+    if reseller is None:
+        return
+    if await settings_service.get(session, "auto_restore_on_payment", True):
+        try:
+            from app.services import enforcement
+
+            await enforcement.restore_reseller(session, reseller)
+        except Exception:  # noqa: BLE001 — enforcement module/credentials may be absent
+            log.info("restore skipped/failed for reseller %s", reseller.id)
+
+
+async def _settle_due_now(
+    session: AsyncSession, reseller_ids: list[int], amount_usdt: Decimal, tolerance: Decimal
+) -> list[Invoice]:
+    """Apply a payment of `amount_usdt` to the due-now invoices (oldest first across all
+    the customer's reseller rows), marking each paid while the amount covers it."""
+    remaining = Decimal(str(amount_usdt))
+    now = dt.datetime.now(dt.timezone.utc)
+    settled: list[Invoice] = []
+    for inv in await _due_now_invoices(session, reseller_ids):
+        amt = Decimal(str(inv.amount_usdt or 0))
+        if remaining + tolerance >= amt:
+            inv.status = InvoiceStatus.paid
+            inv.paid_at = now
+            await financial_archive.record(session, inv)
+            remaining -= amt
+            settled.append(inv)
+        else:
+            break  # can't fully cover this (oldest remaining) invoice → stop
+    return settled
 
 
 @dataclass
@@ -151,20 +219,44 @@ async def verify_payment(session: AsyncSession, payment_id: int) -> PaymentResul
         return PaymentResult("pending", False,
                              f"تراکنش یافت شد اما هنوز تأییدیه کافی ندارد ({check.confirmations}/{min_conf}).")
 
-    expected = Decimal(str(invoice.amount_usdt)) if invoice else Decimal(0)
-    if expected > 0 and check.amount_usdt + tolerance < expected:
+    # Settle the customer's DUE-NOW invoices (oldest first) with this payment. One
+    # transfer can clear several invoices; deferred-to-future invoices are excluded.
+    rids = await _chat_reseller_ids(session, reseller)
+    due = await _due_now_invoices(session, rids) if rids else ([invoice] if invoice else [])
+    if not due:
+        payment.status = PaymentStatus.confirmed
+        payment.verified_at = dt.datetime.now(dt.timezone.utc)
+        await session.commit()
+        return PaymentResult("confirmed", True,
+                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای تسویه وجود نداشت.")
+
+    oldest = Decimal(str(due[0].amount_usdt or 0))
+    if check.amount_usdt + tolerance < oldest:
         payment.status = PaymentStatus.rejected
-        payment.note = f"amount too low: {check.amount_usdt} < {expected}"
+        payment.note = f"amount too low: {check.amount_usdt} < {oldest}"
         await session.commit()
         return PaymentResult(
             "rejected", False,
-            f"❌ مبلغ واریزی ({check.amount_usdt:.2f} USDT) کمتر از مبلغ فاکتور ({expected:.2f} USDT) است.",
+            f"❌ مبلغ واریزی ({check.amount_usdt:.2f} USDT) کمتر از کوچک‌ترین فاکتور "
+            f"قابل‌پرداخت ({oldest:.2f} USDT) است.",
         )
 
-    # Success.
-    await _apply_confirmed(session, payment, invoice, reseller)
-    period = invoice.period_label if invoice else ""
-    msg = await _payment_received_text(session, period)
+    settled = await _settle_due_now(session, rids, check.amount_usdt, tolerance)
+    payment.status = PaymentStatus.confirmed
+    payment.verified_at = dt.datetime.now(dt.timezone.utc)
+    if settled:
+        payment.invoice_id = settled[0].id
+    await session.commit()
+    # Restore any suspended reseller whose invoice was just settled.
+    for rid in {i.reseller_id for i in settled}:
+        await _maybe_restore(session, await session.get(Reseller, rid))
+
+    periods = "، ".join(i.period_label for i in settled)
+    msg = await _payment_received_text(session, periods)
+    leftover = await _due_now_invoices(session, rids)
+    if leftover:
+        rest = sum(float(i.amount_usdt or 0) for i in leftover)
+        msg += f"\n\nهنوز {rest:.2f} USDT بابت {len(leftover)} فاکتور دیگر باقی است."
     return PaymentResult("confirmed", True, msg)
 
 
@@ -186,15 +278,7 @@ async def _apply_confirmed(
     await session.commit()
 
     # Auto-restore panel access if the reseller had been enforced.
-    if reseller is not None:
-        auto = await settings_service.get(session, "auto_restore_on_payment", True)
-        if auto:
-            try:
-                from app.services import enforcement  # M6
-
-                await enforcement.restore_reseller(session, reseller)
-            except Exception:  # noqa: BLE001 — enforcement module/credentials may be absent
-                log.info("restore skipped/failed for reseller %s", reseller.id)
+    await _maybe_restore(session, reseller)
 
 
 async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentResult:

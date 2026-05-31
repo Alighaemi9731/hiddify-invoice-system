@@ -11,11 +11,12 @@ import UndoIcon from "@mui/icons-material/Undo";
 import EditIcon from "@mui/icons-material/Edit";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import ScheduleIcon from "@mui/icons-material/Schedule";
+import AutorenewIcon from "@mui/icons-material/Autorenew";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
-  discardDrafts,
+  discardDrafts, recomputeInvoice,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -64,6 +65,10 @@ export default function Invoices() {
   const sendAll = mut(() => sendPeriod(period), (r: any) => `ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون ربات، ${r.failed || 0} ناموفق`);
   const sendOne = mut((id: number) => sendInvoice(id), (r: any) => `ارسال: ${r.delivery_status}`);
   const pay = mut((id: number) => markInvoicePaid(id), "به‌عنوان پرداخت‌شده ثبت شد");
+  const recompute = mut(
+    (id: number) => recomputeInvoice(id),
+    (r: any) => `بازمحاسبه شد: ${fmtGb(r.usage_gb)} — ${fmtToman(r.amount_toman)}` + (r.synced ? "" : " (همگام‌سازی پنل ناموفق بود؛ از دادهٔ قبلی محاسبه شد)"),
+  );
   const unpay = mut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت قبل)");
   const saveDefer = useMutation({
     mutationFn: () => deferInvoice(deferRow.id, {
@@ -161,6 +166,14 @@ export default function Invoices() {
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>
                   <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
                   <Tooltip title="ویرایش"><IconButton size="small" onClick={() => setEditRow({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                  {i.status !== "paid" && (
+                    <Tooltip title="بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)">
+                      <IconButton size="small" disabled={recompute.isPending}
+                        onClick={() => confirm("پنل همگام‌سازی و اعداد این فاکتور از روی دادهٔ فعلی پنل به‌روز شود؟") && recompute.mutate(i.id)}>
+                        <AutorenewIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   <Tooltip title="PDF"><IconButton size="small" onClick={() => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error"))}><PictureAsPdfIcon fontSize="small" /></IconButton></Tooltip>
                   <Tooltip title="ارسال"><IconButton size="small" onClick={() => sendOne.mutate(i.id)}><SendIcon fontSize="small" /></IconButton></Tooltip>
                   {i.status === "paid" ? (

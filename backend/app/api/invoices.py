@@ -269,6 +269,25 @@ async def defer_invoice(
     return _to_out(inv, reseller.name, panel.key)
 
 
+@router.post("/{invoice_id}/recompute", response_model=InvoiceOut)
+async def recompute_invoice(
+    invoice_id: int, sync: bool = True, session: AsyncSession = Depends(get_session)
+) -> InvoiceOut:
+    """Refresh this invoice's numbers from the panel's CURRENT data (syncs the panel
+    first by default), keeping its status. For correcting an already-sent invoice."""
+    inv = await session.get(Invoice, invoice_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    try:
+        await invoicing.recompute_invoice(session, inv, sync_first=sync)
+    except ValueError:
+        raise HTTPException(400, "فاکتور پرداخت‌شده را نمی‌توان بازمحاسبه کرد؛ ابتدا «لغو پرداخت» را بزنید.")
+    inv = await session.get(Invoice, invoice_id)
+    reseller = await session.get(Reseller, inv.reseller_id)
+    panel = await session.get(Panel, inv.panel_id)
+    return _to_out(inv, reseller.name, panel.key)
+
+
 @router.post("/{invoice_id}/send")
 async def send_invoice(invoice_id: int, session: AsyncSession = Depends(get_session)) -> dict:
     inv = await session.get(Invoice, invoice_id)

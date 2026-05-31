@@ -104,6 +104,7 @@ export const markInvoicePaid = (id: number) => api.post(`/api/invoices/${id}/mar
 export const unmarkInvoicePaid = (id: number) => api.post(`/api/invoices/${id}/unmark-paid`).then((r) => r.data);
 export const editInvoice = (id: number, body: any) => api.patch(`/api/invoices/${id}`, body).then((r) => r.data);
 export const cancelInvoice = (id: number) => api.post(`/api/invoices/${id}/cancel`).then((r) => r.data);
+export const recomputeInvoice = (id: number) => api.post(`/api/invoices/${id}/recompute`).then((r) => r.data);
 export const deferInvoice = (id: number, body: { deferred_until: string | null; defer_note?: string }) =>
   api.post(`/api/invoices/${id}/defer`, body).then((r) => r.data);
 

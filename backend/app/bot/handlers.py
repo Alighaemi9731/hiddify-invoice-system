@@ -645,18 +645,35 @@ async def _send_pay(answer, chat_id: int, session) -> None:
         return
     wallet = await settings_service.get(session, "usdt_bep20_address", "") or "(تنظیم نشده)"
     ids = [r.id for r in resellers]
-    unpaid = (
+    owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
         )
     ).scalars().all()
-    total_u = sum(float(i.amount_usdt) for i in unpaid)
-    await answer(
-        f"💳 پرداخت با USDT (شبکه BEP-20)\n\n"
-        f"مبلغ قابل پرداخت: {total_u:,.2f} USDT\n"
-        f"آدرس کیف پول:\n{wallet}\n\n"
-        f"پس از واریز، شناسه تراکنش (TXID) را همین‌جا ارسال کنید."
-    )
+    today = dt.date.today()
+    due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
+    deferred = [i for i in owed if i.deferred_until and i.deferred_until > today]
+
+    if not due:
+        if deferred:
+            await answer("در حال حاضر مبلغی برای پرداخت ندارید؛ فاکتورهای شما مهلت‌دار هستند. ⏳")
+        else:
+            await answer("بدهی فعالی برای پرداخت ندارید. 🎉")
+        return
+
+    total_u = sum(float(i.amount_usdt) for i in due)
+    lines = [
+        "💳 پرداخت با USDT (شبکه BEP-20)\n",
+        f"مبلغ قابل پرداخت (هم‌اکنون): {total_u:,.2f} USDT",
+    ]
+    if len(due) > 1:
+        lines.append(f"(مجموع {len(due)} فاکتور — با یک واریز همه تسویه می‌شوند)")
+    lines.append(f"\nآدرس کیف پول:\n{wallet}\n")
+    if deferred:
+        dsum = sum(float(i.amount_usdt) for i in deferred)
+        lines.append(f"⏳ {len(deferred)} فاکتور مهلت‌دار ({dsum:,.2f} USDT) فعلاً لازم نیست پرداخت شود.")
+    lines.append("پس از واریز، شناسه تراکنش (TXID) را همین‌جا ارسال کنید.")
+    await answer("\n".join(lines))
 
 
 async def _send_removelink(answer, chat_id: int, session) -> None:
@@ -893,14 +910,20 @@ async def _handle_txid(message: Message, session, txid: str) -> None:
         await message.answer("این تراکنش قبلاً ثبت شده است.")
         return
     ids = [r.id for r in resellers]
-    invoice = (
+    today = dt.date.today()
+    owed = (
         await session.execute(
-            select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_UNPAID))
+            select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
             .order_by(Invoice.period_start.asc())
         )
-    ).scalars().first()
+    ).scalars().all()
+    # Link to the oldest DUE-NOW invoice (skip drafts and deferred ones); verification
+    # then settles across all of the customer's due-now invoices.
+    due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
+    invoice = due[0] if due else None
     payment = Payment(
-        reseller_id=resellers[0].id, invoice_id=invoice.id if invoice else None,
+        reseller_id=invoice.reseller_id if invoice else resellers[0].id,
+        invoice_id=invoice.id if invoice else None,
         method=PaymentMethod.usdt_txid, status=PaymentStatus.pending, txid=txid,
     )
     session.add(payment)

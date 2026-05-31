@@ -5,6 +5,7 @@ import datetime as dt
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
@@ -47,6 +48,8 @@ class DeliveryLog(Base):
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     message_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Telegram message id of a delivered invoice, so a resend can delete the old one.
+    tg_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
