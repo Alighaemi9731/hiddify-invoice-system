@@ -109,8 +109,6 @@ DEFS: list[SettingDef] = [
     SettingDef("enforcement_day", 5, False, "dunning"),
     SettingDef("enforcement_enabled", False, False, "dunning"),  # False = dry-run
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
-    # Value used by the "reset all admin passwords" button (Panels tab).
-    SettingDef("admin_reset_password", "123", False, "dunning"),
     # Owner
     SettingDef("owner_name", "", False, "general"),
     SettingDef("owner_telegram", "", False, "general"),

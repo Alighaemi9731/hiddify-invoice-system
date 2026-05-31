@@ -52,15 +52,3 @@ class AdminApiClient(PanelClient):
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.patch(url, headers=self._headers(panel), json=body)
             resp.raise_for_status()
-
-    async def set_admin_password(self, panel, admin_uuid: str, password: str) -> None:  # noqa: ANN001
-        """Set a panel admin's login password via the admin_user PATCH endpoint.
-
-        Hiddify expects the password under `password`; if a panel build uses a
-        different field this raises and the caller reports it per-admin."""
-        url = f"{panel.admin_api_base}/admin_user/{admin_uuid}/"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.patch(
-                url, headers=self._headers(panel), json={"password": password}
-            )
-            resp.raise_for_status()
