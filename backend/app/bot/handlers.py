@@ -449,6 +449,18 @@ async def cb_sub_restore(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data.startswith("subinv:"))
+async def cb_sub_invoice(cb: CallbackQuery, bot: Bot) -> None:
+    parts = cb.data.split(":")
+    if len(parts) < 3:
+        await cb.answer()
+        return
+    sub_id, period_label = int(parts[1]), parts[2]
+    await cb.answer("در حال ساخت فاکتور…")
+    async with SessionLocal() as s:
+        await _send_sub_invoice(cb.message.answer, cb.from_user.id, sub_id, period_label, s, bot=bot)
+
+
 @router.callback_query(F.data == "menu:support")
 async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
@@ -805,7 +817,44 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
             f"• {m['label']}: {m['gb']:g} گیگ — {m['amount_toman']:,} تومان "
             f"({m['new_services']} سرویس جدید)"
         )
-    await answer("\n".join(lines), reply_markup=keyboards.sub_detail_keyboard(sub.id, enforced))
+    lines.append("\n📄 برای دریافت فاکتور این زیرمجموعه (برای ارسال به خودش) دکمهٔ ماه را بزنید.")
+    months = [m["label"] for m in rep["months"]]
+    await answer("\n".join(lines), reply_markup=keyboards.sub_detail_keyboard(sub.id, enforced, months))
+
+
+async def _send_sub_invoice(answer, chat_id: int, sub_id: int, period_label: str, session, *, bot=None) -> None:
+    """Generate + send a PDF invoice for ONE sub-reseller (for the reseller to bill it)."""
+    sub = await session.get(Reseller, sub_id)
+    if not sub or not await _owns_sub(session, chat_id, sub):
+        await answer("دسترسی ندارید.")
+        return
+    from app.services import invoice_pdf
+    from app.services.periods import parse_period
+
+    try:
+        period = parse_period(period_label)
+    except Exception:  # noqa: BLE001
+        await answer("دورهٔ نامعتبر.")
+        return
+    # The issuer is the chat's own reseller on this panel (the parent billing the sub).
+    mine = [r for r in await _resellers_for_chat(session, chat_id) if r.panel_id == sub.panel_id]
+    issuer = mine[0].name if mine else ""
+    try:
+        res = await invoice_pdf.render_sub_invoice_pdf(session, sub, period, issuer_name=issuer)
+    except Exception:  # noqa: BLE001
+        log.warning("sub invoice pdf failed", exc_info=True)
+        res = None
+    if res is None:
+        await answer(f"«{sub.name}» در دوره {period_label} فروشی نداشته است.")
+        return
+    path, fname = res
+    if bot is not None:
+        from aiogram.types import FSInputFile
+
+        await bot.send_document(chat_id, FSInputFile(path, filename=fname),
+                                caption=f"📄 فاکتور «{sub.name}» — دوره {period_label}")
+    else:
+        await answer(f"فاکتور ساخته شد: {fname}")
 
 
 # --------------------------- forwarded channel post (owner) ---------------------------

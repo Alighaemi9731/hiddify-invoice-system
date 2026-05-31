@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Reseller
 from app.services import pricing
-from app.services.invoice_engine import build_children_map, collect_descendants
+from app.services.invoice_engine import (
+    BundleResult, build_children_map, collect_descendants, compute_invoices,
+)
 from app.services.periods import Period, month_period
 
 
@@ -36,6 +38,34 @@ async def node_descendants(session: AsyncSession, reseller: Reseller) -> list[Re
     ).scalars().all()
     children = build_children_map(panel_resellers)
     return collect_descendants(reseller, children)
+
+
+async def node_invoice(
+    session: AsyncSession, node: Reseller, period: Period
+) -> BundleResult | None:
+    """Compute an invoice bundle ROOTED at `node` for a period — node + its sub-resellers,
+    priced at the node's own price_per_gb. Used so a reseller can bill each of their
+    sub-resellers separately. Not persisted (the owner's invoice already covers the whole
+    subtree); rendered on demand."""
+    descendants = await node_descendants(session, node)
+    uuids = {d.admin_uuid for d in descendants}
+    users = (
+        await session.execute(
+            select(EndUserSnapshot).where(
+                EndUserSnapshot.panel_id == node.panel_id,
+                EndUserSnapshot.added_by_uuid.in_(uuids),
+            )
+        )
+    ).scalars().all()
+    # Pass only the subtree (no owner) so `node` is treated as the single billable root.
+    bundles = compute_invoices(
+        descendants, users, period,
+        default_price_per_gb=await pricing.get_default_price_per_gb(session),
+        excluded_usage_gb=await pricing.get_excluded_usage_gb(session),
+        default_min_sale_toman=await pricing.get_default_min_sale(session),
+        free_threshold_gb=await pricing.get_free_threshold_gb(session),
+    )
+    return next((b for b in bundles if b.root.id == node.id), None)
 
 
 async def node_report(session: AsyncSession, reseller: Reseller, *, months: int = 3) -> dict:
