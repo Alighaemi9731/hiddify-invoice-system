@@ -115,48 +115,41 @@ COMPOSE="docker compose --env-file $ENV_FILE -f deploy/docker-compose.prod.yml"
 $COMPOSE down --remove-orphans 2>/dev/null || true
 $COMPOSE up -d --build --force-recreate
 
-# If a domain was already configured (kept in .env from a prior install), the panel
-# lives at https://<domain> and the bare IP redirects there — so point the user at
-# the domain, not the (now-redirecting) IP.
+# English banner — terminals render LTR, so RTL Persian looks scrambled here.
+VER="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo "")"
+GET_URL="https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh"
+
+# If a domain was configured on a prior install (kept in .env), the panel lives at
+# https://<domain> and the bare IP redirects there — point the user at the domain.
 EXISTING_DOMAIN="$(grep -E '^SERVER_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')"
 if [[ -n "$EXISTING_DOMAIN" ]]; then
   URL="https://$EXISTING_DOMAIN"
-  DOMAIN_NOTE="• دامنه از قبل تنظیم شده؛ پنل روی همین آدرس است و http://$SERVER_IP به آن هدایت می‌شود."
 else
   URL="http://$SERVER_IP"
-  DOMAIN_NOTE=""
 fi
 
 if [[ -n "$ADMIN_PASSWORD" ]]; then
-  # Scripted install (password preseeded) → owner created at boot, no browser wizard.
-  CRED_LINE="   نام کاربری:  $ADMIN_USERNAME
-   رمز عبور:  همان رمزی که تعیین کردید"
-  SETUP_NOTE="• حساب مدیر از قبل ساخته شد. مستقیم وارد شوید."
+  LOGIN_NOTE="Log in with the username/password you set (user: $ADMIN_USERNAME)."
 elif [[ -n "$EXISTING_DOMAIN" ]]; then
-  # Re-install over an existing setup → wizard already done, just log in.
-  CRED_LINE=""
-  SETUP_NOTE="• راه‌اندازی قبلاً انجام شده؛ با همان نام کاربری/رمز قبلی وارد شوید (داده‌ها حفظ شده‌اند)."
+  LOGIN_NOTE="Already set up — log in with your existing username/password (your data was kept)."
 else
-  # Fresh install → the in-browser «راه‌اندازی اولیه» wizard collects everything.
-  CRED_LINE=""
-  SETUP_NOTE="• آدرس بالا را در مرورگر باز کنید؛ صفحهٔ «راه‌اندازی اولیه» نام کاربری، رمز عبور و دامنه را می‌گیرد و خودش SSL را فعال می‌کند."
+  LOGIN_NOTE="First run: the page asks for a username, password and domain, then gets SSL automatically."
 fi
 
 cat <<DONE
 
 ────────────────────────────────────────────────────────────
-✅ نصب کامل شد.
+  Installation complete${VER:+  (v$VER)}.
 
-   این آدرس را در مرورگر باز کنید:
-   $URL
-$CRED_LINE
+  Open in your browser:
+      $URL
 
-نکته‌ها:
-  $SETUP_NOTE
-  $DOMAIN_NOTE
-  • پس از ورود، در «تنظیمات» توکن ربات، کیف پول USDT و کلید BscScan را وارد کنید.
-  • لاگ‌ها:   docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
-  • ری‌استارت: docker compose --env-file .env -f deploy/docker-compose.prod.yml restart
-  • به‌روزرسانی: git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
+  $LOGIN_NOTE
+  After login, set your Bot token, USDT wallet and BscScan key under Settings.
+
+  Manage from the server (run as root):
+      Update :  curl -fsSL $GET_URL | sudo bash
+      Logs   :  cd $REPO_DIR && docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
+      Restart:  cd $REPO_DIR && docker compose --env-file .env -f deploy/docker-compose.prod.yml restart
 ────────────────────────────────────────────────────────────
 DONE
