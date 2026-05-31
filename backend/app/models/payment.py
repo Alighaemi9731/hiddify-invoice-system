@@ -52,3 +52,6 @@ class Payment(Base, TimestampMixin):
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # raw chain response
+    # Path to a deposit screenshot the reseller sent (method=screenshot), served to the
+    # owner in the panel for manual confirmation. Relative to the backend working dir.
+    proof_path: Mapped[str | None] = mapped_column(String(255), nullable=True)

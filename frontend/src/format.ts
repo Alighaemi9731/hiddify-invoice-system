@@ -48,3 +48,10 @@ export const PAYMENT_STATUS_FA: Record<string, string> = {
   rejected: "ردشده",
   duplicate: "تکراری",
 };
+
+export const PAYMENT_METHOD_FA: Record<string, string> = {
+  usdt_txid: "شناسهٔ تراکنش",
+  usdt_hd: "آدرس اختصاصی",
+  manual: "دستی",
+  screenshot: "رسید تصویری",
+};

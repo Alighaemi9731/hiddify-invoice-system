@@ -118,6 +118,12 @@ export const listPayments = (params: any = {}) =>
 export const verifyPayment = (id: number) => api.post(`/api/payments/${id}/verify`).then((r) => r.data);
 export const confirmPayment = (id: number) => api.post(`/api/payments/${id}/confirm`).then((r) => r.data);
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);
+// Fetch the deposit screenshot (authenticated) as a blob and open it in a new tab.
+export const openPaymentProof = async (id: number) => {
+  const r = await api.get(`/api/payments/${id}/proof`, { responseType: "blob" });
+  const url = URL.createObjectURL(r.data);
+  window.open(url, "_blank");
+};
 
 // ---- reports ----
 export const getDashboard = (period?: string) =>

@@ -20,12 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.bot.telegram import build_bot
-from app.models import DeliveryLog, EnforcementAction, Invoice, Reseller
+from app.models import DeliveryLog, EnforcementAction, Invoice, Payment, Reseller
 from app.models.enums import (
     DeliveryKind,
     DeliveryStatus,
     EnforcementState,
     InvoiceStatus,
+    PaymentStatus,
 )
 from app.services import enforcement, notifier, settings_service
 
@@ -77,7 +78,22 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
         )
     ).scalars().all()
 
-    counts = {"reminder1": 0, "reminder2": 0, "warning": 0, "enforced": 0, "enforced_dry": 0, "deferred": 0}
+    # A pending payment means the customer paid and is waiting on the OWNER's review.
+    # Don't punish them in the meantime: hold the whole reminder/warning/enforce cycle for
+    # the invoice the payment is attached to, and never auto-suspend a reseller who has any
+    # pending payment. The hold lifts as soon as the owner confirms (→ paid, leaves _ACTIVE)
+    # or rejects (→ no longer pending, cycle resumes on the original timeline).
+    pending_rows = (
+        await session.execute(
+            select(Payment.invoice_id, Payment.reseller_id)
+            .where(Payment.status == PaymentStatus.pending)
+        )
+    ).all()
+    held_invoice_ids = {iid for iid, _ in pending_rows if iid is not None}
+    held_reseller_ids = {rid for _, rid in pending_rows if rid is not None}
+
+    counts = {"reminder1": 0, "reminder2": 0, "warning": 0, "enforced": 0,
+              "enforced_dry": 0, "deferred": 0, "on_hold": 0}
     enforced_links: list[str] = []  # clickable owner-facing links of enforced resellers
     bot: Bot | None = await build_bot(session)
     try:
@@ -96,6 +112,10 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
             if days < 0:
                 # Deadline still in the future → fully paused.
                 counts["deferred"] += 1
+                continue
+            if inv.id in held_invoice_ids:
+                # A payment for THIS invoice is awaiting the owner's confirm/reject.
+                counts["on_hold"] += 1
                 continue
             reseller = await session.get(Reseller, inv.reseller_id)
             if reseller is None:
@@ -126,7 +146,8 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                     await session.commit()
                 counts["warning"] += 1
 
-            if days >= de and reseller.enforcement_state == EnforcementState.active:
+            if (days >= de and reseller.enforcement_state == EnforcementState.active
+                    and inv.reseller_id not in held_reseller_ids):
                 # A live enforcement flips enforcement_state away from `active`, so it's
                 # naturally skipped next run. A DRY-RUN doesn't change state, so without a
                 # guard it would log a fresh EnforcementAction every single day. In

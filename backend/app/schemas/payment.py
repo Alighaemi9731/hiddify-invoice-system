@@ -21,6 +21,7 @@ class PaymentOut(BaseModel):
     verified_at: dt.datetime | None
     created_at: dt.datetime | None
     note: str | None
+    has_proof: bool = False
 
 
 class ManualPaymentCreate(BaseModel):

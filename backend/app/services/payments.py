@@ -303,18 +303,48 @@ async def _apply_confirmed(
 
 
 async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentResult:
-    """Owner override: mark a payment confirmed without on-chain verification."""
+    """Owner override: mark a payment confirmed without on-chain verification.
+
+    Reversible: works on a previously rejected payment too (recovers from a mis-click),
+    re-marking its invoice paid and restoring the reseller. The reseller is notified only
+    on the FIRST confirmation, so toggling confirm↔reject doesn't spam them."""
     payment = await session.get(Payment, payment_id)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
+    was_confirmed = payment.status == PaymentStatus.confirmed
     invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
     reseller = await session.get(Reseller, payment.reseller_id)
-    payment.note = (payment.note or "") + " [manually confirmed]"
+    if "[manually confirmed]" not in (payment.note or ""):
+        payment.note = (payment.note or "") + " [manually confirmed]"
     await _apply_confirmed(session, payment, invoice, reseller)
-    if reseller is not None:
+    if reseller is not None and not was_confirmed:
         period = invoice.period_label if invoice else ""
         await notifier.send_to_reseller(
             session, reseller, await _payment_received_text(session, period),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
     return PaymentResult("confirmed", True, "Confirmed")
+
+
+async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResult:
+    """Owner rejects a payment. Reversible: if this payment had previously CONFIRMED its
+    invoice (e.g. the owner mis-clicked confirm, or is changing their mind), the invoice is
+    reverted to owed (unpaid) and the ledger updated, so the accounting stays consistent.
+    The reseller is NOT auto-notified (so a mis-click + re-confirm leaves no trace), and an
+    already-enforced reseller is NOT re-suspended automatically — dunning will re-escalate
+    on its normal timeline, or the owner can suspend manually."""
+    payment = await session.get(Payment, payment_id)
+    if payment is None:
+        return PaymentResult("rejected", False, "Payment not found")
+    was_confirmed = payment.status == PaymentStatus.confirmed
+    payment.status = PaymentStatus.rejected
+    payment.verified_at = None
+    invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+    if was_confirmed and invoice is not None and invoice.status == InvoiceStatus.paid:
+        # Undo the payment's effect on the invoice (revert to owed).
+        invoice.status = InvoiceStatus.sent
+        invoice.paid_at = None
+        reseller = await session.get(Reseller, invoice.reseller_id)
+        await financial_archive.record(session, invoice, reseller=reseller)
+    await session.commit()
+    return PaymentResult("rejected", False, "Rejected")

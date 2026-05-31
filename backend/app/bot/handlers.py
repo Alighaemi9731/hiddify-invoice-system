@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 import re
 
 from aiogram import Bot, F, Router
@@ -880,6 +881,14 @@ async def on_document(message: Message) -> None:
     """Owner sends a backup .zip → restore the system from it."""
     async with SessionLocal() as session:
         if not await _is_owner_user(session, message.from_user):
+            # A reseller who sent a screenshot as an uncompressed FILE → nudge them to send
+            # it as a photo (which on_photo records as a payment proof).
+            d = message.document
+            fn = (d.file_name or "").lower()
+            if (d.mime_type or "").startswith("image/") or fn.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                await message.answer(
+                    "برای ثبت رسید پرداخت، لطفاً تصویر را به‌صورت «عکس» ارسال کنید (نه فایل)."
+                )
             return
     doc = message.document
     if not (doc.file_name or "").endswith(".zip"):
@@ -901,6 +910,14 @@ async def on_document(message: Message) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         await message.answer(f"❌ بازیابی ناموفق بود: {exc}")
+
+
+@router.message(F.photo)
+async def on_photo(message: Message) -> None:
+    """A photo from a reseller is treated as a deposit screenshot (payment proof)."""
+    async with SessionLocal() as session:
+        await _track_user(session, message.from_user)
+        await _handle_payment_proof(message, session)
 
 
 @router.message(F.text)
@@ -950,6 +967,23 @@ async def _handle_link(message: Message, session, parsed) -> None:
         await message.answer(await texts.render(session, "tpl_link_matched", name=reseller.name))
 
 
+async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | None:
+    """The customer's oldest DUE-NOW invoice (owed, not a draft, not deferred to the
+    future) — what a submitted payment should be attached to."""
+    ids = [r.id for r in resellers]
+    if not ids:
+        return None
+    today = dt.date.today()
+    owed = (
+        await session.execute(
+            select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
+            .order_by(Invoice.period_start.asc())
+        )
+    ).scalars().all()
+    due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
+    return due[0] if due else None
+
+
 async def _handle_txid(message: Message, session, txid: str) -> None:
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
@@ -961,18 +995,9 @@ async def _handle_txid(message: Message, session, txid: str) -> None:
     if existing:
         await message.answer("این تراکنش قبلاً ثبت شده است.")
         return
-    ids = [r.id for r in resellers]
-    today = dt.date.today()
-    owed = (
-        await session.execute(
-            select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.asc())
-        )
-    ).scalars().all()
-    # Link to the oldest DUE-NOW invoice (skip drafts and deferred ones); verification
-    # then settles across all of the customer's due-now invoices.
-    due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
-    invoice = due[0] if due else None
+    # Link to the oldest DUE-NOW invoice; verification then settles across all of the
+    # customer's due-now invoices.
+    invoice = await _oldest_due_invoice(session, resellers)
     payment = Payment(
         reseller_id=invoice.reseller_id if invoice else resellers[0].id,
         invoice_id=invoice.id if invoice else None,
@@ -984,3 +1009,65 @@ async def _handle_txid(message: Message, session, txid: str) -> None:
 
     result = await verify_payment(session, payment.id)
     await message.answer(result.message_fa)
+
+
+async def _handle_payment_proof(message: Message, session) -> None:
+    """A reseller sent a deposit screenshot as proof of payment. Store it, link it to their
+    oldest due invoice as a PENDING payment, and forward it to the owner for manual confirm.
+    This is the easy path for customers who can't extract a TXID."""
+    resellers = await _resellers_for_chat(session, message.from_user.id)
+    if not resellers:
+        # Not a registered reseller → can't attribute the payment.
+        await message.answer(await texts.render(session, "tpl_link_not_found"))
+        return
+    invoice = await _oldest_due_invoice(session, resellers)
+    payment = Payment(
+        reseller_id=invoice.reseller_id if invoice else resellers[0].id,
+        invoice_id=invoice.id if invoice else None,
+        method=PaymentMethod.screenshot, status=PaymentStatus.pending,
+        note="رسید تصویری (در انتظار بررسی مالک)",
+    )
+    session.add(payment)
+    await session.commit()
+
+    # Download the largest rendition of the photo to disk for the panel to display.
+    photo = message.photo[-1]
+    proof_dir = "data/payment_proofs"
+    os.makedirs(proof_dir, exist_ok=True)
+    proof_path = f"{proof_dir}/payment_{payment.id}.jpg"
+    saved = False
+    try:
+        await message.bot.download(photo, destination=proof_path)
+        payment.proof_path = proof_path
+        await session.commit()
+        saved = True
+    except Exception:  # noqa: BLE001 — keep the pending payment even if the file fails
+        log.warning("failed to save payment proof for payment %s", payment.id, exc_info=True)
+
+    await message.answer(
+        "✅ رسید شما دریافت شد و پس از بررسی توسط پشتیبانی تأیید می‌شود.\n"
+        "اگر شناسهٔ تراکنش (TXID) هم دارید، ارسالش کنید تا سریع‌تر بررسی شود."
+    )
+
+    # Forward the screenshot to the owner so they can confirm from Telegram + the panel.
+    owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
+    if owner_chat:
+        r = resellers[0]
+        period = invoice.period_label if invoice else "—"
+        amount = f"{float(invoice.amount_usdt):,.2f} USDT" if invoice else "نامشخص"
+        caption = (
+            f"🧾 رسید پرداخت از «{r.name}»\n"
+            f"دوره: {period}\nمبلغ فاکتور: {amount}\n"
+            f"شناسهٔ پرداخت در پنل: #{payment.id}\n"
+            "برای تأیید/رد به بخش «پرداخت‌ها» در پنل بروید."
+        )
+        try:
+            await message.bot.send_photo(int(owner_chat), photo.file_id, caption=caption)
+        except Exception:  # noqa: BLE001
+            log.warning("failed to forward payment proof to owner", exc_info=True)
+            if not saved:
+                await message.bot.send_message(
+                    int(owner_chat),
+                    f"🧾 رسید پرداخت از «{resellers[0].name}» ثبت شد (#{payment.id})، "
+                    "اما ارسال تصویر ناموفق بود. در پنل بررسی کنید.",
+                )

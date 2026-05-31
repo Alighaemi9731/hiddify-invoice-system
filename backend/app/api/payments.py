@@ -1,7 +1,10 @@
 """Payments: list, detail, (re)verify on-chain, manual confirm/reject/record."""
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +26,7 @@ def _to_out(p: Payment, reseller_name: str | None) -> PaymentOut:
         method=p.method.value, status=p.status.value, chain=p.chain, txid=p.txid,
         from_address=p.from_address, to_address=p.to_address, amount_usdt=float(p.amount_usdt),
         confirmations=p.confirmations, verified_at=p.verified_at, created_at=p.created_at, note=p.note,
+        has_proof=bool(p.proof_path),
     )
 
 
@@ -74,12 +78,22 @@ async def confirm(payment_id: int, session: AsyncSession = Depends(get_session))
 
 @router.post("/{payment_id}/reject", response_model=PaymentActionResult)
 async def reject(payment_id: int, session: AsyncSession = Depends(get_session)) -> PaymentActionResult:
+    if not await session.get(Payment, payment_id):
+        raise HTTPException(404, "Payment not found")
+    r = await payments_service.reject_payment(session, payment_id)
+    return PaymentActionResult(status=r.status, paid=r.paid, message=r.message_fa)
+
+
+@router.get("/{payment_id}/proof")
+async def proof(payment_id: int, session: AsyncSession = Depends(get_session)) -> FileResponse:
+    """Serve the deposit screenshot a reseller sent (method=screenshot)."""
     p = await session.get(Payment, payment_id)
     if not p:
         raise HTTPException(404, "Payment not found")
-    p.status = PaymentStatus.rejected
-    await session.commit()
-    return PaymentActionResult(status="rejected", paid=False, message="Rejected")
+    if not p.proof_path or not os.path.exists(p.proof_path):
+        raise HTTPException(404, "No proof image for this payment")
+    return FileResponse(p.proof_path, media_type="image/jpeg",
+                        filename=f"proof_{payment_id}.jpg")
 
 
 @router.post("", response_model=PaymentOut, status_code=201)
