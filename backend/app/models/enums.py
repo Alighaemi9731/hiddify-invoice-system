@@ -57,6 +57,7 @@ class DeliveryKind(str, enum.Enum):
     reminder2 = "reminder2"
     warning = "warning"
     payment_ack = "payment_ack"
+    abuse_notice = "abuse_notice"
     generic = "generic"
 
 

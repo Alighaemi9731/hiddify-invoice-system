@@ -22,6 +22,7 @@ from app.models.panel import Panel
 from app.models.payment import Payment
 from app.models.reseller import Reseller
 from app.models.setting import Setting
+from app.models.usage_meter import UsageMeter
 
 __all__ = [
     "AppUser",
@@ -34,6 +35,7 @@ __all__ = [
     "FinancialRecord",
     "Payment",
     "Setting",
+    "UsageMeter",
     "DeliveryLog",
     "EnforcementAction",
     "SyncRun",

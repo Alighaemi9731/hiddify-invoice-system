@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Invoice, InvoiceLine, Panel, Reseller
 from app.models.enums import InvoiceStatus
-from app.services import financial_archive, pricing
+from app.services import financial_archive, metering, pricing
 from app.services.invoice_engine import BundleResult, compute_invoices
 from app.services.periods import Period
 
@@ -74,10 +74,15 @@ async def generate_invoices(
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
         )
         for bundle in bundles:
-            if bundle.total_gb <= 0:
+            # Abuse-resistant extra (overage from usage resets + renew-by-edit), added
+            # on top of the normal snapshot total. See app.services.metering.
+            extra = await metering.bundle_extra(
+                session, panel.id, bundle.admin_uuids, period.label, free_threshold
+            )
+            if bundle.total_gb + extra["gb"] <= 0:
                 summary.zero_skipped += 1
                 continue
-            await _persist_bundle(session, panel, bundle, period, rate, summary, force)
+            await _persist_bundle(session, panel, bundle, extra, period, rate, summary, force)
 
     await session.commit()
     log.info(
@@ -167,30 +172,45 @@ async def recompute_invoice(
     )
     bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
 
-    await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id))
-    if bundle is None:
-        # Reseller billed nothing this period now (or no longer a billable root).
-        invoice.usage_gb = 0
-        invoice.users_count = 0
-        invoice.base_amount_toman = 0
-        invoice.min_sale_toman = 0
-        invoice.floor_applied = False
-        invoice.amount_toman = 0
+    base_gb = bundle.total_gb if bundle else 0.0
+    base_lines = bundle.lines if bundle else []
+    price = bundle.price_per_gb if bundle else invoice.price_per_gb
+    min_sale = bundle.min_sale_toman if bundle else 0
+    if bundle:
+        admin_uuids = bundle.admin_uuids
     else:
-        invoice.usage_gb = bundle.total_gb
-        invoice.users_count = bundle.users_count
-        invoice.price_per_gb = bundle.price_per_gb
-        invoice.base_amount_toman = bundle.base_amount_toman
-        invoice.min_sale_toman = bundle.min_sale_toman
-        invoice.floor_applied = bundle.floor_applied
-        invoice.amount_toman = bundle.amount_toman
-        for line in bundle.lines:
-            session.add(InvoiceLine(
-                invoice_id=invoice.id, end_user_uuid=line.user_uuid, name=line.name[:255],
-                start_date=line.start_date, usage_gb=line.usage_gb,
-                added_by_uuid=line.added_by_uuid,
-                sub_reseller_name=(line.sub_reseller_name or "")[:255],
-            ))
+        from app.services.reseller_report import node_descendants
+        reseller = await session.get(Reseller, invoice.reseller_id)
+        admin_uuids = {d.admin_uuid for d in await node_descendants(session, reseller)} if reseller else set()
+    extra = await metering.bundle_extra(session, panel.id, admin_uuids, period.label, free_threshold)
+
+    total_gb = round(base_gb + float(extra["gb"] or 0), 3)
+    base_amount = round(total_gb * price)
+    floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
+    amount_toman = float(min_sale) if floor_applied else float(base_amount)
+
+    await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id))
+    invoice.usage_gb = total_gb
+    invoice.users_count = (bundle.users_count if bundle else 0) + len(extra["lines"])
+    invoice.price_per_gb = price
+    invoice.base_amount_toman = base_amount
+    invoice.min_sale_toman = min_sale
+    invoice.floor_applied = floor_applied
+    invoice.amount_toman = amount_toman
+    for line in base_lines:
+        session.add(InvoiceLine(
+            invoice_id=invoice.id, end_user_uuid=line.user_uuid, name=line.name[:255],
+            start_date=line.start_date, usage_gb=line.usage_gb,
+            added_by_uuid=line.added_by_uuid,
+            sub_reseller_name=(line.sub_reseller_name or "")[:255],
+        ))
+    for el in extra["lines"]:
+        session.add(InvoiceLine(
+            invoice_id=invoice.id, end_user_uuid=el["user_uuid"],
+            name=((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
+            start_date=None, usage_gb=el["usage_gb"], added_by_uuid=el.get("added_by_uuid"),
+            sub_reseller_name="",
+        ))
     invoice.usdt_rate = rate
     invoice.amount_usdt = float(pricing.toman_to_usdt(invoice.amount_toman, rate))
     await financial_archive.record(session, invoice)
@@ -203,13 +223,20 @@ async def _persist_bundle(
     session: AsyncSession,
     panel: Panel,
     bundle: BundleResult,
+    extra: dict,
     period: Period,
     rate: int,
     summary: GenerationSummary,
     force: bool,
 ) -> None:
     reseller: Reseller = bundle.root
-    amount_toman = bundle.amount_toman
+    # Combine the normal snapshot total with the abuse-metered extra, then apply the floor.
+    price = bundle.price_per_gb
+    total_gb = round(bundle.total_gb + float(extra.get("gb", 0) or 0), 3)
+    base_amount = round(total_gb * price)
+    min_sale = bundle.min_sale_toman
+    floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
+    amount_toman = float(min_sale) if floor_applied else float(base_amount)
     amount_usdt = float(pricing.toman_to_usdt(amount_toman, rate))
 
     existing = (
@@ -247,13 +274,13 @@ async def _persist_bundle(
     invoice.period_start = period.start
     invoice.period_end = period.end
     invoice.period_label = period.label
-    invoice.usage_gb = bundle.total_gb
-    invoice.users_count = bundle.users_count
-    invoice.price_per_gb = bundle.price_per_gb
+    invoice.usage_gb = total_gb
+    invoice.users_count = bundle.users_count + len(extra.get("lines", []))
+    invoice.price_per_gb = price
     invoice.amount_toman = amount_toman
-    invoice.base_amount_toman = bundle.base_amount_toman
-    invoice.min_sale_toman = bundle.min_sale_toman
-    invoice.floor_applied = bundle.floor_applied
+    invoice.base_amount_toman = base_amount
+    invoice.min_sale_toman = min_sale
+    invoice.floor_applied = floor_applied
     invoice.usdt_rate = rate
     invoice.amount_usdt = amount_usdt
     if existing is None or existing.status == InvoiceStatus.draft:
@@ -270,6 +297,19 @@ async def _persist_bundle(
                 usage_gb=line.usage_gb,
                 added_by_uuid=line.added_by_uuid,
                 sub_reseller_name=(line.sub_reseller_name or "")[:255],
+            )
+        )
+    # Abnormal (metered) extra as explicit lines so the PDF/detail shows them.
+    for el in extra.get("lines", []):
+        session.add(
+            InvoiceLine(
+                invoice_id=invoice.id,
+                end_user_uuid=el["user_uuid"],
+                name=((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
+                start_date=None,
+                usage_gb=el["usage_gb"],
+                added_by_uuid=el.get("added_by_uuid"),
+                sub_reseller_name="",
             )
         )
 

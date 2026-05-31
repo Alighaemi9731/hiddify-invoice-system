@@ -113,6 +113,7 @@ async def send_invoice(
     )
     session.add(dl)
 
+    notify_abuse = False
     if status == DeliveryStatus.sent and inv.status == InvoiceStatus.draft:
         inv.status = InvoiceStatus.sent
         inv.sent_at = dt.datetime.now(dt.timezone.utc)
@@ -120,7 +121,15 @@ async def send_invoice(
         from app.services import financial_archive
 
         await financial_archive.record(session, inv, reseller=reseller)
+        notify_abuse = True
     await session.commit()
+
+    # On first delivery, if the invoice includes abuse-metered extra, explain it to the
+    # reseller and ping the owner. Best-effort; never blocks delivery.
+    if notify_abuse:
+        from app.services import metering
+
+        await metering.notify_abuse_if_any(session, inv, reseller, bot=bot)
 
     if own_bot and bot is not None:
         await bot.session.close()

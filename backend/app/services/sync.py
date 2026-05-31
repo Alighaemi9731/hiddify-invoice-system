@@ -112,6 +112,9 @@ async def _upsert_resellers(
 async def _upsert_users(
     session: AsyncSession, panel: Panel, data: PanelData, now: dt.datetime
 ) -> None:
+    from app.models import UsageMeter
+    from app.services import metering
+
     existing = {
         s.user_uuid: s
         for s in (
@@ -120,11 +123,35 @@ async def _upsert_users(
             )
         ).scalars()
     }
+    period_label = now.strftime("%Y-%m")
+    metering_on = await metering.is_enabled(session)
+    meters = await metering.load_period_meters(session, panel.id, period_label) if metering_on else {}
+
     for u in data.users:
         s = existing.get(u.uuid)
         if s is None:
             s = EndUserSnapshot(panel_id=panel.id, user_uuid=u.uuid)
             session.add(s)
+
+        # Meter from the DELTA between the stored snapshot (prev) and the new values —
+        # must run BEFORE we overwrite the snapshot's usage fields below.
+        if metering_on:
+            try:
+                meter = meters.get(u.uuid)
+                if meter is None:
+                    meter = UsageMeter(panel_id=panel.id, user_uuid=u.uuid, period_label=period_label)
+                    session.add(meter)
+                    meters[u.uuid] = meter
+                metering.apply(
+                    snapshot=s, meter=meter,
+                    prev_limit=float(s.usage_limit_gb or 0), prev_used=float(s.current_usage_gb or 0),
+                    new_limit=float(u.usage_limit_gb or 0), new_used=float(u.current_usage_gb or 0),
+                    start_date=u.start_date, added_by_uuid=u.added_by_uuid, name=u.name,
+                    period_label=period_label,
+                )
+            except Exception:  # noqa: BLE001 — metering must never break a sync
+                log.warning("metering.apply failed for user %s", u.uuid, exc_info=True)
+
         s.name = u.name
         s.added_by_uuid = u.added_by_uuid
         s.usage_limit_gb = u.usage_limit_gb

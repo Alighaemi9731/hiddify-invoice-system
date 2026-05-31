@@ -99,6 +99,9 @@ DEFS: list[SettingDef] = [
     # billed (e.g. 1 → both 0.5 GB and 1 GB are free; 1.5+ GB is billed).
     SettingDef("free_under_gb", 1, False, "pricing"),
     SettingDef("min_sale_toman", 0, False, "pricing"),  # 0 = no minimum-sale floor
+    # Abuse-resistant metering (billing model "C"): bill usage beyond the paid quota
+    # (daily-reset trick) + renew-by-edit that skips start_date. On by default.
+    SettingDef("metering_enabled", True, False, "pricing"),
     # Invoicing schedule
     SettingDef("invoice_day_of_month", 1, False, "schedule"),  # run on the 1st for prev month
     SettingDef("invoice_hour", 9, False, "schedule"),

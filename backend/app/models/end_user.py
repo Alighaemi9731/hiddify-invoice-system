@@ -56,3 +56,13 @@ class EndUserSnapshot(Base, TimestampMixin):
     last_synced_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # --- Metering running state (lifetime, reset-aware) — see app.services.metering ---
+    # provisioned = total GB ever sold/topped-up; consumed = true cumulative usage
+    # (survives the reseller resetting current_usage). The remaining buffer
+    # (provisioned - consumed) is what the reseller has legitimately paid for; usage
+    # beyond it is "overage" (billed as abuse). `meter_init` guards baseline setup so a
+    # pre-existing user is not re-billed when metering is first switched on.
+    meter_provisioned_gb: Mapped[float] = mapped_column(Numeric(16, 3), default=0)
+    meter_consumed_gb: Mapped[float] = mapped_column(Numeric(16, 3), default=0)
+    meter_init: Mapped[bool] = mapped_column(default=False)
