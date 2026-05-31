@@ -15,6 +15,10 @@ legacy invoice manual system/
 sample backup panel/
 source code panel for help/
 MY_UNDERSTANDING.md
+# Hiddify source dropped in for reference while wiring the admin API (do NOT commit).
+hiddify-src/
+HiddifyPanel/
+hiddify-manager/
 
 # ───────────────────────────── Python ─────────────────────────────
 __pycache__/
