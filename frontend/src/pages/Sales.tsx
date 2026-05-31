@@ -1,11 +1,12 @@
 import { useState } from "react";
 import {
   Box, Card, Chip, MenuItem, Stack, Table, TableBody, TableCell, TableHead,
-  TableRow, TextField, TableSortLabel, Typography,
+  TableRow, TableSortLabel, Typography,
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
 import { getSales } from "../api/client";
 import { currentPeriod } from "../components/StatCard";
+import PeriodPicker from "../components/PeriodPicker";
 import { fmtToman, fmtUsdt, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error" };
@@ -33,8 +34,7 @@ export default function Sales() {
   return (
     <Box>
       <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
-        <TextField type="month" size="small" label="دوره" value={period} InputLabelProps={{ shrink: true }}
-          onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodPicker value={period} onChange={setPeriod} />
         <Box sx={{ flexGrow: 1 }} />
         <Typography variant="body2" color="text.secondary">
           {fmtNum(data.length)} فاکتور — {fmtGb(totalGb)} — جمع {fmtToman(total)}

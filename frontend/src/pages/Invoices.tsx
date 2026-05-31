@@ -21,6 +21,7 @@ import {
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
 import { currentPeriod } from "../components/StatCard";
+import PeriodPicker from "../components/PeriodPicker";
 import { fmtToman, fmtUsdt, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
@@ -91,8 +92,7 @@ export default function Invoices() {
   return (
     <Box>
       <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }} alignItems="center">
-        <TextField type="month" size="small" label="دوره" value={period} InputLabelProps={{ shrink: true }}
-          onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodPicker value={period} onChange={setPeriod} />
         <TextField select size="small" label="وضعیت" value={status} sx={{ minWidth: 140 }} onChange={(e) => setStatus(e.target.value)}>
           <MenuItem value="">همه</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}

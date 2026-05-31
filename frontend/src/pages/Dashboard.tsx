@@ -12,6 +12,7 @@ import NotificationsActiveIcon from "@mui/icons-material/NotificationsActive";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getDashboard, runMonthly, runDunning, syncAllPanels } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
+import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
 import { useToast, errMsg } from "../components/Toast";
 import { fmtToman, fmtUsdt, fmtNum, fmtCompact, INVOICE_STATUS_FA } from "../format";
@@ -111,8 +112,7 @@ export default function Dashboard() {
   return (
     <Box>
       <Stack direction="row" spacing={1.5} sx={{ mb: 3, flexWrap: "wrap", rowGap: 1.5 }} alignItems="center">
-        <TextField type="month" label="دوره" size="small" value={period}
-          onChange={(e) => setPeriod(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <PeriodPicker value={period} onChange={setPeriod} />
         <Box sx={{ flexGrow: 1 }} />
         <Button variant="outlined" startIcon={<SyncIcon />} onClick={() => sync.mutate()} disabled={sync.isPending}>همگام‌سازی پنل‌ها</Button>
         <Button variant="outlined" color="warning" startIcon={<NotificationsActiveIcon />} onClick={() => dunning.mutate()} disabled={dunning.isPending}>اجرای یادآوری‌ها</Button>

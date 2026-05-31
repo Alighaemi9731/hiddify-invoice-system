@@ -6,6 +6,7 @@ import {
 import DownloadIcon from "@mui/icons-material/Download";
 import { useQuery } from "@tanstack/react-query";
 import { getFinancialHistory } from "../api/client";
+import PeriodPicker from "../components/PeriodPicker";
 import { fmtToman, fmtUsdt, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = {
@@ -49,8 +50,7 @@ export default function FinancialHistory() {
         این سوابق حتی پس از «پاک‌سازی داده‌ها» یا حذف پنل/نماینده باقی می‌مانند.
       </Typography>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }} alignItems="center">
-        <TextField type="month" size="small" label="دوره (خالی = همه)" value={period}
-          InputLabelProps={{ shrink: true }} onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodPicker value={period} onChange={setPeriod} label="دوره (خالی = همه)" allowEmpty />
         <TextField size="small" label="جستجوی نماینده" value={q} onChange={(e) => setQ(e.target.value)} />
         <TextField select size="small" label="وضعیت" value={status} sx={{ minWidth: 140 }}
           onChange={(e) => setStatus(e.target.value)}>
