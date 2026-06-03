@@ -29,6 +29,7 @@ class ResellerOut(BaseModel):
     can_add_admin: bool = False
     users_count: int = 0          # users this admin created (panel snapshot)
     active_users_count: int = 0   # of those, currently enabled+active
+    capacity_pct: float = 0       # users_count / max_users * 100 (0 when no limit)
     last_seen_at: dt.datetime | None
 
 

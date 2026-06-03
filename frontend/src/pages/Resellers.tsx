@@ -132,7 +132,7 @@ export default function Resellers() {
                 <SortTh id="name" label="نام" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="users_count" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="can_add_admin" label="ساخت زیرمجموعه" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="registered" label="ربات" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="enforcement_state" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />

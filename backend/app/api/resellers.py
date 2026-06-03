@@ -26,6 +26,9 @@ def _to_out(
     counts: dict[tuple[int, str], tuple[int, int]] | None = None,
 ) -> ResellerOut:
     total, active = (counts or {}).get((r.panel_id, r.admin_uuid), (0, 0))
+    # Fill % of the admin's user quota — what the capacity column sorts by. No limit → 0
+    # so unlimited admins sort as "empty" rather than randomly by raw count.
+    cap = (total / r.panel_max_users * 100) if r.panel_max_users else 0.0
     return ResellerOut(
         id=r.id, panel_id=r.panel_id, panel_key=panel_key, admin_uuid=r.admin_uuid,
         name=r.name, parent_admin_uuid=r.parent_admin_uuid, mode=r.mode, is_owner=r.is_owner,
@@ -36,7 +39,7 @@ def _to_out(
         registered=r.bot_chat_id is not None, enforcement_state=r.enforcement_state.value,
         panel_max_users=r.panel_max_users, panel_max_active_users=r.panel_max_active_users,
         can_add_admin=r.can_add_admin,
-        users_count=total, active_users_count=active,
+        users_count=total, active_users_count=active, capacity_pct=round(cap, 1),
         last_seen_at=r.last_seen_at,
     )
 
