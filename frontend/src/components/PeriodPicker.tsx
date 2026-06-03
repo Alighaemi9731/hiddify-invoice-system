@@ -1,16 +1,14 @@
 import { MenuItem, Stack, TextField } from "@mui/material";
 
-// Billing periods are GREGORIAN months (the value is "YYYY-MM"); these are the
-// Gregorian month names in Persian, shown with their number for clarity.
-const MONTHS_FA = [
-  "ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن",
-  "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر",
+// Billing periods are GREGORIAN months (the value is "YYYY-MM"). Short English month
+// names look cleaner than localized ones; the number keeps them unambiguous.
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-const toFa = (n: number | string) => String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[+d]);
-
-// Years offered in the dropdown: a generous window around the current year so the
-// owner can always reach past periods and the next one. Newest first.
+// Years offered: a window around the current year (newest first) so any past period and
+// the next one are reachable.
 function yearOptions(): number[] {
   const now = new Date().getFullYear();
   const start = Math.min(2023, now - 1);
@@ -23,28 +21,21 @@ function yearOptions(): number[] {
 type Props = {
   value: string;                 // "YYYY-MM", or "" when allowEmpty
   onChange: (v: string) => void;
-  label?: string;                // label for the year field (e.g. "دوره")
-  allowEmpty?: boolean;          // adds a "همه" option that clears to ""
-  size?: "small" | "medium";
+  label?: string;                // label for the year field
+  allowEmpty?: boolean;          // adds an "all" option that clears to ""
 };
 
 /**
- * Two clear dropdowns (year + Persian month) instead of a native month input,
- * so changing the year is obvious. Emits a "YYYY-MM" string (or "" if allowEmpty
- * and either field is set to "همه").
+ * Two compact dropdowns (year + month) instead of a native month input, so changing the
+ * year is obvious. Emits a "YYYY-MM" string (or "" if allowEmpty and a field is cleared).
  */
-export default function PeriodPicker({
-  value, onChange, label = "دوره", allowEmpty = false, size = "small",
-}: Props) {
+export default function PeriodPicker({ value, onChange, label = "دوره", allowEmpty = false }: Props) {
   const [yStr, mStr] = (value || "").split("-");
   const year = yStr ? Number(yStr) : "";
   const month = mStr ? Number(mStr) : "";
 
   const emit = (y: number | "", m: number | "") => {
-    if (y === "" || m === "") {
-      onChange("");                 // only valid when allowEmpty; clears the filter
-      return;
-    }
+    if (y === "" || m === "") { onChange(""); return; }   // only reachable when allowEmpty
     onChange(`${y}-${String(m).padStart(2, "0")}`);
   };
 
@@ -54,21 +45,27 @@ export default function PeriodPicker({
   return (
     <Stack direction="row" spacing={1}>
       <TextField
-        select size={size} label={label} value={year}
-        sx={{ minWidth: 110 }}
-        onChange={(e) => emit(e.target.value === "" ? "" : Number(e.target.value), allowEmpty && e.target.value === "" ? "" : (month || new Date().getMonth() + 1))}
+        select size="small" label={label} value={year}
+        sx={{ width: 96 }}
+        onChange={(e) => emit(
+          e.target.value === "" ? "" : Number(e.target.value),
+          e.target.value === "" ? "" : (month || new Date().getMonth() + 1),
+        )}
       >
         {allowEmpty && <MenuItem value="">همه</MenuItem>}
-        {years.map((y) => <MenuItem key={y} value={y}>{toFa(y)}</MenuItem>)}
+        {years.map((y) => <MenuItem key={y} value={y}>{y}</MenuItem>)}
       </TextField>
       <TextField
-        select size={size} label="ماه" value={month}
-        sx={{ minWidth: 130 }}
-        onChange={(e) => emit(allowEmpty && e.target.value === "" ? "" : (year || new Date().getFullYear()), e.target.value === "" ? "" : Number(e.target.value))}
+        select size="small" label="ماه" value={month}
+        sx={{ width: 110 }}
+        onChange={(e) => emit(
+          e.target.value === "" ? "" : (year || new Date().getFullYear()),
+          e.target.value === "" ? "" : Number(e.target.value),
+        )}
       >
         {allowEmpty && <MenuItem value="">همه</MenuItem>}
-        {MONTHS_FA.map((name, i) => (
-          <MenuItem key={i + 1} value={i + 1}>{`${name} (${toFa(String(i + 1).padStart(2, "0"))})`}</MenuItem>
+        {MONTHS.map((name, i) => (
+          <MenuItem key={i + 1} value={i + 1}>{`${String(i + 1).padStart(2, "0")} · ${name}`}</MenuItem>
         ))}
       </TextField>
     </Stack>

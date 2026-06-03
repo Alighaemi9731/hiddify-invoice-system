@@ -60,6 +60,8 @@ class Reseller(Base, TimestampMixin):
     # Latest values seen on the panel (refreshed each sync).
     panel_max_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
     panel_max_active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Whether this admin is allowed to create sub-admins (Hiddify `can_add_admin`).
+    can_add_admin: Mapped[bool] = mapped_column(default=False)
 
     # Enforcement state machine
     enforcement_state: Mapped[EnforcementState] = mapped_column(

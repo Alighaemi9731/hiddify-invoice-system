@@ -26,6 +26,9 @@ class ResellerOut(BaseModel):
     enforcement_state: str
     panel_max_users: int | None
     panel_max_active_users: int | None
+    can_add_admin: bool = False
+    users_count: int = 0          # users this admin created (panel snapshot)
+    active_users_count: int = 0   # of those, currently enabled+active
     last_seen_at: dt.datetime | None
 
 
@@ -33,3 +36,11 @@ class ResellerUpdate(BaseModel):
     price_per_gb: int | None = None
     min_sale_toman: int | None = None
     exclude_from_billing: bool | None = None
+
+
+class BumpLimitsBody(BaseModel):
+    amount: int = 100  # added to BOTH max_users and max_active_users
+
+
+class CanAddAdminBody(BaseModel):
+    enabled: bool

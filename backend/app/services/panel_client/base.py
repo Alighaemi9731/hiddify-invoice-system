@@ -59,6 +59,7 @@ class PanelAdmin:
     telegram_id: int | None
     max_users: int | None
     max_active_users: int | None
+    can_add_admin: bool = False
 
     @property
     def is_owner(self) -> bool:
@@ -99,6 +100,7 @@ def parse_backup(payload: dict) -> PanelData:
             telegram_id=_to_int(a.get("telegram_id")),
             max_users=_to_int(a.get("max_users")),
             max_active_users=_to_int(a.get("max_active_users")),
+            can_add_admin=bool(a.get("can_add_admin", False)),
         )
         for a in payload.get("admin_users", [])
         if a.get("uuid")

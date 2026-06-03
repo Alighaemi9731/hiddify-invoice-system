@@ -110,6 +110,7 @@ async def _upsert_resellers(
         r.panel_telegram_id = a.telegram_id
         r.panel_max_users = a.max_users
         r.panel_max_active_users = a.max_active_users
+        r.can_add_admin = a.can_add_admin
         r.last_seen_at = now
 
 

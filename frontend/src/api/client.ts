@@ -93,6 +93,10 @@ export const enforceReseller = (id: number, dry_run?: boolean) =>
   api.post(`/api/resellers/${id}/enforce`, null, { params: { dry_run } }).then((r) => r.data);
 export const restoreReseller = (id: number) =>
   api.post(`/api/resellers/${id}/restore`).then((r) => r.data);
+export const bumpResellerLimits = (id: number, amount: number) =>
+  api.post(`/api/resellers/${id}/bump-limits`, { amount }).then((r) => r.data);
+export const setResellerCanAddAdmin = (id: number, enabled: boolean) =>
+  api.post(`/api/resellers/${id}/can-add-admin`, { enabled }).then((r) => r.data);
 
 // ---- invoices ----
 export const listInvoices = (params: any = {}) =>

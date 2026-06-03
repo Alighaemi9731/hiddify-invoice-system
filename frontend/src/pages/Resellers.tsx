@@ -8,15 +8,18 @@ import { alpha } from "@mui/material/styles";
 import EditIcon from "@mui/icons-material/Edit";
 import BlockIcon from "@mui/icons-material/Block";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import AddIcon from "@mui/icons-material/Add";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowLeftIcon from "@mui/icons-material/KeyboardArrowLeft";
 import SubdirectoryArrowLeftIcon from "@mui/icons-material/SubdirectoryArrowLeft";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listResellers, getResellerTree, listPanels, updateReseller, enforceReseller, restoreReseller,
+  bumpResellerLimits, setResellerCanAddAdmin,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
+import CapacityBar from "../components/CapacityBar";
 import { fmtNum } from "../format";
 
 const ENF_FA: any = { active: ["فعال", "success"], warned: ["اخطار", "warning"], enforced: ["مسدود", "error"] };
@@ -34,6 +37,8 @@ export default function Resellers() {
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
   const [form, setForm] = useState<any>(null);
+  const [bumpRow, setBumpRow] = useState<any>(null);
+  const [bumpAmount, setBumpAmount] = useState(100);
 
   const { data: panels = [] } = useQuery({ queryKey: ["panels"], queryFn: listPanels });
   const { data = [] } = useQuery({
@@ -69,6 +74,16 @@ export default function Resellers() {
     onSuccess: (r) => { show(`بازگردانی: ${r.status}`); refresh(); },
     onError: (e) => show(errMsg(e), "error"),
   });
+  const bump = useMutation({
+    mutationFn: ({ id, amount }: { id: number; amount: number }) => bumpResellerLimits(id, amount),
+    onSuccess: (r) => { show(`ظرفیت افزایش یافت → سقف کاربران: ${r.max_users}`); setBumpRow(null); refresh(); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+  const canAdd = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) => setResellerCanAddAdmin(id, enabled),
+    onSuccess: (r) => { show(r.can_add_admin ? "ساخت زیرمجموعه فعال شد" : "ساخت زیرمجموعه غیرفعال شد"); refresh(); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
 
   const { sorted, key, dir, toggle } = useSort(data, "name", "asc");
   const rows = sorted.slice(page * 25, page * 25 + 25);
@@ -76,12 +91,21 @@ export default function Resellers() {
   const actions = (r: any) => (
     <>
       <Tooltip title="ویرایش"><IconButton size="small" onClick={() => setForm({ ...r })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+      <Tooltip title="افزایش ظرفیت کاربران"><IconButton size="small" color="primary" onClick={() => { setBumpAmount(100); setBumpRow(r); }}><AddIcon fontSize="small" /></IconButton></Tooltip>
       {r.enforcement_state === "enforced" ? (
         <Tooltip title="بازگردانی"><IconButton size="small" color="success" onClick={() => restore.mutate(r.id)}><RestartAltIcon fontSize="small" /></IconButton></Tooltip>
       ) : (
         <Tooltip title="مسدودسازی"><IconButton size="small" color="error" onClick={() => confirm("مسدودسازی این نماینده؟ (در حالت آزمایشی فقط ثبت می‌شود)") && enforce.mutate(r.id)}><BlockIcon fontSize="small" /></IconButton></Tooltip>
       )}
     </>
+  );
+
+  // The "can create sub-admins" toggle (writes to the panel immediately).
+  const canAddSwitch = (r: any) => (
+    <Tooltip title={r.can_add_admin ? "اجازهٔ ساخت زیرمجموعه دارد — برای خاموش‌کردن بزنید" : "بدون اجازهٔ ساخت زیرمجموعه — برای روشن‌کردن بزنید"}>
+      <Switch size="small" checked={!!r.can_add_admin} disabled={canAdd.isPending}
+        onChange={(e) => canAdd.mutate({ id: r.id, enabled: e.target.checked })} />
+    </Tooltip>
   );
 
   return (
@@ -108,6 +132,8 @@ export default function Resellers() {
                 <SortTh id="name" label="نام" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="users_count" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="can_add_admin" label="ساخت زیرمجموعه" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="registered" label="ربات" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="enforcement_state" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
                 <SortTh id="exclude_from_billing" label="محاسبه" sortKey={key} dir={dir} onSort={toggle} />
@@ -120,6 +146,8 @@ export default function Resellers() {
                   <TableCell>{r.name}{r.link_tag ? ` (#${r.link_tag})` : ""}</TableCell>
                   <TableCell>{r.panel_key}</TableCell>
                   <TableCell>{fmtNum(r.effective_price_per_gb)}{r.price_per_gb ? "" : " (پیش‌فرض)"}</TableCell>
+                  <TableCell><CapacityBar used={r.users_count} max={r.panel_max_users} /></TableCell>
+                  <TableCell>{canAddSwitch(r)}</TableCell>
                   <TableCell>{r.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}</TableCell>
                   <TableCell>{enfChip(r.enforcement_state)}</TableCell>
                   <TableCell>{r.exclude_from_billing ? <Chip size="small" color="warning" label="معاف" /> : "✓"}</TableCell>
@@ -144,6 +172,8 @@ export default function Resellers() {
                 <TableCell>نماینده</TableCell>
                 <TableCell>پنل</TableCell>
                 <TableCell>قیمت/گیگ</TableCell>
+                <TableCell>پُری ظرفیت</TableCell>
+                <TableCell>ساخت زیرمجموعه</TableCell>
                 <TableCell>ربات</TableCell>
                 <TableCell>وضعیت</TableCell>
                 <TableCell align="left">عملیات</TableCell>
@@ -151,10 +181,10 @@ export default function Resellers() {
             </TableHead>
             <TableBody>
               {tree.map((r: any) => (
-                <TreeRow key={r.id} node={r} depth={0} actions={actions} />
+                <TreeRow key={r.id} node={r} depth={0} actions={actions} canAddSwitch={canAddSwitch} />
               ))}
               {tree.length === 0 && (
-                <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>داده‌ای نیست</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>داده‌ای نیست</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -179,12 +209,41 @@ export default function Resellers() {
           <Button variant="contained" onClick={() => save.mutate()}>ذخیره</Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog open={!!bumpRow} onClose={() => setBumpRow(null)} fullWidth maxWidth="xs">
+        {bumpRow && (<>
+          <DialogTitle>افزایش ظرفیت — {bumpRow.name}</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              این مقدار به هر دو سقفِ «تعداد کاربران» و «کاربران فعال» این نماینده روی پنل اضافه می‌شود.
+              {bumpRow.panel_max_users != null && (
+                <> سقف فعلی: {fmtNum(bumpRow.panel_max_users)} (ساخته: {fmtNum(bumpRow.users_count)}).</>
+              )}
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+              {[50, 100, 200, 500].map((n) => (
+                <Button key={n} size="small" variant={bumpAmount === n ? "contained" : "outlined"}
+                  onClick={() => setBumpAmount(n)}>+{n}</Button>
+              ))}
+            </Stack>
+            <TextField type="number" label="مقدار افزایش" fullWidth value={bumpAmount}
+              onChange={(e) => setBumpAmount(Math.max(1, Number(e.target.value) || 0))} />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setBumpRow(null)}>انصراف</Button>
+            <Button variant="contained" disabled={bump.isPending || bumpAmount < 1}
+              onClick={() => bump.mutate({ id: bumpRow.id, amount: bumpAmount })}>
+              افزودن +{bumpAmount}
+            </Button>
+          </DialogActions>
+        </>)}
+      </Dialog>
       {node}
     </Box>
   );
 }
 
-function TreeRow({ node, depth, actions }: { node: any; depth: number; actions: (r: any) => any }) {
+function TreeRow({ node, depth, actions, canAddSwitch }: { node: any; depth: number; actions: (r: any) => any; canAddSwitch: (r: any) => any }) {
   const [open, setOpen] = useState(depth === 0);
   const hasKids = (node.children?.length || 0) > 0;
   return (
@@ -213,12 +272,14 @@ function TreeRow({ node, depth, actions }: { node: any; depth: number; actions: 
         </TableCell>
         <TableCell>{node.panel_key}</TableCell>
         <TableCell>{fmtNum(node.effective_price_per_gb)}</TableCell>
+        <TableCell><CapacityBar used={node.users_count} max={node.panel_max_users} /></TableCell>
+        <TableCell>{canAddSwitch(node)}</TableCell>
         <TableCell>{node.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}</TableCell>
         <TableCell>{enfChip(node.enforcement_state)}</TableCell>
         <TableCell align="left">{actions(node)}</TableCell>
       </TableRow>
       {hasKids && open && node.children.map((c: any) => (
-        <TreeRow key={c.id} node={c} depth={depth + 1} actions={actions} />
+        <TreeRow key={c.id} node={c} depth={depth + 1} actions={actions} canAddSwitch={canAddSwitch} />
       ))}
     </>
   );
