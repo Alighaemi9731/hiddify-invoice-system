@@ -9,11 +9,12 @@ import { listSettings, updateSettings } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 
 const GROUP_FA: Record<string, string> = {
-  telegram: "تلگرام", payments: "پرداخت (USDT - BEP20)", pricing: "قیمت‌گذاری",
+  telegram: "تلگرام", payments: "روش‌های پرداخت", pricing: "قیمت‌گذاری",
   schedule: "زمان‌بندی صدور", dunning: "یادآوری و مسدودسازی", templates: "متن پیام‌ها",
   general: "عمومی", deploy: "دامنه و HTTPS (هنگام نصب روی سرور)",
 };
 const GROUP_NOTE: Record<string, string> = {
+  payments: "روش‌های پرداختی که روشن باشند روی فاکتور و در «پرداخت» ربات به نماینده نشان داده می‌شوند. روشی که اطلاعاتش (آدرس کیف پول یا شماره کارت) خالی باشد، نمایش داده نمی‌شود.",
   deploy: "این مقادیر هنگام نصب روی سرور (فاز ۲) استفاده می‌شوند: دامنه را وارد کنید، رکورد A آن را به IP سرور بدهید، و نصب‌کننده به‌صورت خودکار گواهی SSL را می‌گیرد و تمدید می‌کند.",
 };
 const LABELS: Record<string, string> = {
@@ -21,6 +22,8 @@ const LABELS: Record<string, string> = {
   usdt_bep20_address: "آدرس کیف پول USDT", usdt_bep20_contract: "قرارداد USDT", bscscan_api_key: "کلید API بی‌اسکن",
   bscscan_api_url: "آدرس API بی‌اسکن", usdt_master_xpub: "xpub کیف پول مادر", min_confirmations: "حداقل تأیید",
   payment_amount_tolerance_usdt: "اغماض مبلغ (USDT)",
+  pay_usdt_enabled: "روش پرداخت: USDT (کیف پول + TXID)", pay_screenshot_enabled: "روش پرداخت: ارسال تصویر رسید",
+  pay_card_enabled: "روش پرداخت: کارت‌به‌کارت", card_number: "شماره کارت", card_holder_name: "نام صاحب کارت",
   default_price_per_gb: "قیمت پیش‌فرض هر گیگ (تومان)", toman_per_usdt: "نرخ تبدیل (تومان به ازای هر USDT)",
   rate_mode: "حالت نرخ", excluded_usage_gb: "حجم‌های معاف (گیگ، با کاما)", min_sale_toman: "حداقل فروش هر نماینده (تومان، ۰=غیرفعال)",
   invoice_day_of_month: "روز صدور ماهانه", invoice_hour: "ساعت صدور",

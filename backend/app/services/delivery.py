@@ -23,14 +23,21 @@ log = logging.getLogger("delivery")
 
 
 async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Reseller) -> str:
-    wallet = await settings_service.get(session, "usdt_bep20_address", "") or "(تنظیم نشده)"
+    from app.services import payment_methods
+
+    opts = await payment_methods.load_options(session)
+    instructions = payment_methods.instructions_text(
+        opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}"
+    )
     text = await texts.render(
         session, "tpl_invoice",
         name=reseller.name, period=inv.period_label,
         usage_gb=f"{float(inv.usage_gb):,.0f}",
         amount_toman=f"{float(inv.amount_toman):,.0f}",
         amount_usdt=f"{float(inv.amount_usdt):,.2f}",
-        wallet_address=wallet,
+        payment_instructions=instructions,
+        # kept for backward-compat with any owner-customized template still using it
+        wallet_address=opts.wallet or "(تنظیم نشده)",
     )
     # When the minimum-sale floor was applied, explain it transparently.
     if getattr(inv, "floor_applied", False):

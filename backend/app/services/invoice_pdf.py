@@ -27,7 +27,9 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
             .order_by(InvoiceLine.usage_gb.desc())
         )
     ).scalars().all()
-    wallet = await settings_service.get(session, "usdt_bep20_address", "") or ""
+    from app.services import payment_methods
+
+    opts = await payment_methods.load_options(session)
     owner_name = await settings_service.get(session, "owner_name", "") or ""
 
     safe = _safe_name(reseller.name)
@@ -44,7 +46,10 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
         ],
         total_gb=float(inv.usage_gb), price_per_gb=inv.price_per_gb,
         amount_toman=float(inv.amount_toman), amount_usdt=float(inv.amount_usdt),
-        usdt_rate=int(inv.usdt_rate), wallet_address=wallet,
+        usdt_rate=int(inv.usdt_rate),
+        wallet_address=opts.wallet if opts.usdt else "",
+        card_number=opts.card_number if opts.card else "",
+        card_holder=opts.card_holder if opts.card else "",
         base_amount_toman=float(inv.base_amount_toman or inv.amount_toman),
         min_sale_toman=int(inv.min_sale_toman or 0), floor_applied=bool(inv.floor_applied),
         owner_name=owner_name,

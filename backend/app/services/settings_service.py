@@ -49,9 +49,8 @@ _TPL_INVOICE = (
     "نماینده: {name}\n"
     "مجموع مصرف: {usage_gb} گیگ\n"
     "مبلغ: {amount_toman} تومان\n"
-    "معادل: {amount_usdt} USDT (شبکه BEP-20)\n\n"
-    "برای پرداخت، مبلغ USDT را به آدرس زیر ارسال کرده و سپس TXID را در ربات ثبت کنید:\n"
-    "{wallet_address}"
+    "معادل: {amount_usdt} USDT\n\n"
+    "{payment_instructions}"
 )
 _TPL_REMINDER1 = (
     "⏰ یادآوری: فاکتور دوره {period} شما هنوز پرداخت نشده است.\n"
@@ -95,6 +94,13 @@ DEFS: list[SettingDef] = [
     SettingDef("usdt_master_xpub", boot.usdt_master_xpub, True, "payments"),
     SettingDef("min_confirmations", 12, False, "payments"),
     SettingDef("payment_amount_tolerance_usdt", 0.5, False, "payments"),
+    # Payment methods shown to resellers (on the invoice + the bot «پرداخت») — each can be
+    # toggled on/off. USDT-by-TXID on by default (matches the existing behaviour).
+    SettingDef("pay_usdt_enabled", True, False, "payments"),       # USDT wallet + TXID
+    SettingDef("pay_screenshot_enabled", True, False, "payments"),  # pay-by-deposit-photo
+    SettingDef("pay_card_enabled", False, False, "payments"),       # card-to-card transfer
+    SettingDef("card_number", "", False, "payments"),               # the destination card
+    SettingDef("card_holder_name", "", False, "payments"),          # name on the card
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),
@@ -160,6 +166,17 @@ async def seed_defaults(session: AsyncSession) -> None:
             value = crypto.encrypt(str(value))
         session.add(Setting(key=d.key, value=value, is_secret=d.is_secret))
     await session.commit()
+
+    # One-time upgrade of the invoice template: older installs have a tpl_invoice that
+    # hard-codes the wallet (`{wallet_address}`) and a "BEP-20" line. The new flow injects
+    # `{payment_instructions}` (built from the enabled methods), so migrate any saved
+    # template still on the legacy form to the new default. A template the owner customized
+    # to already use {payment_instructions} is left untouched.
+    row = await session.get(Setting, "tpl_invoice")
+    if row is not None and isinstance(row.value, str) \
+            and "{payment_instructions}" not in row.value:
+        row.value = _TPL_INVOICE
+        await session.commit()
 
 
 async def get(session: AsyncSession, key: str, default: Any = None) -> Any:

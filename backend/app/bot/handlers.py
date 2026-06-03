@@ -720,11 +720,12 @@ async def _send_debt(answer, chat_id: int, session) -> None:
 
 
 async def _send_pay(answer, chat_id: int, session) -> None:
+    from app.services import payment_methods
+
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
-    wallet = await settings_service.get(session, "usdt_bep20_address", "") or "(تنظیم نشده)"
     ids = [r.id for r in resellers]
     owed = (
         await session.execute(
@@ -743,17 +744,18 @@ async def _send_pay(answer, chat_id: int, session) -> None:
         return
 
     total_u = sum(float(i.amount_usdt) for i in due)
+    total_t = sum(float(i.amount_toman) for i in due)
     lines = [
-        "💳 پرداخت با USDT (شبکه BEP-20)\n",
-        f"مبلغ قابل پرداخت (هم‌اکنون): {total_u:,.2f} USDT",
+        "💳 پرداخت",
+        f"مبلغ قابل پرداخت (هم‌اکنون): {total_u:,.2f} USDT ({total_t:,.0f} تومان)",
     ]
     if len(due) > 1:
-        lines.append(f"(مجموع {len(due)} فاکتور — با یک واریز همه تسویه می‌شوند)")
-    lines.append(f"\nآدرس کیف پول:\n{wallet}\n")
+        lines.append(f"(مجموع {len(due)} فاکتور — با یک پرداخت همه تسویه می‌شوند)")
+    opts = await payment_methods.load_options(session)
+    lines.append("\n" + payment_methods.instructions_text(opts, amount_usdt=f"{total_u:,.2f}"))
     if deferred:
         dsum = sum(float(i.amount_usdt) for i in deferred)
-        lines.append(f"⏳ {len(deferred)} فاکتور مهلت‌دار ({dsum:,.2f} USDT) فعلاً لازم نیست پرداخت شود.")
-    lines.append("پس از واریز، شناسه تراکنش (TXID) را همین‌جا ارسال کنید.")
+        lines.append(f"\n⏳ {len(deferred)} فاکتور مهلت‌دار ({dsum:,.2f} USDT) فعلاً لازم نیست پرداخت شود.")
     await answer("\n".join(lines))
 
 

@@ -123,6 +123,8 @@ def build_invoice_pdf(
     amount_usdt: float,
     usdt_rate: int,
     wallet_address: str = "",
+    card_number: str = "",
+    card_holder: str = "",
     base_amount_toman: float | None = None,
     min_sale_toman: int = 0,
     floor_applied: bool = False,
@@ -289,21 +291,39 @@ def build_invoice_pdf(
     summary_block.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
     elems += [summary_block, Spacer(1, 14)]
 
-    # ---------- payment box ----------
-    if wallet_address:
-        pay = Table(
-            [[Paragraph(wallet_address, ParagraphStyle("w", fontName="Courier", fontSize=9, alignment=1, textColor=INK)),
-              Paragraph(rtl("آدرس پرداخت USDT (BEP-20)"), ParagraphStyle("wl", fontName=bold, fontSize=9.5, alignment=2, textColor=PRIMARY))]],
+    # ---------- payment boxes (one per enabled method) ----------
+    def _pay_box(value_para, label_fa: str):
+        box = Table(
+            [[value_para,
+              Paragraph(rtl(label_fa), ParagraphStyle("wl", fontName=bold, fontSize=9.5, alignment=2, textColor=PRIMARY))]],
             colWidths=[122 * mm, 60 * mm],
         )
-        pay.setStyle(TableStyle([
+        box.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), PRIMARY_LT),
             ("BOX", (0, 0), (-1, -1), 0.6, PRIMARY),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
             ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
         ]))
-        elems += [pay, Spacer(1, 8)]
+        return box
+
+    if wallet_address:
+        elems += [
+            _pay_box(
+                Paragraph(wallet_address, ParagraphStyle("w", fontName="Courier", fontSize=9, alignment=1, textColor=INK)),
+                "آدرس پرداخت USDT (BEP-20)",
+            ),
+            Spacer(1, 8),
+        ]
+    if card_number:
+        holder = f"  ({card_holder})" if card_holder else ""
+        elems += [
+            _pay_box(
+                Paragraph(f"{card_number}{holder}", ParagraphStyle("c", fontName="Courier", fontSize=10, alignment=1, textColor=INK)),
+                "شمارهٔ کارت (کارت‌به‌کارت)",
+            ),
+            Spacer(1, 8),
+        ]
 
     elems.append(Paragraph(
         rtl(f"این فاکتور به‌صورت خودکار در تاریخ {_fa_digits(issued.strftime('%Y-%m-%d'))} صادر شده است."),
