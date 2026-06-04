@@ -14,11 +14,16 @@ const GROUP_FA: Record<string, string> = {
   general: "عمومی", deploy: "دامنه و HTTPS (هنگام نصب روی سرور)",
 };
 const GROUP_NOTE: Record<string, string> = {
+  telegram: "برای ثبت کانال/گروه (حتی خصوصی): ربات را در آن ادمین کنید، سپس یک پیام از همان کانال/گروه را برای ربات فوروارد کنید تا شناسه‌اش ثبت شود. بعد کلید «عضویت اجباری» مربوطه را روشن کنید. اگر هر دو روشن باشند، کاربر باید عضو هر دو باشد. «پاک‌سازی واقعی» با همین یک کلید، هم کانال و هم گروه را از افرادی که نمایندهٔ فعال نیستند پاک می‌کند (روزانه).",
   payments: "روش‌های پرداختی که روشن باشند روی فاکتور و در «پرداخت» ربات به نماینده نشان داده می‌شوند. روشی که اطلاعاتش (آدرس کیف پول یا شماره کارت) خالی باشد، نمایش داده نمی‌شود.",
   deploy: "این مقادیر هنگام نصب روی سرور (فاز ۲) استفاده می‌شوند: دامنه را وارد کنید، رکورد A آن را به IP سرور بدهید، و نصب‌کننده به‌صورت خودکار گواهی SSL را می‌گیرد و تمدید می‌کند.",
 };
 const LABELS: Record<string, string> = {
-  telegram_bot_token: "توکن ربات", announcement_channel_id: "شناسه کانال", announcement_channel_link: "لینک کانال", channel_kick_enabled: "مسدودسازی واقعی کانال (خاموش=آزمایشی)", one_time_invite_links: "لینک عضویت یکبارمصرف",
+  telegram_bot_token: "توکن ربات", announcement_channel_id: "شناسه کانال", announcement_channel_link: "لینک کانال (اختیاری، برای کانال خصوصی)",
+  channel_membership_required: "عضویت اجباری کانال",
+  announcement_group_id: "شناسه گروه", announcement_group_link: "لینک گروه (اختیاری، برای گروه خصوصی)",
+  group_membership_required: "عضویت اجباری گروه",
+  channel_kick_enabled: "پاک‌سازی واقعی کانال و گروه (خاموش=آزمایشی)", one_time_invite_links: "لینک عضویت یک‌بارمصرف",
   usdt_bep20_address: "آدرس کیف پول USDT", usdt_bep20_contract: "قرارداد USDT", bscscan_api_key: "کلید API بی‌اسکن",
   bscscan_api_url: "آدرس API بی‌اسکن", usdt_master_xpub: "xpub کیف پول مادر", min_confirmations: "حداقل تأیید",
   payment_amount_tolerance_usdt: "اغماض مبلغ (USDT)",

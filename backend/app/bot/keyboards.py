@@ -4,10 +4,15 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def membership_keyboard(channel_link: str | None) -> InlineKeyboardMarkup:
+def membership_keyboard(targets: list[dict] | str | None) -> InlineKeyboardMarkup:
+    """A join button per required chat + a single «بررسی عضویت» button.
+    `targets` is a list of {label, link}; a bare string is accepted for back-compat."""
+    if isinstance(targets, str) or targets is None:
+        targets = [{"label": "کانال", "link": targets}] if targets else []
     rows: list[list[InlineKeyboardButton]] = []
-    if channel_link:
-        rows.append([InlineKeyboardButton(text="📢 عضویت در کانال", url=channel_link)])
+    for t in targets:
+        if t.get("link"):
+            rows.append([InlineKeyboardButton(text=f"📢 عضویت در {t.get('label', 'کانال')}", url=t["link"])])
     rows.append([InlineKeyboardButton(text="✅ بررسی عضویت", callback_data="check_membership")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

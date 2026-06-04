@@ -35,7 +35,7 @@ _TPL_WELCOME = (
     "به ربات مدیریت فاکتورها خوش آمدید."
 )
 _TPL_MEMBERSHIP = (
-    "برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید.\n"
+    "برای استفاده از ربات، ابتدا باید در کانال/گروه ما عضو شوید.\n"
     "پس از عضویت، دکمه «بررسی عضویت» را بزنید."
 )
 _TPL_MENU = "از منوی زیر یک گزینه را انتخاب کنید:"
@@ -82,8 +82,16 @@ DEFS: list[SettingDef] = [
     SettingDef("telegram_bot_token", boot.telegram_bot_token, True, "telegram"),
     SettingDef("announcement_channel_id", boot.announcement_channel_id, False, "telegram"),
     SettingDef("announcement_channel_link", boot.announcement_channel_link, False, "telegram"),
-    # Daily channel guard: kick channel members who started the bot but are not
-    # registered resellers. Default OFF (dry-run reports only) for safety.
+    # Forced-membership gate for the channel: when on, a non-owner must be a member to
+    # use the bot. Default ON if a channel is configured (matches old behaviour).
+    SettingDef("channel_membership_required", True, False, "telegram"),
+    # Forced-membership gate for a Telegram GROUP (may be private). Independent toggle;
+    # when both are on, the user must be in BOTH (channel AND group).
+    SettingDef("announcement_group_id", "", False, "telegram"),
+    SettingDef("announcement_group_link", "", False, "telegram"),
+    SettingDef("group_membership_required", False, False, "telegram"),
+    # Daily guard: kick people who started the bot but are NOT registered resellers from
+    # the channel AND the group. Default OFF (dry-run reports only) for safety.
     SettingDef("channel_kick_enabled", False, False, "telegram"),
     SettingDef("one_time_invite_links", True, False, "telegram"),
     # Payments

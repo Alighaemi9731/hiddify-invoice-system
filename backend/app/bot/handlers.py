@@ -100,31 +100,68 @@ async def _track_user(session, user) -> None:
     await session.commit()
 
 
-async def _join_link(bot: Bot, session) -> str | None:
-    """A per-user single-use invite link so the channel's real link isn't shared.
-
+async def _join_link(bot: Bot, chat_id: str, static_link: str, one_time: bool) -> str | None:
+    """A per-user single-use invite link so the chat's real link isn't shared.
     Falls back to the static link if the bot can't create one (needs invite rights)."""
-    channel = await settings_service.get(session, "announcement_channel_id", "") or ""
-    static = await settings_service.get(session, "announcement_channel_link", "") or ""
-    one_time = bool(await settings_service.get(session, "one_time_invite_links", True))
-    if channel and one_time:
+    if chat_id and one_time:
         try:
-            link = await bot.create_chat_invite_link(channel, member_limit=1)
+            link = await bot.create_chat_invite_link(chat_id, member_limit=1)
             return link.invite_link
         except Exception:  # noqa: BLE001
             log.warning("create_chat_invite_link failed (need invite rights?)", exc_info=True)
-    return static or None
+    return static_link or None
 
 
-async def _is_member(bot: Bot, channel_id: str, user_id: int) -> bool:
-    if not channel_id:
+async def _is_member(bot: Bot, chat_id: str, user_id: int) -> bool:
+    if not chat_id:
         return True
     try:
-        member = await bot.get_chat_member(channel_id, user_id)
+        member = await bot.get_chat_member(chat_id, user_id)
         return member.status in ("member", "administrator", "creator", "owner")
     except Exception as exc:  # noqa: BLE001
         log.warning("membership check failed for %s: %s", user_id, exc)
         return False
+
+
+async def _required_gates(session) -> list[dict]:
+    """The enabled forced-membership targets (channel and/or group). Each: id, link, label.
+    A gate counts only when its toggle is on AND a chat id is configured."""
+    cfg = await settings_service.get_many(session, [
+        "channel_membership_required", "announcement_channel_id", "announcement_channel_link",
+        "group_membership_required", "announcement_group_id", "announcement_group_link",
+    ])
+    gates: list[dict] = []
+    if cfg.get("channel_membership_required") and (cfg.get("announcement_channel_id") or ""):
+        gates.append({"id": str(cfg["announcement_channel_id"]),
+                      "link": cfg.get("announcement_channel_link") or "", "label": "کانال"})
+    if cfg.get("group_membership_required") and (cfg.get("announcement_group_id") or ""):
+        gates.append({"id": str(cfg["announcement_group_id"]),
+                      "link": cfg.get("announcement_group_link") or "", "label": "گروه"})
+    return gates
+
+
+async def _missing_gates(bot: Bot, session, user_id: int) -> list[dict]:
+    """Of the enabled gates, the ones the user is NOT a member of."""
+    return [g for g in await _required_gates(session) if not await _is_member(bot, g["id"], user_id)]
+
+
+async def _gate_or_menu(answer, bot: Bot, session, user) -> None:
+    """Show the main menu if the user is the owner or passes every enabled gate; otherwise
+    show the join prompt with a button per chat they still need to join."""
+    if await _is_owner_user(session, user):
+        await _send_menu(answer, session, user)
+        return
+    missing = await _missing_gates(bot, session, user.id)
+    if not missing:
+        await _send_menu(answer, session, user)
+        return
+    one_time = bool(await settings_service.get(session, "one_time_invite_links", True))
+    targets = []
+    for g in missing:
+        link = await _join_link(bot, g["id"], g["link"], one_time)
+        targets.append({"label": g["label"], "link": link})
+    text = await texts.render(session, "tpl_membership")
+    await answer(text, reply_markup=keyboards.membership_keyboard(targets))
 
 
 async def _send_menu(answer, session, user) -> None:
@@ -154,15 +191,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     async with SessionLocal() as session:
         await _track_user(session, message.from_user)
         await _sync_command_menu(bot, session, message.from_user)
-        channel = await settings_service.get(session, "announcement_channel_id", "") or ""
-        if await _is_owner_user(session, message.from_user) or await _is_member(
-            bot, channel, message.from_user.id
-        ):
-            await _send_menu(message.answer, session, message.from_user)
-        else:
-            link = await _join_link(bot, session)
-            text = await texts.render(session, "tpl_membership")
-            await message.answer(text, reply_markup=keyboards.membership_keyboard(link))
+        await _gate_or_menu(message.answer, bot, session, message.from_user)
 
 
 @router.message(Command("menu"))
@@ -376,12 +405,16 @@ async def on_broadcast_text(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "check_membership")
 async def cb_check_membership(cb: CallbackQuery, bot: Bot) -> None:
     async with SessionLocal() as session:
-        channel = await settings_service.get(session, "announcement_channel_id", "") or ""
-        if await _is_member(bot, channel, cb.from_user.id):
+        missing = (
+            [] if await _is_owner_user(session, cb.from_user)
+            else await _missing_gates(bot, session, cb.from_user.id)
+        )
+        if not missing:
             await cb.message.edit_text("✅ عضویت شما تأیید شد.")
             await _send_menu(cb.message.answer, session, cb.from_user)
         else:
-            await cb.answer("هنوز عضو کانال نیستید.", show_alert=True)
+            names = " و ".join(g["label"] for g in missing)
+            await cb.answer(f"هنوز عضو {names} نیستید.", show_alert=True)
 
 
 @router.callback_query(F.data == "menu:register")
@@ -929,17 +962,29 @@ async def _send_sub_invoice(answer, chat_id: int, sub_id: int, period_label: str
 @router.message(F.forward_origin)
 async def on_forward(message: Message) -> None:
     chat = getattr(message.forward_origin, "chat", None)
-    if not chat or chat.type not in ("channel", "supergroup"):
+    if not chat or chat.type not in ("channel", "supergroup", "group"):
         return
     async with SessionLocal() as session:
         if not await _is_owner_user(session, message.from_user):
-            await message.answer("فقط مالک سیستم می‌تواند کانال اطلاع‌رسانی را تنظیم کند.")
+            await message.answer("فقط مالک سیستم می‌تواند کانال/گروه را تنظیم کند.")
             return
-        await settings_service.set_value(session, "announcement_channel_id", str(chat.id))
-        await message.answer(
-            f"✅ کانال اطلاع‌رسانی ثبت شد:\n{chat.title}\nid: {chat.id}\n"
-            "از این پس عضویت کاربران در این کانال بررسی می‌شود."
-        )
+        # A broadcast channel → the announcement channel; a group/supergroup → the group.
+        # (A supergroup IS a group in Telegram; only a real broadcast channel has type
+        # "channel", so this split is reliable.)
+        if chat.type == "channel":
+            await settings_service.set_value(session, "announcement_channel_id", str(chat.id))
+            await message.answer(
+                f"✅ کانال اطلاع‌رسانی ثبت شد:\n{chat.title}\nid: {chat.id}\n"
+                "برای اجباری‌کردن عضویت، کلید «عضویت اجباری کانال» را در تنظیمات روشن کنید.\n"
+                "توجه: ربات باید ادمین این کانال باشد."
+            )
+        else:
+            await settings_service.set_value(session, "announcement_group_id", str(chat.id))
+            await message.answer(
+                f"✅ گروه ثبت شد:\n{chat.title}\nid: {chat.id}\n"
+                "برای اجباری‌کردن عضویت، کلید «عضویت اجباری گروه» را در تنظیمات روشن کنید.\n"
+                "توجه: ربات باید ادمین این گروه باشد."
+            )
 
 
 # --------------------------- free text (link / txid) ---------------------------
