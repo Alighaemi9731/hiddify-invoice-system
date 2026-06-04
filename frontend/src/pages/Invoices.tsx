@@ -12,11 +12,12 @@ import EditIcon from "@mui/icons-material/Edit";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
-  discardDrafts, recomputeInvoice,
+  discardDrafts, recomputeInvoice, revertInvoiceToDraft,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -71,6 +72,7 @@ export default function Invoices() {
     (r: any) => `بازمحاسبه شد: ${fmtGb(r.usage_gb)} — ${fmtToman(r.amount_toman)}` + (r.synced ? "" : " (همگام‌سازی پنل ناموفق بود؛ از دادهٔ قبلی محاسبه شد)"),
   );
   const unpay = mut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت قبل)");
+  const toDraft = mut((id: number) => revertInvoiceToDraft(id), "به پیش‌نویس بازگردانده شد");
   const saveDefer = useMutation({
     mutationFn: () => deferInvoice(deferRow.id, {
       deferred_until: deferRow.deferred_until || null, defer_note: deferRow.defer_note || "",
@@ -176,6 +178,14 @@ export default function Invoices() {
                   )}
                   <Tooltip title="PDF"><IconButton size="small" onClick={() => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error"))}><PictureAsPdfIcon fontSize="small" /></IconButton></Tooltip>
                   <Tooltip title="ارسال"><IconButton size="small" onClick={() => sendOne.mutate(i.id)}><SendIcon fontSize="small" /></IconButton></Tooltip>
+                  {i.status !== "draft" && i.status !== "paid" && (
+                    <Tooltip title="بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از دفتر مالی هم حذف می‌شود)">
+                      <IconButton size="small" color="warning" disabled={toDraft.isPending}
+                        onClick={() => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id)}>
+                        <RestartAltIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   {i.status === "paid" ? (
                     <Tooltip title="لغو پرداخت"><IconButton size="small" color="warning" onClick={() => unpay.mutate(i.id)}><UndoIcon fontSize="small" /></IconButton></Tooltip>
                   ) : (

@@ -52,18 +52,23 @@ async def load_options(session: AsyncSession) -> PaymentOptions:
 
 def instructions_text(opts: PaymentOptions, *, amount_usdt: str | None = None) -> str:
     """Multi-line payment instructions for the enabled methods (Telegram / PDF caption)."""
+    # A value that starts with a Latin/hex/digit character (a wallet address, a card number)
+    # would left-align its whole line in Telegram while the Persian lines right-align, so the
+    # message looks jumbled. A leading right-to-left mark (‏ U+200F) keeps the line right-
+    # aligned; the value itself still reads left-to-right within it.
+    rtl = "‏"
     blocks: list[str] = []
     if opts.usdt:
         b = ["💳 پرداخت با USDT (شبکه BEP-20):"]
         if amount_usdt:
             b.append(f"مبلغ: {amount_usdt} USDT")
-        b.append(f"آدرس کیف پول:\n{opts.wallet}")
+        b.append(f"آدرس کیف پول:\n{rtl}{opts.wallet}")
         b.append("پس از واریز، شناسهٔ تراکنش (TXID) را همین‌جا ارسال کنید.")
         blocks.append("\n".join(b))
     if opts.card:
-        b = ["🏦 کارت‌به‌کارت:", f"شماره کارت:\n{opts.card_number}"]
+        b = ["🏦 کارت‌به‌کارت:", f"شماره کارت:\n{rtl}{opts.card_number}"]
         if opts.card_holder:
-            b.append(f"به نام: {opts.card_holder}")
+            b.append(f"به نام: {rtl}{opts.card_holder}")
         b.append("پس از واریز، تصویر رسید را همین‌جا ارسال کنید.")
         blocks.append("\n".join(b))
     elif opts.screenshot:

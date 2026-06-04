@@ -331,3 +331,30 @@ async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) 
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
+
+
+@router.post("/{invoice_id}/revert-to-draft", response_model=InvoiceOut)
+async def revert_to_draft(
+    invoice_id: int, session: AsyncSession = Depends(get_session)
+) -> InvoiceOut:
+    """Send a delivered/overdue/canceled invoice BACK to draft — for re-testing the flow or
+    correcting a mistaken send. A PAID invoice is protected (un-mark it as paid first). Clears
+    sent_at + any payment deadline and removes it from the durable ledger (drafts aren't kept
+    there); «صدور فاکتورهای دوره» will then recompute it like any other draft."""
+    inv = await session.get(Invoice, invoice_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv.status == InvoiceStatus.paid:
+        raise HTTPException(
+            400, "این فاکتور پرداخت‌شده است؛ ابتدا «لغو پرداخت» را بزنید، بعد به پیش‌نویس برگردانید."
+        )
+    inv.status = InvoiceStatus.draft
+    inv.sent_at = None
+    inv.deferred_until = None
+    inv.defer_note = None
+    reseller = await session.get(Reseller, inv.reseller_id)
+    panel = await session.get(Panel, inv.panel_id)
+    # Draft status → financial_archive removes the ledger row.
+    await financial_archive.record(session, inv, panel=panel, reseller=reseller)
+    await session.commit()
+    return _to_out(inv, reseller.name, panel.key)

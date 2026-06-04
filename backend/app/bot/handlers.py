@@ -108,6 +108,14 @@ async def _resellers_for_chat(session, chat_id: int) -> list[Reseller]:
     )
 
 
+def _iso(value) -> str:
+    """Wrap a value in a Unicode First-Strong Isolate (U+2068 … U+2069) so it renders cleanly
+    inside a mixed Persian/English Telegram line: the segment keeps its own auto-detected
+    direction and does NOT reorder the surrounding RTL text. Use around panel keys, reseller
+    names, link tags, uuids — anything that may be English/Latin and sits inside an RTL line."""
+    return f"⁨{value}⁩"
+
+
 async def _is_owner_user(session, user) -> bool:
     """Owner identification, hardened against @username takeover.
 
@@ -831,7 +839,7 @@ async def _owner_debtors(answer, session) -> None:
     # Latin character flips the whole line to LTR and it reads garbled).
     lines = ["💰 بدهکاران برتر:\n"]
     for i, (name, total) in enumerate(rows, 1):
-        lines.append(f"‏{i}. {name}: {float(total):,.0f} تومان")
+        lines.append(f"‏{i}. {_iso(name)}: {float(total):,.0f} تومان")
     await answer("\n".join(lines))
 
 
@@ -849,7 +857,7 @@ async def _owner_zerosale(answer, session) -> None:
         await answer(f"🟡 فروش صفر ({current_month().label}): همهٔ نمایندگانِ متصل فروش داشته‌اند.")
         return
     lines = [f"🟡 فروش صفر این ماه ({current_month().label}) — {len(idle)} نماینده:\n"]
-    lines += [f"‏• {n}" for n in idle[:40]]  # leading RLM keeps English names right-aligned
+    lines += [f"‏• {_iso(n)}" for n in idle[:40]]  # RLM + isolate keeps English names tidy
     if len(idle) > 40:
         lines.append(f"… و {len(idle) - 40} نمایندهٔ دیگر")
     await answer("\n".join(lines))
@@ -1046,7 +1054,7 @@ async def _send_removelink(answer, chat_id: int, session) -> None:
     if not resellers:
         await answer("لینکی برای حذف ندارید.")
         return
-    items = [(r.id, f"{r.name} (…{r.admin_uuid[-6:]})") for r in resellers]
+    items = [(r.id, _iso(f"{r.name} (…{r.admin_uuid[-6:]})")) for r in resellers]
     await answer("لینک‌های ثبت‌شدهٔ شما — برای حذف انتخاب کنید:",
                  reply_markup=keyboards.remove_links_keyboard(items))
 
@@ -1070,7 +1078,9 @@ async def _send_panels(answer, chat_id: int, session) -> None:
             )
         ).scalar_one()
         tag = f" (#{r.link_tag})" if r.link_tag else ""
-        lines.append(f"‏• پنل {panel.name or panel.key}{tag} — زیرمجموعه‌ها: {subs}")
+        # Isolate the panel label so the English key + (#tag) render as one clean LTR chunk
+        # inside the RTL line instead of reordering with the trailing count.
+        lines.append(f"‏• پنل {_iso((panel.name or panel.key) + tag)} — زیرمجموعه‌ها: {subs}")
     await answer("\n".join(lines))
 
 
@@ -1106,7 +1116,7 @@ async def _send_sub_panels(answer, chat_id: int, session) -> None:
         ).scalar_one()
         if subs > 0:
             panel = await session.get(Panel, r.panel_id)
-            items.append((r.id, f"پنل {panel.name or panel.key} — {r.name} ({subs})"))
+            items.append((r.id, f"پنل {_iso((panel.name or panel.key))} — {_iso(r.name)} ({subs})"))
     if not items:
         await answer("شما زیرمجموعه‌ای ندارید.")
         return
