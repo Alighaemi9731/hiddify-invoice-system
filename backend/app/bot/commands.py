@@ -1,17 +1,27 @@
 """
 Telegram `/` command menus.
 
-Two scopes:
-  * DEFAULT  — reseller commands, shown to everyone (BotCommandScopeDefault).
-  * OWNER    — admin commands, scoped to the owner's chat only, so the owner does
-               NOT see reseller-only commands like /pay or /debt.
+Scopes:
+  * PRIVATE CHATS — reseller commands, shown only in private chats with the bot
+                    (BotCommandScopeAllPrivateChats), so the `/` menu does NOT pop up
+                    in GROUPS where the bot is a member/admin.
+  * OWNER         — admin commands, scoped to the owner's private chat, so the owner
+                    does NOT see reseller-only commands like /pay or /debt.
+The GROUP-CHATS scope is explicitly CLEARED so any commands previously registered
+under the default scope stop appearing in groups.
 """
 from __future__ import annotations
 
 import logging
 
 from aiogram import Bot
-from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import settings_service
@@ -38,8 +48,19 @@ OWNER_COMMANDS = [
 
 
 async def apply_command_menus(bot: Bot, session: AsyncSession) -> None:
-    """Set the default reseller menu, plus the owner menu scoped to the owner's chat."""
-    await bot.set_my_commands(RESELLER_COMMANDS, scope=BotCommandScopeDefault())
+    """Show the reseller `/` menu ONLY in private chats, clear it in groups, and apply the
+    owner menu in the owner's private chat."""
+    # Reseller menu only in private chats (the bot is a PRIVATE-chat assistant).
+    await bot.set_my_commands(RESELLER_COMMANDS, scope=BotCommandScopeAllPrivateChats())
+    # Remove any `/` menu in GROUP chats so it doesn't pop up where the bot is just a
+    # member/admin for the membership gate. Also clear the legacy default scope (older
+    # installs registered the reseller menu there, which leaks into groups).
+    for scope in (BotCommandScopeAllGroupChats(), BotCommandScopeDefault()):
+        try:
+            await bot.delete_my_commands(scope=scope)
+        except Exception:  # noqa: BLE001
+            log.warning("clearing group/default command menu failed", exc_info=True)
+
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
     if owner_chat.lstrip("-").isdigit():
         try:
