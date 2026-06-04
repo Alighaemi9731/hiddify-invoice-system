@@ -1,80 +1,295 @@
 import { useState, useMemo } from "react";
 import {
-  Box, Button, Card, CardContent, Typography, TextField, Switch, FormControlLabel,
-  Stack, Divider, Accordion, AccordionSummary, AccordionDetails,
+  Box, Button, Typography, TextField, Switch, FormControlLabel, Stack, Divider,
+  Collapse, Tabs, Tab, Paper, MenuItem, Chip, Alert,
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
+import PaymentsIcon from "@mui/icons-material/Payments";
+import SellIcon from "@mui/icons-material/Sell";
+import ScheduleIcon from "@mui/icons-material/Schedule";
+import NotificationsActiveIcon from "@mui/icons-material/NotificationsActive";
+import PersonIcon from "@mui/icons-material/Person";
+import DnsIcon from "@mui/icons-material/Dns";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
+import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listSettings, updateSettings } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 
-const GROUP_FA: Record<string, string> = {
-  telegram: "تلگرام", payments: "روش‌های پرداخت", pricing: "قیمت‌گذاری",
-  schedule: "زمان‌بندی کارهای خودکار", dunning: "یادآوری و مسدودسازی", templates: "متن پیام‌ها",
-  general: "عمومی", deploy: "دامنه و HTTPS (هنگام نصب روی سرور)",
+// A curated, hand-authored settings UI. Each field carries its own label/help/visibility,
+// so the page is intentionally structured (not an auto-dump of every DB key). Internal-only
+// settings (setup_done, owner_chat_id) are never rendered as editable fields.
+type Getter = (key: string) => any;
+type Field = {
+  key: string;
+  label: string;
+  help?: string;
+  type?: "text" | "number" | "bool" | "csv" | "multiline" | "select";
+  advanced?: boolean;
+  dir?: "ltr" | "rtl";
+  min?: number;
+  max?: number;
+  options?: { value: string; label: string }[];
+  when?: (v: Getter) => boolean;
 };
-const GROUP_NOTE: Record<string, string> = {
-  telegram: "برای ثبت کانال/گروه (حتی خصوصی): ربات را در آن ادمین کنید، سپس یک پیام از همان کانال/گروه را برای ربات فوروارد کنید تا شناسه‌اش ثبت شود. بعد کلید «عضویت اجباری» مربوطه را روشن کنید. اگر هر دو روشن باشند، کاربر باید عضو هر دو باشد. «پاک‌سازی واقعی» با همین یک کلید، هم کانال و هم گروه را از افرادی که نمایندهٔ فعال نیستند پاک می‌کند (روزانه).",
-  payments: "روش‌های پرداختی که روشن باشند روی فاکتور و در «پرداخت» ربات به نماینده نشان داده می‌شوند. روشی که اطلاعاتش (آدرس کیف پول یا شماره کارت) خالی باشد، نمایش داده نمی‌شود.",
-  schedule: "همهٔ ساعت‌ها به وقت ایران است. کارهای «هر چند ساعت/دقیقه» روی ساعت‌های رُند اجرا می‌شوند (مثلاً هر ۲ ساعت = ۰۰، ۰۲، …، ۲۲) و به زمان دیپلوی وابسته نیستند. برای فاصله‌گذاری کاملاً یکنواخت، عددی بگذارید که ۲۴ (برای ساعت) یا ۶۰ (برای دقیقه) بر آن بخش‌پذیر باشد: ۱، ۲، ۳، ۴، ۶، ۸، ۱۲. تغییرات بلافاصله و بدون نیاز به ری‌استارت اعمال می‌شوند.",
-  deploy: "این مقادیر هنگام نصب روی سرور (فاز ۲) استفاده می‌شوند: دامنه را وارد کنید، رکورد A آن را به IP سرور بدهید، و نصب‌کننده به‌صورت خودکار گواهی SSL را می‌گیرد و تمدید می‌کند.",
+type Sub = { title?: string; fields: Field[] };
+type Section = {
+  id: string;
+  title: string;
+  icon: JSX.Element;
+  description?: string;
+  note?: string;
+  subs: Sub[];
 };
-const LABELS: Record<string, string> = {
-  telegram_bot_token: "توکن ربات", announcement_channel_id: "شناسه کانال", announcement_channel_link: "لینک کانال (اختیاری، برای کانال خصوصی)",
-  channel_membership_required: "عضویت اجباری کانال",
-  announcement_group_id: "شناسه گروه", announcement_group_link: "لینک گروه (اختیاری، برای گروه خصوصی)",
-  group_membership_required: "عضویت اجباری گروه",
-  channel_kick_enabled: "پاک‌سازی واقعی کانال و گروه (خاموش=آزمایشی)", kick_grace_minutes: "مهلت ارفاق پاک‌سازی (دقیقه)", one_time_invite_links: "لینک عضویت یک‌بارمصرف",
-  usdt_bep20_address: "آدرس کیف پول USDT", usdt_bep20_contract: "قرارداد USDT", bscscan_api_key: "کلید API بی‌اسکن",
-  bscscan_api_url: "آدرس API بی‌اسکن", usdt_master_xpub: "xpub کیف پول مادر", min_confirmations: "حداقل تأیید",
-  payment_amount_tolerance_usdt: "اغماض مبلغ (USDT)",
-  pay_usdt_enabled: "روش پرداخت: USDT (کیف پول + TXID)", pay_screenshot_enabled: "روش پرداخت: ارسال تصویر رسید",
-  pay_card_enabled: "روش پرداخت: کارت‌به‌کارت", card_number: "شماره کارت", card_holder_name: "نام صاحب کارت",
-  default_price_per_gb: "قیمت پیش‌فرض هر گیگ (تومان)", toman_per_usdt: "نرخ تبدیل (تومان به ازای هر USDT)",
-  rate_mode: "حالت نرخ", excluded_usage_gb: "حجم‌های معاف (گیگ، با کاما)", min_sale_toman: "حداقل فروش هر نماینده (تومان، ۰=غیرفعال)",
-  invoice_day_of_month: "صدور فاکتور ماهانه: روز ماه (۱ تا ۲۸)", invoice_hour: "صدور فاکتور ماهانه: ساعت (۰ تا ۲۳)",
-  dunning_hour: "یادآوری/مسدودسازی روزانه: ساعت (۰ تا ۲۳)",
-  sync_interval_hours: "سینک پنل‌ها: هر چند ساعت",
-  guard_interval_minutes: "گارد کانال/گروه: هر چند دقیقه",
-  backup_enabled: "بکاپ خودکار به تلگرام (روشن/خاموش)", backup_interval_hours: "بکاپ خودکار: هر چند ساعت",
-  reminder1_day: "یادآوری اول (روز)", reminder2_day: "یادآوری دوم (روز)", warning_day: "اخطار (روز)",
-  enforcement_day: "مسدودسازی (روز)", enforcement_enabled: "مسدودسازی واقعی (خاموش = آزمایشی)",
-  auto_restore_on_payment: "بازگردانی خودکار با پرداخت",
-  owner_name: "نام مالک", owner_telegram: "تلگرام مالک",
-  server_domain: "دامنه سرور", https_enabled: "فعال‌سازی HTTPS خودکار", acme_email: "ایمیل برای گواهی SSL",
-  tpl_welcome: "خوش‌آمد", tpl_membership: "نیاز به عضویت", tpl_menu: "منو",
-  tpl_link_matched: "ثبت لینک موفق", tpl_link_not_found: "لینک نامعتبر", tpl_invoice: "فاکتور",
-  tpl_reminder1: "یادآوری اول", tpl_reminder2: "یادآوری دوم", tpl_warning: "اخطار نهایی",
-  tpl_payment_received: "تأیید پرداخت",
-};
-const GROUP_ORDER = ["telegram", "payments", "pricing", "schedule", "dunning", "general", "deploy", "templates"];
-// Numeric bounds for the schedule fields — mirror the backend clamp (app.scheduler.jobs.load_config)
-// so the panel can't show a value that silently differs from what actually runs.
-const BOUNDS: Record<string, [number, number]> = {
-  invoice_day_of_month: [1, 28], invoice_hour: [0, 23], dunning_hour: [0, 23],
-  sync_interval_hours: [1, 23], guard_interval_minutes: [1, 59], backup_interval_hours: [1, 23],
-};
+
+// Settings that are machine-managed, not user-editable — hidden from the panel entirely.
+const HIDDEN = new Set(["setup_done", "owner_chat_id"]);
+
+const SECTIONS: Section[] = [
+  {
+    id: "telegram",
+    title: "تلگرام و عضویت",
+    icon: <SmartToyIcon fontSize="small" />,
+    description:
+      "ربات تلگرام، کانال/گروه عضویت اجباری، و پاک‌سازی اعضای غیرنماینده. برای ثبت کانال/گروه (حتی خصوصی) کافی است ربات را در آن ادمین کنید و یک پیام از همان‌جا را برای ربات فوروارد کنید تا شناسه‌اش خودکار پر شود.",
+    subs: [
+      {
+        fields: [
+          { key: "telegram_bot_token", label: "توکن ربات", help: "از @BotFather بگیرید.", dir: "ltr" },
+        ],
+      },
+      {
+        title: "کانال اطلاع‌رسانی",
+        fields: [
+          { key: "announcement_channel_id", label: "شناسه کانال", help: "با فوروارد یک پیام از کانال خودکار پر می‌شود.", dir: "ltr" },
+          { key: "channel_membership_required", label: "الزام عضویت در کانال", help: "اگر روشن باشد، کاربر تا عضو کانال نشود نمی‌تواند از ربات استفاده کند." },
+          { key: "announcement_channel_link", label: "لینک ثابت کانال", help: "اختیاری — برای کانال خصوصی لازم نیست؛ ربات خودش لینک عضویت یک‌بارمصرف می‌سازد.", advanced: true, dir: "ltr" },
+        ],
+      },
+      {
+        title: "گروه (اختیاری)",
+        fields: [
+          { key: "announcement_group_id", label: "شناسه گروه", help: "اگر می‌خواهید علاوه بر کانال، عضویت در یک گروه هم اجباری باشد.", dir: "ltr" },
+          { key: "group_membership_required", label: "الزام عضویت در گروه", help: "اگر هم این و هم کانال روشن باشد، کاربر باید عضو هر دو باشد." },
+          { key: "announcement_group_link", label: "لینک ثابت گروه", help: "اختیاری — برای گروه خصوصی لازم نیست.", advanced: true, dir: "ltr" },
+        ],
+      },
+      {
+        title: "پاک‌سازی و امنیت",
+        fields: [
+          { key: "channel_kick_enabled", label: "پاک‌سازی واقعی اعضای غیرنماینده", help: "خاموش = فقط گزارش آزمایشی. روشن = کسانی که نمایندهٔ ثبت‌شده نیستند از کانال/گروه حذف می‌شوند." },
+          { key: "one_time_invite_links", label: "لینک عضویت یک‌بارمصرف", help: "برای هر کاربر یک لینک اختصاصی ساخته می‌شود." },
+          { key: "kick_grace_minutes", label: "مهلت ارفاق پاک‌سازی (دقیقه)", help: "تازه‌واردها تا این مدت فرصت ثبت لینک دارند و حذف نمی‌شوند.", type: "number", min: 0, max: 1440, advanced: true },
+        ],
+      },
+    ],
+  },
+  {
+    id: "payments",
+    title: "روش‌های پرداخت",
+    icon: <PaymentsIcon fontSize="small" />,
+    description:
+      "روش‌هایی که روی فاکتور و در «پرداخت» ربات به نماینده نشان داده می‌شود. روشی که اطلاعاتش خالی باشد (آدرس کیف پول یا شماره کارت) نمایش داده نمی‌شود، حتی اگر روشن باشد.",
+    subs: [
+      {
+        title: "روش‌های فعال",
+        fields: [
+          { key: "pay_usdt_enabled", label: "USDT (کیف پول + شناسهٔ تراکنش)" },
+          { key: "pay_screenshot_enabled", label: "ارسال تصویر رسید" },
+          { key: "pay_card_enabled", label: "کارت‌به‌کارت" },
+        ],
+      },
+      {
+        title: "اطلاعات USDT (BEP-20)",
+        fields: [
+          { key: "usdt_bep20_address", label: "آدرس کیف پول USDT", help: "آدرس مقصد روی شبکهٔ BEP-20.", dir: "ltr", when: (v) => !!v("pay_usdt_enabled") },
+          { key: "usdt_bep20_contract", label: "قرارداد توکن USDT", advanced: true, dir: "ltr", when: (v) => !!v("pay_usdt_enabled") },
+        ],
+      },
+      {
+        title: "اطلاعات کارت بانکی",
+        fields: [
+          { key: "card_number", label: "شماره کارت", dir: "ltr", when: (v) => !!v("pay_card_enabled") },
+          { key: "card_holder_name", label: "نام صاحب کارت", when: (v) => !!v("pay_card_enabled") },
+        ],
+      },
+      {
+        title: "تأیید تراکنش روی زنجیره (BscScan)",
+        fields: [
+          { key: "bscscan_api_key", label: "کلید API بی‌اسکن", advanced: true, dir: "ltr" },
+          { key: "bscscan_api_url", label: "آدرس API بی‌اسکن", advanced: true, dir: "ltr" },
+          { key: "min_confirmations", label: "حداقل تعداد تأیید", type: "number", min: 1, max: 100, advanced: true },
+          { key: "payment_amount_tolerance_usdt", label: "اغماض مبلغ (USDT)", help: "اختلاف مجاز بین مبلغ فاکتور و واریزی.", type: "number", advanced: true },
+          { key: "usdt_master_xpub", label: "xpub کیف پول مادر (HD)", advanced: true, dir: "ltr" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "pricing",
+    title: "قیمت‌گذاری",
+    icon: <SellIcon fontSize="small" />,
+    description: "قیمت پایهٔ فروش، نرخ تبدیل به USDT، و قواعد صورتحساب.",
+    subs: [
+      {
+        fields: [
+          { key: "default_price_per_gb", label: "قیمت پیش‌فرض هر گیگ (تومان)", help: "اگر برای نماینده‌ای قیمت اختصاصی ثبت نشده باشد، این اعمال می‌شود.", type: "number", min: 0 },
+          { key: "toman_per_usdt", label: "نرخ تبدیل (تومان به ازای هر USDT)", type: "number", min: 0 },
+          { key: "free_under_gb", label: "آستانهٔ کانفیگ رایگان (گیگ)", help: "کانفیگ‌هایی با حجم کوچک‌تر یا مساوی این مقدار، تستی و رایگان حساب می‌شوند (مثلاً ۱ → هم ۰٫۵ و هم ۱ گیگ رایگان، ۱٫۵ به بالا محاسبه می‌شود).", type: "number", min: 0 },
+          { key: "min_sale_toman", label: "حداقل فروش هر نماینده (تومان)", help: "۰ = غیرفعال. اگر مبلغ فاکتور از این کمتر شد، همین مبلغ لحاظ می‌شود.", type: "number", min: 0 },
+          { key: "metering_enabled", label: "متر مصرف ضد سوءاستفاده", help: "محاسبهٔ مصرف فراتر از سهمیه (ترفند ریست روزانه) و تمدید با ویرایش." },
+          { key: "excluded_usage_gb", label: "حجم‌های معاف اضافی (گیگ، با کاما)", help: "اندازه‌های دقیقی که نباید محاسبه شوند، جدا با کاما.", type: "csv", advanced: true },
+          { key: "rate_mode", label: "حالت نرخ تبدیل", type: "select", advanced: true,
+            options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار" }] },
+        ],
+      },
+    ],
+  },
+  {
+    id: "schedule",
+    title: "زمان‌بندی کارهای خودکار",
+    icon: <ScheduleIcon fontSize="small" />,
+    note:
+      "همهٔ ساعت‌ها به وقت ایران است. کارهای «هر چند ساعت/دقیقه» روی ساعت‌های رُند اجرا می‌شوند (مثلاً هر ۲ ساعت = ۰۰، ۰۲، …) و به زمان دیپلوی وابسته نیستند. برای فاصلهٔ کاملاً یکنواخت عددی بگذارید که ۲۴ (ساعت) یا ۶۰ (دقیقه) بر آن بخش‌پذیر باشد: ۱، ۲، ۳، ۴، ۶، ۸، ۱۲. تغییرات بلافاصله و بدون ری‌استارت اعمال می‌شوند.",
+    subs: [
+      {
+        title: "پشتیبان‌گیری و همگام‌سازی",
+        fields: [
+          { key: "backup_enabled", label: "پشتیبان‌گیری خودکار به تلگرام" },
+          { key: "backup_interval_hours", label: "پشتیبان‌گیری: هر چند ساعت", type: "number", min: 1, max: 23, when: (v) => !!v("backup_enabled") },
+          { key: "sync_interval_hours", label: "همگام‌سازی پنل‌ها: هر چند ساعت", type: "number", min: 1, max: 23 },
+          { key: "guard_interval_minutes", label: "گارد کانال/گروه: هر چند دقیقه", type: "number", min: 1, max: 59 },
+        ],
+      },
+      {
+        title: "فاکتور و یادآوری",
+        fields: [
+          { key: "invoice_day_of_month", label: "صدور فاکتور ماهانه: روز ماه", type: "number", min: 1, max: 28 },
+          { key: "invoice_hour", label: "صدور فاکتور ماهانه: ساعت", type: "number", min: 0, max: 23 },
+          { key: "dunning_hour", label: "اجرای یادآوری/مسدودسازی روزانه: ساعت", type: "number", min: 0, max: 23 },
+        ],
+      },
+    ],
+  },
+  {
+    id: "dunning",
+    title: "یادآوری و مسدودسازی",
+    icon: <NotificationsActiveIcon fontSize="small" />,
+    description:
+      "روزشماری از زمان ارسال فاکتور تا یادآوری‌ها و مسدودسازی. مسدودسازی واقعی به‌طور پیش‌فرض خاموش (آزمایشی) است تا تا وقتی مطمئن نشده‌اید کاربری مسدود نشود.",
+    subs: [
+      {
+        fields: [
+          { key: "reminder1_day", label: "یادآوری اول (روز پس از صدور)", type: "number", min: 0, max: 60 },
+          { key: "reminder2_day", label: "یادآوری دوم (روز)", type: "number", min: 0, max: 60 },
+          { key: "warning_day", label: "اخطار نهایی (روز)", type: "number", min: 0, max: 60 },
+          { key: "enforcement_day", label: "مسدودسازی (روز)", type: "number", min: 0, max: 60 },
+          { key: "enforcement_enabled", label: "مسدودسازی واقعی", help: "خاموش = فقط گزارش آزمایشی. روشن = کاربران نمایندهٔ بدهکار و زیرمجموعه‌هایش غیرفعال می‌شوند." },
+          { key: "auto_restore_on_payment", label: "بازگردانی خودکار با پرداخت", help: "پس از تأیید پرداخت، نماینده و کاربرانش خودکار به حالت قبل برمی‌گردند." },
+        ],
+      },
+    ],
+  },
+  {
+    id: "general",
+    title: "عمومی",
+    icon: <PersonIcon fontSize="small" />,
+    description: "اطلاعات مالک سامانه.",
+    subs: [
+      {
+        fields: [
+          { key: "owner_name", label: "نام مالک" },
+          { key: "owner_telegram", label: "آیدی تلگرام مالک", help: "مثلاً @username — برای نمایش/پشتیبانی.", dir: "ltr" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "deploy",
+    title: "دامنه و HTTPS",
+    icon: <DnsIcon fontSize="small" />,
+    note:
+      "این مقادیر هنگام نصب روی سرور استفاده می‌شوند: دامنه را وارد کنید، رکورد A آن را به IP سرور بدهید، و نصب‌کننده خودکار گواهی SSL را می‌گیرد و تمدید می‌کند.",
+    subs: [
+      {
+        fields: [
+          { key: "server_domain", label: "دامنهٔ سرور", dir: "ltr" },
+          { key: "https_enabled", label: "فعال‌سازی HTTPS خودکار" },
+          { key: "acme_email", label: "ایمیل برای گواهی SSL", dir: "ltr", when: (v) => !!v("https_enabled") },
+        ],
+      },
+    ],
+  },
+  {
+    id: "templates",
+    title: "متن پیام‌ها",
+    icon: <ChatBubbleOutlineIcon fontSize="small" />,
+    description: "متن پیام‌های ربات. از placeholderها مثل {name}، {period}، {amount_usdt} و {payment_instructions} استفاده کنید.",
+    subs: [
+      {
+        fields: [
+          { key: "tpl_welcome", label: "پیام خوش‌آمد", type: "multiline" },
+          { key: "tpl_membership", label: "پیام نیاز به عضویت", type: "multiline" },
+          { key: "tpl_menu", label: "پیام منو", type: "multiline" },
+          { key: "tpl_link_matched", label: "ثبت موفق لینک", type: "multiline" },
+          { key: "tpl_link_not_found", label: "لینک نامعتبر", type: "multiline" },
+          { key: "tpl_invoice", label: "متن فاکتور", type: "multiline" },
+          { key: "tpl_reminder1", label: "یادآوری اول", type: "multiline" },
+          { key: "tpl_reminder2", label: "یادآوری دوم", type: "multiline" },
+          { key: "tpl_warning", label: "اخطار نهایی", type: "multiline" },
+          { key: "tpl_payment_received", label: "تأیید پرداخت", type: "multiline" },
+          { key: "tpl_payment_rejected", label: "رد پرداخت", type: "multiline" },
+        ],
+      },
+    ],
+  },
+];
 
 export default function Settings() {
   const qc = useQueryClient();
+  const theme = useTheme();
+  const compact = useMediaQuery(theme.breakpoints.down("md"));
   const { node, show } = useToast();
   const { data = [] } = useQuery({ queryKey: ["settings"], queryFn: listSettings });
   const [edits, setEdits] = useState<Record<string, any>>({});
+  const [active, setActive] = useState(0);
+  const [showAdvanced, setShowAdvanced] = useState<Record<string, boolean>>({});
 
-  const grouped = useMemo(() => {
-    const g: Record<string, any[]> = {};
-    for (const s of data) (g[s.group] ||= []).push(s);
-    return g;
+  const byKey = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const s of data) m[s.key] = s;
+    return m;
   }, [data]);
 
   const setVal = (key: string, value: any) => setEdits((e) => ({ ...e, [key]: value }));
-  const valueOf = (s: any) => (s.key in edits ? edits[s.key] : s.value);
+  const getVal: Getter = (key) => (key in edits ? edits[key] : byKey[key]?.value);
+  const dirtyCount = Object.keys(edits).length;
+
+  // Any non-hidden setting not covered by a curated field falls into a "متفرقه" section,
+  // so a newly-added backend setting is never silently lost from the panel.
+  const sections = useMemo(() => {
+    const covered = new Set<string>();
+    SECTIONS.forEach((s) => s.subs.forEach((sub) => sub.fields.forEach((f) => covered.add(f.key))));
+    const leftover = data
+      .filter((s: any) => !covered.has(s.key) && !HIDDEN.has(s.key))
+      .map((s: any) => ({ key: s.key, label: s.key }));
+    if (!leftover.length) return SECTIONS;
+    return [
+      ...SECTIONS,
+      { id: "misc", title: "متفرقه", icon: <TuneRoundedIcon fontSize="small" />, subs: [{ fields: leftover }] } as Section,
+    ];
+  }, [data]);
 
   const save = useMutation({
     mutationFn: () => {
       const items = Object.entries(edits).map(([key, value]) => {
-        if (key === "excluded_usage_gb" && typeof value === "string")
-          value = value.split(",").map((x) => parseInt(x.trim())).filter((n) => !isNaN(n));
+        if (byKey[key] && Array.isArray(byKey[key].value) && typeof value === "string")
+          value = value.split(",").map((x) => parseFloat(x.trim())).filter((n) => !isNaN(n));
         return { key, value };
       });
       return updateSettings(items);
@@ -83,53 +298,154 @@ export default function Settings() {
     onError: (e) => show(errMsg(e), "error"),
   });
 
-  const field = (s: any) => {
-    const label = LABELS[s.key] || s.key;
-    const v = valueOf(s);
-    if (typeof s.value === "boolean")
-      return <FormControlLabel key={s.key} control={<Switch checked={!!v} onChange={(e) => setVal(s.key, e.target.checked)} />} label={label} />;
-    if (s.key.startsWith("tpl_"))
-      return <TextField key={s.key} label={label} value={v ?? ""} multiline minRows={2} fullWidth onChange={(e) => setVal(s.key, e.target.value)} />;
-    if (s.key === "excluded_usage_gb")
-      return <TextField key={s.key} label={label} value={Array.isArray(v) ? v.join(", ") : v ?? ""} fullWidth onChange={(e) => setVal(s.key, e.target.value)} />;
-    if (s.is_secret)
-      return <TextField key={s.key} label={label} placeholder={s.has_value ? "•••• (برای تغییر وارد کنید)" : ""} dir="ltr"
-        value={s.key in edits ? edits[s.key] : ""} fullWidth onChange={(e) => setVal(s.key, e.target.value)} />;
-    if (typeof s.value === "number") {
-      const b = BOUNDS[s.key];
-      return <TextField key={s.key} label={label} type="number" value={v ?? 0} fullWidth
-        inputProps={b ? { min: b[0], max: b[1] } : undefined}
-        helperText={b ? `مجاز: ${b[0]} تا ${b[1]}` : undefined}
-        onChange={(e) => setVal(s.key, Number(e.target.value))} />;
+  const renderField = (f: Field) => {
+    const meta = byKey[f.key];
+    if (!meta) return null;
+    if (f.when && !f.when(getVal)) return null;
+    const v = getVal(f.key);
+    const isSecret = !!meta.is_secret;
+    const type = f.type || (typeof meta.value === "boolean" ? "bool" : typeof meta.value === "number" ? "number" : "text");
+
+    if (type === "bool")
+      return (
+        <FormControlLabel key={f.key} sx={{ alignItems: "center" }}
+          control={<Switch checked={!!v} onChange={(e) => setVal(f.key, e.target.checked)} />}
+          label={
+            <Box>
+              <Typography variant="body2">{f.label}</Typography>
+              {f.help && <Typography variant="caption" color="text.secondary">{f.help}</Typography>}
+            </Box>
+          }
+        />
+      );
+    if (type === "select")
+      return (
+        <TextField key={f.key} select label={f.label} value={v ?? ""} fullWidth size="small"
+          helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)}>
+          {(f.options || []).map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+        </TextField>
+      );
+    if (type === "multiline")
+      return <TextField key={f.key} label={f.label} value={v ?? ""} multiline minRows={2} fullWidth size="small"
+        helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
+    if (type === "csv")
+      return <TextField key={f.key} label={f.label} value={Array.isArray(v) ? v.join(", ") : v ?? ""} fullWidth size="small"
+        helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
+    if (isSecret)
+      return <TextField key={f.key} label={f.label} placeholder={meta.has_value ? "•••• (برای تغییر وارد کنید)" : "تنظیم نشده"}
+        dir="ltr" value={f.key in edits ? edits[f.key] : ""} fullWidth size="small"
+        helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
+    if (type === "number") {
+      const bounded = f.min !== undefined || f.max !== undefined;
+      const range = bounded ? `مجاز: ${f.min ?? "?"} تا ${f.max ?? "?"}` : "";
+      return <TextField key={f.key} label={f.label} type="number" value={v ?? 0} fullWidth size="small"
+        inputProps={bounded ? { min: f.min, max: f.max } : undefined}
+        helperText={[f.help, range].filter(Boolean).join(" — ") || undefined}
+        onChange={(e) => setVal(f.key, Number(e.target.value))} />;
     }
-    return <TextField key={s.key} label={label} value={v ?? ""} fullWidth dir={s.key.includes("address") || s.key.includes("link") ? "ltr" : undefined}
-      onChange={(e) => setVal(s.key, e.target.value)} />;
+    return <TextField key={f.key} label={f.label} value={v ?? ""} fullWidth size="small"
+      dir={f.dir} helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
+  };
+
+  const renderSection = (sec: Section) => {
+    const advanced: Field[] = [];
+    const subs = sec.subs.map((sub) => {
+      const normal = sub.fields.filter((f) => !f.advanced && (!f.when || f.when(getVal)));
+      sub.fields.filter((f) => f.advanced && (!f.when || f.when(getVal))).forEach((f) => advanced.push(f));
+      return { title: sub.title, fields: normal };
+    }).filter((sub) => sub.fields.length);
+    const advOpen = !!showAdvanced[sec.id];
+
+    return (
+      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+          {sec.icon}
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>{sec.title}</Typography>
+        </Stack>
+        {sec.description && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{sec.description}</Typography>
+        )}
+        {sec.note && (
+          <Alert severity="info" icon={<InfoOutlinedIcon fontSize="inherit" />} sx={{ mb: 2 }}>
+            {sec.note}
+          </Alert>
+        )}
+
+        {/* Owner-connection status — read-only, not an editable field. */}
+        {sec.id === "general" && (
+          <Box sx={{ mb: 2 }}>
+            {byKey["owner_chat_id"]?.value
+              ? <Chip color="success" size="small" icon={<CheckCircleIcon />} label="تلگرام مالک متصل است — پشتیبان و هشدارها ارسال می‌شوند" />
+              : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="هنوز در ربات /start نزده‌اید؛ تا متصل نشوید پشتیبان خودکار ارسال نمی‌شود" />}
+          </Box>
+        )}
+
+        <Stack spacing={3}>
+          {subs.map((sub, i) => (
+            <Box key={i}>
+              {sub.title && (
+                <Divider textAlign="right" sx={{ mb: 1.5 }}>
+                  <Typography variant="overline" color="text.secondary">{sub.title}</Typography>
+                </Divider>
+              )}
+              <Stack spacing={2}>{sub.fields.map(renderField)}</Stack>
+            </Box>
+          ))}
+        </Stack>
+
+        {advanced.length > 0 && (
+          <Box sx={{ mt: 3 }}>
+            <Button size="small" color="inherit" startIcon={<TuneRoundedIcon />}
+              endIcon={<ExpandMoreIcon sx={{ transform: advOpen ? "rotate(180deg)" : "none", transition: "0.2s" }} />}
+              onClick={() => setShowAdvanced((s) => ({ ...s, [sec.id]: !advOpen }))}>
+              تنظیمات پیشرفته ({advanced.length})
+            </Button>
+            <Collapse in={advOpen}>
+              <Stack spacing={2} sx={{ mt: 2, pt: 2, borderTop: 1, borderColor: "divider" }}>
+                {advanced.map(renderField)}
+              </Stack>
+            </Collapse>
+          </Box>
+        )}
+      </Paper>
+    );
   };
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-        <Typography variant="body2" color="text.secondary">پیکربندی سامانه (مقادیر حساس رمزنگاری می‌شوند)</Typography>
-        <Button variant="contained" onClick={() => save.mutate()} disabled={save.isPending || Object.keys(edits).length === 0}>
-          ذخیره تغییرات ({Object.keys(edits).length})
+      <Stack direction="row" justifyContent="space-between" alignItems="center"
+        sx={{ position: "sticky", top: 0, zIndex: 3, bgcolor: "background.default", py: 1.5, mb: 2 }}>
+        <Box>
+          <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>تنظیمات سامانه</Typography>
+          <Typography variant="caption" color="text.secondary">
+            پیکربندی ربات، پرداخت، قیمت و زمان‌بندی — مقادیر حساس رمزنگاری می‌شوند.
+          </Typography>
+        </Box>
+        <Button variant="contained" onClick={() => save.mutate()} disabled={save.isPending || dirtyCount === 0}>
+          ذخیره تغییرات{dirtyCount ? ` (${dirtyCount})` : ""}
         </Button>
       </Stack>
 
-      {GROUP_ORDER.filter((g) => grouped[g]).map((g) => (
-        <Accordion key={g} defaultExpanded={g !== "templates"} sx={{ mb: 1 }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography sx={{ fontWeight: 600 }}>{GROUP_FA[g] || g}</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            {GROUP_NOTE[g] && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
-                {GROUP_NOTE[g]}
-              </Typography>
-            )}
-            <Stack spacing={2}>{grouped[g].map(field)}</Stack>
-          </AccordionDetails>
-        </Accordion>
-      ))}
+      <Box sx={{ display: "flex", flexDirection: compact ? "column" : "row", gap: 2, alignItems: "flex-start" }}>
+        <Paper variant="outlined" sx={{ flexShrink: 0, width: compact ? "100%" : 240, position: compact ? "static" : "sticky", top: 80, overflow: "hidden" }}>
+          <Tabs
+            orientation={compact ? "horizontal" : "vertical"}
+            variant={compact ? "scrollable" : "standard"}
+            scrollButtons="auto"
+            value={active}
+            onChange={(_, v) => setActive(v)}
+            sx={{ ".MuiTab-root": { justifyContent: "flex-start", minHeight: 48, alignItems: "center" } }}
+          >
+            {sections.map((s) => (
+              <Tab key={s.id} icon={s.icon} iconPosition="start" label={s.title} sx={{ textAlign: "right" }} />
+            ))}
+          </Tabs>
+        </Paper>
+
+        <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
+          {sections[active] && renderSection(sections[active])}
+        </Box>
+      </Box>
       {node}
     </Box>
   );
