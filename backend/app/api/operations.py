@@ -187,6 +187,9 @@ async def restart_service() -> dict:
 _UPDATE_DIR = os.environ.get("UPDATE_DIR", "/app/data")
 _UPDATE_REQUEST = os.path.join(_UPDATE_DIR, ".update-requested")
 _UPDATE_STATUS = os.path.join(_UPDATE_DIR, ".update-status")
+# Persistent marker the host watcher writes on startup (survives request/status resets),
+# so the panel reliably knows the watcher is installed even between updates.
+_UPDATE_ALIVE = os.path.join(_UPDATE_DIR, ".updater-alive")
 
 
 def _read_update_status() -> dict:
@@ -247,9 +250,12 @@ async def update_status() -> dict:
 
     st = _read_update_status()
     st.setdefault("current_version", __version__)
-    # If the watcher ever wrote a status, it's installed. If only a request is pending and
-    # nothing has touched it, we can't be sure — surface that so the UI can warn.
-    st["updater_installed"] = os.path.exists(_UPDATE_STATUS) or st.get("phase") in (
-        "running", "done", "failed"
+    # The watcher is installed if its persistent alive-marker exists (written on startup),
+    # OR it has touched the status file / is mid-run. The alive-marker is the reliable
+    # signal because it survives the status reset that happens on each update request.
+    st["updater_installed"] = (
+        os.path.exists(_UPDATE_ALIVE)
+        or os.path.exists(_UPDATE_STATUS)
+        or st.get("phase") in ("running", "done", "failed")
     )
     return st

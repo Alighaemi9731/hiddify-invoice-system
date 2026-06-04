@@ -25,6 +25,10 @@ POLL="${POLL:-5}"
 
 mkdir -p "$UPDATE_DIR"
 
+# A persistent presence marker so the panel knows the watcher is installed even between
+# update requests (the status file is reset on each request). Refreshed on every startup.
+date -u +%Y-%m-%dT%H:%M:%SZ > "$UPDATE_DIR/.updater-alive" 2>/dev/null || true
+
 # Write a status JSON the panel reads: phase + message + version + timestamp.
 write_status() {
   local phase="$1" message="$2"

@@ -42,7 +42,11 @@ services:
       - ../.env:/app/.env
       # Shared with the host-side update watcher: the panel's «به‌روزرسانی» button writes
       # a flag here that deploy/updater.sh (systemd) picks up to rebuild to the latest.
-      - ./update:/app/data/update
+      # NOTE: relative paths resolve from the compose file's dir (deploy/), so this MUST be
+      # ../update to land on the repo-root `update/` that install.sh + the systemd unit use
+      # (UPDATE_DIR=$REPO_DIR/update). Using ./update here pointed at deploy/update — a
+      # different directory — so the backend never saw the watcher (always "not installed").
+      - ../update:/app/data/update
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   bot:
