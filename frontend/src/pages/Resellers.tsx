@@ -143,7 +143,7 @@ export default function Resellers() {
             <TableBody>
               {rows.map((r: any) => (
                 <TableRow key={r.id} hover>
-                  <TableCell>{r.name}{r.link_tag ? ` (#${r.link_tag})` : ""}</TableCell>
+                  <TableCell>{r.name}</TableCell>
                   <TableCell>{r.panel_key}</TableCell>
                   <TableCell>{fmtNum(r.effective_price_per_gb)}{r.price_per_gb ? "" : " (پیش‌فرض)"}</TableCell>
                   <TableCell><CapacityBar used={r.users_count} max={r.panel_max_users} /></TableCell>
@@ -260,7 +260,7 @@ function TreeRow({ node, depth, actions, canAddSwitch }: { node: any; depth: num
             )}
             <Box>
               <Typography variant="body2" sx={{ fontWeight: depth === 0 ? 700 : 400 }}>
-                {node.name}{node.link_tag ? ` (#${node.link_tag})` : ""}
+                {node.name}
               </Typography>
               {hasKids && (
                 <Typography variant="caption" color="text.secondary">
