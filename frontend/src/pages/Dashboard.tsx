@@ -1,20 +1,17 @@
 import { useState } from "react";
 import {
-  Grid, Box, Card, CardContent, Typography, TextField, Button, Stack, CircularProgress,
+  Grid, Box, Card, CardContent, Typography, Stack, CircularProgress,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import DnsIcon from "@mui/icons-material/Dns";
 import GroupIcon from "@mui/icons-material/Group";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
-import SyncIcon from "@mui/icons-material/Sync";
-import NotificationsActiveIcon from "@mui/icons-material/NotificationsActive";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getDashboard, runMonthly, runDunning, syncAllPanels } from "../api/client";
+import { useQuery } from "@tanstack/react-query";
+import { getDashboard } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
-import { useToast, errMsg } from "../components/Toast";
 import { fmtToman, fmtUsdt, fmtNum, fmtCompact, INVOICE_STATUS_FA } from "../format";
 import { CHART_COLORS } from "../theme";
 
@@ -37,8 +34,6 @@ function ChartCard({ title, children }: { title: string; children: any }) {
 
 export default function Dashboard() {
   const [period, setPeriod] = useState(currentPeriod());
-  const qc = useQueryClient();
-  const { node, show } = useToast();
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === "dark";
   const { data, isLoading } = useQuery({ queryKey: ["dashboard", period], queryFn: () => getDashboard(period) });
@@ -54,16 +49,6 @@ export default function Dashboard() {
     borderColor: isDark ? "#334155" : "#e2e8f0",
     textStyle: { color: isDark ? "#e2e8f0" : "#334155", fontFamily: FONT },
   };
-
-  const mkMut = (fn: () => Promise<any>, ok: string) =>
-    useMutation({
-      mutationFn: fn,
-      onSuccess: () => { show(ok); qc.invalidateQueries({ queryKey: ["dashboard"] }); },
-      onError: (e) => show(errMsg(e), "error"),
-    });
-  const monthly = mkMut(() => runMonthly({ period }), "صدور و ارسال ماهانه انجام شد");
-  const dunning = mkMut(() => runDunning(), "یادآوری‌ها اجرا شد");
-  const sync = mkMut(() => syncAllPanels(), "همگام‌سازی پنل‌ها انجام شد");
 
   const panelData = data?.sales_by_panel || [];
   const statusData = (data?.status_counts || []).map((s: any) => ({
@@ -113,10 +98,6 @@ export default function Dashboard() {
     <Box>
       <Stack direction="row" spacing={1.5} sx={{ mb: 3, flexWrap: "wrap", rowGap: 1.5 }} alignItems="center">
         <PeriodPicker value={period} onChange={setPeriod} />
-        <Box sx={{ flexGrow: 1 }} />
-        <Button variant="outlined" startIcon={<SyncIcon />} onClick={() => sync.mutate()} disabled={sync.isPending}>همگام‌سازی پنل‌ها</Button>
-        <Button variant="outlined" color="warning" startIcon={<NotificationsActiveIcon />} onClick={() => dunning.mutate()} disabled={dunning.isPending}>اجرای یادآوری‌ها</Button>
-        <Button variant="contained" onClick={() => monthly.mutate()} disabled={monthly.isPending}>صدور و ارسال ماهانه</Button>
       </Stack>
 
       {isLoading || !data ? (
@@ -152,7 +133,6 @@ export default function Dashboard() {
           </Grid>
         </>
       )}
-      {node}
     </Box>
   );
 }

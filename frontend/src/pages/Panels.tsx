@@ -10,7 +10,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import WifiTetheringIcon from "@mui/icons-material/WifiTethering";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  listPanels, createPanel, updatePanel, deletePanel, syncPanel, testPanel,
+  listPanels, createPanel, updatePanel, deletePanel, syncPanel, syncAllPanels, testPanel,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -95,6 +95,15 @@ export default function Panels() {
     onSuccess: (r) => show(r.ok ? `اتصال موفق — ${r.admin_count} ادمین / ${r.user_count} کاربر` : `ناموفق: ${r.error}`, r.ok ? "success" : "error"),
     onError: (e) => show(errMsg(e), "error"),
   });
+  const doSyncAll = useMutation({
+    mutationFn: () => syncAllPanels(),
+    onSuccess: () => {
+      show("همگام‌سازی همهٔ پنل‌ها آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info");
+      refresh();
+      [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms));
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
   const doDelete = useMutation({
     mutationFn: (id: number) => deletePanel(id),
     onSuccess: () => { show("حذف شد"); refresh(); },
@@ -116,7 +125,11 @@ export default function Panels() {
         <Typography variant="body2" color="text.secondary">
           پنل‌های هیدیفای متصل (حداکثر ۱۰)
         </Typography>
-        <Button variant="contained" onClick={() => edit()}>افزودن پنل</Button>
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" startIcon={<SyncIcon />} disabled={doSyncAll.isPending}
+            onClick={() => doSyncAll.mutate()}>همگام‌سازی همه</Button>
+          <Button variant="contained" onClick={() => edit()}>افزودن پنل</Button>
+        </Stack>
       </Stack>
       <Card>
         <Table>
