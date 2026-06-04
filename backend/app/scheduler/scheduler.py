@@ -11,10 +11,17 @@ Each job opens its own DB session and is wrapped so a failure never kills the lo
 from __future__ import annotations
 
 import logging
+import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 log = logging.getLogger("scheduler")
+
+# All cron jobs fire on round hours in the OWNER's local clock (Iran-based business; the
+# frontend already renders times in Asia/Tehran). Iran has no DST, so this is a stable
+# UTC+3:30 — e.g. the every-2h backup fires at 00,02,…,22:00 Tehran. Overridable via the
+# SCHEDULER_TIMEZONE env var if ever deployed elsewhere.
+SCHEDULER_TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "Asia/Tehran")
 
 _scheduler: AsyncIOScheduler | None = None
 
@@ -22,7 +29,7 @@ _scheduler: AsyncIOScheduler | None = None
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
-        _scheduler = AsyncIOScheduler(timezone="UTC")
+        _scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
     return _scheduler
 
 

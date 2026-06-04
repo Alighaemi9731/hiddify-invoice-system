@@ -104,18 +104,27 @@ async def backup_job() -> None:
 
 
 def register(sched: AsyncIOScheduler) -> None:
-    # 1st of each month, 09:00 UTC — bill the previous month and deliver.
-    sched.add_job(monthly_invoicing_job, "cron", day=1, hour=9, id="monthly_invoicing",
+    # ALL jobs use fixed wall-clock (cron) times, NOT `interval`. An interval job's countdown
+    # is anchored to process start and APScheduler's in-memory store resets it on every
+    # restart, so frequent redeploys (each shorter than the interval) starve it — that's why
+    # the 2h auto-backup never fired. Cron triggers fire at the same absolute clock times
+    # regardless of when we last deployed. Times are in the scheduler's timezone
+    # (Asia/Tehran — see scheduler.get_scheduler), and kept on round hours/minutes.
+
+    # 1st of each month, 09:00 — bill the previous month and deliver.
+    sched.add_job(monthly_invoicing_job, "cron", day=1, hour=9, minute=0,
+                  id="monthly_invoicing", replace_existing=True)
+    # Daily 10:00 — reminders + enforcement.
+    sched.add_job(daily_dunning_job, "cron", hour=10, minute=0, id="daily_dunning",
                   replace_existing=True)
-    # Daily 10:00 UTC — reminders + enforcement.
-    sched.add_job(daily_dunning_job, "cron", hour=10, id="daily_dunning", replace_existing=True)
-    # Every 10 minutes — remove non-reseller members from the channel/group (dry-run unless
-    # enabled) and notify them in the bot. Frequent so people who haven't registered their
-    # panel link don't linger.
-    sched.add_job(channel_guard_job, "interval", minutes=10, id="channel_guard",
+    # Every 10 minutes on the :00/:10/:20… — remove non-reseller members from the channel/
+    # group (dry-run unless enabled) and notify them in the bot. Frequent so people who
+    # haven't registered their panel link don't linger.
+    sched.add_job(channel_guard_job, "cron", minute="*/10", id="channel_guard",
                   replace_existing=True)
-    # Every 6 hours — keep snapshots fresh for the dashboard.
-    sched.add_job(periodic_sync_job, "interval", hours=6, id="periodic_sync", replace_existing=True)
-    # Every 2 hours — auto-backup to the owner's Telegram PV.
-    sched.add_job(backup_job, "interval", hours=2, id="backup", replace_existing=True)
-    log.info("Registered 5 scheduled jobs.")
+    # Every 6 hours on the hour (00,06,12,18:00) — keep snapshots fresh for the dashboard.
+    sched.add_job(periodic_sync_job, "cron", hour="*/6", minute=0, id="periodic_sync",
+                  replace_existing=True)
+    # Every 2 hours on the hour (00,02,…,22:00) — auto-backup to the owner's Telegram PV.
+    sched.add_job(backup_job, "cron", hour="*/2", minute=0, id="backup", replace_existing=True)
+    log.info("Registered 5 scheduled jobs (fixed wall-clock cron, tz=%s).", sched.timezone)

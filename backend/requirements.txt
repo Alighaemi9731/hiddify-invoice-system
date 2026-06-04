@@ -27,6 +27,9 @@ aiogram>=3.7
 
 # Scheduling
 APScheduler>=3.10
+# IANA tz database as a pip package — guarantees zoneinfo can resolve the scheduler's
+# timezone (Asia/Tehran) even on a slim base image that ships no system /usr/share/zoneinfo.
+tzdata>=2024.1
 
 # Invoice PDF (Persian/RTL) — same toolchain as the legacy system
 reportlab>=4.1
