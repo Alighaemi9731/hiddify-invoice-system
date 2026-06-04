@@ -211,10 +211,22 @@ async def _gate_or_menu(answer, bot: Bot, session, user) -> None:
     await answer(text, reply_markup=keyboards.membership_keyboard(targets))
 
 
-async def _send_menu(answer, session, user) -> None:
+async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     if await _is_owner_user(session, user):
         await answer("👑 منوی مدیریت سیستم:", reply_markup=keyboards.owner_menu_keyboard())
         return
+    # A non-owner must pass the membership gate to see the menu. If `bot` is available we
+    # re-check here too, so a stray message from a non-member shows the JOIN prompt (with a
+    # clickable /start) instead of leaking the reseller menu.
+    if bot is not None:
+        missing = await _missing_gates(bot, session, user.id)
+        if missing:
+            names = " و ".join(g["label"] for g in missing)
+            await answer(
+                f"برای استفاده از ربات باید عضو {names} ما باشید.\n"
+                "ابتدا /start را بزنید تا لینک عضویت برایتان ارسال شود."
+            )
+            return
     name = user.first_name or user.username or ""
     welcome = await texts.render(session, "tpl_welcome", name=name)
     menu = await texts.render(session, "tpl_menu")
@@ -245,7 +257,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 async def cmd_menu(message: Message, bot: Bot) -> None:
     async with SessionLocal() as session:
         await _sync_command_menu(bot, session, message.from_user)
-        await _send_menu(message.answer, session, message.from_user)
+        await _send_menu(message.answer, session, message.from_user, bot=bot)
 
 
 @router.message(Command("help"))
@@ -1180,7 +1192,7 @@ _SETCHAT_RE = re.compile(r"^(channel|group|کانال|گروه)\s+(-?\d{5,})$", 
 
 
 @router.message(F.text)
-async def on_text(message: Message) -> None:
+async def on_text(message: Message, bot: Bot) -> None:
     text = (message.text or "").strip()
     async with SessionLocal() as session:
         await _track_user(session, message.from_user)
@@ -1209,9 +1221,9 @@ async def on_text(message: Message) -> None:
         if parsed:
             await _handle_link(message, session, parsed)
             return
-        # Any other text / mistyped command → show the right main menu (owner vs reseller)
-        # instead of a dead-end hint, so the user always sees their options.
-        await _send_menu(message.answer, session, message.from_user)
+        # Any other text / mistyped command → show the right main menu (owner vs reseller),
+        # but a non-member gets the join prompt (with a clickable /start), not the menu.
+        await _send_menu(message.answer, session, message.from_user, bot=bot)
 
 
 async def _is_top_level_reseller(session, reseller: Reseller) -> bool:

@@ -90,9 +90,14 @@ DEFS: list[SettingDef] = [
     SettingDef("announcement_group_id", "", False, "telegram"),
     SettingDef("announcement_group_link", "", False, "telegram"),
     SettingDef("group_membership_required", False, False, "telegram"),
-    # Daily guard: kick people who started the bot but are NOT registered resellers from
-    # the channel AND the group. Default OFF (dry-run reports only) for safety.
+    # Guard: kick people who started the bot but are NOT registered resellers from the
+    # channel AND the group. Default OFF (dry-run reports only) for safety.
     SettingDef("channel_kick_enabled", False, False, "telegram"),
+    # Grace period (MINUTES) before the guard removes a NON-registered bot user. Default 15:
+    # short on purpose — the guard runs every 10 min, so a newcomer who joins right at a
+    # check tick is skipped that round and removed on the NEXT one (the "second 10-minute
+    # cycle"), not instantly. Counted from when they first started the bot (BotUser.created_at).
+    SettingDef("kick_grace_minutes", 15, False, "telegram"),
     SettingDef("one_time_invite_links", True, False, "telegram"),
     # Payments
     SettingDef("usdt_bep20_address", boot.usdt_bep20_address, False, "payments"),

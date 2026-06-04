@@ -28,6 +28,7 @@ _PROTECTED = ("administrator", "creator", "owner")
 async def enforce_channel(session: AsyncSession) -> dict:
     cfg = await settings_service.get_many(session, [
         "announcement_channel_id", "announcement_group_id", "channel_kick_enabled",
+        "kick_grace_minutes",
     ])
     chats = [(cid, label) for cid, label in (
         (str(cfg.get("announcement_channel_id") or ""), "channel"),
@@ -36,6 +37,8 @@ async def enforce_channel(session: AsyncSession) -> dict:
     if not chats:
         return {"skipped": "no channel/group configured"}
     enabled = bool(cfg.get("channel_kick_enabled"))
+    grace_minutes = float(cfg.get("kick_grace_minutes") or 0)
+    now = dt.datetime.now(dt.timezone.utc)
 
     reseller_ids = {
         c for c in (
@@ -47,13 +50,25 @@ async def enforce_channel(session: AsyncSession) -> dict:
     users = (await session.execute(select(BotUser))).scalars().all()
 
     bot = await build_bot(session)
-    counts = {"checked": 0, "in_channel_non_reseller": 0, "kicked": 0, "dry_run": not enabled}
+    counts = {"checked": 0, "in_channel_non_reseller": 0, "kicked": 0,
+              "grace": 0, "dry_run": not enabled}
     if bot is None:
         return {**counts, "error": "no bot token"}
     try:
         for u in users:
             if u.telegram_id in reseller_ids:
                 continue  # a real reseller — leave them
+            # Grace period: don't kick someone who only just started the bot — give them a
+            # short window to register their panel link first. With a 15-min grace and a
+            # 10-min guard, a newcomer is skipped on the tick they joined near and removed
+            # on the next one (the "second cycle").
+            if grace_minutes > 0 and u.created_at is not None:
+                created = u.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=dt.timezone.utc)
+                if (now - created).total_seconds() < grace_minutes * 60:
+                    counts["grace"] += 1
+                    continue
             counts["checked"] += 1
             kicked_any = False
             for chat_id, _label in chats:

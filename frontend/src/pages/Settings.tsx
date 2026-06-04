@@ -23,7 +23,7 @@ const LABELS: Record<string, string> = {
   channel_membership_required: "عضویت اجباری کانال",
   announcement_group_id: "شناسه گروه", announcement_group_link: "لینک گروه (اختیاری، برای گروه خصوصی)",
   group_membership_required: "عضویت اجباری گروه",
-  channel_kick_enabled: "پاک‌سازی واقعی کانال و گروه (خاموش=آزمایشی)", one_time_invite_links: "لینک عضویت یک‌بارمصرف",
+  channel_kick_enabled: "پاک‌سازی واقعی کانال و گروه (خاموش=آزمایشی)", kick_grace_minutes: "مهلت ارفاق پاک‌سازی (دقیقه)", one_time_invite_links: "لینک عضویت یک‌بارمصرف",
   usdt_bep20_address: "آدرس کیف پول USDT", usdt_bep20_contract: "قرارداد USDT", bscscan_api_key: "کلید API بی‌اسکن",
   bscscan_api_url: "آدرس API بی‌اسکن", usdt_master_xpub: "xpub کیف پول مادر", min_confirmations: "حداقل تأیید",
   payment_amount_tolerance_usdt: "اغماض مبلغ (USDT)",
