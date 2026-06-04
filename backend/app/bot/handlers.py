@@ -61,6 +61,38 @@ router = Router()
 # unaffected — they only occur on messages the bot itself sent in a private chat.
 router.message.filter(F.chat.type == "private")
 
+# Callbacks that must work even for a NON-member (so they can pass the gate or are inert).
+_GATE_EXEMPT_CALLBACKS = {"check_membership", "noop"}
+
+
+@router.callback_query.outer_middleware
+async def _membership_gate_mw(handler, event, data):
+    """Re-check forced-membership on EVERY button tap, not just /start.
+
+    Without this, a user who already has the menu in their chat history (or left the
+    channel/group afterwards) could keep using old buttons without being a member. The
+    owner is exempt; `check_membership` is always allowed so they can re-verify."""
+    try:
+        cb_data = getattr(event, "data", "") or ""
+        if cb_data not in _GATE_EXEMPT_CALLBACKS:
+            bot = data.get("bot")
+            user = getattr(event, "from_user", None)
+            if bot is not None and user is not None:
+                async with SessionLocal() as session:
+                    if not await _is_owner_user(session, user):
+                        missing = await _missing_gates(bot, session, user.id)
+                        if missing:
+                            names = " و ".join(g["label"] for g in missing)
+                            await event.answer(
+                                f"برای استفاده از ربات باید عضو {names} باشید. ابتدا /start را بزنید.",
+                                show_alert=True,
+                            )
+                            return  # block the real handler
+    except Exception:  # noqa: BLE001 — a gate error must never break the bot
+        log.warning("membership gate middleware failed", exc_info=True)
+    return await handler(event, data)
+
+
 _TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 _UNPAID = (InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
@@ -1069,11 +1101,27 @@ async def on_forward(message: Message) -> None:
         # "channel", so this split is reliable.)
         if chat.type == "channel":
             await settings_service.set_value(session, "announcement_channel_id", str(chat.id))
-            await message.answer(
+            reply = (
                 f"✅ کانال اطلاع‌رسانی ثبت شد:\n{chat.title}\nid: {chat.id}\n"
                 "برای اجباری‌کردن عضویت، کلید «عضویت اجباری کانال» را در تنظیمات روشن کنید.\n"
                 "توجه: ربات باید ادمین این کانال باشد."
             )
+            # If this channel has a linked DISCUSSION GROUP, register it automatically — you
+            # can't forward FROM a group (Telegram hides the group as the forward origin),
+            # so reading the channel's linked_chat is the reliable way to capture a private
+            # group. Needs the bot to be in (ideally admin of) the channel.
+            try:
+                full = await message.bot.get_chat(chat.id)
+                linked = getattr(full, "linked_chat_id", None)
+                if linked:
+                    await settings_service.set_value(session, "announcement_group_id", str(linked))
+                    reply += (
+                        f"\n\n🔗 گروه گفتگوی متصل به این کانال هم خودکار ثبت شد (id: {linked}).\n"
+                        "برای اجباری‌کردن عضویت گروه، کلید «عضویت اجباری گروه» را روشن کنید."
+                    )
+            except Exception:  # noqa: BLE001 — best-effort; the manual path below still works
+                log.info("could not read linked_chat for channel %s", chat.id, exc_info=True)
+            await message.answer(reply)
         else:
             await settings_service.set_value(session, "announcement_group_id", str(chat.id))
             await message.answer(
@@ -1128,11 +1176,31 @@ async def on_photo(message: Message) -> None:
         await _handle_payment_proof(message, session)
 
 
+_SETCHAT_RE = re.compile(r"^(channel|group|کانال|گروه)\s+(-?\d{5,})$", re.IGNORECASE)
+
+
 @router.message(F.text)
 async def on_text(message: Message) -> None:
     text = (message.text or "").strip()
     async with SessionLocal() as session:
         await _track_user(session, message.from_user)
+        # Owner manual fallback for a PRIVATE GROUP that can't be forwarded: «group -100…»
+        # (or «channel -100…»). Telegram hides a group as the forward origin, so this lets
+        # the owner paste the numeric id directly.
+        m = _SETCHAT_RE.match(text)
+        if m and await _is_owner_user(session, message.from_user):
+            kind = m.group(1).lower()
+            chat_id = m.group(2)
+            is_channel = kind in ("channel", "کانال")
+            key = "announcement_channel_id" if is_channel else "announcement_group_id"
+            await settings_service.set_value(session, key, chat_id)
+            label = "کانال" if is_channel else "گروه"
+            await message.answer(
+                f"✅ {label} با شناسهٔ {chat_id} ثبت شد.\n"
+                f"برای اجباری‌کردن عضویت، کلید «عضویت اجباری {label}» را در تنظیمات روشن کنید.\n"
+                "توجه: ربات باید ادمین آن باشد."
+            )
+            return
         txm = _TXID_RE.search(text)
         if txm:
             await _handle_txid(message, session, txm.group(0))
