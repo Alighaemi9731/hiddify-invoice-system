@@ -82,12 +82,12 @@ export default function Login() {
               </Box>
               <Tooltip title="کد جدید"><IconButton onClick={loadCaptcha}><RefreshIcon /></IconButton></Tooltip>
             </Stack>
-            <TextField label="کد امنیتی تصویر" fullWidth value={captchaAns} dir="ltr"
-              onChange={(e) => setCaptchaAns(e.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 6 }} />
+            <TextField label="کد امنیتی تصویر" fullWidth value={captchaAns}
+              onChange={(e) => setCaptchaAns(e.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 6, dir: "ltr" }} />
 
             {need2fa && (
-              <TextField label="کد تأیید دو مرحله‌ای (Authenticator)" fullWidth value={totp} dir="ltr"
-                onChange={(e) => setTotp(e.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 6 }} autoFocus />
+              <TextField label="کد تأیید دو مرحله‌ای (Authenticator)" fullWidth value={totp}
+                onChange={(e) => setTotp(e.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 6, dir: "ltr" }} autoFocus />
             )}
 
             <Button type="submit" variant="contained" fullWidth size="large" disabled={busy}>

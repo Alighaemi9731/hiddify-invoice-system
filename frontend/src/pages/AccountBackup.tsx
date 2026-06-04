@@ -192,7 +192,7 @@ export default function AccountBackup() {
           <Stack spacing={2}>
             <TextField label="رمز عبور فعلی *" type="password" value={cur}
               onChange={(e) => setCur(e.target.value)} />
-            <TextField label="نام کاربری جدید (اختیاری)" value={newUser} dir="ltr"
+            <TextField label="نام کاربری جدید (اختیاری)" value={newUser} inputProps={{ dir: "ltr" }}
               onChange={(e) => setNewUser(e.target.value)} />
             <TextField label="رمز عبور جدید (اختیاری)" type="password" value={newPass}
               onChange={(e) => setNewPass(e.target.value)} />
@@ -238,7 +238,7 @@ export default function AccountBackup() {
                 <Box>
                   <Typography variant="caption" color="text.secondary">کلید دستی:</Typography>
                   <Typography dir="ltr" sx={{ fontFamily: "monospace", wordBreak: "break-all", mb: 2 }}>{setup.secret}</Typography>
-                  <TextField label="کد ۶ رقمی" value={code} dir="ltr" inputProps={{ maxLength: 6 }}
+                  <TextField label="کد ۶ رقمی" value={code} inputProps={{ maxLength: 6, dir: "ltr" }}
                     onChange={(e) => setCode(e.target.value)} sx={{ mb: 1, display: "block" }} />
                   <Button variant="contained" disabled={code.length < 6 || enable2fa.isPending}
                     onClick={() => enable2fa.mutate()}>تأیید و فعال‌سازی</Button>
@@ -346,9 +346,9 @@ export default function AccountBackup() {
             خودکار گواهی SSL می‌گیرد و پنل روی همان دامنه با HTTPS در دسترس می‌شود.
           </Typography>
           <Stack spacing={2} sx={{ maxWidth: 420 }}>
-            <TextField label="دامنه" dir="ltr" placeholder="panel.example.com"
+            <TextField label="دامنه" inputProps={{ dir: "ltr" }} placeholder="panel.example.com"
               value={domain} onChange={(e) => setDomainVal(e.target.value)} />
-            <TextField label="ایمیل برای گواهی SSL (اختیاری)" dir="ltr"
+            <TextField label="ایمیل برای گواهی SSL (اختیاری)" inputProps={{ dir: "ltr" }}
               value={acmeEmail} onChange={(e) => setAcmeEmail(e.target.value)} />
             {domainResult && <Alert severity="success">{domainResult}</Alert>}
             <Box>

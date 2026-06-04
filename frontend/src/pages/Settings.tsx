@@ -333,7 +333,7 @@ export default function Settings() {
         helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
     if (isSecret)
       return <TextField key={f.key} label={f.label} placeholder={meta.has_value ? "•••• (برای تغییر وارد کنید)" : "تنظیم نشده"}
-        dir="ltr" value={f.key in edits ? edits[f.key] : ""} fullWidth size="small"
+        inputProps={{ dir: "ltr" }} value={f.key in edits ? edits[f.key] : ""} fullWidth size="small"
         helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
     if (type === "number") {
       const bounded = f.min !== undefined || f.max !== undefined;
@@ -344,7 +344,8 @@ export default function Settings() {
         onChange={(e) => setVal(f.key, Number(e.target.value))} />;
     }
     return <TextField key={f.key} label={f.label} value={v ?? ""} fullWidth size="small"
-      dir={f.dir} helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
+      inputProps={f.dir === "ltr" ? { dir: "ltr" } : undefined}
+      helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;
   };
 
   const renderSection = (sec: Section) => {

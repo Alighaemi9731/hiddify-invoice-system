@@ -213,7 +213,10 @@ async def _gate_or_menu(answer, bot: Bot, session, user) -> None:
 
 async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     if await _is_owner_user(session, user):
-        await answer("👑 منوی مدیریت سیستم:", reply_markup=keyboards.owner_menu_keyboard())
+        await answer(
+            "👑 پنل مدیریت\nیک گزینه را انتخاب کنید:",
+            reply_markup=keyboards.owner_menu_keyboard(),
+        )
         return
     # A non-owner must pass the membership gate to see the menu. If `bot` is available we
     # re-check here too, so a stray message from a non-member shows the JOIN prompt (with a
@@ -262,15 +265,31 @@ async def cmd_menu(message: Message, bot: Bot) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    await message.answer(
-        "راهنما:\n"
-        "/start یا /menu — منوی اصلی\n"
-        "/invoices — فاکتورهای من\n"
-        "/pay — پرداخت\n"
-        "/debt — بدهی من\n"
-        "/removelink — حذف لینک‌های ثبت‌شده\n\n"
-        "برای ثبت، کافیست لینک پنل خود را ارسال کنید."
-    )
+    async with SessionLocal() as session:
+        if await _is_owner_user(session, message.from_user):
+            await message.answer(
+                "📖 راهنمای مدیر\n\n"
+                "/start یا /menu — منوی مدیریت\n"
+                "/broadcast — پیام همگانی به نمایندگان\n"
+                "/help — همین راهنما\n\n"
+                "از دکمه‌های منو می‌توانید آمار کلی، بدهکاران، فروشِ صفر، همگام‌سازی پنل‌ها، "
+                "اجرای یادآوری‌ها و پشتیبان‌گیری فوری را اجرا کنید.\n"
+                "• ثبت کانال/گروه: یک پیام از آن را برای ربات فوروارد کنید.\n"
+                "• بازیابی: فایل پشتیبان (zip) را برای ربات بفرستید.\n"
+                "• پاسخ به پشتیبانی: روی پیام کاربر «ریپلای» کنید."
+            )
+        else:
+            await message.answer(
+                "📖 راهنما\n\n"
+                "/start یا /menu — منوی اصلی\n"
+                "/invoices — فاکتورهای من\n"
+                "/pay — پرداخت فاکتور\n"
+                "/debt — بدهی من\n"
+                "/subs — مدیریت زیرمجموعه‌ها\n"
+                "/removelink — حذف لینک‌های ثبت‌شده\n\n"
+                "برای ثبت نام، کافی است لینک پنل خود را همین‌جا ارسال کنید.\n"
+                "می‌توانید «فاکتور علی‌الحساب» این ماه و پرداخت با USDT، کارت یا ارسال رسید را هم از منو انتخاب کنید."
+            )
 
 
 @router.message(Command("invoices"))
@@ -800,9 +819,12 @@ async def _owner_debtors(answer, session) -> None:
     if not rows:
         await answer("بدهکاری وجود ندارد.")
         return
+    # Each row starts with a right-to-left mark (‏) so a line that begins with an
+    # English reseller name still renders right-aligned in Telegram (otherwise the first
+    # Latin character flips the whole line to LTR and it reads garbled).
     lines = ["💰 بدهکاران برتر:\n"]
     for i, (name, total) in enumerate(rows, 1):
-        lines.append(f"{i}. {name}: {float(total):,.0f} تومان")
+        lines.append(f"‏{i}. {name}: {float(total):,.0f} تومان")
     await answer("\n".join(lines))
 
 
@@ -820,7 +842,7 @@ async def _owner_zerosale(answer, session) -> None:
         await answer(f"🟡 فروش صفر ({current_month().label}): همهٔ نمایندگانِ متصل فروش داشته‌اند.")
         return
     lines = [f"🟡 فروش صفر این ماه ({current_month().label}) — {len(idle)} نماینده:\n"]
-    lines += [f"• {n}" for n in idle[:40]]
+    lines += [f"‏• {n}" for n in idle[:40]]  # leading RLM keeps English names right-aligned
     if len(idle) > 40:
         lines.append(f"… و {len(idle) - 40} نمایندهٔ دیگر")
     await answer("\n".join(lines))
@@ -1042,7 +1064,7 @@ async def _send_panels(answer, chat_id: int, session) -> None:
             )
         ).scalar_one()
         tag = f" (#{r.link_tag})" if r.link_tag else ""
-        lines.append(f"• {panel.name or panel.key}{tag} — زیرمجموعه‌ها: {subs}")
+        lines.append(f"‏• پنل {panel.name or panel.key}{tag} — زیرمجموعه‌ها: {subs}")
     await answer("\n".join(lines))
 
 
@@ -1078,7 +1100,7 @@ async def _send_sub_panels(answer, chat_id: int, session) -> None:
         ).scalar_one()
         if subs > 0:
             panel = await session.get(Panel, r.panel_id)
-            items.append((r.id, f"{panel.name or panel.key} — {r.name} ({subs})"))
+            items.append((r.id, f"پنل {panel.name or panel.key} — {r.name} ({subs})"))
     if not items:
         await answer("شما زیرمجموعه‌ای ندارید.")
         return

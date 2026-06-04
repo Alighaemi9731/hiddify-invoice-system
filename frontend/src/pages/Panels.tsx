@@ -185,11 +185,11 @@ export default function Panels() {
             <TextField label="کلید (مثل fa1)" value={form.key} disabled={!!form.id}
               onChange={(e) => setForm({ ...form, key: e.target.value })} />
             <TextField label="نام" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <TextField label="دامنه (بدون https)" dir="ltr" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
-            <TextField label={form.id ? "مسیر مخفی (برای تغییر وارد کنید)" : "مسیر مخفی (proxy path)"} dir="ltr"
+            <TextField label="دامنه (بدون https)" inputProps={{ dir: "ltr" }} value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
+            <TextField label={form.id ? "مسیر مخفی (برای تغییر وارد کنید)" : "مسیر مخفی (proxy path)"} inputProps={{ dir: "ltr" }}
               value={form.proxy_path} onChange={(e) => setForm({ ...form, proxy_path: e.target.value })} />
-            <TextField label="UUID مالک پنل (Owner)" dir="ltr" value={form.owner_uuid} onChange={(e) => setForm({ ...form, owner_uuid: e.target.value })} />
-            <TextField label="کلید API ادمین (برای مسدودسازی)" dir="ltr" value={form.admin_api_key}
+            <TextField label="UUID مالک پنل (Owner)" inputProps={{ dir: "ltr" }} value={form.owner_uuid} onChange={(e) => setForm({ ...form, owner_uuid: e.target.value })} />
+            <TextField label="کلید API ادمین (برای مسدودسازی)" inputProps={{ dir: "ltr" }} value={form.admin_api_key}
               onChange={(e) => setForm({ ...form, admin_api_key: e.target.value })}
               helperText="برای اجرای واقعی مسدودسازی لازم است" />
             <FormControlLabel control={<Switch checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />} label="فعال" />

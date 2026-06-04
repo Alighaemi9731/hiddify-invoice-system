@@ -95,16 +95,16 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
           <Stack spacing={2}>
             <Typography variant="subtitle2" color="text.secondary">۱) حساب مدیر</Typography>
-            <TextField label="نام کاربری" dir="ltr" value={username} onChange={(e) => setUsername(e.target.value)} fullWidth />
+            <TextField label="نام کاربری" inputProps={{ dir: "ltr" }} value={username} onChange={(e) => setUsername(e.target.value)} fullWidth />
             <TextField label="رمز عبور" type="password" value={password} onChange={(e) => setPassword(e.target.value)} fullWidth
               helperText="حداقل ۸ کاراکتر" />
             <TextField label="تکرار رمز عبور" type="password" value={password2} onChange={(e) => setPassword2(e.target.value)} fullWidth
               error={!!password2 && password !== password2} />
 
             <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 1 }}>۲) دامنه (اختیاری)</Typography>
-            <TextField label="دامنه" dir="ltr" placeholder="panel.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} fullWidth
+            <TextField label="دامنه" inputProps={{ dir: "ltr" }} placeholder="panel.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} fullWidth
               helperText="رکورد A دامنه باید به IP این سرور اشاره کند. خالی بگذارید تا فعلاً روی IP بماند." />
-            <TextField label="ایمیل برای گواهی SSL" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} fullWidth />
+            <TextField label="ایمیل برای گواهی SSL" inputProps={{ dir: "ltr" }} value={email} onChange={(e) => setEmail(e.target.value)} fullWidth />
 
             <Button variant="contained" size="large" disabled={!valid || busy} onClick={submit}
               startIcon={busy ? <CircularProgress size={18} color="inherit" /> : <RocketLaunchIcon />}>

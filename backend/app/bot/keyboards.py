@@ -111,5 +111,5 @@ def owner_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def remove_links_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rm:{rid}")] for rid, name in items]
+    rows = [[InlineKeyboardButton(text=f"🗑 حذف {name}", callback_data=f"rm:{rid}")] for rid, name in items]
     return InlineKeyboardMarkup(inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]])
