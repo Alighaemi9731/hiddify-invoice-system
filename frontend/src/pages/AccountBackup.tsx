@@ -117,35 +117,57 @@ export default function AccountBackup() {
     onError: (e) => show(errMsg(e), "error"),
   });
 
-  // While updating, poll the status. The site goes down mid-rebuild, so we tolerate
-  // failed polls; when it comes back on a NEW version (or status says done) we reload.
+  // While updating, poll the status. Two completion signals, whichever comes first:
+  //   1) the watcher wrote phase "done"; OR
+  //   2) the backend went DOWN (rebuild bounces it) and then came back UP — a guaranteed
+  //      signal even when re-building to the SAME version, and robust if the status file
+  //      is momentarily unreadable. `armed` (we saw ≥1 good poll first) avoids a transient
+  //      network blip before the real rebuild being mistaken for completion.
   useEffect(() => {
     if (!updating) return;
     let stop = false;
+    let armed = false;     // saw at least one successful poll (request is in flight)
+    let sawDown = false;   // saw the backend go unreachable (the rebuild started)
+    const startedAt = Date.now();
+    const MAX_MS = 10 * 60 * 1000;
+
+    const doReload = () => {
+      setUpdateMsg("✅ به‌روزرسانی انجام شد. در حال بارگذاری مجدد…");
+      setTimeout(() => window.location.reload(), 1500);
+    };
+
     const tick = async () => {
+      if (stop) return;
       try {
         const st = await getUpdateStatus();
         if (stop) return;
+        if (st.phase === "failed") {
+          setUpdating(false);
+          show("به‌روزرسانی ناموفق بود. گزارش را روی سرور (update/update.log) ببینید.", "error");
+          return;
+        }
+        if (st.phase === "done") { doReload(); return; }
+        if (sawDown) { doReload(); return; }   // backend recovered after the rebuild bounce
         if (st.updater_installed === false && st.phase === "requested") {
           setUpdateMsg("⚠️ سرویس به‌روزرسانیِ خودکار روی سرور نصب نیست. لطفاً یک‌بار دستور نصب را روی سرور اجرا کنید تا فعال شود.");
         } else if (st.phase === "running") {
           setUpdateMsg("در حال دریافت آخرین نسخه و بازسازی… سامانه چند لحظه از دسترس خارج می‌شود.");
-        } else if (st.phase === "failed") {
-          setUpdating(false);
-          show("به‌روزرسانی ناموفق بود. گزارش را روی سرور (update/update.log) ببینید.", "error");
-          return;
-        } else if (st.phase === "done") {
-          setUpdateMsg("✅ به‌روزرسانی انجام شد. در حال بارگذاری مجدد…");
-          setTimeout(() => window.location.reload(), 1500);
-          return;
+        } else {
+          setUpdateMsg("درخواست ثبت شد؛ در انتظار شروع به‌روزرسانی…");
         }
+        armed = true;
       } catch {
-        // Backend is briefly down during the rebuild — keep waiting.
+        // Backend unreachable → it's bouncing for the rebuild. Only counts once we've
+        // confirmed we were talking to it (armed), so a pre-rebuild blip isn't mistaken.
+        if (armed) sawDown = true;
         setUpdateMsg("سامانه در حال بازسازی است… (چند لحظه از دسترس خارج می‌شود)");
       }
-      if (!stop) setTimeout(tick, 4000);
+      if (!stop && Date.now() - startedAt > MAX_MS) {
+        setUpdateMsg("به‌روزرسانی بیش از حد انتظار طول کشید. اگر سایت بالا آمده، صفحه را دستی تازه کنید.");
+      }
+      if (!stop) setTimeout(tick, 3000);
     };
-    const id = setTimeout(tick, 4000);
+    const id = setTimeout(tick, 3000);
     return () => { stop = true; clearTimeout(id); };
   }, [updating]);  // eslint-disable-line react-hooks/exhaustive-deps
 
