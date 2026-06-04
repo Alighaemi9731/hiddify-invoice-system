@@ -63,6 +63,15 @@ class Reseller(Base, TimestampMixin):
     # Whether this admin is allowed to create sub-admins (Hiddify `can_add_admin`).
     can_add_admin: Mapped[bool] = mapped_column(default=False)
 
+    # Monthly SOLD-quota cap (GB) a PARENT reseller sets on this sub-reseller — a feature
+    # Hiddify itself lacks (it only caps user COUNT). Purely informational/alerting: when
+    # the sub's billable GB this period reaches the cap, the parent (and the sub) get a
+    # one-time heads-up via the bot. 0/NULL = no cap. Resets each billing month.
+    gb_cap: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The period label (YYYY-MM) for which the over-cap alert was last sent, so we warn
+    # once per month and re-arm automatically when the month rolls over.
+    gb_cap_alerted_period: Mapped[str | None] = mapped_column(String(7), nullable=True)
+
     # Enforcement state machine
     enforcement_state: Mapped[EnforcementState] = mapped_column(
         Enum(EnforcementState, native_enum=False, length=16),

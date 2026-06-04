@@ -74,6 +74,14 @@ async def periodic_sync_job() -> None:
     try:
         async with SessionLocal() as session:
             await sync_service.sync_all(session)
+            # Re-evaluate per-sub GB caps against the freshly-synced data; alert any that
+            # crossed their monthly ceiling (once per month).
+            try:
+                from app.services import gb_cap
+
+                await gb_cap.check_caps(session)
+            except Exception:  # noqa: BLE001
+                log.exception("gb_cap check failed")
     except Exception:  # noqa: BLE001
         log.exception("periodic_sync_job failed")
 

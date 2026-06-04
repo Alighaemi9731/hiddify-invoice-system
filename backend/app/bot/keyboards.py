@@ -48,12 +48,17 @@ def sub_list_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
 
 
 def sub_detail_keyboard(
-    sub_id: int, enforced: bool, months: list[str] | None = None
+    sub_id: int, enforced: bool, months: list[str] | None = None, has_cap: bool = False
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     # Per-month invoice PDFs the reseller can hand to this sub-reseller.
     for label in (months or [])[:3]:
         rows.append([InlineKeyboardButton(text=f"📄 فاکتور {label}", callback_data=f"subinv:{sub_id}:{label}")])
+    # Set / change the monthly GB cap for this sub-reseller.
+    rows.append([InlineKeyboardButton(
+        text=("✏️ تغییر سقف حجم ماهانه" if has_cap else "🎯 تعیین سقف حجم ماهانه"),
+        callback_data=f"subcap:{sub_id}",
+    )])
     if enforced:
         rows.append([InlineKeyboardButton(text="✅ آزادسازی", callback_data=f"subr:{sub_id}")])
     else:

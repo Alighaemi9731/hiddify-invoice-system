@@ -43,6 +43,13 @@ class OwnerReplyState(StatesGroup):
     waiting = State()
 
 
+class SubCapState(StatesGroup):
+    """A reseller is entering the monthly GB cap for one of their sub-resellers
+    (the sub's id is held in FSM data)."""
+
+    waiting = State()
+
+
 log = logging.getLogger("bot.handlers")
 router = Router()
 
@@ -520,6 +527,59 @@ async def cb_sub_invoice(cb: CallbackQuery, bot: Bot) -> None:
         await _send_sub_invoice(cb.message.answer, cb.from_user.id, sub_id, period_label, s, bot=bot)
 
 
+@router.callback_query(F.data.startswith("subcap:"))
+async def cb_sub_cap(cb: CallbackQuery, state: FSMContext) -> None:
+    """Ask the reseller for a new monthly GB cap for this sub-reseller."""
+    sub_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sub = await s.get(Reseller, sub_id)
+        if not sub or not await _owns_sub(s, cb.from_user.id, sub):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        cur = int(sub.gb_cap or 0)
+        name = sub.name
+    await state.set_state(SubCapState.waiting)
+    await state.update_data(sub_id=sub_id)
+    cur_txt = f"سقف فعلی: {cur:g} گیگ\n" if cur > 0 else "سقف فعلی: تعیین‌نشده\n"
+    await cb.message.answer(
+        f"🎯 تعیین سقف حجم ماهانه برای «{name}»\n{cur_txt}"
+        "عدد سقف را به گیگابایت بفرستید (مثلاً 500). برای حذف سقف، عدد 0 را بفرستید.\n"
+        "این سقف هر ماه ریست می‌شود و فقط برای هشدار است (مسدودسازی خودکار نمی‌کند).\n"
+        "برای لغو: /cancel"
+    )
+    await cb.answer()
+
+
+@router.message(SubCapState.waiting)
+async def on_sub_cap_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    sub_id = data.get("sub_id")
+    await state.clear()
+    raw = (message.text or "").strip().replace("٬", "").replace(",", "")
+    # Accept Persian digits too.
+    raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    if not raw.isdigit():
+        await message.answer("عدد نامعتبر بود. یک عدد صحیح (گیگابایت) بفرستید یا /cancel.")
+        return
+    gb = int(raw)
+    async with SessionLocal() as s:
+        sub = await s.get(Reseller, sub_id) if sub_id else None
+        if not sub or not await _owns_sub(s, message.from_user.id, sub):
+            await message.answer("دسترسی ندارید.")
+            return
+        sub.gb_cap = gb or None
+        sub.gb_cap_alerted_period = None  # re-arm the alert for the new ceiling
+        await s.commit()
+        if gb > 0:
+            await message.answer(
+                f"✅ سقف حجم ماهانهٔ «{sub.name}» روی {gb:g} گیگ تنظیم شد.\n"
+                "از "
+                "«مدیریت زیرمجموعه‌ها» می‌توانید میزان مصرف این ماه را ببینید."
+            )
+        else:
+            await message.answer(f"✅ سقف حجم «{sub.name}» حذف شد (بدون محدودیت).")
+
+
 @router.callback_query(F.data == "menu:support")
 async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
@@ -912,6 +972,23 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
     if rep["sub_count"]:
         lines.append(f"زیرمجموعه‌های این نماینده: {rep['sub_count']}")
     lines.append(f"قیمت هر گیگ: {rep['price_per_gb']:,} تومان")
+    # Monthly GB-cap progress (the Hiddify-missing volume limit, simulated by us).
+    cap = rep.get("gb_cap") or 0
+    used = rep.get("current_gb") or 0
+    if cap > 0:
+        pct = rep.get("cap_pct") or 0
+        bar = _cap_bar(pct)
+        remaining = rep.get("cap_remaining_gb")
+        status = "⛔️ به سقف رسید" if used >= cap else f"باقی‌مانده: {remaining:g} گیگ"
+        lines.append(
+            f"\n🎯 سقف حجم ماهانه ({rep['current_period']}):\n"
+            f"{bar} {used:g}/{cap:g} گیگ ({pct}%) — {status}"
+        )
+    else:
+        lines.append(
+            f"\n🎯 سقف حجم ماهانه: تعیین نشده "
+            f"(این ماه تا الان: {used:g} گیگ ساخته شده)"
+        )
     lines.append("\n📊 فروش ماهانه (سهمیهٔ فروخته‌شده):")
     for m in rep["months"]:
         lines.append(
@@ -920,7 +997,18 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
         )
     lines.append("\n📄 برای دریافت فاکتور این زیرمجموعه (برای ارسال به خودش) دکمهٔ ماه را بزنید.")
     months = [m["label"] for m in rep["months"]]
-    await answer("\n".join(lines), reply_markup=keyboards.sub_detail_keyboard(sub.id, enforced, months))
+    await answer(
+        "\n".join(lines),
+        reply_markup=keyboards.sub_detail_keyboard(sub.id, enforced, months, has_cap=cap > 0),
+    )
+
+
+def _cap_bar(pct: int, width: int = 10) -> str:
+    """A small text progress bar for the GB cap (🟩 under 70%, 🟧 70–89%, 🟥 90%+)."""
+    pct = max(0, min(100, int(pct)))
+    filled = round(pct / 100 * width)
+    block = "🟥" if pct >= 90 else ("🟧" if pct >= 70 else "🟩")
+    return block * filled + "⬜️" * (width - filled)
 
 
 async def _send_sub_invoice(answer, chat_id: int, sub_id: int, period_label: str, session, *, bot=None) -> None:

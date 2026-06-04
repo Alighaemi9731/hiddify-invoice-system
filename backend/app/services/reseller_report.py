@@ -68,6 +68,22 @@ async def node_invoice(
     return next((b for b in bundles if b.root.id == node.id), None)
 
 
+def _billable_gb_for_period(users, period: Period, free_threshold: float) -> tuple[float, int]:
+    """Sum of SOLD quota (and count) of services created in `period`, above the free
+    threshold — the same rule the invoice engine bills on."""
+    gb = 0.0
+    cnt = 0
+    for u in users:
+        if not period.contains(u.start_date):
+            continue
+        g = float(u.usage_limit_gb or 0)
+        if g <= free_threshold + 1e-9:
+            continue
+        gb += g
+        cnt += 1
+    return round(gb, 2), cnt
+
+
 async def node_report(session: AsyncSession, reseller: Reseller, *, months: int = 3) -> dict:
     descendants = await node_descendants(session, reseller)
     uuids = {d.admin_uuid for d in descendants}
@@ -86,22 +102,19 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
 
     by_month = []
     for p in _last_months(months):
-        gb = 0.0
-        cnt = 0
-        for u in users:
-            if not p.contains(u.start_date):
-                continue
-            g = float(u.usage_limit_gb or 0)
-            if g <= free_threshold + 1e-9:
-                continue
-            gb += g
-            cnt += 1
+        gb, cnt = _billable_gb_for_period(users, p, free_threshold)
         by_month.append({
             "label": p.label,
-            "gb": round(gb, 2),
+            "gb": gb,
             "amount_toman": round(gb * price),
             "new_services": cnt,
         })
+
+    # Current-month progress against the parent-set GB cap (the bot shows this so the
+    # parent can see how much of the sub's monthly quota is used).
+    this_period = month_period(dt.date.today().year, dt.date.today().month)
+    used_gb = next((m["gb"] for m in by_month if m["label"] == this_period.label), 0.0)
+    cap = int(reseller.gb_cap or 0)
 
     return {
         "name": reseller.name,
@@ -112,4 +125,27 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
         "price_per_gb": price,
         "enforcement_state": reseller.enforcement_state.value,
         "months": by_month,
+        "gb_cap": cap,
+        "current_period": this_period.label,
+        "current_gb": used_gb,
+        "cap_pct": (round(used_gb / cap * 100) if cap > 0 else 0),
+        "cap_remaining_gb": (round(cap - used_gb, 2) if cap > 0 else None),
     }
+
+
+async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> float:
+    """The sub-tree's billable SOLD-quota GB for the CURRENT billing month (for cap checks)."""
+    descendants = await node_descendants(session, reseller)
+    uuids = {d.admin_uuid for d in descendants}
+    users = (
+        await session.execute(
+            select(EndUserSnapshot).where(
+                EndUserSnapshot.panel_id == reseller.panel_id,
+                EndUserSnapshot.added_by_uuid.in_(uuids),
+            )
+        )
+    ).scalars().all()
+    free_threshold = await pricing.get_free_threshold_gb(session)
+    today = dt.date.today()
+    gb, _ = _billable_gb_for_period(users, month_period(today.year, today.month), free_threshold)
+    return gb
