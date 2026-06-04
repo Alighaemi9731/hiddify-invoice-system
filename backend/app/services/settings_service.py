@@ -126,9 +126,18 @@ DEFS: list[SettingDef] = [
     # Abuse-resistant metering (billing model "C"): bill usage beyond the paid quota
     # (daily-reset trick) + renew-by-edit that skips start_date. On by default.
     SettingDef("metering_enabled", True, False, "pricing"),
-    # Invoicing schedule
-    SettingDef("invoice_day_of_month", 1, False, "schedule"),  # run on the 1st for prev month
-    SettingDef("invoice_hour", 9, False, "schedule"),
+    # Scheduler timings — ALL automated jobs. Every value here actually drives the
+    # APScheduler cron triggers (see app.scheduler.jobs.load_config). Hour/day values fire
+    # at that fixed clock time in the owner's timezone (Asia/Tehran); the "every N hours/
+    # minutes" values fire on round boundaries (00,0N,…). Values that evenly divide 24h /
+    # 60min give perfectly even spacing.
+    SettingDef("invoice_day_of_month", 1, False, "schedule"),   # monthly invoice: day (1=run on the 1st for prev month)
+    SettingDef("invoice_hour", 9, False, "schedule"),            # monthly invoice: hour
+    SettingDef("dunning_hour", 10, False, "schedule"),           # daily reminders/enforcement: hour
+    SettingDef("sync_interval_hours", 6, False, "schedule"),     # panel sync: every N hours
+    SettingDef("guard_interval_minutes", 10, False, "schedule"), # channel/group guard: every N minutes
+    SettingDef("backup_enabled", True, False, "schedule"),       # auto-backup on/off
+    SettingDef("backup_interval_hours", 2, False, "schedule"),   # auto-backup: every N hours
     # Dunning / enforcement
     SettingDef("reminder1_day", 2, False, "dunning"),
     SettingDef("reminder2_day", 4, False, "dunning"),
@@ -142,9 +151,6 @@ DEFS: list[SettingDef] = [
     SettingDef("owner_chat_id", "", False, "general"),
     # First-run setup wizard state (locked once the owner completes setup).
     SettingDef("setup_done", False, False, "general"),
-    # Automatic backups to the owner's Telegram.
-    SettingDef("backup_enabled", True, False, "backup"),
-    SettingDef("backup_interval_hours", 2, False, "backup"),
     # Deployment (Phase 2): domain + automatic HTTPS, applied by the installer.
     SettingDef("server_domain", "", False, "deploy"),
     SettingDef("https_enabled", False, False, "deploy"),

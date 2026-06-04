@@ -1,14 +1,18 @@
 """Scheduled jobs: monthly invoicing, daily dunning, periodic panel sync.
 
 Each job opens its own session and never lets an exception escape (which would stop
-the scheduler). Cron times use sensible defaults; the owner can also trigger any of
-these on demand from the panel (see app.api.operations).
+the scheduler). All timings are owner-configurable from the panel (Settings → زمان‌بندی),
+read by `load_config` and turned into fixed wall-clock cron triggers in `register` — see
+the module-level note there on why cron (not interval) is used.
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionLocal
 from app.services import (
@@ -24,6 +28,46 @@ from app.services import (
 from app.services.periods import previous_month
 
 log = logging.getLogger("scheduler.jobs")
+
+
+# ----------------------------- configurable timings -----------------------------
+@dataclass(frozen=True)
+class ScheduleConfig:
+    invoice_day: int = 1       # monthly invoice: day of month (1–28)
+    invoice_hour: int = 9      # monthly invoice: hour (0–23)
+    dunning_hour: int = 10     # daily reminders/enforcement: hour (0–23)
+    sync_hours: int = 6        # panel sync: every N hours (1–24)
+    guard_minutes: int = 10    # channel/group guard: every N minutes (1–59)
+    backup_hours: int = 2      # auto-backup: every N hours (1–24)
+
+
+def _clamp(value, lo: int, hi: int, default: int) -> int:
+    """Coerce a setting to an int within [lo, hi], falling back to `default` if it's
+    missing or unparseable — a bad value can never break the scheduler."""
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+async def load_config(session: AsyncSession) -> ScheduleConfig:
+    """Read the owner-configured scheduler timings (clamped to safe ranges)."""
+    s = await settings_service.get_many(session, [
+        "invoice_day_of_month", "invoice_hour", "dunning_hour",
+        "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
+    ])
+    return ScheduleConfig(
+        invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
+        invoice_hour=_clamp(s.get("invoice_hour"), 0, 23, 9),
+        dunning_hour=_clamp(s.get("dunning_hour"), 0, 23, 10),
+        # The "every N hours/minutes" steps go into a cron field, so N must stay within that
+        # field's range: hour 0–23 (so max step 23 — `*/24` is INVALID and throws), minute
+        # 0–59 (max step 59). Capping here is what keeps register() from ever building a bad
+        # trigger.
+        sync_hours=_clamp(s.get("sync_interval_hours"), 1, 23, 6),
+        guard_minutes=_clamp(s.get("guard_interval_minutes"), 1, 59, 10),
+        backup_hours=_clamp(s.get("backup_interval_hours"), 1, 23, 2),
+    )
 
 
 async def monthly_invoicing_job() -> None:
@@ -103,28 +147,45 @@ async def backup_job() -> None:
         log.exception("backup_job failed")
 
 
-def register(sched: AsyncIOScheduler) -> None:
-    # ALL jobs use fixed wall-clock (cron) times, NOT `interval`. An interval job's countdown
-    # is anchored to process start and APScheduler's in-memory store resets it on every
-    # restart, so frequent redeploys (each shorter than the interval) starve it — that's why
-    # the 2h auto-backup never fired. Cron triggers fire at the same absolute clock times
-    # regardless of when we last deployed. Times are in the scheduler's timezone
-    # (Asia/Tehran — see scheduler.get_scheduler), and kept on round hours/minutes.
+def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None:
+    """(Re)register all jobs with the owner-configured timings. Safe to call on a running
+    scheduler — `replace_existing=True` updates each trigger in place, so this doubles as the
+    live "apply settings" path. Falls back to defaults if no config is given.
 
-    # 1st of each month, 09:00 — bill the previous month and deliver.
-    sched.add_job(monthly_invoicing_job, "cron", day=1, hour=9, minute=0,
-                  id="monthly_invoicing", replace_existing=True)
-    # Daily 10:00 — reminders + enforcement.
-    sched.add_job(daily_dunning_job, "cron", hour=10, minute=0, id="daily_dunning",
-                  replace_existing=True)
-    # Every 10 minutes on the :00/:10/:20… — remove non-reseller members from the channel/
-    # group (dry-run unless enabled) and notify them in the bot. Frequent so people who
-    # haven't registered their panel link don't linger.
-    sched.add_job(channel_guard_job, "cron", minute="*/10", id="channel_guard",
-                  replace_existing=True)
-    # Every 6 hours on the hour (00,06,12,18:00) — keep snapshots fresh for the dashboard.
-    sched.add_job(periodic_sync_job, "cron", hour="*/6", minute=0, id="periodic_sync",
-                  replace_existing=True)
-    # Every 2 hours on the hour (00,02,…,22:00) — auto-backup to the owner's Telegram PV.
-    sched.add_job(backup_job, "cron", hour="*/2", minute=0, id="backup", replace_existing=True)
-    log.info("Registered 5 scheduled jobs (fixed wall-clock cron, tz=%s).", sched.timezone)
+    ALL jobs use fixed wall-clock (cron) triggers, NOT `interval`. An interval job's countdown
+    is anchored to process start and APScheduler's in-memory store resets it on every restart,
+    so frequent redeploys (each shorter than the interval) starve it — that's why the 2h
+    auto-backup never fired. Cron fires at the same absolute clock times regardless of when we
+    last deployed. Times are in the scheduler's timezone (Asia/Tehran — see get_scheduler)."""
+    cfg = cfg or ScheduleConfig()
+    tz = sched.timezone
+
+    # Build + validate ALL triggers BEFORE mutating the jobstore. add_job(..., "cron", ...)
+    # constructs the trigger internally, so a bad field would throw mid-loop and leave the
+    # running scheduler half-updated (register also serves the live apply_settings path).
+    # Constructing the CronTrigger objects up front makes registration all-or-nothing.
+    #   • Monthly invoice: day N of each month at HH:00 (bill prev month + deliver)
+    #   • Daily dunning at HH:00 (reminders + enforcement)
+    #   • Channel/group guard every N minutes on the :00 boundary
+    #   • Panel sync every N hours on the hour
+    #   • Auto-backup to the owner's Telegram every N hours on the hour
+    specs = [
+        ("monthly_invoicing", monthly_invoicing_job,
+         CronTrigger(day=cfg.invoice_day, hour=cfg.invoice_hour, minute=0, timezone=tz)),
+        ("daily_dunning", daily_dunning_job,
+         CronTrigger(hour=cfg.dunning_hour, minute=0, timezone=tz)),
+        ("channel_guard", channel_guard_job,
+         CronTrigger(minute=f"*/{cfg.guard_minutes}", timezone=tz)),
+        ("periodic_sync", periodic_sync_job,
+         CronTrigger(hour=f"*/{cfg.sync_hours}", minute=0, timezone=tz)),
+        ("backup", backup_job,
+         CronTrigger(hour=f"*/{cfg.backup_hours}", minute=0, timezone=tz)),
+    ]
+    for job_id, func, trigger in specs:
+        sched.add_job(func, trigger, id=job_id, replace_existing=True)
+    log.info(
+        "Registered 5 cron jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
+        "sync every %dh, guard every %dm, backup every %dh.",
+        sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
+        cfg.sync_hours, cfg.guard_minutes, cfg.backup_hours,
+    )

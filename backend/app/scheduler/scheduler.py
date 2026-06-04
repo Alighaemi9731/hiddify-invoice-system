@@ -35,7 +35,7 @@ def get_scheduler() -> AsyncIOScheduler:
 
 async def start() -> None:
     sched = get_scheduler()
-    _register_jobs(sched)
+    await _register_jobs(sched)
     sched.start()
     log.info("Scheduler started with %d job(s).", len(sched.get_jobs()))
 
@@ -47,11 +47,36 @@ async def shutdown() -> None:
         _scheduler = None
 
 
-def _register_jobs(sched: AsyncIOScheduler) -> None:
-    """Register jobs. Imported lazily to avoid circular imports during startup."""
+async def apply_settings(session) -> bool:
+    """Re-read the owner-configured timings and live-update the running jobs' triggers.
+    Called from the settings API after a schedule-affecting change so edits take effect
+    immediately (no restart). No-op (returns False) if the scheduler isn't running here —
+    e.g. in the separate bot process — so it's safe to call from anywhere."""
+    if _scheduler is None or not _scheduler.running:
+        return False
+    from app.scheduler import jobs
+
+    cfg = await jobs.load_config(session)
+    jobs.register(_scheduler, cfg)  # replace_existing=True rewrites each trigger in place
+    return True
+
+
+async def _register_jobs(sched: AsyncIOScheduler) -> None:
+    """Register jobs with the owner-configured timings. Imported lazily to avoid circular
+    imports during startup; never lets a failure crash boot."""
     try:
+        from app.core.db import SessionLocal
         from app.scheduler import jobs
 
-        jobs.register(sched)
+        async with SessionLocal() as session:
+            cfg = await jobs.load_config(session)
+        jobs.register(sched, cfg)
     except Exception:  # pragma: no cover - never let registration crash boot
         log.exception("Failed to register scheduler jobs")
+        # Fall back to defaults so the jobs still run on a sane schedule.
+        try:
+            from app.scheduler import jobs
+
+            jobs.register(sched)
+        except Exception:
+            log.exception("Fallback job registration also failed")

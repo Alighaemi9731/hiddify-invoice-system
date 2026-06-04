@@ -10,12 +10,13 @@ import { useToast, errMsg } from "../components/Toast";
 
 const GROUP_FA: Record<string, string> = {
   telegram: "تلگرام", payments: "روش‌های پرداخت", pricing: "قیمت‌گذاری",
-  schedule: "زمان‌بندی صدور", dunning: "یادآوری و مسدودسازی", templates: "متن پیام‌ها",
+  schedule: "زمان‌بندی کارهای خودکار", dunning: "یادآوری و مسدودسازی", templates: "متن پیام‌ها",
   general: "عمومی", deploy: "دامنه و HTTPS (هنگام نصب روی سرور)",
 };
 const GROUP_NOTE: Record<string, string> = {
   telegram: "برای ثبت کانال/گروه (حتی خصوصی): ربات را در آن ادمین کنید، سپس یک پیام از همان کانال/گروه را برای ربات فوروارد کنید تا شناسه‌اش ثبت شود. بعد کلید «عضویت اجباری» مربوطه را روشن کنید. اگر هر دو روشن باشند، کاربر باید عضو هر دو باشد. «پاک‌سازی واقعی» با همین یک کلید، هم کانال و هم گروه را از افرادی که نمایندهٔ فعال نیستند پاک می‌کند (روزانه).",
   payments: "روش‌های پرداختی که روشن باشند روی فاکتور و در «پرداخت» ربات به نماینده نشان داده می‌شوند. روشی که اطلاعاتش (آدرس کیف پول یا شماره کارت) خالی باشد، نمایش داده نمی‌شود.",
+  schedule: "همهٔ ساعت‌ها به وقت ایران است. کارهای «هر چند ساعت/دقیقه» روی ساعت‌های رُند اجرا می‌شوند (مثلاً هر ۲ ساعت = ۰۰، ۰۲، …، ۲۲) و به زمان دیپلوی وابسته نیستند. برای فاصله‌گذاری کاملاً یکنواخت، عددی بگذارید که ۲۴ (برای ساعت) یا ۶۰ (برای دقیقه) بر آن بخش‌پذیر باشد: ۱، ۲، ۳، ۴، ۶، ۸، ۱۲. تغییرات بلافاصله و بدون نیاز به ری‌استارت اعمال می‌شوند.",
   deploy: "این مقادیر هنگام نصب روی سرور (فاز ۲) استفاده می‌شوند: دامنه را وارد کنید، رکورد A آن را به IP سرور بدهید، و نصب‌کننده به‌صورت خودکار گواهی SSL را می‌گیرد و تمدید می‌کند.",
 };
 const LABELS: Record<string, string> = {
@@ -31,7 +32,11 @@ const LABELS: Record<string, string> = {
   pay_card_enabled: "روش پرداخت: کارت‌به‌کارت", card_number: "شماره کارت", card_holder_name: "نام صاحب کارت",
   default_price_per_gb: "قیمت پیش‌فرض هر گیگ (تومان)", toman_per_usdt: "نرخ تبدیل (تومان به ازای هر USDT)",
   rate_mode: "حالت نرخ", excluded_usage_gb: "حجم‌های معاف (گیگ، با کاما)", min_sale_toman: "حداقل فروش هر نماینده (تومان، ۰=غیرفعال)",
-  invoice_day_of_month: "روز صدور ماهانه", invoice_hour: "ساعت صدور",
+  invoice_day_of_month: "صدور فاکتور ماهانه: روز ماه (۱ تا ۲۸)", invoice_hour: "صدور فاکتور ماهانه: ساعت (۰ تا ۲۳)",
+  dunning_hour: "یادآوری/مسدودسازی روزانه: ساعت (۰ تا ۲۳)",
+  sync_interval_hours: "سینک پنل‌ها: هر چند ساعت",
+  guard_interval_minutes: "گارد کانال/گروه: هر چند دقیقه",
+  backup_enabled: "بکاپ خودکار به تلگرام (روشن/خاموش)", backup_interval_hours: "بکاپ خودکار: هر چند ساعت",
   reminder1_day: "یادآوری اول (روز)", reminder2_day: "یادآوری دوم (روز)", warning_day: "اخطار (روز)",
   enforcement_day: "مسدودسازی (روز)", enforcement_enabled: "مسدودسازی واقعی (خاموش = آزمایشی)",
   auto_restore_on_payment: "بازگردانی خودکار با پرداخت",
@@ -43,6 +48,12 @@ const LABELS: Record<string, string> = {
   tpl_payment_received: "تأیید پرداخت",
 };
 const GROUP_ORDER = ["telegram", "payments", "pricing", "schedule", "dunning", "general", "deploy", "templates"];
+// Numeric bounds for the schedule fields — mirror the backend clamp (app.scheduler.jobs.load_config)
+// so the panel can't show a value that silently differs from what actually runs.
+const BOUNDS: Record<string, [number, number]> = {
+  invoice_day_of_month: [1, 28], invoice_hour: [0, 23], dunning_hour: [0, 23],
+  sync_interval_hours: [1, 23], guard_interval_minutes: [1, 59], backup_interval_hours: [1, 23],
+};
 
 export default function Settings() {
   const qc = useQueryClient();
@@ -84,8 +95,13 @@ export default function Settings() {
     if (s.is_secret)
       return <TextField key={s.key} label={label} placeholder={s.has_value ? "•••• (برای تغییر وارد کنید)" : ""} dir="ltr"
         value={s.key in edits ? edits[s.key] : ""} fullWidth onChange={(e) => setVal(s.key, e.target.value)} />;
-    if (typeof s.value === "number")
-      return <TextField key={s.key} label={label} type="number" value={v ?? 0} fullWidth onChange={(e) => setVal(s.key, Number(e.target.value))} />;
+    if (typeof s.value === "number") {
+      const b = BOUNDS[s.key];
+      return <TextField key={s.key} label={label} type="number" value={v ?? 0} fullWidth
+        inputProps={b ? { min: b[0], max: b[1] } : undefined}
+        helperText={b ? `مجاز: ${b[0]} تا ${b[1]}` : undefined}
+        onChange={(e) => setVal(s.key, Number(e.target.value))} />;
+    }
     return <TextField key={s.key} label={label} value={v ?? ""} fullWidth dir={s.key.includes("address") || s.key.includes("link") ? "ltr" : undefined}
       onChange={(e) => setVal(s.key, e.target.value)} />;
   };
