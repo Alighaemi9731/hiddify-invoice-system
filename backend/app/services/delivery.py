@@ -50,11 +50,65 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
     return text
 
 
+def _breakdown_lines(bd: dict) -> list[str]:
+    """Per-node usage breakdown (own + each sub), matching the «فاکتور علی‌الحساب» format.
+    GB only — the payable total + payment instructions live in the main invoice text. Each
+    line starts with a Persian word so an English (sub-)reseller name stays right-aligned."""
+    lines = [
+        "➖➖➖➖➖➖➖➖",
+        "🧾 ریز مصرف این دوره:",
+        f"🟦 مصرف خودتان: حجم {bd['own']['gb']:g} گیگ ({bd['own']['users']} سرویس)",
+    ]
+    if bd["subs"]:
+        lines.append("🟨 زیرمجموعه‌های شما:")
+        for s in bd["subs"]:
+            lines.append(f"• نماینده {s['name']} — {s['gb']:g} گیگ ({s['users']} سرویس)")
+    return lines
+
+
+async def _render_invoice_pdfs(
+    session: AsyncSession, inv: Invoice, reseller: Reseller, bd: dict | None
+) -> list[tuple[str, str]]:
+    """Build the per-node, volume-only PDFs for an invoice — ONE for the reseller's own users
+    and ONE per sub-reseller (its subtree) — exactly like the interim invoice, so the reseller
+    can hand each sub its matching PDF. Falls back to a single whole-bundle PDF if the split
+    yields nothing. Returns [(path, caption), …]."""
+    from app.services.periods import month_period
+
+    period = month_period(inv.period_start.year, inv.period_start.month)
+    title = f"فاکتور دوره {inv.period_label}"
+    docs: list[tuple[str, str]] = []
+    try:
+        own = await invoice_pdf.render_own_usage_pdf(session, reseller, period, title=title)
+        if own:
+            docs.append((own[0], f"📄 {title} — کاربران خودتان"))
+        for s in (bd["subs"] if bd else []):
+            sub = await session.get(Reseller, s["id"])
+            if sub is None:
+                continue
+            res = await invoice_pdf.render_node_usage_pdf(
+                session, sub, period, title=title, issuer_name=reseller.name
+            )
+            if res:
+                docs.append((res[0], f"📄 {title} — زیرمجموعه «{sub.name}»"))
+    except Exception:  # noqa: BLE001
+        log.warning("per-node invoice PDF render failed for invoice %s", inv.id, exc_info=True)
+    if not docs:
+        # Defensive fallback: the classic single bundle PDF so the reseller still gets a doc.
+        try:
+            path, _ = await invoice_pdf.render_invoice_pdf(session, inv)
+            docs.append((path, f"📄 {title}"))
+        except Exception:  # noqa: BLE001
+            log.warning("fallback invoice PDF render failed for invoice %s", inv.id, exc_info=True)
+    return docs
+
+
 async def send_invoice(
     session: AsyncSession, invoice_id: int, *, bot: Bot | None = None
 ) -> DeliveryLog:
-    """Deliver the invoice as the PDF document with the full text as its caption
-    (one message). Falls back to text-only if the PDF/document send fails."""
+    """Deliver the invoice like the «فاکتور علی‌الحساب»: a text message (payable amount +
+    payment instructions + a per-node usage breakdown), then a SEPARATE volume-only PDF for
+    the reseller's own users and one per sub-reseller. Falls back to text-only on failure."""
     inv = await session.get(Invoice, invoice_id)
     reseller = await session.get(Reseller, inv.reseller_id)
     text = await build_invoice_text(session, inv, reseller)
@@ -70,58 +124,81 @@ async def send_invoice(
         bot = await build_bot(session)
         own_bot = True
 
-    # Resend cleanup: find the previously delivered message for THIS invoice. We DELETE
-    # it only AFTER the new message is sent successfully, so a failed resend never leaves
-    # the reseller with no invoice in their chat.
-    prior_msg_id: int | None = None
-    if bot is not None:
-        prior = (
-            await session.execute(
-                select(DeliveryLog)
-                .where(
-                    DeliveryLog.invoice_id == inv.id,
-                    DeliveryLog.kind == DeliveryKind.invoice,
-                    DeliveryLog.tg_message_id.is_not(None),
-                )
-                .order_by(DeliveryLog.created_at.desc())
-                .limit(1)
+    # Per-node breakdown (own + each sub) — for the text AND to know which sub PDFs to render.
+    from app.services import reseller_report
+    from app.services.periods import month_period
+
+    period = month_period(inv.period_start.year, inv.period_start.month)
+    bd: dict | None = None
+    try:
+        b = await reseller_report.interim_breakdown(session, reseller, period)
+        bd = b if b and b.get("total_gb", 0) > 0 else None
+    except Exception:  # noqa: BLE001
+        bd = None
+
+    full_text = text
+    if bd:
+        full_text = text + "\n\n" + "\n".join(_breakdown_lines(bd))
+
+    # Resend cleanup: collect ALL message ids of the prior delivery (text + every PDF) and
+    # delete them only AFTER the new pieces land, so a failed resend never wipes the chat.
+    prior_ids: list[int] = []
+    prior = (
+        await session.execute(
+            select(DeliveryLog)
+            .where(
+                DeliveryLog.invoice_id == inv.id,
+                DeliveryLog.kind == DeliveryKind.invoice,
             )
-        ).scalar_one_or_none()
-        prior_msg_id = prior.tg_message_id if prior else None
+            .order_by(DeliveryLog.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if prior:
+        if prior.tg_message_ids:
+            prior_ids = [int(x) for x in prior.tg_message_ids.split(",") if x.strip().isdigit()]
+        elif prior.tg_message_id:
+            prior_ids = [prior.tg_message_id]
 
     status = DeliveryStatus.sent
     error: str | None = None
-    msg_id: int | None = None
+    sent_ids: list[int] = []
     try:
         if bot is None:
             raise RuntimeError("no telegram bot token configured")
-        path, _ = await invoice_pdf.render_invoice_pdf(session, inv)
-        # Caption carries the invoice text; overflow goes as a follow-up message.
-        caption = text if len(text) <= _CAPTION_MAX else None
-        sent = await bot.send_document(reseller.bot_chat_id, FSInputFile(path), caption=caption)
-        msg_id = sent.message_id
-        if caption is None:
-            await bot.send_message(reseller.bot_chat_id, text)
+        # 1) the payable text + breakdown (the primary message)
+        msg = await bot.send_message(reseller.bot_chat_id, full_text)
+        sent_ids.append(msg.message_id)
+        # 2) one volume-only PDF for own users + one per sub-reseller
+        for path, caption in await _render_invoice_pdfs(session, inv, reseller, bd):
+            try:
+                doc = await bot.send_document(reseller.bot_chat_id, FSInputFile(path), caption=caption)
+                sent_ids.append(doc.message_id)
+            except Exception:  # noqa: BLE001 — a single PDF failure shouldn't fail the invoice
+                log.warning("invoice PDF send failed for invoice %s", inv.id, exc_info=True)
     except TelegramForbiddenError:
         status, error = DeliveryStatus.blocked, "reseller blocked the bot"
-    except Exception as exc:  # noqa: BLE001 — fall back to text-only
-        log.warning("PDF delivery failed for invoice %s: %s", inv.id, exc)
+    except Exception as exc:  # noqa: BLE001 — fall back to plain text only
+        log.warning("invoice delivery failed for invoice %s: %s", inv.id, exc)
         try:
-            sent = await bot.send_message(reseller.bot_chat_id, text)
-            msg_id = sent.message_id
+            msg = await bot.send_message(reseller.bot_chat_id, text)
+            sent_ids = [msg.message_id]
         except Exception as exc2:  # noqa: BLE001
             status, error = DeliveryStatus.failed, str(exc2)[:500]
 
-    # New message is out → now it's safe to remove the previous one.
-    if status == DeliveryStatus.sent and prior_msg_id and bot is not None:
-        try:
-            await bot.delete_message(reseller.bot_chat_id, prior_msg_id)
-        except Exception:  # noqa: BLE001 — old message may be deleted/too old to remove
-            pass
+    # New pieces are out → now it's safe to remove the previous delivery's messages.
+    if status == DeliveryStatus.sent and prior_ids and bot is not None:
+        for mid in prior_ids:
+            try:
+                await bot.delete_message(reseller.bot_chat_id, mid)
+            except Exception:  # noqa: BLE001 — old message may already be gone / too old
+                pass
 
     dl = DeliveryLog(
         reseller_id=reseller.id, invoice_id=inv.id, kind=DeliveryKind.invoice,
-        status=status, error=error, message_preview=text[:200], tg_message_id=msg_id,
+        status=status, error=error, message_preview=text[:200],
+        tg_message_id=sent_ids[0] if sent_ids else None,
+        tg_message_ids=",".join(str(i) for i in sent_ids) or None,
     )
     session.add(dl)
 

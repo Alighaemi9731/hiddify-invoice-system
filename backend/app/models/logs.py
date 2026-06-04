@@ -50,6 +50,9 @@ class DeliveryLog(Base):
     message_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Telegram message id of a delivered invoice, so a resend can delete the old one.
     tg_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # All message ids of a multi-part invoice delivery (text + per-node PDFs), comma-joined,
+    # so a resend can remove every old piece — not just the primary message.
+    tg_message_ids: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
