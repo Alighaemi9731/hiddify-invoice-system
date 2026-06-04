@@ -14,7 +14,7 @@ import {
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
-import { fmtNum, fmtDate } from "../format";
+import { fmtNum, fmtDateTime } from "../format";
 
 const EMPTY = { key: "", name: "", host: "", proxy_path: "", owner_uuid: "", admin_api_key: "", enabled: true };
 
@@ -141,7 +141,7 @@ export default function Panels() {
                 <TableCell>{statusChip(p.status)}</TableCell>
                 <TableCell>{fmtNum(p.resellers_count)}</TableCell>
                 <TableCell>{fmtNum(p.end_users_count)}</TableCell>
-                <TableCell>{fmtDate(p.last_synced_at)}</TableCell>
+                <TableCell dir="ltr">{fmtDateTime(p.last_synced_at)}</TableCell>
                 <TableCell align="left">
                   <Tooltip title="همگام‌سازی"><IconButton onClick={() => doSync.mutate(p.id)}><SyncIcon /></IconButton></Tooltip>
                   <Tooltip title="تست اتصال"><IconButton onClick={() => doTest.mutate(p.id)}><WifiTetheringIcon /></IconButton></Tooltip>

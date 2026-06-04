@@ -33,6 +33,22 @@ export const fmtDate = (s?: string | null) => {
   }
 };
 
+// Gregorian date + time in Iran time (Asia/Tehran), e.g. "2026-06-04 16:14". Used where
+// the exact moment matters (panel sync), so the owner sees a real wall-clock in their zone.
+export const fmtDateTime = (s?: string | null) => {
+  if (!s) return "—";
+  try {
+    const d = new Date(s);
+    const date = d.toLocaleDateString("en-CA", { timeZone: "Asia/Tehran" }); // YYYY-MM-DD
+    const time = d.toLocaleTimeString("en-GB", {
+      timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit",
+    });
+    return `${date} ${time}`;
+  } catch {
+    return s;
+  }
+};
+
 export const INVOICE_STATUS_FA: Record<string, string> = {
   draft: "پیش‌نویس",
   sent: "ارسال‌شده",
