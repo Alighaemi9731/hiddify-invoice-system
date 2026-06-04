@@ -59,21 +59,30 @@ export default function Layout() {
   const { data: info } = useQuery({ queryKey: ["app-info"], queryFn: getInfo, staleTime: 600000 });
 
   const navItemSx = (selected: boolean) => ({
-    borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.85,
+    position: "relative", borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.85,
     color: selected ? "primary.main" : "text.secondary",
     "& .MuiListItemIcon-root": { color: selected ? "primary.main" : "text.secondary", minWidth: 38 },
     "&.Mui-selected": {
-      bgcolor: alpha(primary, mode === "dark" ? 0.22 : 0.1),
-      "&:hover": { bgcolor: alpha(primary, mode === "dark" ? 0.28 : 0.16) },
+      bgcolor: alpha(primary, mode === "dark" ? 0.18 : 0.09),
+      "&:hover": { bgcolor: alpha(primary, mode === "dark" ? 0.24 : 0.14) },
+      // accent bar on the leading edge (right in RTL)
+      "&::before": {
+        content: '""', position: "absolute", insetInlineStart: 4, top: 9, bottom: 9,
+        width: 3, borderRadius: 3, bgcolor: "primary.main",
+      },
     },
-    "&:hover": { bgcolor: alpha(primary, mode === "dark" ? 0.14 : 0.06) },
+    "&:hover": { bgcolor: alpha(primary, mode === "dark" ? 0.12 : 0.05) },
   });
 
   const sidebar = (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", bgcolor: "background.paper" }}>
       <Toolbar sx={{ py: 2.5 }}>
         <Stack direction="row" alignItems="center" spacing={1.25}>
-          <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: "primary.main", color: "#fff", display: "grid", placeItems: "center" }}>
+          <Box sx={{
+            width: 38, height: 38, borderRadius: 2.5, color: "#fff", display: "grid", placeItems: "center",
+            background: "linear-gradient(135deg, #a78bfa 0%, #6d5efc 55%, #5b50e6 100%)",
+            boxShadow: "0 6px 16px -6px rgba(109,94,252,.6)",
+          }}>
             <ReceiptLongIcon fontSize="small" />
           </Box>
           <Box>
@@ -134,8 +143,12 @@ export default function Layout() {
       )}
 
       <Box component="main" sx={{ flexGrow: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <AppBar position="sticky" elevation={0}
-          sx={{ bgcolor: "background.paper", color: "text.primary", borderBottom: "1px solid", borderColor: "divider" }}>
+        <AppBar position="sticky" elevation={0} color="transparent"
+          sx={{
+            bgcolor: (t) => t.palette.mode === "dark" ? "rgba(13,15,26,.72)" : "rgba(255,255,255,.72)",
+            backdropFilter: "saturate(180%) blur(10px)", color: "text.primary",
+            borderBottom: "1px solid", borderColor: "divider",
+          }}>
           <Toolbar>
             {!isDesktop && (
               <IconButton edge="start" onClick={() => setOpen(true)} sx={{ ml: 1 }}><MenuIcon /></IconButton>

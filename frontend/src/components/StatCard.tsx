@@ -3,7 +3,7 @@ import { alpha } from "@mui/material/styles";
 import { ReactNode } from "react";
 
 export default function StatCard({
-  label, value, sub, color = "#1f3b73", icon,
+  label, value, sub, color = "#6d5efc", icon,
 }: {
   label: string; value: ReactNode; sub?: string; color?: string; icon?: ReactNode;
 }) {
@@ -11,12 +11,21 @@ export default function StatCard({
     <Card
       sx={{
         height: "100%", position: "relative", overflow: "hidden",
-        boxShadow: "0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04)",
-        transition: "box-shadow .2s, transform .2s",
-        "&:hover": { boxShadow: "0 6px 20px rgba(16,24,40,.10)", transform: "translateY(-2px)" },
+        transition: "box-shadow .2s, transform .2s, border-color .2s",
+        "&:hover": {
+          transform: "translateY(-2px)",
+          borderColor: (t) => alpha(color, t.palette.mode === "dark" ? 0.5 : 0.35),
+          boxShadow: (t) => t.palette.mode === "dark"
+            ? `0 8px 26px -10px ${alpha(color, 0.5)}`
+            : `0 10px 28px -12px ${alpha(color, 0.45)}`,
+        },
       }}
     >
-      <Box sx={{ position: "absolute", insetInlineStart: 0, top: 0, bottom: 0, width: 5, bgcolor: color }} />
+      {/* soft tint wash from the accent corner — gives each card a bit of life */}
+      <Box sx={{ position: "absolute", inset: 0, background: (t) =>
+        `radial-gradient(120% 120% at 100% 0%, ${alpha(color, t.palette.mode === "dark" ? 0.14 : 0.07)} 0%, transparent 45%)`,
+        pointerEvents: "none" }} />
+      <Box sx={{ position: "absolute", insetInlineStart: 0, top: 0, bottom: 0, width: 4, bgcolor: color }} />
       <CardContent sx={{ pl: 3 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
           <Box>

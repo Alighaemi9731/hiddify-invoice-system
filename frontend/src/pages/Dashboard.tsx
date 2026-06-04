@@ -64,7 +64,7 @@ export default function Dashboard() {
     yAxis: { type: "value", axisLabel: { formatter: fmtCompact, color: mutedText }, splitLine: { lineStyle: { color: splitLine } } },
     series: [{
       type: "bar", barMaxWidth: 56, data: panelData.map((p: any) => p.amount_toman),
-      itemStyle: { borderRadius: [8, 8, 0, 0], color: grad("#3b5fb0", "#1f3b73") },
+      itemStyle: { borderRadius: [8, 8, 0, 0], color: grad("#8b7cff", "#6d5efc") },
       label: { show: true, position: "top", formatter: (p: any) => fmtCompact(p.value), color: labelText, fontFamily: FONT },
     }],
   };
@@ -105,10 +105,10 @@ export default function Dashboard() {
       ) : (
         <>
           <Grid container spacing={2}>
-            <Grid item xs={6} md={3}><StatCard label="پنل‌ها" value={fmtNum(data.panels)} color="#3b82f6" icon={<DnsIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="نمایندگان" value={fmtNum(data.resellers)} sub={`${fmtNum(data.registered_resellers)} متصل به ربات`} color="#0891b2" icon={<GroupIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="فروش دوره" value={fmtToman(data.period_billed_toman)} sub={fmtUsdt(data.period_billed_usdt)} color="#f29f05" icon={<TrendingUpIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="بدهی معوق" value={fmtToman(data.outstanding_toman)} sub={fmtUsdt(data.outstanding_usdt)} color="#ef4444" icon={<WarningAmberIcon />} /></Grid>
+            <Grid item xs={6} md={3}><StatCard label="پنل‌ها" value={fmtNum(data.panels)} color="#6d5efc" icon={<DnsIcon />} /></Grid>
+            <Grid item xs={6} md={3}><StatCard label="نمایندگان" value={fmtNum(data.resellers)} sub={`${fmtNum(data.registered_resellers)} متصل به ربات`} color="#0ea5e9" icon={<GroupIcon />} /></Grid>
+            <Grid item xs={6} md={3}><StatCard label="فروش دوره" value={fmtToman(data.period_billed_toman)} sub={fmtUsdt(data.period_billed_usdt)} color="#10b981" icon={<TrendingUpIcon />} /></Grid>
+            <Grid item xs={6} md={3}><StatCard label="بدهی معوق" value={fmtToman(data.outstanding_toman)} sub={fmtUsdt(data.outstanding_usdt)} color="#f43f5e" icon={<WarningAmberIcon />} /></Grid>
           </Grid>
 
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
