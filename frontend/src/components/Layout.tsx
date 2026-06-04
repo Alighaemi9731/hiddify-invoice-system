@@ -75,7 +75,10 @@ export default function Layout() {
   });
 
   const sidebar = (
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", bgcolor: "background.paper" }}>
+    <Box sx={{
+      height: "100%", display: "flex", flexDirection: "column", bgcolor: "background.paper",
+      backdropFilter: "blur(20px) saturate(180%)", WebkitBackdropFilter: "blur(20px) saturate(180%)",
+    }}>
       <Toolbar sx={{ py: 2.5 }}>
         <Stack direction="row" alignItems="center" spacing={1.25}>
           <Box sx={{

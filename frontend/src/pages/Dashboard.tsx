@@ -23,7 +23,7 @@ const grad = (c1: string, c2: string, horizontal = false) => ({
 
 function ChartCard({ title, children }: { title: string; children: any }) {
   return (
-    <Card sx={{ height: "100%", boxShadow: "0 1px 3px rgba(16,24,40,.06)" }}>
+    <Card sx={{ height: "100%" }}>
       <CardContent>
         <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>{title}</Typography>
         {children}
