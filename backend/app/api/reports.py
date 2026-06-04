@@ -252,21 +252,14 @@ async def dashboard(
     label = (parse_period(period).label if period else current_month().label)
 
     panels = (await session.execute(select(func.count(Panel.id)))).scalar_one()
-    resellers = (
-        await session.execute(select(func.count(Reseller.id)).where(Reseller.is_owner.is_(False)))
-    ).scalar_one()
-    billable = (
-        await session.execute(
-            select(func.count(Reseller.id)).where(
-                Reseller.is_owner.is_(False), Reseller.exclude_from_billing.is_(False)
-            )
-        )
-    ).scalar_one()
-    registered = (
-        await session.execute(
-            select(func.count(Reseller.id)).where(Reseller.bot_chat_id.is_not(None))
-        )
-    ).scalar_one()
+    # Count only MAIN (top-level) resellers — NOT their sub-resellers — so the dashboard
+    # matches the «فهرست» tab and the bot «آمار کلی» exactly (shared reseller_stats logic).
+    from app.services.reseller_stats import load_root_stats
+
+    stats = await load_root_stats(session)
+    resellers = stats.billable          # non-exempt main resellers (the «N نمایندهٔ اصلی» figure)
+    billable = stats.billable
+    registered = stats.connected        # of those, how many are connected to the bot
     invoices_total = (await session.execute(select(func.count(Invoice.id)))).scalar_one()
 
     rows = await _period_rows(session, label, None)
