@@ -76,7 +76,7 @@ async def list_panels(session: AsyncSession = Depends(get_session)) -> list[Pane
 
 @router.post("", response_model=PanelOut, status_code=201)
 async def create_panel(
-    body: PanelCreate, session: AsyncSession = Depends(get_session)
+    body: PanelCreate, background: BackgroundTasks, session: AsyncSession = Depends(get_session)
 ) -> PanelOut:
     exists = (
         await session.execute(select(Panel).where(Panel.key == body.key))
@@ -96,6 +96,10 @@ async def create_panel(
     session.add(panel)
     await session.commit()
     await session.refresh(panel)
+    # Kick off the first sync automatically (status stays "unknown"=syncing until it
+    # finishes), so a freshly added panel populates without a manual sync click.
+    if panel.enabled:
+        background.add_task(_sync_one_bg, panel.id)
     return await _to_out(session, panel)
 
 
@@ -106,23 +110,35 @@ async def get_panel(panel_id: int, session: AsyncSession = Depends(get_session))
 
 @router.patch("/{panel_id}", response_model=PanelOut)
 async def update_panel(
-    panel_id: int, body: PanelUpdate, session: AsyncSession = Depends(get_session)
+    panel_id: int, body: PanelUpdate, background: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
 ) -> PanelOut:
     panel = await _get_or_404(session, panel_id)
     if body.name is not None:
         panel.name = body.name
+    # Connection-relevant edits (host / proxy path / api key / owner uuid) change what the
+    # panel returns, so re-sync after saving them.
+    conn_changed = False
     if body.host is not None:
         panel.host = body.host.replace("https://", "").replace("http://", "").strip("/")
+        conn_changed = True
     if body.owner_uuid is not None:
         panel.owner_uuid = body.owner_uuid
+        conn_changed = True
     if body.proxy_path is not None:
         panel.proxy_path = body.proxy_path
+        conn_changed = True
     if body.admin_api_key is not None:
         panel.admin_api_key = body.admin_api_key or None
+        conn_changed = True
     if body.enabled is not None:
         panel.enabled = body.enabled
+    if conn_changed and panel.enabled:
+        panel.status = PanelStatus.unknown  # show "syncing…" until the re-sync finishes
     await session.commit()
     await session.refresh(panel)
+    if conn_changed and panel.enabled:
+        background.add_task(_sync_one_bg, panel.id)
     return await _to_out(session, panel)
 
 

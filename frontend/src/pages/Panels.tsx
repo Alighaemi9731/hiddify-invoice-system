@@ -46,7 +46,13 @@ function parsePanelLink(raw: string): null | { host: string; proxy_path: string;
 export default function Panels() {
   const qc = useQueryClient();
   const { node, show } = useToast();
-  const { data = [], isLoading } = useQuery({ queryKey: ["panels"], queryFn: listPanels });
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["panels"], queryFn: listPanels,
+    // While any panel is still syncing (status "unknown"), poll so its chip flips to
+    // موفق/خطا on its own once the background sync finishes — no manual refresh needed.
+    refetchInterval: (q: any) =>
+      (q.state.data || []).some((p: any) => p.status === "unknown") ? 3000 : false,
+  });
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<any>(EMPTY);
   const [link, setLink] = useState("");
