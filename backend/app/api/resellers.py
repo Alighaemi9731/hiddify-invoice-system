@@ -75,11 +75,26 @@ async def list_resellers(
     q: str | None = Query(None, description="search by name"),
     include_owners: bool = False,
     registered: bool | None = None,
+    top_level_only: bool = Query(
+        False, description="only main (top-level) resellers — exclude sub-resellers"
+    ),
     limit: int = Query(500, le=5000),
     offset: int = 0,
     session: AsyncSession = Depends(get_session),
 ) -> list[ResellerOut]:
     default_price = await pricing.get_default_price_per_gb(session)
+    # When asked for main resellers only, compute the root set (same logic as the tree view)
+    # from ALL of the panel's resellers, then keep only those rows below.
+    root_keys: set[tuple[int, str]] | None = None
+    if top_level_only:
+        from app.services.reseller_stats import top_level_roots
+
+        base = select(Reseller)
+        if panel_id is not None:
+            base = base.where(Reseller.panel_id == panel_id)
+        all_res = (await session.execute(base)).scalars().all()
+        root_keys = {(r.panel_id, r.admin_uuid) for r in top_level_roots(all_res)}
+
     query = select(Reseller, Panel.key).join(Panel, Reseller.panel_id == Panel.id)
     if panel_id is not None:
         query = query.where(Reseller.panel_id == panel_id)
@@ -93,6 +108,8 @@ async def list_resellers(
         query = query.where(or_(Reseller.name.ilike(f"%{q}%"), Reseller.admin_uuid.ilike(f"%{q}%")))
     query = query.order_by(Reseller.name).limit(limit).offset(offset)
     rows = (await session.execute(query)).all()
+    if root_keys is not None:
+        rows = [(r, key) for r, key in rows if (r.panel_id, r.admin_uuid) in root_keys]
     counts = await _usage_counts(session, panel_id)
     return [_to_out(r, key, default_price, counts) for r, key in rows]
 

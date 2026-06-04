@@ -757,14 +757,12 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
 
 async def _owner_stats(answer, session) -> None:
     from app.services.periods import current_month
+    from app.services.reseller_stats import load_root_stats
 
     panels = (await session.execute(select(func.count(Panel.id)))).scalar_one()
-    resellers = (
-        await session.execute(select(func.count(Reseller.id)).where(Reseller.is_owner.is_(False)))
-    ).scalar_one()
-    registered = (
-        await session.execute(select(func.count(Reseller.id)).where(Reseller.bot_chat_id.is_not(None)))
-    ).scalar_one()
+    # Count only MAIN (top-level) resellers that are billable — not their sub-resellers,
+    # not the exempt ones — and how many of those are connected to the bot.
+    stats = await load_root_stats(session)
     label = current_month().label
     sent_rows = (
         await session.execute(
@@ -778,10 +776,11 @@ async def _owner_stats(answer, session) -> None:
     owed_rows = (
         await session.execute(select(Invoice.amount_toman).where(Invoice.status.in_(_OWED)))
     ).scalars().all()
+    exempt_note = f" + {stats.exempt} معاف" if stats.exempt else ""
     await answer(
         f"📊 آمار کلی\n"
         f"پنل‌ها: {panels}\n"
-        f"نمایندگان: {resellers} ({registered} متصل به ربات)\n"
+        f"نمایندگان اصلی: {stats.billable} ({stats.connected} متصل به ربات){exempt_note}\n"
         f"فروش دورهٔ جاری ({label}): {sum(float(x) for x in sent_rows):,.0f} تومان\n"
         f"بدهی معوق: {sum(float(x) for x in owed_rows):,.0f} تومان"
     )

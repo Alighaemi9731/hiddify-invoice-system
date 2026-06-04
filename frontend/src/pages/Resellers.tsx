@@ -41,10 +41,13 @@ export default function Resellers() {
   const [bumpAmount, setBumpAmount] = useState(100);
 
   const { data: panels = [] } = useQuery({ queryKey: ["panels"], queryFn: listPanels });
+  // List view shows only MAIN (top-level) resellers — sub-resellers live in the tree tab.
   const { data = [] } = useQuery({
     queryKey: ["resellers", panelId, q],
-    queryFn: () => listResellers({ panel_id: panelId || undefined, q: q || undefined, limit: 2000 }),
+    queryFn: () => listResellers({ panel_id: panelId || undefined, q: q || undefined, top_level_only: true, limit: 2000 }),
   });
+  const billableCount = data.filter((r: any) => !r.exclude_from_billing).length;
+  const exemptCount = data.filter((r: any) => r.exclude_from_billing).length;
   const { data: tree = [] } = useQuery({
     queryKey: ["reseller-tree", panelId, q],
     queryFn: () => getResellerTree({ panel_id: panelId || undefined, q: q || undefined }),
@@ -120,12 +123,19 @@ export default function Resellers() {
       </Stack>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="فهرست" />
+        <Tab label="فهرست (نماینده‌های اصلی)" />
         <Tab label="ساختار درختی (نماینده و زیرمجموعه‌ها)" />
       </Tabs>
 
       {tab === 0 ? (
         <Card>
+          <Box sx={{ p: 2, pb: 0 }}>
+            <Typography variant="body2" color="text.secondary">
+              {fmtNum(billableCount)} نمایندهٔ اصلی
+              {exemptCount ? <>{" "}(<Box component="span" sx={{ color: "warning.main" }}>{fmtNum(exemptCount)} معاف از فاکتور</Box>)</> : ""}
+              {" "}— زیرمجموعه‌ها در تب «ساختار درختی» نمایش داده می‌شوند.
+            </Typography>
+          </Box>
           <Table size="small">
             <TableHead>
               <TableRow>
