@@ -68,6 +68,33 @@ async def node_invoice(
     return next((b for b in bundles if b.root.id == node.id), None)
 
 
+async def node_invoice_own(
+    session: AsyncSession, node: Reseller, period: Period
+) -> BundleResult | None:
+    """Compute an invoice bundle for `node`'s OWN users only — just `node.admin_uuid`, NOT
+    its descendants — priced at the node's own price_per_gb. Used so the top reseller's
+    interim PDF shows ONLY their own users, mirroring each sub-reseller's separate subtree
+    PDF (own + each sub's subtree together cover everyone exactly once). Not persisted.
+    Returns None if the node has no billable own usage in the period."""
+    users = (
+        await session.execute(
+            select(EndUserSnapshot).where(
+                EndUserSnapshot.panel_id == node.panel_id,
+                EndUserSnapshot.added_by_uuid == node.admin_uuid,
+            )
+        )
+    ).scalars().all()
+    # Pass [node] alone so it's the single billable root and only its own users are summed.
+    bundles = compute_invoices(
+        [node], users, period,
+        default_price_per_gb=await pricing.get_default_price_per_gb(session),
+        excluded_usage_gb=await pricing.get_excluded_usage_gb(session),
+        default_min_sale_toman=await pricing.get_default_min_sale(session),
+        free_threshold_gb=await pricing.get_free_threshold_gb(session),
+    )
+    return next((b for b in bundles if b.root.id == node.id), None)
+
+
 def _billable_gb_for_period(users, period: Period, free_threshold: float) -> tuple[float, int]:
     """Sum of SOLD quota (and count) of services created in `period`, above the free
     threshold — the same rule the invoice engine bills on."""
@@ -180,6 +207,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
         if scnt == 0 and sgb == 0:
             continue  # skip sub-resellers with no sales this period (keeps the report tidy)
         subs_out.append({
+            "id": child.id,
             "name": child.name,
             "gb": sgb,
             "users": scnt,

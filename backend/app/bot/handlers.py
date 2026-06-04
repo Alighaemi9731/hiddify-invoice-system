@@ -853,9 +853,11 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
 
 
 async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None:
-    """A reseller's OWN interim invoice for the CURRENT month so far — identical in scope to
-    the real end-of-month invoice (their own users + all sub-resellers, bundled), but marked
-    interim. Sends a volume-only PDF plus a text breakdown (own + each sub + Rial total)."""
+    """A reseller's OWN interim invoice for the CURRENT month so far — same SCOPE as the real
+    end-of-month invoice (their own users + all sub-resellers), but marked interim. Sends a
+    text breakdown (own + each sub + Rial total) plus volume-only PDFs split per node: ONE PDF
+    for the reseller's own users and ONE PDF per sub-reseller (its subtree), so each can be
+    handed to the matching sub without exposing the others. The grand total stays text-only."""
     from app.services import invoice_pdf, reseller_report
     from app.services.periods import month_period
 
@@ -877,6 +879,9 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
             continue
 
         # --- text breakdown ---
+        # Each line starts with a Persian word so Telegram renders the WHOLE line RTL even
+        # when the (sub-)reseller's name is English — otherwise a line beginning with a
+        # Latin name gets left-aligned and reads garbled.
         price = bd["price"]
         lines = [
             f"📄 فاکتور علی‌الحساب — «{r.name}»",
@@ -884,12 +889,14 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
             f"قیمت هر گیگ: {price:,} تومان",
             "",
             "🟦 مصرف خودتان:",
-            f"• {bd['own']['gb']:g} گیگ ({bd['own']['users']} سرویس) — {bd['own']['amount']:,} تومان",
+            f"• حجم {bd['own']['gb']:g} گیگ ({bd['own']['users']} سرویس) — {bd['own']['amount']:,} تومان",
         ]
         if bd["subs"]:
             lines.append("\n🟨 زیرمجموعه‌های شما:")
             for s in bd["subs"]:
-                lines.append(f"• {s['name']}: {s['gb']:g} گیگ ({s['users']} سرویس) — {s['amount']:,} تومان")
+                lines.append(
+                    f"• نماینده {s['name']} — {s['gb']:g} گیگ ({s['users']} سرویس) — {s['amount']:,} تومان"
+                )
         lines += [
             "",
             "➖➖➖➖➖➖➖➖",
@@ -898,27 +905,51 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
             "",
             "ℹ️ این فاکتور علی‌الحساب است؛ اول ماه آینده فاکتور کامل و واقعیِ قابل پرداخت برایتان ارسال می‌شود.",
         ]
+        if bd["subs"]:
+            lines.append("\n📎 در ادامه، یک PDF جدا برای خودتان و هر زیرمجموعه ارسال می‌شود تا بتوانید به هرکدام بدهید.")
         text = "\n".join(lines)
 
-        # --- volume-only PDF (own + subs bundled, same as the real invoice) ---
         owner_name = await settings_service.get(session, "owner_name", "") or ""
-        try:
-            res = await invoice_pdf.render_node_usage_pdf(
-                session, r, period, title="فاکتور علی‌الحساب", issuer_name=owner_name
-            )
-        except Exception:  # noqa: BLE001
-            log.warning("interim pdf failed", exc_info=True)
-            res = None
-        if res and bot is not None:
-            from aiogram.types import FSInputFile
+        # Send the text breakdown first (it's the summary), then the PDFs.
+        await answer(text)
 
-            path, fname = res
-            cap = text if len(text) <= 1024 else None
-            await bot.send_document(chat_id, FSInputFile(path, filename=fname), caption=cap)
-            if cap is None:
-                await answer(text)
-        else:
-            await answer(text)
+        if bot is None:
+            sent_any = True
+            continue
+        from aiogram.types import FSInputFile
+
+        # (1) The admin's OWN invoice — ONLY their own users (not the subtree), exactly
+        #     like each sub gets its own PDF; own + each sub cover everyone once.
+        try:
+            res = await invoice_pdf.render_own_usage_pdf(
+                session, r, period, title="فاکتور علی الحساب", issuer_name=owner_name
+            )
+            if res:
+                path, fname = res
+                await bot.send_document(
+                    chat_id, FSInputFile(path, filename=fname),
+                    caption=f"📄 فاکتور علی‌الحساب شما «{r.name}» (فقط کاربران خودتان)",
+                )
+        except Exception:  # noqa: BLE001
+            log.warning("interim own pdf failed", exc_info=True)
+
+        # (2) A separate PDF per sub-reseller, so the admin can forward each to that sub.
+        for s in bd["subs"]:
+            sub = await session.get(Reseller, s["id"])
+            if sub is None:
+                continue
+            try:
+                sres = await invoice_pdf.render_node_usage_pdf(
+                    session, sub, period, title="فاکتور علی الحساب", issuer_name=r.name
+                )
+                if sres:
+                    spath, sfname = sres
+                    await bot.send_document(
+                        chat_id, FSInputFile(spath, filename=sfname),
+                        caption=f"📄 فاکتور علی‌الحساب زیرمجموعه «{sub.name}» — {s['gb']:g} گیگ",
+                    )
+            except Exception:  # noqa: BLE001
+                log.warning("interim sub pdf failed for %s", s.get("id"), exc_info=True)
         sent_any = True
     if not sent_any:
         await answer("شما نمایندهٔ اصلی نیستید؛ فاکتور شما از طریق نمایندهٔ بالادستی صادر می‌شود.")
