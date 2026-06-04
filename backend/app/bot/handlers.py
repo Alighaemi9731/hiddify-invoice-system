@@ -53,6 +53,14 @@ class SubCapState(StatesGroup):
 log = logging.getLogger("bot.handlers")
 router = Router()
 
+# The bot is a PRIVATE-CHAT assistant. When it's an admin of the announcement channel/
+# group (needed for the membership gate + guard), Telegram delivers every group message to
+# it — but it must NOT react there. Restrict ALL message handlers to private chats; group/
+# channel/supergroup messages are ignored. Membership checks use the get_chat_member API,
+# not message handlers, so the gate still works. Callback queries (button taps) are
+# unaffected — they only occur on messages the bot itself sent in a private chat.
+router.message.filter(F.chat.type == "private")
+
 _TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 _UNPAID = (InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
