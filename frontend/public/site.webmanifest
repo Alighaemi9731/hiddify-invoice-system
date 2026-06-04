@@ -1,0 +1,16 @@
+{
+  "name": "سامانه مدیریت و فاکتور نمایندگان",
+  "short_name": "سامانه فاکتور",
+  "description": "مدیریت نمایندگان و صدور فاکتور",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0c14",
+  "theme_color": "#6d5efc",
+  "icons": [
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
