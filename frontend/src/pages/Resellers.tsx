@@ -61,7 +61,12 @@ export default function Resellers() {
   const save = useMutation({
     mutationFn: () => updateReseller(form.id, {
       price_per_gb: form.price_per_gb ? Number(form.price_per_gb) : null,
-      min_sale_toman: form.min_sale_toman ? Number(form.min_sale_toman) : null,
+      // Empty = "use the global default"; an explicit 0 = "no minimum-sale floor". Treating
+      // 0 as falsy here used to silently revert it to the default, so distinguish "" from 0.
+      min_sale_toman:
+        form.min_sale_toman === "" || form.min_sale_toman == null
+          ? null
+          : Number(form.min_sale_toman),
       exclude_from_billing: form.exclude_from_billing,
     }),
     onSuccess: () => { show("ذخیره شد"); setForm(null); refresh(); },

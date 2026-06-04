@@ -43,11 +43,12 @@ def decrypt(ciphertext: str | None) -> str | None:
         return None
 
 
-def mask(secret: str | None, visible: int = 4) -> str:
-    """Mask a secret for display/logging (keeps the last few chars)."""
+def mask(secret: str | None, visible: int = 0) -> str:
+    """Mask a secret for display/logging. Reveals NOTHING — not even the last few chars or
+    the real length — so reading the settings API leaks no information about a stored secret.
+    Returns a fixed run of bullets for any non-empty value, "" for empty (the API's separate
+    `has_value` flag tells the UI whether a value exists). The all-bullets result also keeps
+    the settings-save 'unchanged masked secret' skip working."""
     if not secret:
         return ""
-    plain = decrypt(secret) or ""
-    if len(plain) <= visible:
-        return "•" * len(plain)
-    return "•" * (len(plain) - visible) + plain[-visible:]
+    return "•" * 8

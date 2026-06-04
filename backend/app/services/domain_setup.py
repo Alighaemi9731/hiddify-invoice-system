@@ -28,10 +28,17 @@ CADDY_ADMIN = os.environ.get("CADDY_ADMIN", "http://caddy:2019")
 ENV_PATHS = [Path("/app/.env"), Path(__file__).resolve().parents[3] / ".env"]
 
 _DOMAIN_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})+$")
+# Anchored, with char classes that exclude whitespace/newlines — so a value that passes can
+# never inject a second line into .env (env-injection via the unauthenticated setup wizard).
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 
 def _valid_domain(d: str) -> bool:
     return bool(_DOMAIN_RE.match(d or ""))
+
+
+def _valid_email(e: str) -> bool:
+    return bool(_EMAIL_RE.match(e or ""))
 
 
 def _persist_env(domain: str, email: str | None) -> bool:
@@ -42,6 +49,7 @@ def _persist_env(domain: str, email: str | None) -> bool:
                 continue
             text = p.read_text()
             def setkv(t: str, k: str, v: str) -> str:
+                v = re.sub(r"[\r\n]", "", v)  # never let a value break onto a new .env line
                 if re.search(rf"^{k}=.*$", t, flags=re.M):
                     return re.sub(rf"^{k}=.*$", f"{k}={v}", t, flags=re.M)
                 return t + (("" if t.endswith("\n") else "\n") + f"{k}={v}\n")
@@ -121,6 +129,8 @@ async def set_domain(session: AsyncSession, domain: str, email: str | None = Non
         return {"ok": False, "error": "دامنهٔ واردشده معتبر نیست."}
 
     email = (email or await settings_service.get(session, "acme_email", "") or "").strip() or None
+    if email and not _valid_email(email):
+        return {"ok": False, "error": "ایمیل واردشده معتبر نیست."}
 
     # persist to settings (panel) + .env (survives restart)
     await settings_service.set_value(session, "server_domain", domain)

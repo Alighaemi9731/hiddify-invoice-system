@@ -92,6 +92,29 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
     held_invoice_ids = {iid for iid, _ in pending_rows if iid is not None}
     held_reseller_ids = {rid for _, rid in pending_rows if rid is not None}
 
+    # A customer can be an admin on several panels (sibling reseller rows share bot_chat_id),
+    # and ONE payment settles their due invoices across ALL of those rows. So a pending payment
+    # must pause dunning on EVERY sibling row — otherwise the customer gets auto-suspended on
+    # another panel while waiting on the owner's review. Expand the hold to the full sibling set.
+    if held_reseller_ids:
+        chat_ids = set(
+            (await session.execute(
+                select(Reseller.bot_chat_id).where(
+                    Reseller.id.in_(held_reseller_ids), Reseller.bot_chat_id.is_not(None)
+                )
+            )).scalars().all()
+        )
+        if chat_ids:
+            sibling_ids = set(
+                (await session.execute(
+                    select(Reseller.id).where(Reseller.bot_chat_id.in_(chat_ids))
+                )).scalars().all()
+            )
+            held_reseller_ids |= sibling_ids
+            # Also hold every owed invoice of those siblings so reminders pause too (matching
+            # the cross-panel settlement scope), not just enforcement.
+            held_invoice_ids |= {inv.id for inv in invoices if inv.reseller_id in sibling_ids}
+
     counts = {"reminder1": 0, "reminder2": 0, "warning": 0, "enforced": 0,
               "enforced_dry": 0, "deferred": 0, "on_hold": 0}
     enforced_links: list[str] = []  # clickable owner-facing links of enforced resellers

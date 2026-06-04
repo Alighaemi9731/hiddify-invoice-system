@@ -199,7 +199,9 @@ async def update_reseller(
     if body.price_per_gb is not None:
         r.price_per_gb = body.price_per_gb or None
     if body.min_sale_toman is not None:
-        r.min_sale_toman = body.min_sale_toman or None
+        # Keep an explicit 0 ("no minimum-sale floor") as 0 — `or None` used to coerce it to
+        # None, silently reverting the reseller to the global default floor.
+        r.min_sale_toman = int(body.min_sale_toman) if body.min_sale_toman >= 0 else None
     if body.exclude_from_billing is not None:
         r.exclude_from_billing = body.exclude_from_billing
     await session.commit()

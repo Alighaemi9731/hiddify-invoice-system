@@ -7,8 +7,10 @@ import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.db import get_session
 
 ALGORITHM = "HS256"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
@@ -43,8 +45,16 @@ def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
 
 
-async def get_current_subject(token: str = Depends(oauth2_scheme)) -> str:
-    """Returns the authenticated owner's username, or raises 401."""
+async def get_current_subject(
+    token: str = Depends(oauth2_scheme),
+    session: AsyncSession = Depends(get_session),
+) -> str:
+    """Returns the authenticated owner's username, or raises 401.
+
+    Beyond signature/expiry, the token is bound to the account's live state: a deactivated
+    account is rejected, and a password change (which bumps `token_epoch`) invalidates any
+    token carrying an older `epoch` claim — so a stolen token dies the moment the owner
+    changes their password."""
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -57,4 +67,20 @@ async def get_current_subject(token: str = Depends(oauth2_scheme)) -> str:
     subject = payload.get("sub")
     if not subject:
         raise credentials_error
+    try:
+        from sqlalchemy import select
+
+        from app.models.app_user import AppUser
+
+        user = (
+            await session.execute(select(AppUser).where(AppUser.username == subject))
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — a DB hiccup must not lock the owner out
+        return subject
+    if user is not None:
+        if not user.is_active:
+            raise credentials_error
+        tok_epoch = payload.get("epoch")
+        if tok_epoch is not None and int(tok_epoch) != int(user.token_epoch or 0):
+            raise credentials_error
     return subject

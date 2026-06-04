@@ -89,6 +89,38 @@ async def enforce_reseller(
     enabled = await settings_service.get(session, "enforcement_enabled", False)
     is_dry = (not enabled) if dry_run is None else dry_run
 
+    # Idempotency guard (live path only): NEVER re-enforce a reseller already enforced.
+    # On a re-enforce its on-panel limits are already 0, so reading them back would overwrite
+    # the saved restore snapshot with 0/0 and permanently destroy the real max_users. Dunning
+    # already guards on state==active; this protects the manual panel/bot suspend paths
+    # (double-submit, a stale view, a rapid double-tap). Return the prior action unchanged.
+    if not is_dry and reseller.enforcement_state == EnforcementState.enforced:
+        prior = (
+            await session.execute(
+                select(EnforcementAction)
+                .where(
+                    EnforcementAction.reseller_id == reseller.id,
+                    EnforcementAction.action == EnforcementActionType.disable_users,
+                    EnforcementAction.status == EnforcementActionStatus.done,
+                )
+                .order_by(EnforcementAction.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        log.info("enforce_reseller: %s already enforced — skipping (idempotent)", reseller.name)
+        if prior is not None:
+            return prior
+        # State says enforced but no 'done' action on record: record a no-op rather than
+        # re-reading/zeroing limits (which is the corrupting path).
+        noop = EnforcementAction(
+            reseller_id=reseller.id, invoice_id=invoice_id,
+            action=EnforcementActionType.disable_users, dry_run=False, affected_count=0,
+            snapshot={"limits": {}, "users": {}}, status=EnforcementActionStatus.done,
+        )
+        session.add(noop)
+        await session.commit()
+        return noop
+
     panel = await session.get(Panel, reseller.panel_id)
     descendants = await _bundle(session, reseller)
     admin_uuids = {d.admin_uuid for d in descendants}
@@ -158,6 +190,12 @@ async def enforce_reseller(
             real_mu = d.panel_max_users
         if real_mau is None:
             real_mau = d.panel_max_active_users
+        # Defense-in-depth: never overwrite a previously-saved real limit with a 0 we just
+        # read (would happen if the admin is somehow already capped) — keep the good value.
+        if not real_mu and d.max_users_snapshot:
+            real_mu = d.max_users_snapshot
+        if not real_mau and d.max_active_users_snapshot:
+            real_mau = d.max_active_users_snapshot
         d.max_users_snapshot = real_mu
         d.max_active_users_snapshot = real_mau
         captured_limits[d.admin_uuid] = {"max_users": real_mu, "max_active_users": real_mau}

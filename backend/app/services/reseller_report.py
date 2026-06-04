@@ -16,11 +16,11 @@ from app.services import pricing
 from app.services.invoice_engine import (
     BundleResult, build_children_map, collect_descendants, compute_invoices,
 )
-from app.services.periods import Period, month_period
+from app.services.periods import Period, current_month, month_period, today as _today
 
 
 def _last_months(n: int, today: dt.date | None = None) -> list[Period]:
-    today = today or dt.date.today()
+    today = today or _today()
     out: list[Period] = []
     y, m = today.year, today.month
     for _ in range(n):
@@ -95,16 +95,22 @@ async def node_invoice_own(
     return next((b for b in bundles if b.root.id == node.id), None)
 
 
-def _billable_gb_for_period(users, period: Period, free_threshold: float) -> tuple[float, int]:
-    """Sum of SOLD quota (and count) of services created in `period`, above the free
-    threshold — the same rule the invoice engine bills on."""
+def _billable_gb_for_period(
+    users, period: Period, free_threshold: float, excluded: set[int] | None = None
+) -> tuple[float, int]:
+    """Sum of SOLD quota (and count) of services created in `period` that the invoice engine
+    would bill — using its EXACT rule (free threshold AND the extra excluded sizes) via
+    `invoice_engine._excluded`, so this report/interim/cap math matches the real invoice."""
+    from app.services.invoice_engine import _excluded
+
+    excluded = excluded or set()
     gb = 0.0
     cnt = 0
     for u in users:
         if not period.contains(u.start_date):
             continue
         g = float(u.usage_limit_gb or 0)
-        if g <= free_threshold + 1e-9:
+        if _excluded(g, excluded, free_threshold):
             continue
         gb += g
         cnt += 1
@@ -126,10 +132,11 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     default_price = await pricing.get_default_price_per_gb(session)
     price = int(reseller.price_per_gb or default_price)
     free_threshold = await pricing.get_free_threshold_gb(session)
+    excluded = await pricing.get_excluded_usage_gb(session)
 
     by_month = []
     for p in _last_months(months):
-        gb, cnt = _billable_gb_for_period(users, p, free_threshold)
+        gb, cnt = _billable_gb_for_period(users, p, free_threshold, excluded)
         by_month.append({
             "label": p.label,
             "gb": gb,
@@ -139,7 +146,7 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
 
     # Current-month progress against the parent-set GB cap (the bot shows this so the
     # parent can see how much of the sub's monthly quota is used).
-    this_period = month_period(dt.date.today().year, dt.date.today().month)
+    this_period = current_month()
     used_gb = next((m["gb"] for m in by_month if m["label"] == this_period.label), 0.0)
     cap = int(reseller.gb_cap or 0)
 
@@ -174,6 +181,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
     default_price = await pricing.get_default_price_per_gb(session)
     price = int(reseller.price_per_gb or default_price)
     free_threshold = await pricing.get_free_threshold_gb(session)
+    excluded = await pricing.get_excluded_usage_gb(session)
 
     # All resellers on the panel → children map, to find this node's DIRECT subs + subtrees.
     panel_resellers = (
@@ -195,7 +203,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
 
     # Own users: exactly this reseller's admin_uuid (NOT descendants).
     own_users = await _users_for({reseller.admin_uuid})
-    own_gb, own_cnt = _billable_gb_for_period(own_users, period, free_threshold)
+    own_gb, own_cnt = _billable_gb_for_period(own_users, period, free_threshold, excluded)
 
     # Each direct sub-reseller, counted as its whole subtree (so no user is double-counted).
     subs_out: list[dict] = []
@@ -203,7 +211,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
         subtree = collect_descendants(child, children)
         sub_uuids = {d.admin_uuid for d in subtree}
         sub_users = await _users_for(sub_uuids)
-        sgb, scnt = _billable_gb_for_period(sub_users, period, free_threshold)
+        sgb, scnt = _billable_gb_for_period(sub_users, period, free_threshold, excluded)
         if scnt == 0 and sgb == 0:
             continue  # skip sub-resellers with no sales this period (keeps the report tidy)
         subs_out.append({
@@ -241,6 +249,6 @@ async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> floa
         )
     ).scalars().all()
     free_threshold = await pricing.get_free_threshold_gb(session)
-    today = dt.date.today()
-    gb, _ = _billable_gb_for_period(users, month_period(today.year, today.month), free_threshold)
+    excluded = await pricing.get_excluded_usage_gb(session)
+    gb, _ = _billable_gb_for_period(users, current_month(), free_threshold, excluded)
     return gb

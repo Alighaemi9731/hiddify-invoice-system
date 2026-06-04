@@ -1,7 +1,7 @@
 """Owner / staff login accounts for the web panel."""
 from __future__ import annotations
 
-from sqlalchemy import String
+from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -16,6 +16,9 @@ class AppUser(Base, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(32), default="owner")
     is_active: Mapped[bool] = mapped_column(default=True)
+    # Bumped on every password change to invalidate previously-issued JWTs (the token carries
+    # an `epoch` claim that must match this). 0 for legacy rows added before this column.
+    token_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     # Two-factor auth (TOTP / Google Authenticator). Secret is stored encrypted.
     totp_secret_enc: Mapped[str | None] = mapped_column(String(255), nullable=True)

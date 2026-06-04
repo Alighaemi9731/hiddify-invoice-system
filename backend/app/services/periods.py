@@ -3,7 +3,28 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import os
 from dataclasses import dataclass
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
+# Billing months are anchored to the OWNER's clock (same tz the scheduler fires on), not the
+# container's UTC. Otherwise, near midnight, `dt.date.today()` (UTC, +3:30 behind Tehran)
+# can land in the wrong month — e.g. an invoice_hour of 0 would bill the wrong period.
+_TZ_NAME = os.getenv("SCHEDULER_TIMEZONE", "Asia/Tehran")
+
+
+def today() -> dt.date:
+    """The current date in the configured local timezone (Asia/Tehran by default)."""
+    if ZoneInfo is not None:
+        try:
+            return dt.datetime.now(ZoneInfo(_TZ_NAME)).date()
+        except Exception:  # noqa: BLE001
+            pass
+    return dt.date.today()
 
 
 @dataclass(frozen=True)
@@ -24,16 +45,16 @@ def month_period(year: int, month: int) -> Period:
     return Period(dt.date(year, month, 1), dt.date(year, month, last))
 
 
-def previous_month(today: dt.date | None = None) -> Period:
-    today = today or dt.date.today()
-    first_this = today.replace(day=1)
+def previous_month(today_: dt.date | None = None) -> Period:
+    today_ = today_ or today()
+    first_this = today_.replace(day=1)
     last_prev = first_this - dt.timedelta(days=1)
     return month_period(last_prev.year, last_prev.month)
 
 
-def current_month(today: dt.date | None = None) -> Period:
-    today = today or dt.date.today()
-    return month_period(today.year, today.month)
+def current_month(today_: dt.date | None = None) -> Period:
+    today_ = today_ or today()
+    return month_period(today_.year, today_.month)
 
 
 def parse_period(value: str) -> Period:

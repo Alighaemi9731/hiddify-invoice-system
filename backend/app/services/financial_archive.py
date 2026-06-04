@@ -50,14 +50,26 @@ async def record(
         if reseller is None:
             reseller = await session.get(Reseller, invoice.reseller_id)
 
-        row = (
+        # Fetch ALL rows for this invoice (resilient to any pre-existing duplicates) and
+        # self-heal: keep the oldest, delete the rest, so the ledger converges to one row
+        # per invoice even on DBs created before the unique constraint existed.
+        rows = (
             await session.execute(
-                select(FinancialRecord).where(FinancialRecord.invoice_id == invoice.id)
+                select(FinancialRecord)
+                .where(FinancialRecord.invoice_id == invoice.id)
+                .order_by(FinancialRecord.id.asc())
             )
-        ).scalar_one_or_none()
-        if row is None:
+        ).scalars().all()
+        if rows:
+            row = rows[0]
+            for extra in rows[1:]:
+                await session.delete(extra)
+        else:
             row = FinancialRecord(invoice_id=invoice.id)
             session.add(row)
+            # Flush so a later record() in the SAME (autoflush-off) session sees this row
+            # instead of inserting a second one.
+            await session.flush()
 
         row.panel_key = (getattr(panel, "key", "") or "")[:128]
         row.reseller_name = (getattr(reseller, "name", "") or "")[:255]

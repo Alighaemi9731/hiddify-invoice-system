@@ -47,10 +47,16 @@ async def lifespan(app: FastAPI):
         await scheduler.shutdown()
 
 
+# In production, don't expose the interactive docs / OpenAPI schema (it enumerates every
+# endpoint and shape to an unauthenticated visitor). They stay on in dev for convenience.
+_is_prod = settings.app_env == "production"
 app = FastAPI(
     title="Hiddify Reseller Invoicing System",
     version=__version__,
     lifespan=lifespan,
+    docs_url=None if _is_prod else "/docs",
+    redoc_url=None if _is_prod else "/redoc",
+    openapi_url=None if _is_prod else "/openapi.json",
 )
 
 # Security headers on every response.

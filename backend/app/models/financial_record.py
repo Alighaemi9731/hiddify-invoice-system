@@ -22,8 +22,10 @@ class FinancialRecord(Base, TimestampMixin):
     __tablename__ = "financial_records"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Soft reference to the source invoice (no FK → survives invoice deletion).
-    invoice_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # Soft reference to the source invoice (no FK → survives invoice deletion). Unique so a
+    # given invoice has exactly one ledger row (enforced on fresh DBs; existing DBs are kept
+    # de-duplicated by the self-healing collapse in financial_archive.record).
+    invoice_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True, nullable=True)
 
     # Denormalized labels (kept even after panel/reseller removal).
     panel_key: Mapped[str] = mapped_column(String(128), default="", index=True)

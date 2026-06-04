@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 import pyotp
 
 # ----------------------------- rate limiting -----------------------------
-MAX_ATTEMPTS = 5
+MAX_ATTEMPTS = 5           # per (username, IP)
+GLOBAL_MAX_ATTEMPTS = 30   # per username across ALL IPs — backstop for distributed attacks
 WINDOW_SECONDS = 15 * 60   # attempts counted within this window
 LOCKOUT_SECONDS = 15 * 60  # how long a key stays locked after hitting the cap
 
@@ -30,35 +31,51 @@ class _Bucket:
 _buckets: dict[str, _Bucket] = {}
 
 
-def _key(username: str, ip: str) -> str:
-    return f"{(username or '').lower()}|{ip or '?'}"
+def _ip_key(username: str, ip: str) -> str:
+    return f"ip|{(username or '').lower()}|{ip or '?'}"
+
+
+def _user_key(username: str) -> str:
+    return f"user|{(username or '').lower()}"
 
 
 def is_locked(username: str, ip: str) -> int:
-    """Return remaining lockout seconds (0 if not locked)."""
-    b = _buckets.get(_key(username, ip))
-    if not b:
-        return 0
-    remaining = int(b.locked_until - time.time())
+    """Return remaining lockout seconds (0 if not locked). Checks BOTH the per-IP bucket and
+    the per-username global bucket so a spoofed/rotated IP can't reset the protection."""
+    now = time.time()
+    remaining = 0
+    for k in (_ip_key(username, ip), _user_key(username)):
+        b = _buckets.get(k)
+        if b:
+            remaining = max(remaining, int(b.locked_until - now))
     return max(0, remaining)
 
 
 def record_failure(username: str, ip: str) -> int:
-    """Record a failed attempt; lock the key if the cap is reached.
-    Returns remaining attempts before lockout (0 means now locked)."""
+    """Record a failed attempt on both the per-IP and per-username buckets; lock whichever
+    hits its cap. Returns the per-IP remaining attempts before lockout (0 = now locked)."""
     now = time.time()
-    b = _buckets.setdefault(_key(username, ip), _Bucket())
-    b.fails = [t for t in b.fails if now - t < WINDOW_SECONDS]
-    b.fails.append(now)
-    if len(b.fails) >= MAX_ATTEMPTS:
-        b.locked_until = now + LOCKOUT_SECONDS
-        b.fails.clear()
-        return 0
-    return MAX_ATTEMPTS - len(b.fails)
+    ip_remaining = MAX_ATTEMPTS
+    for k, cap, is_ip in ((_ip_key(username, ip), MAX_ATTEMPTS, True),
+                          (_user_key(username), GLOBAL_MAX_ATTEMPTS, False)):
+        b = _buckets.setdefault(k, _Bucket())
+        b.fails = [t for t in b.fails if now - t < WINDOW_SECONDS]
+        b.fails.append(now)
+        if len(b.fails) >= cap:
+            b.locked_until = now + LOCKOUT_SECONDS
+            b.fails.clear()
+            if is_ip:
+                ip_remaining = 0
+        elif is_ip:
+            ip_remaining = cap - len(b.fails)
+    return ip_remaining
 
 
 def reset(username: str, ip: str) -> None:
-    _buckets.pop(_key(username, ip), None)
+    # Only a successful login (correct password) reaches here, so clearing the global
+    # username bucket can't be triggered by an attacker.
+    _buckets.pop(_ip_key(username, ip), None)
+    _buckets.pop(_user_key(username), None)
 
 
 # ----------------------------- captcha -----------------------------

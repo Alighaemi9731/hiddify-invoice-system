@@ -3,15 +3,22 @@ from __future__ import annotations
 
 import abc
 import datetime as dt
+import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger("panel.parse")
 
 
 def _to_int(value: Any, default: int | None = None) -> int | None:
     try:
         if value is None or value == "":
             return default
-        return int(float(value))
+        f = float(value)
+        if not math.isfinite(f):  # NaN/inf from a buggy panel must not reach the DB/billing
+            return default
+        return int(f)
     except (TypeError, ValueError):
         return default
 
@@ -20,9 +27,12 @@ def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
-        return float(value)
+        f = float(value)
     except (TypeError, ValueError):
         return default
+    # NaN/inf would silently corrupt billing: `round(sum(... nan ...))` is NaN and every
+    # threshold comparison with NaN is False. Map any non-finite value to the default.
+    return default if not math.isfinite(f) else f
 
 
 def _to_date(value: Any) -> dt.date | None:
@@ -89,40 +99,55 @@ class PanelData:
 
 
 def parse_backup(payload: dict) -> PanelData:
-    """Normalize a Hiddify backup JSON document into PanelData."""
-    admins = [
-        PanelAdmin(
-            uuid=a.get("uuid", ""),
-            name=a.get("name") or "",
-            parent_admin_uuid=a.get("parent_admin_uuid"),
-            mode=a.get("mode") or "agent",
-            comment=a.get("comment"),
-            telegram_id=_to_int(a.get("telegram_id")),
-            max_users=_to_int(a.get("max_users")),
-            max_active_users=_to_int(a.get("max_active_users")),
-            can_add_admin=bool(a.get("can_add_admin", False)),
-        )
-        for a in payload.get("admin_users", [])
-        if a.get("uuid")
-    ]
-    users = [
-        PanelUser(
-            uuid=u.get("uuid", ""),
-            name=u.get("name") or "",
-            added_by_uuid=u.get("added_by_uuid"),
-            start_date=_to_date(u.get("start_date")),
-            usage_limit_gb=_to_float(u.get("usage_limit_GB")),
-            current_usage_gb=_to_float(u.get("current_usage_GB")),
-            package_days=_to_int(u.get("package_days")),
-            enable=bool(u.get("enable", True)),
-            is_active=bool(u.get("is_active", True)),
-            mode=u.get("mode"),
-            last_online=_to_datetime(u.get("last_online")),
-            comment=u.get("comment"),
-        )
-        for u in payload.get("users", [])
-        if u.get("uuid")
-    ]
+    """Normalize a Hiddify backup JSON document into PanelData.
+
+    Defensive: a single malformed admin/user entry (or a non-dict/None container) is skipped
+    rather than crashing the whole panel's sync."""
+    if not isinstance(payload, dict):
+        log.warning("parse_backup: payload is %s, not a dict — treating as empty", type(payload).__name__)
+        return PanelData()
+
+    admins: list[PanelAdmin] = []
+    for a in (payload.get("admin_users") or []):
+        if not isinstance(a, dict) or not a.get("uuid"):
+            continue
+        try:
+            admins.append(PanelAdmin(
+                uuid=a.get("uuid", ""),
+                name=a.get("name") or "",
+                parent_admin_uuid=a.get("parent_admin_uuid"),
+                mode=a.get("mode") or "agent",
+                comment=a.get("comment"),
+                telegram_id=_to_int(a.get("telegram_id")),
+                max_users=_to_int(a.get("max_users")),
+                max_active_users=_to_int(a.get("max_active_users")),
+                can_add_admin=bool(a.get("can_add_admin", False)),
+            ))
+        except Exception:  # noqa: BLE001 — skip a bad admin row, keep the rest
+            log.warning("parse_backup: skipping malformed admin entry", exc_info=True)
+
+    users: list[PanelUser] = []
+    for u in (payload.get("users") or []):
+        if not isinstance(u, dict) or not u.get("uuid"):
+            continue
+        try:
+            users.append(PanelUser(
+                uuid=u.get("uuid", ""),
+                name=u.get("name") or "",
+                added_by_uuid=u.get("added_by_uuid"),
+                start_date=_to_date(u.get("start_date")),
+                usage_limit_gb=_to_float(u.get("usage_limit_GB")),
+                current_usage_gb=_to_float(u.get("current_usage_GB")),
+                package_days=_to_int(u.get("package_days")),
+                enable=bool(u.get("enable", True)),
+                is_active=bool(u.get("is_active", True)),
+                mode=u.get("mode"),
+                last_online=_to_datetime(u.get("last_online")),
+                comment=u.get("comment"),
+            ))
+        except Exception:  # noqa: BLE001 — skip a bad user row, keep the rest
+            log.warning("parse_backup: skipping malformed user entry", exc_info=True)
+
     return PanelData(admins=admins, users=users)
 
 

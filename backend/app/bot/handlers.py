@@ -109,24 +109,31 @@ async def _resellers_for_chat(session, chat_id: int) -> list[Reseller]:
 
 
 async def _is_owner_user(session, user) -> bool:
-    """Owner = matches the configured @username OR the numeric owner_telegram OR the
-    already-captured owner_chat_id. First owner match also pins the chat id."""
+    """Owner identification, hardened against @username takeover.
+
+    Once the owner's numeric chat id has been pinned (`owner_chat_id`), we trust ONLY that id
+    — a Telegram @username can be reassigned to someone else, so matching by username after
+    pinning would let an attacker who grabs the owner's old handle impersonate them. Username
+    (or a configured numeric id) is used ONLY for the first-ever match, which then pins the id."""
     owner_setting = str(await settings_service.get(session, "owner_telegram", "") or "").strip()
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
 
+    if owner_chat:
+        # Pinned: numeric id is the sole source of truth.
+        return str(user.id) == owner_chat
+
+    # Not yet pinned — allow a first-time match by the configured numeric id or @username.
     uname = (user.username or "").lstrip("@").lower()
     owner_name = owner_setting.lstrip("@").lower()
-
     is_owner = False
-    if owner_name and uname and uname == owner_name:
+    if owner_setting.isdigit() and str(user.id) == owner_setting:
         is_owner = True
-    elif owner_setting.isdigit() and str(user.id) == owner_setting:
-        is_owner = True
-    elif owner_chat and str(user.id) == owner_chat:
+    elif owner_name and uname and uname == owner_name:
         is_owner = True
 
-    if is_owner and owner_chat != str(user.id):
-        # Pin the owner's chat id so scheduled backups/alerts/logs can reach them.
+    if is_owner:
+        # Pin the owner's chat id so scheduled backups/alerts/logs can reach them, and so all
+        # subsequent checks are id-only.
         await settings_service.set_value(session, "owner_chat_id", str(user.id))
     return is_owner
 
@@ -880,14 +887,13 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
     for the reseller's own users and ONE PDF per sub-reseller (its subtree), so each can be
     handed to the matching sub without exposing the others. The grand total stays text-only."""
     from app.services import invoice_pdf, reseller_report
-    from app.services.periods import month_period
+    from app.services.periods import current_month
 
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
-    today = dt.date.today()
-    period = month_period(today.year, today.month)
+    period = current_month()
     sent_any = False
     for r in resellers:
         # Only TOP-LEVEL resellers get a bundled invoice (a sub is billed via its parent).
@@ -1374,9 +1380,27 @@ async def _is_top_level_reseller(session, reseller: Reseller) -> bool:
 
 
 async def _handle_link(message: Message, session, parsed) -> None:
-    reseller = (
+    # The same admin_uuid can exist on more than one panel, so a uuid-only lookup may return
+    # several rows — `scalar_one_or_none()` would raise MultipleResultsFound and crash the
+    # handler (no reply). Fetch all and disambiguate by the link's host (the documented
+    # "host + UUID identifies the panel" rule); fall back to the first if host can't resolve.
+    candidates = (
         await session.execute(select(Reseller).where(Reseller.admin_uuid == parsed.uuid))
-    ).scalar_one_or_none()
+    ).scalars().all()
+    if not candidates:
+        reseller = None
+    elif len(candidates) == 1:
+        reseller = candidates[0]
+    else:
+        reseller = None
+        host = (parsed.host or "").lower()
+        if host:
+            for c in candidates:
+                p = await session.get(Panel, c.panel_id)
+                if p and (p.host or "").lower() == host:
+                    reseller = c
+                    break
+        reseller = reseller or candidates[0]
     # Must be a real, non-owner reseller that came from one of the registered panels.
     if reseller is None or reseller.is_owner:
         await message.answer(await texts.render(session, "tpl_link_not_found"))

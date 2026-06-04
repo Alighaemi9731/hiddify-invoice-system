@@ -169,20 +169,25 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
     #   • Channel/group guard every N minutes on the :00 boundary
     #   • Panel sync every N hours on the hour
     #   • Auto-backup to the owner's Telegram every N hours on the hour
+    # The 4th value is misfire_grace_time (seconds): how late a fire may run if the scheduler
+    # was busy/down at the exact moment. APScheduler's DEFAULT is 1s, which silently SKIPS a
+    # job whose tick the loop missed by a second — fatal for the once-a-month invoicing. Give
+    # each a generous grace (monthly the largest) and coalesce so a backlog runs once.
     specs = [
         ("monthly_invoicing", monthly_invoicing_job,
-         CronTrigger(day=cfg.invoice_day, hour=cfg.invoice_hour, minute=0, timezone=tz)),
+         CronTrigger(day=cfg.invoice_day, hour=cfg.invoice_hour, minute=0, timezone=tz), 12 * 3600),
         ("daily_dunning", daily_dunning_job,
-         CronTrigger(hour=cfg.dunning_hour, minute=0, timezone=tz)),
+         CronTrigger(hour=cfg.dunning_hour, minute=0, timezone=tz), 6 * 3600),
         ("channel_guard", channel_guard_job,
-         CronTrigger(minute=f"*/{cfg.guard_minutes}", timezone=tz)),
+         CronTrigger(minute=f"*/{cfg.guard_minutes}", timezone=tz), 300),
         ("periodic_sync", periodic_sync_job,
-         CronTrigger(hour=f"*/{cfg.sync_hours}", minute=0, timezone=tz)),
+         CronTrigger(hour=f"*/{cfg.sync_hours}", minute=0, timezone=tz), 1800),
         ("backup", backup_job,
-         CronTrigger(hour=f"*/{cfg.backup_hours}", minute=0, timezone=tz)),
+         CronTrigger(hour=f"*/{cfg.backup_hours}", minute=0, timezone=tz), 3600),
     ]
-    for job_id, func, trigger in specs:
-        sched.add_job(func, trigger, id=job_id, replace_existing=True)
+    for job_id, func, trigger, grace in specs:
+        sched.add_job(func, trigger, id=job_id, replace_existing=True,
+                      coalesce=True, misfire_grace_time=grace)
     log.info(
         "Registered 5 cron jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
         "sync every %dh, guard every %dm, backup every %dh.",

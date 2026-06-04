@@ -127,6 +127,7 @@ class _ChainCheck:
     amount_usdt: Decimal
     confirmations: int
     error: str | None = None
+    contract_address: str | None = None  # the token contract of the matched tx
 
 
 async def _bscscan_tokentx(
@@ -159,6 +160,7 @@ async def _bscscan_tokentx(
                 from_address=(tx.get("from") or "").lower(),
                 amount_usdt=amount,
                 confirmations=int(tx.get("confirmations", 0) or 0),
+                contract_address=(tx.get("contractAddress") or "").lower(),
             )
     return _ChainCheck(False, None, None, Decimal(0), 0, error="transaction not found for this wallet")
 
@@ -169,7 +171,9 @@ async def verify_payment(
     """Verify a pending TXID payment on-chain and apply it. Idempotent-ish.
     `notify_reseller=True` (panel-triggered) sends the confirmation to the reseller's
     Telegram; the bot path leaves it False because it answers the chat inline."""
-    payment = await session.get(Payment, payment_id)
+    # Lock the row (Postgres) and re-check status under the lock so a concurrent
+    # verify/confirm can't double-settle the same payment. No-op on SQLite (tests).
+    payment = await session.get(Payment, payment_id, with_for_update=True)
     if payment is None:
         return PaymentResult("rejected", False, "پرداخت یافت نشد.")
     if payment.status == PaymentStatus.confirmed:
@@ -189,12 +193,13 @@ async def verify_payment(
     min_conf = int(cfg.get("min_confirmations") or 0)
     tolerance = Decimal(str(cfg.get("payment_amount_tolerance_usdt") or 0))
 
-    if not api_key or not wallet:
-        # Can't auto-verify; leave pending for manual confirmation by the owner.
+    if not api_key or not wallet or not contract:
+        # Can't safely auto-verify without all three (a blank token contract would let a
+        # worthless-token transfer to our wallet pass as USDT) — leave pending for manual review.
         return PaymentResult(
             "pending", False,
             "✅ شناسه تراکنش دریافت شد و پس از بررسی توسط پشتیبانی تأیید می‌شود.",
-            detail="bscscan api key or wallet not configured",
+            detail="bscscan api key, wallet, or USDT contract not configured",
         )
 
     try:
@@ -225,6 +230,14 @@ async def verify_payment(
         payment.note = "destination address mismatch"
         await session.commit()
         return PaymentResult("rejected", False, "❌ آدرس مقصد تراکنش با کیف پول ما مطابقت ندارد.")
+
+    # The matched tx must be for the configured USDT token contract — otherwise a transfer of
+    # some other (worthless) token to our wallet, with the same nominal value, would pass.
+    if (check.contract_address or "") != contract.lower():
+        payment.status = PaymentStatus.rejected
+        payment.note = f"token contract mismatch: {check.contract_address}"
+        await session.commit()
+        return PaymentResult("rejected", False, "❌ توکن این تراکنش با USDT موردنظر مطابقت ندارد.")
 
     if check.confirmations < min_conf:
         payment.status = PaymentStatus.pending
@@ -326,7 +339,7 @@ async def confirm_manually(
     reseller is notified only when the status actually CHANGES to confirmed (re-confirming
     an already-confirmed payment is silent), so a double-click doesn't spam them.
     """
-    payment = await session.get(Payment, payment_id)
+    payment = await session.get(Payment, payment_id, with_for_update=True)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_confirmed = payment.status == PaymentStatus.confirmed
@@ -381,7 +394,7 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     (re-rejecting is silent), so toggling/double-clicks don't spam them. An already-enforced
     reseller is NOT re-suspended automatically — dunning re-escalates on its normal timeline,
     or the owner suspends manually."""
-    payment = await session.get(Payment, payment_id)
+    payment = await session.get(Payment, payment_id, with_for_update=True)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_rejected = payment.status == PaymentStatus.rejected
