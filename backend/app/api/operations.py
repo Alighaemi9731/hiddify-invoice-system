@@ -175,3 +175,81 @@ async def restart_service() -> dict:
     """Restart the backend service from the panel (no server terminal needed)."""
     _schedule_self_restart(1.0)
     return {"status": "restarting", "message": "سرویس در حال راه‌اندازی مجدد است (چند ثانیه صبر کنید)."}
+
+
+# ------------------------------- self-update -------------------------------
+# The backend container is intentionally sandboxed (no Docker socket), so it can't
+# rebuild itself. Instead the panel writes a request flag into the shared data volume
+# and a tiny host-side watcher (systemd unit `hiddify-updater`, installed by
+# deploy/install.sh) runs get.sh — pulling the latest release and rebuilding. The
+# watcher reports progress back into the same volume. These files all live under
+# /app/data (the `app_data` volume), which the host mounts at the repo's data dir.
+_UPDATE_DIR = os.environ.get("UPDATE_DIR", "/app/data")
+_UPDATE_REQUEST = os.path.join(_UPDATE_DIR, ".update-requested")
+_UPDATE_STATUS = os.path.join(_UPDATE_DIR, ".update-status")
+
+
+def _read_update_status() -> dict:
+    """Read the watcher's status file: {phase, version, message, ts}. phase is one of
+    idle | requested | running | done | failed. Defaults to idle when absent."""
+    import json
+
+    try:
+        with open(_UPDATE_STATUS, encoding="utf-8") as fh:
+            data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+    except FileNotFoundError:
+        pass
+    except Exception:  # noqa: BLE001 — a half-written file: treat as running
+        return {"phase": "running"}
+    # No status file but a request is pending → the watcher hasn't picked it up yet.
+    if os.path.exists(_UPDATE_REQUEST):
+        return {"phase": "requested"}
+    return {"phase": "idle"}
+
+
+@router.post("/update")
+async def update_now() -> dict:
+    """Ask the host-side watcher to update the system to the latest release.
+
+    Writes a request flag the watcher polls; returns immediately. Poll
+    GET /api/ops/update-status to follow progress; the site briefly goes down while the
+    containers rebuild, then comes back on the new version."""
+    from app import __version__
+
+    try:
+        os.makedirs(_UPDATE_DIR, exist_ok=True)
+        # Reset any stale status, then drop the request flag.
+        try:
+            os.remove(_UPDATE_STATUS)
+        except FileNotFoundError:
+            pass
+        with open(_UPDATE_REQUEST, "w", encoding="utf-8") as fh:
+            fh.write(__version__)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"ثبت درخواست به‌روزرسانی ناموفق بود: {exc}")
+    return {
+        "status": "requested",
+        "current_version": __version__,
+        "message": (
+            "درخواست به‌روزرسانی ثبت شد. اگر سرویس به‌روزرسانیِ خودکار روی سرور نصب باشد، "
+            "چند دقیقه بعد سامانه به آخرین نسخه می‌رسد و دوباره بالا می‌آید."
+        ),
+    }
+
+
+@router.get("/update-status")
+async def update_status() -> dict:
+    """Current update phase for the panel to poll. updater_installed=False means the
+    host watcher isn't present (older installs) — the request would sit unhandled."""
+    from app import __version__
+
+    st = _read_update_status()
+    st.setdefault("current_version", __version__)
+    # If the watcher ever wrote a status, it's installed. If only a request is pending and
+    # nothing has touched it, we can't be sure — surface that so the UI can warn.
+    st["updater_installed"] = os.path.exists(_UPDATE_STATUS) or st.get("phase") in (
+        "running", "done", "failed"
+    )
+    return st

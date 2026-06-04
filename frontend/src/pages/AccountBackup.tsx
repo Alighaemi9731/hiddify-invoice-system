@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, Divider, Chip,
+  LinearProgress,
 } from "@mui/material";
 import LockResetIcon from "@mui/icons-material/LockReset";
 import CloudDownloadIcon from "@mui/icons-material/CloudDownload";
@@ -9,10 +10,12 @@ import RestoreIcon from "@mui/icons-material/Restore";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import ShieldIcon from "@mui/icons-material/Shield";
 import LanguageIcon from "@mui/icons-material/Language";
+import SystemUpdateAltIcon from "@mui/icons-material/SystemUpdateAlt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   updateAccount, downloadBackup, sendBackupToTelegram, restoreBackup, setToken, wipeData,
   getMe, totpSetup, totpEnable, totpDisable, setDomain, restartService,
+  getInfo, updateSystem, getUpdateStatus,
 } from "../api/client";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useToast, errMsg } from "../components/Toast";
@@ -97,6 +100,54 @@ export default function AccountBackup() {
     onSuccess: () => show("سرویس در حال راه‌اندازی مجدد است؛ چند ثانیه صبر کنید و صفحه را تازه کنید.", "info"),
     onError: (e) => show(errMsg(e), "error"),
   });
+
+  // ----- self-update -----
+  const { data: info } = useQuery({ queryKey: ["info"], queryFn: getInfo });
+  const [updating, setUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState("");
+  const startedBefore = useRef<string>("");   // version at the moment we hit "update"
+
+  const update = useMutation({
+    mutationFn: () => updateSystem(),
+    onSuccess: (r: any) => {
+      startedBefore.current = info?.version || "";
+      setUpdating(true);
+      setUpdateMsg(r.message || "درخواست به‌روزرسانی ثبت شد…");
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
+  // While updating, poll the status. The site goes down mid-rebuild, so we tolerate
+  // failed polls; when it comes back on a NEW version (or status says done) we reload.
+  useEffect(() => {
+    if (!updating) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const st = await getUpdateStatus();
+        if (stop) return;
+        if (st.updater_installed === false && st.phase === "requested") {
+          setUpdateMsg("⚠️ سرویس به‌روزرسانیِ خودکار روی سرور نصب نیست. لطفاً یک‌بار دستور نصب را روی سرور اجرا کنید تا فعال شود.");
+        } else if (st.phase === "running") {
+          setUpdateMsg("در حال دریافت آخرین نسخه و بازسازی… سامانه چند لحظه از دسترس خارج می‌شود.");
+        } else if (st.phase === "failed") {
+          setUpdating(false);
+          show("به‌روزرسانی ناموفق بود. گزارش را روی سرور (update/update.log) ببینید.", "error");
+          return;
+        } else if (st.phase === "done") {
+          setUpdateMsg("✅ به‌روزرسانی انجام شد. در حال بارگذاری مجدد…");
+          setTimeout(() => window.location.reload(), 1500);
+          return;
+        }
+      } catch {
+        // Backend is briefly down during the rebuild — keep waiting.
+        setUpdateMsg("سامانه در حال بازسازی است… (چند لحظه از دسترس خارج می‌شود)");
+      }
+      if (!stop) setTimeout(tick, 4000);
+    };
+    const id = setTimeout(tick, 4000);
+    return () => { stop = true; clearTimeout(id); };
+  }, [updating]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Stack spacing={2} sx={{ maxWidth: 720 }}>
@@ -215,6 +266,32 @@ export default function AccountBackup() {
             onClick={() => { if (confirm("سرویس یک‌بار راه‌اندازی مجدد شود؟")) restart.mutate(); }}>
             راه‌اندازی مجدد سرویس
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Update to latest version */}
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+            <SystemUpdateAltIcon color="primary" />
+            <Typography variant="h6">به‌روزرسانی سامانه</Typography>
+            {info?.version && <Chip size="small" label={`نسخهٔ فعلی: ${info.version}`} />}
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            با این دکمه، سامانه به آخرین نسخه به‌روزرسانی می‌شود (بدون نیاز به ترمینال سرور). دیتابیس شما حفظ می‌شود.
+            هنگام به‌روزرسانی، سایت برای چند لحظه از دسترس خارج می‌شود و سپس صفحه به‌صورت خودکار دوباره بارگذاری می‌شود.
+          </Typography>
+          {updating ? (
+            <Box>
+              <LinearProgress sx={{ mb: 1 }} />
+              <Typography variant="body2">{updateMsg}</Typography>
+            </Box>
+          ) : (
+            <Button variant="contained" startIcon={<SystemUpdateAltIcon />} disabled={update.isPending}
+              onClick={() => { if (confirm("سامانه به آخرین نسخه به‌روزرسانی شود؟ سایت برای چند لحظه از دسترس خارج می‌شود.")) update.mutate(); }}>
+              به‌روزرسانی به آخرین نسخه
+            </Button>
+          )}
         </CardContent>
       </Card>
 

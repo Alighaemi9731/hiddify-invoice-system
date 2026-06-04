@@ -115,6 +115,40 @@ COMPOSE="docker compose --env-file $ENV_FILE -f deploy/docker-compose.prod.yml"
 $COMPOSE down --remove-orphans 2>/dev/null || true
 $COMPOSE up -d --build --force-recreate
 
+# ---- 5. in-panel updater (host-side watcher) --------------------------------
+# Install/refresh a tiny systemd service that lets the panel's «به‌روزرسانی» button
+# trigger this very script. The backend container is sandboxed (no Docker socket), so a
+# host-side helper is the safe way to rebuild. Idempotent: re-running the installer
+# updates the unit. Skipped gracefully if systemd isn't available.
+if command -v systemctl >/dev/null 2>&1; then
+  c "Installing the in-panel update watcher (systemd: hiddify-updater)…"
+  mkdir -p "$REPO_DIR/update"
+  cat > /etc/systemd/system/hiddify-updater.service <<UNIT
+[Unit]
+Description=Hiddify Invoice System — in-panel update watcher
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=simple
+Environment=REPO_DIR=$REPO_DIR
+Environment=UPDATE_DIR=$REPO_DIR/update
+ExecStart=/usr/bin/env bash $REPO_DIR/deploy/updater.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  chmod +x "$REPO_DIR/deploy/updater.sh" 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable --now hiddify-updater >/dev/null 2>&1 \
+    && systemctl restart hiddify-updater >/dev/null 2>&1 || true
+  c "Update watcher active — the panel can now self-update."
+else
+  err "systemd not found — the in-panel «به‌روزرسانی» button won't work (update from the terminal instead)."
+fi
+
 # English banner — terminals render LTR, so RTL Persian looks scrambled here.
 VER="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo "")"
 GET_URL="https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh"

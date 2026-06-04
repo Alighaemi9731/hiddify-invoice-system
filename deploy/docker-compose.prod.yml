@@ -32,6 +32,7 @@ services:
       POSTGRES_HOST: db
       RUN_SCHEDULER: "true"
       CADDY_ADMIN: "http://caddy:2019"
+      UPDATE_DIR: /app/data/update
     depends_on:
       db:
         condition: service_healthy
@@ -39,6 +40,9 @@ services:
       - app_data:/app/data
       # Mount the repo-root .env so the in-panel "set domain" can persist SERVER_DOMAIN.
       - ../.env:/app/.env
+      # Shared with the host-side update watcher: the panel's «به‌روزرسانی» button writes
+      # a flag here that deploy/updater.sh (systemd) picks up to rebuild to the latest.
+      - ./update:/app/data/update
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   bot:
