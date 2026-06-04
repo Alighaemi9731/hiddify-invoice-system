@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   updateAccount, downloadBackup, sendBackupToTelegram, restoreBackup, setToken, wipeData,
   getMe, totpSetup, totpEnable, totpDisable, setDomain, restartService,
-  getInfo, updateSystem, getUpdateStatus,
+  getInfo, updateSystem, getUpdateStatus, pingInfo,
 } from "../api/client";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useToast, errMsg } from "../components/Toast";
@@ -117,53 +117,63 @@ export default function AccountBackup() {
     onError: (e) => show(errMsg(e), "error"),
   });
 
-  // While updating, poll the status. Two completion signals, whichever comes first:
-  //   1) the watcher wrote phase "done"; OR
-  //   2) the backend went DOWN (rebuild bounces it) and then came back UP — a guaranteed
-  //      signal even when re-building to the SAME version, and robust if the status file
-  //      is momentarily unreadable. `armed` (we saw ≥1 good poll first) avoids a transient
-  //      network blip before the real rebuild being mistaken for completion.
+  // While updating, poll with a SHORT-timeout probe so the loop never hangs on the
+  // default 120s when the backend stalls mid-rebuild. Completion = the backend is reachable
+  // again AND its version changed from what we started on, OR it bounced (down→up). Both
+  // independent of the status file. A manual «بارگذاری مجدد» button is always shown too, so
+  // the owner is never stuck even if auto-detection misses.
   useEffect(() => {
     if (!updating) return;
     let stop = false;
-    let armed = false;     // saw at least one successful poll (request is in flight)
-    let sawDown = false;   // saw the backend go unreachable (the rebuild started)
+    let sawDown = false;   // backend became unreachable (rebuild started)
+    const startVer = startedBefore.current;
     const startedAt = Date.now();
     const MAX_MS = 10 * 60 * 1000;
 
     const doReload = () => {
       setUpdateMsg("✅ به‌روزرسانی انجام شد. در حال بارگذاری مجدد…");
-      setTimeout(() => window.location.reload(), 1500);
+      setTimeout(() => window.location.reload(), 1200);
     };
 
     const tick = async () => {
       if (stop) return;
+      const elapsed = Date.now() - startedAt;
       try {
-        const st = await getUpdateStatus();
+        // First, a cheap status read (best-effort) for nicer messaging + the "not installed"
+        // warning. Don't let it block completion detection.
+        let phase = "";
+        try {
+          const st = await getUpdateStatus();
+          phase = st.phase || "";
+          if (st.phase === "failed") {
+            setUpdating(false);
+            show("به‌روزرسانی ناموفق بود. گزارش را روی سرور (update/update.log) ببینید.", "error");
+            return;
+          }
+          if (st.updater_installed === false && st.phase === "requested" && elapsed < 15000) {
+            setUpdateMsg("⚠️ سرویس به‌روزرسانیِ خودکار روی سرور نصب نیست. لطفاً یک‌بار دستور نصب را روی سرور اجرا کنید تا فعال شود.");
+          }
+        } catch { /* ignore — covered by the probe below */ }
+
+        // The decisive signal: probe the backend's live version with a short timeout.
+        const { version } = await pingInfo(4000);
         if (stop) return;
-        if (st.phase === "failed") {
-          setUpdating(false);
-          show("به‌روزرسانی ناموفق بود. گزارش را روی سرور (update/update.log) ببینید.", "error");
+        if (sawDown || (startVer && version && version !== startVer)) {
+          doReload();
           return;
         }
-        if (st.phase === "done") { doReload(); return; }
-        if (sawDown) { doReload(); return; }   // backend recovered after the rebuild bounce
-        if (st.updater_installed === false && st.phase === "requested") {
-          setUpdateMsg("⚠️ سرویس به‌روزرسانیِ خودکار روی سرور نصب نیست. لطفاً یک‌بار دستور نصب را روی سرور اجرا کنید تا فعال شود.");
-        } else if (st.phase === "running") {
-          setUpdateMsg("در حال دریافت آخرین نسخه و بازسازی… سامانه چند لحظه از دسترس خارج می‌شود.");
-        } else {
-          setUpdateMsg("درخواست ثبت شد؛ در انتظار شروع به‌روزرسانی…");
-        }
-        armed = true;
+        setUpdateMsg(
+          phase === "running"
+            ? "در حال دریافت آخرین نسخه و بازسازی… سامانه چند لحظه از دسترس خارج می‌شود."
+            : "درخواست ثبت شد؛ در انتظار شروع و بازسازی…",
+        );
       } catch {
-        // Backend unreachable → it's bouncing for the rebuild. Only counts once we've
-        // confirmed we were talking to it (armed), so a pre-rebuild blip isn't mistaken.
-        if (armed) sawDown = true;
+        // Backend unreachable → it's bouncing for the rebuild.
+        sawDown = true;
         setUpdateMsg("سامانه در حال بازسازی است… (چند لحظه از دسترس خارج می‌شود)");
       }
-      if (!stop && Date.now() - startedAt > MAX_MS) {
-        setUpdateMsg("به‌روزرسانی بیش از حد انتظار طول کشید. اگر سایت بالا آمده، صفحه را دستی تازه کنید.");
+      if (!stop && elapsed > MAX_MS) {
+        setUpdateMsg("به‌روزرسانی بیش از حد انتظار طول کشید. اگر سایت بالا آمده، دکمهٔ «بارگذاری مجدد» را بزنید.");
       }
       if (!stop) setTimeout(tick, 3000);
     };
@@ -306,7 +316,14 @@ export default function AccountBackup() {
           {updating ? (
             <Box>
               <LinearProgress sx={{ mb: 1 }} />
-              <Typography variant="body2">{updateMsg}</Typography>
+              <Typography variant="body2" sx={{ mb: 1.5 }}>{updateMsg}</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+                اگر بعد از چند دقیقه صفحه خودکار باز نشد، دکمهٔ زیر را بزنید.
+              </Typography>
+              <Button variant="outlined" startIcon={<RestartAltIcon />}
+                onClick={() => window.location.reload()}>
+                بارگذاری مجدد صفحه
+              </Button>
             </Box>
           ) : (
             <Button variant="contained" startIcon={<SystemUpdateAltIcon />} disabled={update.isPending}

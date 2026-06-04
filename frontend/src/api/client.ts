@@ -158,6 +158,11 @@ export const setDomain = (domain: string, acme_email?: string) =>
 export const restartService = () => api.post("/api/ops/restart").then((r) => r.data);
 export const updateSystem = () => api.post("/api/ops/update").then((r) => r.data);
 export const getUpdateStatus = () => api.get("/api/ops/update-status").then((r) => r.data);
+// Lightweight liveness/version probe with a SHORT timeout, used while polling through an
+// update (the backend bounces mid-rebuild). A short timeout keeps the poll loop responsive
+// instead of hanging on the default 120s when a request stalls during the restart.
+export const pingInfo = (timeoutMs = 4000) =>
+  api.get("/api/info", { timeout: timeoutMs }).then((r) => r.data as { version: string });
 
 // ---- account ----
 export const updateAccount = (body: { current_password: string; new_username?: string; new_password?: string }) =>
