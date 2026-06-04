@@ -109,8 +109,11 @@ def register(sched: AsyncIOScheduler) -> None:
                   replace_existing=True)
     # Daily 10:00 UTC — reminders + enforcement.
     sched.add_job(daily_dunning_job, "cron", hour=10, id="daily_dunning", replace_existing=True)
-    # Daily 11:00 UTC — remove non-reseller members from the channel (dry-run unless enabled).
-    sched.add_job(channel_guard_job, "cron", hour=11, id="channel_guard", replace_existing=True)
+    # Every 10 minutes — remove non-reseller members from the channel/group (dry-run unless
+    # enabled) and notify them in the bot. Frequent so people who haven't registered their
+    # panel link don't linger.
+    sched.add_job(channel_guard_job, "interval", minutes=10, id="channel_guard",
+                  replace_existing=True)
     # Every 6 hours — keep snapshots fresh for the dashboard.
     sched.add_job(periodic_sync_job, "interval", hours=6, id="periodic_sync", replace_existing=True)
     # Every 2 hours — auto-backup to the owner's Telegram PV.

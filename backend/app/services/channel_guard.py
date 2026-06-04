@@ -75,6 +75,20 @@ async def enforce_channel(session: AsyncSession) -> dict:
             if kicked_any:
                 u.last_kicked_at = dt.datetime.now(dt.timezone.utc)
                 counts["kicked"] += 1
+                # Tell the removed user IN THE BOT why — they started the bot but never
+                # registered their panel link, so they aren't a recognized reseller.
+                try:
+                    await bot.send_message(
+                        u.telegram_id,
+                        "⛔️ شما از کانال/گروه حذف شدید.\n"
+                        "دلیل: هنوز لینک پنل خود را در ربات ثبت نکرده‌اید و به‌عنوان نمایندهٔ "
+                        "معتبر شناخته نمی‌شوید.\n"
+                        "اگر نمایندهٔ ما هستید، لطفاً لینک پنل خود را همین‌جا ارسال کنید تا ثبت "
+                        "شوید و دوباره بتوانید عضو شوید.",
+                    )
+                    counts["notified"] = counts.get("notified", 0) + 1
+                except Exception:  # noqa: BLE001 — user may have blocked the bot / never DMed it
+                    log.info("kick notice to %s failed (blocked bot?)", u.telegram_id)
         await session.commit()
     finally:
         await bot.session.close()

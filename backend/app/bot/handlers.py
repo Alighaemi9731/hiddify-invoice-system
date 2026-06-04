@@ -1214,6 +1214,22 @@ async def on_text(message: Message) -> None:
         await _send_menu(message.answer, session, message.from_user)
 
 
+async def _is_top_level_reseller(session, reseller: Reseller) -> bool:
+    """True only for a TOP-LEVEL reseller — a direct child of the panel's Owner. Mirrors the
+    billing engine's `select_billable_roots` rule so "who may register in the bot" matches
+    "who gets billed". A sub-reseller (its parent is another reseller, not the Owner) is NOT
+    top-level: it's managed/billed through its parent, so it must not self-register."""
+    panel_resellers = (
+        await session.execute(select(Reseller).where(Reseller.panel_id == reseller.panel_id))
+    ).scalars().all()
+    owner_uuids = {r.admin_uuid for r in panel_resellers if r.is_owner}
+    all_uuids = {r.admin_uuid for r in panel_resellers}
+    if owner_uuids:
+        return reseller.parent_admin_uuid in owner_uuids
+    # No Owner row in the data → fall back to structural roots (orphans / no parent).
+    return reseller.parent_admin_uuid is None or reseller.parent_admin_uuid not in all_uuids
+
+
 async def _handle_link(message: Message, session, parsed) -> None:
     reseller = (
         await session.execute(select(Reseller).where(Reseller.admin_uuid == parsed.uuid))
@@ -1221,6 +1237,15 @@ async def _handle_link(message: Message, session, parsed) -> None:
     # Must be a real, non-owner reseller that came from one of the registered panels.
     if reseller is None or reseller.is_owner:
         await message.answer(await texts.render(session, "tpl_link_not_found"))
+        return
+    # Only TOP-LEVEL resellers may register. A sub-reseller is handled by its parent (the
+    # parent issues its invoices + manages it from «مدیریت زیرمجموعه‌ها»), so block it.
+    if not await _is_top_level_reseller(session, reseller):
+        await message.answer(
+            "این لینک متعلق به یک زیرمجموعه است.\n"
+            "زیرمجموعه‌ها مستقیماً در ربات ثبت نمی‌شوند؛ مدیریت و صورتحساب شما از طریق "
+            "نمایندهٔ بالادستی‌تان انجام می‌شود. لطفاً با او هماهنگ کنید."
+        )
         return
     if parsed.host:
         hosts = {
