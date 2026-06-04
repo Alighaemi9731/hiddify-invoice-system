@@ -133,6 +133,73 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     }
 
 
+async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: Period) -> dict:
+    """Interim (so-far-this-period) breakdown for a reseller, split into:
+      - own:  the reseller's OWN users (just their admin_uuid)
+      - subs: each DIRECT sub-reseller's WHOLE subtree (so every user is counted once,
+              under the top sub it rolls up to)
+    ALL priced at the MAIN reseller's price_per_gb (a single unit price across the bundle),
+    so the totals exactly match the real end-of-month invoice for this node.
+
+    Returns: {price, own:{gb,users,amount}, subs:[{name,gb,users,amount}], total_gb,
+    total_amount, total_users}.
+    """
+    default_price = await pricing.get_default_price_per_gb(session)
+    price = int(reseller.price_per_gb or default_price)
+    free_threshold = await pricing.get_free_threshold_gb(session)
+
+    # All resellers on the panel → children map, to find this node's DIRECT subs + subtrees.
+    panel_resellers = (
+        await session.execute(select(Reseller).where(Reseller.panel_id == reseller.panel_id))
+    ).scalars().all()
+    children = build_children_map(panel_resellers)
+
+    async def _users_for(uuids: set[str]):
+        if not uuids:
+            return []
+        return (
+            await session.execute(
+                select(EndUserSnapshot).where(
+                    EndUserSnapshot.panel_id == reseller.panel_id,
+                    EndUserSnapshot.added_by_uuid.in_(uuids),
+                )
+            )
+        ).scalars().all()
+
+    # Own users: exactly this reseller's admin_uuid (NOT descendants).
+    own_users = await _users_for({reseller.admin_uuid})
+    own_gb, own_cnt = _billable_gb_for_period(own_users, period, free_threshold)
+
+    # Each direct sub-reseller, counted as its whole subtree (so no user is double-counted).
+    subs_out: list[dict] = []
+    for child in children.get(reseller.admin_uuid, []):
+        subtree = collect_descendants(child, children)
+        sub_uuids = {d.admin_uuid for d in subtree}
+        sub_users = await _users_for(sub_uuids)
+        sgb, scnt = _billable_gb_for_period(sub_users, period, free_threshold)
+        if scnt == 0 and sgb == 0:
+            continue  # skip sub-resellers with no sales this period (keeps the report tidy)
+        subs_out.append({
+            "name": child.name,
+            "gb": sgb,
+            "users": scnt,
+            "amount": round(sgb * price),
+        })
+    subs_out.sort(key=lambda s: s["gb"], reverse=True)
+
+    total_gb = round(own_gb + sum(s["gb"] for s in subs_out), 2)
+    total_users = own_cnt + sum(s["users"] for s in subs_out)
+    return {
+        "price": price,
+        "own": {"gb": own_gb, "users": own_cnt, "amount": round(own_gb * price)},
+        "subs": subs_out,
+        "total_gb": total_gb,
+        "total_users": total_users,
+        "total_amount": round(total_gb * price),
+        "period": period.label,
+    }
+
+
 async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> float:
     """The sub-tree's billable SOLD-quota GB for the CURRENT billing month (for cap checks)."""
     descendants = await node_descendants(session, reseller)

@@ -59,6 +59,37 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
     return out_path, f"factor_{safe}_{inv.period_label}.pdf"
 
 
+async def render_node_usage_pdf(
+    session: AsyncSession, node: Reseller, period, *, title: str = "فاکتور", issuer_name: str = "",
+) -> tuple[str, str] | None:
+    """Render a volume-only usage PDF for a node + its whole subtree (the same bundle the
+    real monthly invoice covers), for any period. Used for the reseller's own interim
+    invoice. Returns None if there's zero billable usage in the period."""
+    from app.services.reseller_report import node_invoice
+
+    bundle = await node_invoice(session, node, period)
+    if bundle is None or bundle.total_gb <= 0:
+        return None
+    panel = await session.get(Panel, node.panel_id)
+    owner_name = issuer_name or (await settings_service.get(session, "owner_name", "") or "")
+    safe = _safe_name(node.name)
+    out_path = f"data/invoices/{period.label}/usage_{safe}_{period.label}.pdf"
+    pdf_service.build_invoice_pdf(
+        out_path,
+        reseller_name=node.name, panel_label=panel.key if panel else "",
+        period_label=period.label, period_start=period.start, period_end=period.end,
+        lines=[
+            {"name": l.name, "uuid": l.user_uuid, "start_date": l.start_date,
+             "usage_gb": float(l.usage_gb), "sub_reseller_name": l.sub_reseller_name or node.name}
+            for l in bundle.lines
+        ],
+        total_gb=float(bundle.total_gb), price_per_gb=0,
+        amount_toman=0, amount_usdt=0, usdt_rate=0,
+        owner_name=owner_name, invoice_title=title,
+    )
+    return out_path, f"{title.replace(' ', '_')}_{safe}_{period.label}.pdf"
+
+
 async def render_sub_invoice_pdf(
     session: AsyncSession, node: Reseller, period, *, issuer_name: str = ""
 ) -> tuple[str, str] | None:

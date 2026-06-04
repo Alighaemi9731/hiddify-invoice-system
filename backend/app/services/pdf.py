@@ -130,7 +130,12 @@ def build_invoice_pdf(
     floor_applied: bool = False,
     owner_name: str = "",
     issued_at: dt.date | None = None,
+    invoice_title: str = "فاکتور",
 ) -> str:
+    # NOTE: the money args (price_per_gb, amount_toman, amount_usdt, usdt_rate,
+    # wallet_address, card_number, card_holder, base_amount_toman, min_sale_toman,
+    # floor_applied) are accepted for backward-compat but NO LONGER rendered — the PDF is a
+    # volume-only usage report. Pricing/payment is shown in the bot's text message instead.
     reg = _font_or_default(FONT)
     bold = _font_or_default(BOLD)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -158,7 +163,7 @@ def build_invoice_pdf(
     title_style = ParagraphStyle("t", fontName=bold, fontSize=19, textColor=colors.white,
                                  alignment=2, leading=26)
     title_html = (
-        f"{rtl('فاکتور فروش')}"
+        f"{rtl(invoice_title or 'فاکتور')}"
         f"<br/><font size='10' color='#cdd7ee'>{rtl('دوره ' + _fa_digits(period_label))}</font>"
     )
     title = Paragraph(title_html, title_style)
@@ -255,78 +260,36 @@ def build_invoice_pdf(
     table.setStyle(TableStyle(style))
     elems += [table, Spacer(1, 12)]
 
-    # ---------- totals ----------
-    rows = [
-        [Paragraph(money(total_gb) + rtl(" گیگ"), val), Paragraph(rtl("مجموع مصرف"), rightMuted)],
-        [Paragraph(money(price_per_gb) + rtl(" تومان"), val), Paragraph(rtl("قیمت هر گیگ"), rightMuted)],
-    ]
-    if floor_applied and base_amount_toman is not None:
-        rows.append([Paragraph(money(base_amount_toman) + rtl(" تومان"), rightMuted),
-                     Paragraph(rtl("مبلغ بر اساس مصرف"), rightMuted)])
-        rows.append([Paragraph(money(min_sale_toman) + rtl(" تومان"), val),
-                     Paragraph(rtl("حداقل فروش (اعمال شد)"), rightMuted)])
-    totals = Table(rows, colWidths=[55 * mm, 36 * mm])
-    totals.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
-        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
-
+    # ---------- total GB summary (volume only — NO prices/amounts on the PDF) ----------
+    # The invoice PDF is a usage report: it shows ONLY how much volume was created and by
+    # whom. Money (price, total Toman/USDT, payment instructions) lives in the bot's text
+    # message, not on the document — so a reseller can hand the PDF to their sub-reseller
+    # without exposing the prices configured in the owner's settings.
     grand = Table(
-        [[Paragraph(rtl(f"{money(amount_toman)} تومان"), ParagraphStyle("g", fontName=bold, fontSize=14, alignment=2, textColor=colors.white)),
-          Paragraph(rtl("مبلغ قابل پرداخت"), ParagraphStyle("gl", fontName=bold, fontSize=11, alignment=2, textColor=colors.white))],
-         [Paragraph(_fa_digits(f"{amount_usdt:,.2f}") + rtl(" USDT (BEP-20)"), ParagraphStyle("gu", fontName=reg, fontSize=10, alignment=2, textColor=colors.HexColor("#fde9c8"))),
-          Paragraph(rtl(f"نرخ: {money(usdt_rate)} ت/دلار"), ParagraphStyle("gr", fontName=reg, fontSize=8.5, alignment=2, textColor=colors.HexColor("#fde9c8")))]],
-        colWidths=[55 * mm, 36 * mm],
+        [[Paragraph(rtl(f"{gb(total_gb)} گیگ"),
+                    ParagraphStyle("g", fontName=bold, fontSize=15, alignment=2, textColor=colors.white)),
+          Paragraph(rtl("مجموع حجم"),
+                    ParagraphStyle("gl", fontName=bold, fontSize=11, alignment=2, textColor=colors.white))],
+         [Paragraph(rtl(f"{_fa_digits(str(len(lines)))} سرویس"),
+                    ParagraphStyle("gc", fontName=reg, fontSize=9.5, alignment=2, textColor=colors.HexColor("#dbe6fb"))),
+          Paragraph(rtl("تعداد سرویس‌های جدید"),
+                    ParagraphStyle("gcl", fontName=reg, fontSize=9, alignment=2, textColor=colors.HexColor("#dbe6fb")))]],
+        colWidths=[60 * mm, 55 * mm],
     )
     grand.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), ACCENT),
-        ("SPAN", (0, 0), (0, 0)),
+        ("BACKGROUND", (0, 0), (-1, -1), PRIMARY),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
     ]))
-
-    summary_block = Table([[grand, totals]], colWidths=[95 * mm, 92 * mm])
+    # Right-align the summary block on the page.
+    summary_block = Table([["", grand]], colWidths=[72 * mm, 115 * mm])
     summary_block.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
     elems += [summary_block, Spacer(1, 14)]
 
-    # ---------- payment boxes (one per enabled method) ----------
-    def _pay_box(value_para, label_fa: str):
-        box = Table(
-            [[value_para,
-              Paragraph(rtl(label_fa), ParagraphStyle("wl", fontName=bold, fontSize=9.5, alignment=2, textColor=PRIMARY))]],
-            colWidths=[122 * mm, 60 * mm],
-        )
-        box.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), PRIMARY_LT),
-            ("BOX", (0, 0), (-1, -1), 0.6, PRIMARY),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
-            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ]))
-        return box
-
-    if wallet_address:
-        elems += [
-            _pay_box(
-                Paragraph(wallet_address, ParagraphStyle("w", fontName="Courier", fontSize=9, alignment=1, textColor=INK)),
-                "آدرس پرداخت USDT (BEP-20)",
-            ),
-            Spacer(1, 8),
-        ]
-    if card_number:
-        holder = f"  ({card_holder})" if card_holder else ""
-        elems += [
-            _pay_box(
-                Paragraph(f"{card_number}{holder}", ParagraphStyle("c", fontName="Courier", fontSize=10, alignment=1, textColor=INK)),
-                "شمارهٔ کارت (کارت‌به‌کارت)",
-            ),
-            Spacer(1, 8),
-        ]
-
     elems.append(Paragraph(
-        rtl(f"این فاکتور به‌صورت خودکار در تاریخ {_fa_digits(issued.strftime('%Y-%m-%d'))} صادر شده است."),
+        rtl(f"این گزارش به‌صورت خودکار در تاریخ {_fa_digits(issued.strftime('%Y-%m-%d'))} صادر شده است."),
         ParagraphStyle("f", fontName=reg, fontSize=8, alignment=1, textColor=MUTED)))
 
     doc.build(elems)

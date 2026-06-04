@@ -653,6 +653,13 @@ async def cb_debt(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data == "menu:interim")
+async def cb_interim(cb: CallbackQuery, bot: Bot) -> None:
+    await cb.answer("در حال ساخت فاکتور علی‌الحساب…")
+    async with SessionLocal() as s:
+        await _send_self_interim(cb.message.answer, cb.from_user.id, s, bot=bot)
+
+
 @router.callback_query(F.data == "menu:pay")
 async def cb_pay(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
@@ -843,6 +850,78 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
             f"({float(inv.amount_usdt):,.2f} USDT) — {_STATUS_FA.get(inv.status.value, inv.status.value)}"
         )
     await answer("\n".join(lines))
+
+
+async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None:
+    """A reseller's OWN interim invoice for the CURRENT month so far — identical in scope to
+    the real end-of-month invoice (their own users + all sub-resellers, bundled), but marked
+    interim. Sends a volume-only PDF plus a text breakdown (own + each sub + Rial total)."""
+    from app.services import invoice_pdf, reseller_report
+    from app.services.periods import month_period
+
+    resellers = await _resellers_for_chat(session, chat_id)
+    if not resellers:
+        await answer(await texts.render(session, "tpl_link_not_found"))
+        return
+    today = dt.date.today()
+    period = month_period(today.year, today.month)
+    sent_any = False
+    for r in resellers:
+        # Only TOP-LEVEL resellers get a bundled invoice (a sub is billed via its parent).
+        if not await _is_top_level_reseller(session, r):
+            continue
+        bd = await reseller_report.interim_breakdown(session, r, period)
+        if bd["total_gb"] <= 0:
+            await answer(f"«{r.name}»: در دورهٔ جاری ({period.label}) هنوز مصرفی ثبت نشده است.")
+            sent_any = True
+            continue
+
+        # --- text breakdown ---
+        price = bd["price"]
+        lines = [
+            f"📄 فاکتور علی‌الحساب — «{r.name}»",
+            f"دوره: {period.label} (تا امروز)",
+            f"قیمت هر گیگ: {price:,} تومان",
+            "",
+            "🟦 مصرف خودتان:",
+            f"• {bd['own']['gb']:g} گیگ ({bd['own']['users']} سرویس) — {bd['own']['amount']:,} تومان",
+        ]
+        if bd["subs"]:
+            lines.append("\n🟨 زیرمجموعه‌های شما:")
+            for s in bd["subs"]:
+                lines.append(f"• {s['name']}: {s['gb']:g} گیگ ({s['users']} سرویس) — {s['amount']:,} تومان")
+        lines += [
+            "",
+            "➖➖➖➖➖➖➖➖",
+            f"📊 مجموع حجم: {bd['total_gb']:g} گیگ ({bd['total_users']} سرویس)",
+            f"💰 مجموع مبلغ: {bd['total_amount']:,} تومان",
+            "",
+            "ℹ️ این فاکتور علی‌الحساب است؛ اول ماه آینده فاکتور کامل و واقعیِ قابل پرداخت برایتان ارسال می‌شود.",
+        ]
+        text = "\n".join(lines)
+
+        # --- volume-only PDF (own + subs bundled, same as the real invoice) ---
+        owner_name = await settings_service.get(session, "owner_name", "") or ""
+        try:
+            res = await invoice_pdf.render_node_usage_pdf(
+                session, r, period, title="فاکتور علی‌الحساب", issuer_name=owner_name
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("interim pdf failed", exc_info=True)
+            res = None
+        if res and bot is not None:
+            from aiogram.types import FSInputFile
+
+            path, fname = res
+            cap = text if len(text) <= 1024 else None
+            await bot.send_document(chat_id, FSInputFile(path, filename=fname), caption=cap)
+            if cap is None:
+                await answer(text)
+        else:
+            await answer(text)
+        sent_any = True
+    if not sent_any:
+        await answer("شما نمایندهٔ اصلی نیستید؛ فاکتور شما از طریق نمایندهٔ بالادستی صادر می‌شود.")
 
 
 async def _send_debt(answer, chat_id: int, session) -> None:
