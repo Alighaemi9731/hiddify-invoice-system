@@ -3,18 +3,16 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import Invoice, Panel, Payment, Reseller
+from app.models import Invoice, Payment, Reseller
 from app.models.enums import PaymentMethod, PaymentStatus
 from app.schemas.payment import (
-    ConfirmPaymentBody,
-    DueInvoiceOut,
     ManualPaymentCreate,
     PaymentActionResult,
     PaymentOut,
@@ -26,9 +24,13 @@ router = APIRouter(
 )
 
 
-def _to_out(p: Payment, reseller_name: str | None) -> PaymentOut:
+def _to_out(
+    p: Payment, reseller_name: str | None,
+    invoice_period: str | None = None, invoice_amount_toman: float = 0,
+) -> PaymentOut:
     return PaymentOut(
         id=p.id, reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
+        invoice_period=invoice_period, invoice_amount_toman=float(invoice_amount_toman or 0),
         method=p.method.value, status=p.status.value, chain=p.chain, txid=p.txid,
         from_address=p.from_address, to_address=p.to_address, amount_usdt=float(p.amount_usdt),
         confirmations=p.confirmations, verified_at=p.verified_at, created_at=p.created_at, note=p.note,
@@ -44,8 +46,9 @@ async def list_payments(
     session: AsyncSession = Depends(get_session),
 ) -> list[PaymentOut]:
     q = (
-        select(Payment, Reseller.name)
+        select(Payment, Reseller.name, Invoice.period_label, Invoice.amount_toman)
         .outerjoin(Reseller, Payment.reseller_id == Reseller.id)
+        .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
         .order_by(Payment.created_at.desc())
         .limit(limit)
     )
@@ -54,7 +57,7 @@ async def list_payments(
     if reseller_id is not None:
         q = q.where(Payment.reseller_id == reseller_id)
     rows = (await session.execute(q)).all()
-    return [_to_out(p, name) for p, name in rows]
+    return [_to_out(p, name, period, toman) for p, name, period, toman in rows]
 
 
 @router.get("/{payment_id}", response_model=PaymentOut)
@@ -63,7 +66,9 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
     if not p:
         raise HTTPException(404, "Payment not found")
     reseller = await session.get(Reseller, p.reseller_id)
-    return _to_out(p, reseller.name if reseller else None)
+    inv = await session.get(Invoice, p.invoice_id) if p.invoice_id else None
+    return _to_out(p, reseller.name if reseller else None,
+                   inv.period_label if inv else None, float(inv.amount_toman) if inv else 0)
 
 
 @router.post("/{payment_id}/verify", response_model=PaymentActionResult)
@@ -75,42 +80,12 @@ async def verify(payment_id: int, session: AsyncSession = Depends(get_session)) 
 
 
 @router.post("/{payment_id}/confirm", response_model=PaymentActionResult)
-async def confirm(
-    payment_id: int,
-    body: ConfirmPaymentBody | None = Body(None),
-    session: AsyncSession = Depends(get_session),
-) -> PaymentActionResult:
+async def confirm(payment_id: int, session: AsyncSession = Depends(get_session)) -> PaymentActionResult:
+    """Confirm the payment for the single invoice it's linked to (payments are per-invoice)."""
     if not await session.get(Payment, payment_id):
         raise HTTPException(404, "Payment not found")
-    r = await payments_service.confirm_manually(
-        session, payment_id, invoice_ids=(body.invoice_ids if body else None)
-    )
+    r = await payments_service.confirm_manually(session, payment_id)
     return PaymentActionResult(status=r.status, paid=r.paid, message=r.message_fa)
-
-
-@router.get("/{payment_id}/due-invoices", response_model=list[DueInvoiceOut])
-async def due_invoices(
-    payment_id: int, session: AsyncSession = Depends(get_session)
-) -> list[DueInvoiceOut]:
-    """The customer's outstanding (due-now) invoices, oldest first — so the owner can pick
-    which ones a payment covers when confirming. Spans all of the customer's reseller rows."""
-    p = await session.get(Payment, payment_id)
-    if not p:
-        raise HTTPException(404, "Payment not found")
-    reseller = await session.get(Reseller, p.reseller_id)
-    rids = await payments_service._chat_reseller_ids(session, reseller)
-    invoices = await payments_service._due_now_invoices(session, rids)
-    out: list[DueInvoiceOut] = []
-    for inv in invoices:
-        r = await session.get(Reseller, inv.reseller_id)
-        panel = await session.get(Panel, inv.panel_id)
-        out.append(DueInvoiceOut(
-            id=inv.id, period_label=inv.period_label,
-            reseller_name=r.name if r else "", panel_key=panel.key if panel else "",
-            amount_usdt=float(inv.amount_usdt), amount_toman=float(inv.amount_toman),
-            status=inv.status.value,
-        ))
-    return out
 
 
 @router.post("/{payment_id}/reject", response_model=PaymentActionResult)

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
-  Box, Button, Card, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  Divider, IconButton, MenuItem, Stack, Table, TableBody, TableCell,
+  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  IconButton, MenuItem, Stack, Table, TableBody, TableCell,
   TableHead, TableRow, TextField, Tooltip, Typography, Link,
 } from "@mui/material";
 import VerifiedIcon from "@mui/icons-material/Verified";
@@ -10,11 +10,11 @@ import CloseIcon from "@mui/icons-material/Close";
 import ImageIcon from "@mui/icons-material/Image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  listPayments, verifyPayment, confirmPayment, rejectPayment, openPaymentProof, getDueInvoices,
+  listPayments, verifyPayment, confirmPayment, rejectPayment, openPaymentProof,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
-import { fmtUsdt, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
+import { fmtUsdt, fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error", duplicate: "default" };
 
@@ -29,31 +29,21 @@ export default function Payments() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["payments"] });
   const { sorted, key, dir, toggle } = useSort(data, "created_at", "desc");
 
-  // ---- confirm dialog: owner picks which invoices a payment covers ----
+  // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const [confirmRow, setConfirmRow] = useState<any>(null);
-  const [selected, setSelected] = useState<Record<number, boolean>>({});
-  const { data: dueList = [], isLoading: dueLoading } = useQuery({
-    queryKey: ["due-invoices", confirmRow?.id],
-    queryFn: () => getDueInvoices(confirmRow.id),
-    enabled: !!confirmRow,
-  });
 
   const verify = useMutation({ mutationFn: verifyPayment, onSuccess: (r: any) => { show(r?.message || "بررسی شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
   const reject = useMutation({ mutationFn: rejectPayment, onSuccess: (r: any) => { show(r?.message || "رد شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
   const confirm_ = useMutation({
-    mutationFn: ({ id, ids }: { id: number; ids?: number[] }) => confirmPayment(id, ids),
+    mutationFn: (id: number) => confirmPayment(id),
     onSuccess: (r: any) => { show(r?.message || "تأیید شد"); setConfirmRow(null); refresh(); },
     onError: (e) => show(errMsg(e), "error"),
   });
 
-  const openConfirm = (p: any) => { setSelected({}); setConfirmRow(p); };
   const doReject = (p: any) => {
-    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ رد آن فاکتورهای تسویه‌شده را دوباره «پرداخت‌نشده» می‌کند.)" : "";
+    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ رد آن فاکتورِ تسویه‌شده را دوباره «پرداخت‌نشده» می‌کند.)" : "";
     if (window.confirm(`پرداخت «${p.reseller_name || ""}» رد شود؟${extra}`)) reject.mutate(p.id);
   };
-
-  const selectedIds = dueList.filter((i: any) => selected[i.id]).map((i: any) => i.id);
-  const selTotalUsdt = dueList.filter((i: any) => selected[i.id]).reduce((s: number, i: any) => s + (i.amount_usdt || 0), 0);
 
   return (
     <Box>
@@ -68,6 +58,7 @@ export default function Payments() {
           <TableHead>
             <TableRow>
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
+              <SortTh id="invoice_period" label="فاکتور (دوره)" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="method" label="روش" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell>TXID</TableCell>
               <SortTh id="amount_usdt" label="مبلغ" sortKey={key} dir={dir} onSort={toggle} />
@@ -81,6 +72,7 @@ export default function Payments() {
             {sorted.map((p: any) => (
               <TableRow key={p.id} hover>
                 <TableCell>{p.reseller_name}</TableCell>
+                <TableCell>{p.invoice_period || "—"}</TableCell>
                 <TableCell>{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
                 <TableCell dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
                   {p.txid
@@ -96,59 +88,42 @@ export default function Payments() {
                 <TableCell align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
                   <Tooltip title="بررسی زنجیره (TXID)"><span><IconButton size="small" disabled={!p.txid} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
-                  <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید و انتخاب فاکتورها"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => openConfirm(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
+                  <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                 </TableCell>
               </TableRow>
             ))}
-            {data.length === 0 && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>پرداختی ثبت نشده است</TableCell></TableRow>}
+            {data.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>پرداختی ثبت نشده است</TableCell></TableRow>}
           </TableBody>
         </Table>
       </Card>
 
-      {/* Pick exactly which invoices this payment settles. One transfer can cover several. */}
-      <Dialog open={!!confirmRow} onClose={() => setConfirmRow(null)} fullWidth maxWidth="sm">
+      {/* A payment is for ONE invoice — just confirm it (view the receipt first if a screenshot). */}
+      <Dialog open={!!confirmRow} onClose={() => setConfirmRow(null)} fullWidth maxWidth="xs">
         {confirmRow && (<>
-          <DialogTitle>تأیید پرداخت — {confirmRow.reseller_name}</DialogTitle>
+          <DialogTitle>تأیید پرداخت</DialogTitle>
           <DialogContent>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              نماینده: <b>{confirmRow.reseller_name}</b>
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              فاکتور دوره: <b>{confirmRow.invoice_period || "—"}</b>
+              {confirmRow.invoice_amount_toman ? <> — {fmtToman(confirmRow.invoice_amount_toman)}</> : null}
+            </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              فاکتورهایی را که این پرداخت پوشش می‌دهد انتخاب کنید (می‌توانید چند فاکتور را با یک پرداخت تسویه کنید). فقط فاکتورهای انتخاب‌شده «پرداخت‌شده» می‌شوند.
+              با تأیید، فقط همین فاکتور «پرداخت‌شده» می‌شود.
             </Typography>
             {confirmRow.has_proof && (
-              <Button size="small" startIcon={<ImageIcon />} onClick={() => openPaymentProof(confirmRow.id)} sx={{ mb: 1 }}>
+              <Button size="small" startIcon={<ImageIcon />} onClick={() => openPaymentProof(confirmRow.id)}>
                 مشاهدهٔ رسید
               </Button>
             )}
-            {dueLoading && <Typography variant="body2">در حال بارگذاری…</Typography>}
-            {!dueLoading && dueList.length === 0 && (
-              <Typography variant="body2" color="text.secondary">این مشتری فاکتور پرداخت‌نشدهٔ سررسیده‌ای ندارد.</Typography>
-            )}
-            {dueList.map((i: any) => (
-              <Stack key={i.id} direction="row" alignItems="center" spacing={1} sx={{ py: 0.5 }}>
-                <Checkbox size="small" checked={!!selected[i.id]} onChange={(e) => setSelected({ ...selected, [i.id]: e.target.checked })} />
-                <Box sx={{ flex: 1 }}>
-                  <Typography variant="body2">{i.period_label} — {i.reseller_name} <span style={{ color: "#888" }}>({i.panel_key})</span></Typography>
-                </Box>
-                <Typography variant="body2" dir="ltr">{fmtUsdt(i.amount_usdt)}</Typography>
-              </Stack>
-            ))}
-            {dueList.length > 0 && <>
-              <Divider sx={{ my: 1 }} />
-              <Stack direction="row" justifyContent="space-between">
-                <Typography variant="body2">جمع انتخاب‌شده: {selectedIds.length} فاکتور</Typography>
-                <Typography variant="body2" dir="ltr" fontWeight={600}>{fmtUsdt(selTotalUsdt)}</Typography>
-              </Stack>
-            </>}
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setConfirmRow(null)}>انصراف</Button>
-            <Button onClick={() => confirm_.mutate({ id: confirmRow.id, ids: dueList.map((i: any) => i.id) })}
-              disabled={confirm_.isPending || dueList.length === 0}>
-              تأیید همهٔ بدهی
-            </Button>
-            <Button variant="contained" onClick={() => confirm_.mutate({ id: confirmRow.id, ids: selectedIds })}
-              disabled={confirm_.isPending || selectedIds.length === 0}>
-              تأیید فاکتورهای انتخاب‌شده
+            <Button variant="contained" disabled={confirm_.isPending}
+              onClick={() => confirm_.mutate(confirmRow.id)}>
+              تأیید پرداخت
             </Button>
           </DialogActions>
         </>)}

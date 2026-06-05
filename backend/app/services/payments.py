@@ -38,37 +38,6 @@ USDT_DECIMALS = 18
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 
 
-async def _chat_reseller_ids(session: AsyncSession, reseller: Reseller | None) -> list[int]:
-    """All reseller rows that belong to the same Telegram user (one customer can be an
-    admin on several panels). Used so one payment can clear debt across all of them."""
-    if reseller is None:
-        return []
-    if reseller.bot_chat_id is None:
-        return [reseller.id]
-    rows = (
-        await session.execute(
-            select(Reseller.id).where(Reseller.bot_chat_id == reseller.bot_chat_id)
-        )
-    ).scalars().all()
-    return list(rows) or [reseller.id]
-
-
-async def _due_now_invoices(session: AsyncSession, reseller_ids: list[int]) -> list[Invoice]:
-    """Outstanding invoices that are due NOW (oldest first) — owed and NOT deferred to a
-    future date. Deferred invoices wait until their deadline."""
-    if not reseller_ids:
-        return []
-    today = dt.date.today()
-    rows = (
-        await session.execute(
-            select(Invoice)
-            .where(Invoice.reseller_id.in_(reseller_ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.asc())
-        )
-    ).scalars().all()
-    return [i for i in rows if not (i.deferred_until and i.deferred_until > today)]
-
-
 async def _maybe_restore(session: AsyncSession, reseller: Reseller | None) -> None:
     if reseller is None:
         return
@@ -281,62 +250,40 @@ async def _mark_invoices_paid(
         await financial_archive.record(session, inv, reseller=reseller, txid=payment.txid)
 
 
-async def confirm_manually(
-    session: AsyncSession, payment_id: int, invoice_ids: list[int] | None = None
-) -> PaymentResult:
-    """Owner override: mark a payment confirmed without on-chain verification.
+async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentResult:
+    """Owner override: mark a payment confirmed (without on-chain verification) for the SINGLE
+    invoice it's linked to — payments are per-invoice, so there's nothing to choose.
 
-    `invoice_ids` (optional): the exact set of the customer's OWED invoices this payment
-    covers — so one transfer can settle several invoices, and the owner stays in control of
-    which ones (vital for screenshots, where the amount isn't machine-readable). When None,
-    falls back to settling the single invoice the payment was linked to (its oldest due).
-
-    Reversible: works on a previously rejected payment too (recovers a mis-click). The
-    reseller is notified only when the status actually CHANGES to confirmed (re-confirming
-    an already-confirmed payment is silent), so a double-click doesn't spam them.
+    Reversible: works on a previously rejected payment too (recovers a mis-click). The reseller
+    is notified only when the status actually CHANGES to confirmed (re-confirming an already-
+    confirmed payment is silent), so a double-click doesn't spam them.
     """
     payment = await session.get(Payment, payment_id, with_for_update=True)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
-    rids = set(await _chat_reseller_ids(session, reseller))
-
-    if invoice_ids:
-        rows = (
-            await session.execute(select(Invoice).where(Invoice.id.in_(invoice_ids)))
-        ).scalars().all()
-        # Only the customer's own invoices that are owed (or already paid by THIS payment,
-        # so a re-confirm after reject still works), oldest first.
-        targets = [
-            i for i in rows
-            if i.reseller_id in rids and (i.status in _OWED or i.id in set(_settled_ids(payment)))
-        ]
-        targets.sort(key=lambda i: i.period_start)
-    else:
-        inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-        targets = [inv] if inv is not None else []
+    inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+    targets = [inv] if inv is not None else []
 
     await _mark_invoices_paid(session, targets, payment)
     payment.status = PaymentStatus.confirmed
     payment.verified_at = dt.datetime.now(dt.timezone.utc)
-    if targets:
-        payment.invoice_id = targets[0].id
-        payment.settled_invoice_ids = ",".join(str(i.id) for i in targets)
+    if inv is not None:
+        payment.settled_invoice_ids = str(inv.id)
         if not payment.amount_usdt:
-            payment.amount_usdt = float(sum(Decimal(str(i.amount_usdt or 0)) for i in targets))
+            payment.amount_usdt = float(inv.amount_usdt or 0)
     if "[manually confirmed]" not in (payment.note or ""):
         payment.note = (payment.note or "") + " [manually confirmed]"
     await session.commit()
 
-    # Restore any reseller whose invoice we just settled (covers sub-rows of one customer).
-    for rid in ({i.reseller_id for i in targets} or {payment.reseller_id}):
-        await _maybe_restore(session, await session.get(Reseller, rid))
+    if inv is not None:
+        await _maybe_restore(session, await session.get(Reseller, inv.reseller_id))
 
     if reseller is not None and not was_confirmed:
-        periods = "، ".join(i.period_label for i in targets)
+        period = inv.period_label if inv is not None else ""
         await notifier.send_to_reseller(
-            session, reseller, await _payment_received_text(session, periods),
+            session, reseller, await _payment_received_text(session, period),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
     return PaymentResult("confirmed", True, "Confirmed")

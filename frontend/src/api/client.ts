@@ -34,9 +34,6 @@ api.interceptors.response.use(
   }
 );
 
-export const pdfUrl = (invoiceId: number) =>
-  `${baseURL}/api/invoices/${invoiceId}/pdf`;
-
 // Fetch the PDF WITH the auth header (a plain link would 401), then open it.
 export async function openInvoicePdf(invoiceId: number) {
   const res = await api.get(`/api/invoices/${invoiceId}/pdf`, { responseType: "blob" });
@@ -111,7 +108,6 @@ export const sendPeriod = (period: string) =>
 export const markInvoicePaid = (id: number) => api.post(`/api/invoices/${id}/mark-paid`).then((r) => r.data);
 export const unmarkInvoicePaid = (id: number) => api.post(`/api/invoices/${id}/unmark-paid`).then((r) => r.data);
 export const editInvoice = (id: number, body: any) => api.patch(`/api/invoices/${id}`, body).then((r) => r.data);
-export const cancelInvoice = (id: number) => api.post(`/api/invoices/${id}/cancel`).then((r) => r.data);
 export const recomputeInvoice = (id: number) => api.post(`/api/invoices/${id}/recompute`).then((r) => r.data);
 export const revertInvoiceToDraft = (id: number) => api.post(`/api/invoices/${id}/revert-to-draft`).then((r) => r.data);
 export const deferInvoice = (id: number, body: { deferred_until: string | null; defer_note?: string }) =>
@@ -121,11 +117,9 @@ export const deferInvoice = (id: number, body: { deferred_until: string | null; 
 export const listPayments = (params: any = {}) =>
   api.get("/api/payments", { params }).then((r) => r.data);
 export const verifyPayment = (id: number) => api.post(`/api/payments/${id}/verify`).then((r) => r.data);
-export const confirmPayment = (id: number, invoice_ids?: number[]) =>
-  api.post(`/api/payments/${id}/confirm`, { invoice_ids: invoice_ids ?? null }).then((r) => r.data);
+export const confirmPayment = (id: number) =>
+  api.post(`/api/payments/${id}/confirm`).then((r) => r.data);
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);
-export const getDueInvoices = (id: number) =>
-  api.get(`/api/payments/${id}/due-invoices`).then((r) => r.data);
 // Fetch the deposit screenshot (authenticated) as a blob and open it in a new tab.
 export const openPaymentProof = async (id: number) => {
   const r = await api.get(`/api/payments/${id}/proof`, { responseType: "blob" });
@@ -148,9 +142,6 @@ export const getFinancialHistory = (params: any = {}) =>
   api.get("/api/reports/financial-history", { params }).then((r) => r.data);
 
 // ---- operations ----
-export const runDunning = () => api.post("/api/ops/dunning/run").then((r) => r.data);
-export const runMonthly = (params: any = {}) =>
-  api.post("/api/ops/run-monthly", null, { params }).then((r) => r.data);
 export const broadcastMessage = (body: { text: string; audience?: string; panel_id?: number }) =>
   api.post("/api/ops/broadcast", body).then((r) => r.data);
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);

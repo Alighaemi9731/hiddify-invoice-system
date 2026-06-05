@@ -6,7 +6,7 @@ Scopes:
                     (BotCommandScopeAllPrivateChats), so the `/` menu does NOT pop up
                     in GROUPS where the bot is a member/admin.
   * OWNER         — admin commands, scoped to the owner's private chat, so the owner
-                    does NOT see reseller-only commands like /pay or /debt.
+                    does NOT see reseller-only commands like /pay or /invoices.
 The GROUP-CHATS scope is explicitly CLEARED so any commands previously registered
 under the default scope stop appearing in groups.
 """
