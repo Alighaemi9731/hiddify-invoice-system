@@ -18,12 +18,11 @@ def toman_to_usdt(amount_toman: float | Decimal, toman_per_usdt: float | int) ->
 
 
 async def get_rate(session: AsyncSession) -> int:
-    """Current Toman-per-USDT rate from settings."""
-    value = await settings_service.get(session, "toman_per_usdt", 0)
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+    """Current Toman-per-USDT rate to use — the live auto rate when `rate_mode="auto"`,
+    otherwise the manual setting (see `rates.get_effective_rate`)."""
+    from app.services import rates
+
+    return await rates.get_effective_rate(session)
 
 
 async def get_default_price_per_gb(session: AsyncSession) -> int:

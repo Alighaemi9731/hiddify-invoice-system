@@ -30,7 +30,8 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
 
     opts = await payment_methods.load_options(session)
     instructions = payment_methods.instructions_text(
-        opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}", html=True
+        opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
+        amount_toman=f"{float(inv.amount_toman):,.0f}", html=True,
     )
     text = await texts.render(
         session, "tpl_invoice",

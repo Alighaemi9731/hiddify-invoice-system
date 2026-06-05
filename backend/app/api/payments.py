@@ -96,6 +96,18 @@ async def reject(payment_id: int, session: AsyncSession = Depends(get_session)) 
     return PaymentActionResult(status=r.status, paid=r.paid, message=r.message_fa)
 
 
+@router.delete("/{payment_id}", response_model=PaymentActionResult)
+async def delete_payment(
+    payment_id: int, session: AsyncSession = Depends(get_session)
+) -> PaymentActionResult:
+    """Delete a payment row (e.g. test-data cleanup). A confirmed payment's invoice is reverted
+    to owed first so accounting stays consistent."""
+    ok = await payments_service.delete_payment(session, payment_id)
+    if not ok:
+        raise HTTPException(404, "Payment not found")
+    return PaymentActionResult(status="deleted", paid=False, message="پرداخت حذف شد.")
+
+
 @router.get("/{payment_id}/proof")
 async def proof(payment_id: int, session: AsyncSession = Depends(get_session)) -> FileResponse:
     """Serve the deposit screenshot a reseller sent (method=screenshot)."""

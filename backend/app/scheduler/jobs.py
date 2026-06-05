@@ -22,6 +22,7 @@ from app.services import (
     dunning,
     invoicing,
     owner_notify,
+    rates,
     settings_service,
     sync as sync_service,
 )
@@ -39,6 +40,7 @@ class ScheduleConfig:
     sync_hours: int = 6        # panel sync: every N hours (1–24)
     guard_minutes: int = 10    # channel/group guard: every N minutes (1–59)
     backup_hours: int = 2      # auto-backup: every N hours (1–24)
+    rate_hours: int = 1        # live USDT→Toman rate refresh: every N hours (1–23)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -55,6 +57,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
     s = await settings_service.get_many(session, [
         "invoice_day_of_month", "invoice_hour", "dunning_hour",
         "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
+        "rate_refresh_hours",
     ])
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
@@ -67,6 +70,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         sync_hours=_clamp(s.get("sync_interval_hours"), 1, 23, 6),
         guard_minutes=_clamp(s.get("guard_interval_minutes"), 1, 59, 10),
         backup_hours=_clamp(s.get("backup_interval_hours"), 1, 23, 2),
+        rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 23, 1),
     )
 
 
@@ -147,6 +151,16 @@ async def backup_job() -> None:
         log.exception("backup_job failed")
 
 
+async def rate_refresh_job() -> None:
+    """Refresh the live USDT→Toman rate when in auto mode (no-op in manual mode)."""
+    try:
+        async with SessionLocal() as session:
+            if str(await settings_service.get(session, "rate_mode", "manual")).lower() == "auto":
+                await rates.refresh_auto_rate(session)
+    except Exception:  # noqa: BLE001
+        log.exception("rate_refresh_job failed")
+
+
 def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None:
     """(Re)register all jobs with the owner-configured timings. Safe to call on a running
     scheduler — `replace_existing=True` updates each trigger in place, so this doubles as the
@@ -184,13 +198,17 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
          CronTrigger(hour=f"*/{cfg.sync_hours}", minute=0, timezone=tz), 1800),
         ("backup", backup_job,
          CronTrigger(hour=f"*/{cfg.backup_hours}", minute=0, timezone=tz), 3600),
+        # Live USDT→Toman rate refresh, a few minutes past the hour so it doesn't collide
+        # with the on-the-hour jobs above.
+        ("rate_refresh", rate_refresh_job,
+         CronTrigger(hour=f"*/{cfg.rate_hours}", minute=5, timezone=tz), 3600),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,
                       coalesce=True, misfire_grace_time=grace)
     log.info(
-        "Registered 5 cron jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
-        "sync every %dh, guard every %dm, backup every %dh.",
+        "Registered 6 cron jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
+        "sync every %dh, guard every %dm, backup every %dh, rate every %dh.",
         sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
-        cfg.sync_hours, cfg.guard_minutes, cfg.backup_hours,
+        cfg.sync_hours, cfg.guard_minutes, cfg.backup_hours, cfg.rate_hours,
     )

@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -194,6 +195,19 @@ async def verify_payment(
                              "✅ پرداخت دریافت شد؛ بدهی فعالی برای این فاکتور نبود.")
 
     target_amt = Decimal(str(target.amount_usdt or 0))
+    # Safety net: never AUTO-confirm a zero-amount invoice. If the conversion rate was 0 when
+    # the invoice was generated (e.g. auto mode before a live rate was fetched), amount_usdt is
+    # 0 and the "amount too low" floor below (anything < 0) could never fire — so a dust
+    # transfer would clear the whole Toman invoice. Hold it for the owner's manual review.
+    if target_amt <= 0:
+        payment.status = PaymentStatus.pending
+        if "[needs manual review: zero invoice amount]" not in (payment.note or ""):
+            payment.note = (payment.note or "") + " [needs manual review: zero invoice amount]"
+        await session.commit()
+        return PaymentResult(
+            "pending", False,
+            "مبلغ این فاکتور نامشخص است؛ پرداخت برای بررسیِ دستی ثبت شد.",
+        )
     if check.amount_usdt + tolerance < target_amt:
         payment.status = PaymentStatus.rejected
         payment.note = f"amount too low: {check.amount_usdt} < {target_amt}"
@@ -334,3 +348,33 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
     return PaymentResult("rejected", False, "Rejected")
+
+
+async def delete_payment(session: AsyncSession, payment_id: int) -> bool:
+    """Delete a payment row entirely (e.g. to clean up test data).
+
+    If the payment had CONFIRMED an invoice, that invoice is first reverted to owed (and the
+    ledger updated) so we never leave a 'paid' invoice with no payment behind it. The proof
+    image file, if any, is removed too. Returns False if the payment doesn't exist.
+    """
+    payment = await session.get(Payment, payment_id, with_for_update=True)
+    if payment is None:
+        return False
+    if payment.status == PaymentStatus.confirmed:
+        rows = (
+            await session.execute(select(Invoice).where(Invoice.id.in_(_settled_ids(payment))))
+        ).scalars().all()
+        for inv in rows:
+            if inv.status == InvoiceStatus.paid:
+                inv.status = InvoiceStatus.sent
+                inv.paid_at = None
+                r = await session.get(Reseller, inv.reseller_id)
+                await financial_archive.record(session, inv, reseller=r)
+    if payment.proof_path and os.path.exists(payment.proof_path):
+        try:
+            os.remove(payment.proof_path)
+        except OSError:
+            log.warning("failed to remove proof file %s", payment.proof_path, exc_info=True)
+    await session.delete(payment)
+    await session.commit()
+    return True

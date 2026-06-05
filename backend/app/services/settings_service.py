@@ -116,8 +116,12 @@ DEFS: list[SettingDef] = [
     SettingDef("card_holder_name", "", False, "payments"),          # name on the card
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
-    SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),
-    SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto
+    SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
+    SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto (live from Tetherland/Wallex)
+    # Last live USDT→Toman rate fetched from Tetherland/Wallex + when (read-only status, auto-updated).
+    SettingDef("toman_per_usdt_auto", 0, False, "pricing"),
+    SettingDef("toman_per_usdt_auto_at", "", False, "pricing"),
+    SettingDef("rate_refresh_hours", 1, False, "schedule"),  # how often to refresh the live rate
     SettingDef("excluded_usage_gb", [1], False, "pricing"),  # extra exact sizes to skip
     # Any config whose quota is <= this many GB is a free test config and is NOT
     # billed (e.g. 1 → both 0.5 GB and 1 GB are free; 1.5+ GB is billed).

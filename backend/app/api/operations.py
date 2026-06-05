@@ -71,6 +71,19 @@ async def run_dunning(session: AsyncSession = Depends(get_session)) -> dict:
     return await dunning.run_dunning(session)
 
 
+@router.post("/refresh-rate")
+async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
+    """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display."""
+    from app.services import rates
+
+    rate = await rates.refresh_auto_rate(session)
+    if rate is None:
+        raise HTTPException(
+            502, "دریافت نرخ آنلاین ناموفق بود؛ بعداً دوباره تلاش کنید یا نرخ را دستی تنظیم کنید."
+        )
+    return {"rate": rate, "effective": await rates.get_effective_rate(session)}
+
+
 @router.post("/run-monthly")
 async def run_monthly(
     period: str | None = None,

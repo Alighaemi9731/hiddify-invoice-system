@@ -44,6 +44,18 @@ async def generate_invoices(
 ) -> GenerationSummary:
     """Generate draft invoices for `period`. Existing non-draft invoices are kept
     unless `force=True`. Draft invoices for the period are recomputed in place."""
+    from app.services import rates, settings_service
+
+    # In auto mode, pull a fresh live rate right before billing so the Toman→USDT figures are
+    # current. Strictly best-effort — a fetch OR settings-write failure must never abort the
+    # billing run; the last good rate stays in place.
+    if str(await settings_service.get(session, "rate_mode", "manual")).lower() == "auto":
+        try:
+            await rates.refresh_auto_rate(session)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("invoicing").warning("pre-billing rate refresh failed", exc_info=True)
+
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     free_threshold = await pricing.get_free_threshold_gb(session)

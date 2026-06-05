@@ -18,7 +18,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listSettings, updateSettings } from "../api/client";
+import { listSettings, updateSettings, refreshRate } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 
 // A curated, hand-authored settings UI. Each field carries its own label/help/visibility,
@@ -48,7 +48,7 @@ type Section = {
 };
 
 // Settings that are machine-managed, not user-editable — hidden from the panel entirely.
-const HIDDEN = new Set(["setup_done", "owner_chat_id"]);
+const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at"]);
 
 const SECTIONS: Section[] = [
   {
@@ -139,13 +139,15 @@ const SECTIONS: Section[] = [
       {
         fields: [
           { key: "default_price_per_gb", label: "قیمت پیش‌فرض هر گیگ (تومان)", help: "اگر برای نماینده‌ای قیمت اختصاصی ثبت نشده باشد، این اعمال می‌شود.", type: "number", min: 0 },
-          { key: "toman_per_usdt", label: "نرخ تبدیل (تومان به ازای هر USDT)", type: "number", min: 0 },
+          { key: "rate_mode", label: "حالت نرخ تبدیل تومان→USDT", type: "select",
+            help: "«خودکار» نرخ تتر به تومان را آنلاین می‌خواند (تترلند/والکس)؛ «دستی» از نرخ پایین استفاده می‌کند.",
+            options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار (آنلاین)" }] },
+          { key: "toman_per_usdt", label: "نرخ تبدیل دستی (تومان به ازای هر USDT)", type: "number", min: 0,
+            help: "در حالت «دستی» این نرخ استفاده می‌شود؛ در حالت «خودکار» اگر دریافت آنلاین ناموفق بود، همین مقدار جایگزین می‌شود." },
           { key: "free_under_gb", label: "آستانهٔ کانفیگ رایگان (گیگ)", help: "کانفیگ‌هایی با حجم کوچک‌تر یا مساوی این مقدار، تستی و رایگان حساب می‌شوند (مثلاً ۱ → هم ۰٫۵ و هم ۱ گیگ رایگان، ۱٫۵ به بالا محاسبه می‌شود).", type: "number", min: 0 },
           { key: "min_sale_toman", label: "حداقل فروش هر نماینده (تومان)", help: "۰ = غیرفعال. اگر مبلغ فاکتور از این کمتر شد، همین مبلغ لحاظ می‌شود.", type: "number", min: 0 },
           { key: "metering_enabled", label: "متر مصرف ضد سوءاستفاده", help: "محاسبهٔ مصرف فراتر از سهمیه (ترفند ریست روزانه) و تمدید با ویرایش." },
           { key: "excluded_usage_gb", label: "حجم‌های معاف اضافی (گیگ، با کاما)", help: "اندازه‌های دقیقی که نباید محاسبه شوند، جدا با کاما.", type: "csv", advanced: true },
-          { key: "rate_mode", label: "حالت نرخ تبدیل", type: "select", advanced: true,
-            options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار" }] },
         ],
       },
     ],
@@ -298,6 +300,12 @@ export default function Settings() {
     onError: (e) => show(errMsg(e), "error"),
   });
 
+  const refreshRateM = useMutation({
+    mutationFn: refreshRate,
+    onSuccess: (r: any) => { show(`نرخ آنلاین به‌روزرسانی شد: ${Number(r?.rate || 0).toLocaleString("en-US")} تومان`); qc.invalidateQueries({ queryKey: ["settings"] }); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
   const renderField = (f: Field) => {
     const meta = byKey[f.key];
     if (!meta) return null;
@@ -378,6 +386,29 @@ export default function Settings() {
             {byKey["owner_chat_id"]?.value
               ? <Chip color="success" size="small" icon={<CheckCircleIcon />} label="تلگرام مالک متصل است — پشتیبان و هشدارها ارسال می‌شوند" />
               : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="هنوز در ربات /start نزده‌اید؛ تا متصل نشوید پشتیبان خودکار ارسال نمی‌شود" />}
+          </Box>
+        )}
+
+        {/* Live USDT→Toman rate status + manual refresh — read-only display. */}
+        {sec.id === "pricing" && (
+          <Box sx={{ mb: 2 }}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              {Number(byKey["toman_per_usdt_auto"]?.value) > 0
+                ? <Chip color={getVal("rate_mode") === "auto" ? "success" : "default"} size="small"
+                    label={`نرخ آنلاین تتر: ${Number(byKey["toman_per_usdt_auto"].value).toLocaleString("en-US")} تومان`} />
+                : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین هنوز دریافت نشده" />}
+              {byKey["toman_per_usdt_auto_at"]?.value && (
+                <Typography variant="caption" color="text.secondary" dir="ltr">
+                  {String(byKey["toman_per_usdt_auto_at"].value).replace("T", " ").slice(0, 16)} UTC
+                </Typography>
+              )}
+              <Button size="small" variant="outlined" disabled={refreshRateM.isPending} onClick={() => refreshRateM.mutate()}>
+                به‌روزرسانی نرخ
+              </Button>
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+              در حالت «خودکار»، فاکتورها با همین نرخِ آنلاین به USDT تبدیل می‌شوند و هر ساعت به‌روز می‌شود.
+            </Typography>
           </Box>
         )}
 

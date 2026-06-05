@@ -36,7 +36,8 @@ def test_register_defaults_when_no_config():
     assert "hour='*/2'" in t["backup"]       # default 2h
     assert "hour='*/6'" in t["periodic_sync"]  # default 6h
     assert "minute='*/10'" in t["channel_guard"]
-    assert len(t) == 5
+    assert "hour='*/1'" in t["rate_refresh"]  # default 1h live-rate refresh
+    assert len(t) == 6
 
 
 def test_boundary_interval_builds_valid_trigger():

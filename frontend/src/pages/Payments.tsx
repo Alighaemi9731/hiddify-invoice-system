@@ -8,9 +8,10 @@ import VerifiedIcon from "@mui/icons-material/Verified";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import ImageIcon from "@mui/icons-material/Image";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  listPayments, verifyPayment, confirmPayment, rejectPayment, openPaymentProof,
+  listPayments, verifyPayment, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -26,7 +27,10 @@ export default function Payments() {
     queryKey: ["payments", status],
     queryFn: () => listPayments({ status: status || undefined }),
   });
-  const refresh = () => qc.invalidateQueries({ queryKey: ["payments"] });
+  // A confirm/reject/delete can flip an invoice paid↔owed, so refresh the dependent views too.
+  const refresh = () => {
+    ["payments", "invoices", "dashboard", "debts"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+  };
   const { sorted, key, dir, toggle } = useSort(data, "created_at", "desc");
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
@@ -40,9 +44,15 @@ export default function Payments() {
     onError: (e) => show(errMsg(e), "error"),
   });
 
+  const del = useMutation({ mutationFn: deletePayment, onSuccess: (r: any) => { show(r?.message || "حذف شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
+
   const doReject = (p: any) => {
     const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ رد آن فاکتورِ تسویه‌شده را دوباره «پرداخت‌نشده» می‌کند.)" : "";
     if (window.confirm(`پرداخت «${p.reseller_name || ""}» رد شود؟${extra}`)) reject.mutate(p.id);
+  };
+  const doDelete = (p: any) => {
+    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ با حذف، فاکتورِ مرتبط دوباره «پرداخت‌نشده» می‌شود.)" : "";
+    if (window.confirm(`پرداختِ «${p.reseller_name || ""}» (دوره ${p.invoice_period || "—"}) برای همیشه حذف شود؟${extra}`)) del.mutate(p.id);
   };
 
   return (
@@ -81,7 +91,17 @@ export default function Payments() {
                       ? <Tooltip title="مشاهدهٔ رسید"><IconButton size="small" onClick={() => openPaymentProof(p.id)}><ImageIcon fontSize="small" /></IconButton></Tooltip>
                       : "—"}
                 </TableCell>
-                <TableCell dir="ltr">{fmtUsdt(p.amount_usdt)}</TableCell>
+                <TableCell dir="ltr">
+                  <Tooltip title={
+                    <span style={{ whiteSpace: "pre-line" }}>
+                      {`فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}\nمعادل: ${fmtUsdt(p.amount_usdt)}`}
+                    </span>
+                  }>
+                    <span style={{ cursor: "help" }}>
+                      {p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : fmtUsdt(p.amount_usdt)}
+                    </span>
+                  </Tooltip>
+                </TableCell>
                 <TableCell>{p.confirmations}</TableCell>
                 <TableCell><Chip size="small" color={COLOR[p.status]} label={PAYMENT_STATUS_FA[p.status]} /></TableCell>
                 <TableCell>{fmtDate(p.created_at)}</TableCell>
@@ -90,6 +110,7 @@ export default function Payments() {
                   <Tooltip title="بررسی زنجیره (TXID)"><span><IconButton size="small" disabled={!p.txid} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
+                  <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
                 </TableCell>
               </TableRow>
             ))}

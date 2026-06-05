@@ -120,6 +120,8 @@ export const verifyPayment = (id: number) => api.post(`/api/payments/${id}/verif
 export const confirmPayment = (id: number) =>
   api.post(`/api/payments/${id}/confirm`).then((r) => r.data);
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);
+export const deletePayment = (id: number) => api.delete(`/api/payments/${id}`).then((r) => r.data);
+export const refreshRate = () => api.post("/api/ops/refresh-rate").then((r) => r.data);
 // Fetch the deposit screenshot (authenticated) as a blob and open it in a new tab.
 export const openPaymentProof = async (id: number) => {
   const r = await api.get(`/api/payments/${id}/proof`, { responseType: "blob" });

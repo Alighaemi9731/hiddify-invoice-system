@@ -51,9 +51,14 @@ async def load_options(session: AsyncSession) -> PaymentOptions:
 
 
 def instructions_text(
-    opts: PaymentOptions, *, amount_usdt: str | None = None, html: bool = False
+    opts: PaymentOptions, *, amount_usdt: str | None = None, amount_toman: str | None = None,
+    html: bool = False,
 ) -> str:
     """Multi-line payment instructions for the enabled methods.
+
+    `amount_usdt` / `amount_toman` are pre-formatted figures. USDT payers see the USDT amount
+    (with the Toman equivalent in parentheses); card-to-card payers see the **Toman** amount —
+    Iranian customers pay and think in Toman, so the card block leads with it.
 
     `html=True` renders the wallet address / card number inside <code>…</code> so the reseller
     can TAP to copy them (the message must then be sent with parse_mode="HTML"). `html=False`
@@ -70,7 +75,10 @@ def instructions_text(
     if opts.usdt:
         b = ["💳 پرداخت با USDT (فقط شبکهٔ BEP-20):"]
         if amount_usdt:
-            b.append(f"مبلغ: {amount_usdt} USDT")
+            line = f"مبلغ: {amount_usdt} USDT"
+            if amount_toman:
+                line += f" (≈ {amount_toman} تومان)"
+            b.append(line)
         b.append(f"آدرس کیف پول:\n{copyable(opts.wallet)}")
         b.append(
             "⚠️ توجه: فقط در شبکهٔ BEP-20 (BSC) واریز کنید. ارسال از شبکه‌های دیگر "
@@ -79,7 +87,10 @@ def instructions_text(
         b.append("پس از واریز، شناسهٔ تراکنش (TXID) را همین‌جا ارسال کنید.")
         blocks.append("\n".join(b))
     if opts.card:
-        b = ["🏦 کارت‌به‌کارت:", f"شماره کارت:\n{copyable(opts.card_number)}"]
+        b = ["🏦 کارت‌به‌کارت (پرداخت تومانی):"]
+        if amount_toman:
+            b.append(f"مبلغ: {amount_toman} تومان")
+        b.append(f"شماره کارت:\n{copyable(opts.card_number)}")
         if opts.card_holder:
             holder = _html.escape(opts.card_holder) if html else f"{rtl}{opts.card_holder}"
             b.append(f"به نام: {holder}")
