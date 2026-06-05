@@ -1,3 +1,7 @@
+# ───────────────────────── Playwright MCP / E2E scratch ───────────────────
+.playwright-mcp/
+/*.png
+
 # ───────────────────────── SECRETS — never commit ─────────────────────────
 .env
 .env.*

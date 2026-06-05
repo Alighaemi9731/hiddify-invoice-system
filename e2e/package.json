@@ -1,0 +1,14 @@
+{
+  "name": "invoice-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end UI tests for the Hiddify invoice panel (Playwright + OCR captcha login).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "tesseract.js": "^5.1.1"
+  }
+}
