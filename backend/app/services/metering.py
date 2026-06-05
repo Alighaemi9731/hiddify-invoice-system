@@ -30,6 +30,10 @@ from app.services import settings_service
 log = logging.getLogger("metering")
 
 _EPS = 0.05  # ignore sub-50MB noise
+# A usage drop is only a real "renew-volume" reset (usage zeroed, start_date kept) when the
+# new value lands near zero. A larger drop that DOESN'T reach ~0 is a panel stat-correction /
+# re-sync, not abuse — so it must not be counted as consumption (that produced false overage).
+_RESET_FLOOR_GB = 5.0
 
 
 def period_of(d) -> str:
@@ -91,6 +95,11 @@ def apply(
     if start_date is not None and (prev_start is None or start_date > prev_start):
         snapshot.meter_provisioned_gb = new_limit
         snapshot.meter_consumed_gb = new_used
+        # A proper renewal (renew-day advances start_date) is the CORRECT way and supersedes any
+        # earlier renew-by-edit recorded for this user this month: the fresh start_date makes the
+        # normal invoice rule bill the full new quota, so a lingering edit_renewal_gb would
+        # double-bill the same volume. Clear it (overage from real over-consumption is kept).
+        meter.edit_renewal_gb = 0.0
         if in_period:
             meter.quota_added_gb = float(meter.quota_added_gb or 0) + new_limit
         return
@@ -106,10 +115,16 @@ def apply(
 
     # Consumption since last sync (reset-aware).
     if new_used + _EPS >= prev_used:
-        dc = new_used - prev_used
-    else:
-        dc = new_used                      # current_usage dropped → a reset happened
+        dc = new_used - prev_used          # normal forward consumption
+    elif new_used <= _RESET_FLOOR_GB:
+        # Usage dropped to ~0 while start_date stayed the same → a "renew-volume" reset (the
+        # daily-reset abuse): the post-reset usage counts so it accumulates toward overage.
+        dc = new_used
         meter.reset_count = int(meter.reset_count or 0) + 1
+    else:
+        # Dropped but NOT to ~0 → a legitimate panel stat-correction / re-sync, not a reset.
+        # Count no consumption this sync (next sync measures forward from the new lower value).
+        dc = 0.0
     if dc < 0:
         dc = 0.0
 
@@ -173,27 +188,53 @@ async def bundle_extra(
     return {"gb": round(total, 3), "lines": lines, "abnormal": abnormal}
 
 
-def _abuse_text(period: str, abnormal: list[dict], price_per_gb: int) -> str:
+def _abuse_text(period: str, abnormal: list[dict]) -> str:
+    """A clear, complete heads-up for the reseller: WHAT was detected (per user), WHY it's
+    billed, and HOW to renew correctly next month so it doesn't recur. Plain text (sent via
+    notifier without parse_mode), structured with separators so it reads cleanly RTL."""
+    total = round(sum(float(a["billed_gb"]) for a in abnormal), 3)
+    n = len(abnormal)
     lines = [
-        "⚠️ توجه: در فاکتور دوره " + period + " مواردی شناسایی شد که طبق روال عادی محاسبه "
-        "نمی‌شدند ولی رصد شده و به فاکتور شما اضافه شده‌اند:\n",
+        f"⚠️ هشدارِ مصرفِ غیرعادی — دورهٔ {period}",
+        "",
+        f"نمایندهٔ گرامی، برای {n} کاربرِ شما روشِ تمدیدِ نادرست شناسایی شد. فاکتورِ عادی فقط "
+        "حجمِ سرویس‌هایی را می‌شمارد که «تاریخِ شروع»شان در همین ماه باشد؛ این کاربرها به همین "
+        "دلیل در فاکتورِ عادی دیده نمی‌شدند، ولی سامانه مصرفِ واقعی‌شان را رصد کرده و جمعاً "
+        f"{total:g} گیگ به فاکتورِ این دوره اضافه کرده است.",
+        "",
+        "──────── جزئیات ────────",
     ]
     for a in abnormal:
-        parts = []
+        lines.append(f"👤 {a['name']}")
         if a["overage_gb"] > 0:
-            parts.append(
-                f"مصرف بیش از حجم فروخته‌شده (احتمال ریست مصرف): {a['overage_gb']:g} گیگ"
-                + (f" — {a['reset_count']} بار ریست" if a["reset_count"] else "")
+            extra = f" ({a['reset_count']} بار)" if a["reset_count"] else ""
+            lines.append(
+                f"   ▫️ «تمدیدِ حجم» بدونِ «تمدیدِ روز» (ریستِ مصرف){extra}: "
+                f"{a['overage_gb']:g} گیگ مصرفِ مازاد"
             )
         if a["edit_renewal_gb"] > 0:
-            parts.append(
-                f"تمدید/شارژ با ویرایش بدون به‌روزرسانی تاریخ شروع: {a['edit_renewal_gb']:g} گیگ"
+            lines.append(
+                f"   ▫️ افزایشِ حجم با «ویرایش» (تاریخِ شروع عوض نشده): {a['edit_renewal_gb']:g} گیگ"
             )
-        lines.append(f"• کاربر «{a['name']}» → " + "؛ ".join(parts) + f"  (محاسبه‌شده: {a['billed_gb']:g} گیگ)")
-    lines.append(
-        "\nلطفاً برای تمدید از دکمهٔ تمدید پنل استفاده کنید (نه ویرایش حجم/تاریخ) و مصرف "
-        "کاربران را ریست نکنید. این موارد به‌صورت خودکار رصد و در فاکتور لحاظ می‌شوند."
-    )
+        lines.append(f"   ➕ اضافه‌شده به فاکتور: {a['billed_gb']:g} گیگ")
+    lines += [
+        "",
+        "──────── چرا؟ ────────",
+        "وقتی کاربری را فقط «تمدیدِ حجم» می‌کنید یا حجمش را «ویرایش» می‌کنید، بدونِ اینکه «روز» "
+        "را هم تمدید کنید، تاریخِ شروعِ کاربر قدیمی می‌ماند و سرویس در فاکتورِ عادی شمرده نمی‌شود "
+        "— در حالی که مصرفش ادامه دارد. این یعنی فروشِ حجم بدونِ ثبت در فاکتور، که سامانه آن را "
+        "خودکار جبران می‌کند.",
+        "",
+        "──────── روشِ درست (از ماهِ بعد) ────────",
+        "✅ برای تمدیدِ هر کاربر، «هم روز و هم حجم» را با هم تمدید/ریست کنید.",
+        "این‌طور تاریخِ شروع به‌روز می‌شود، سرویس در فاکتورِ همان ماه به‌صورت عادی محاسبه می‌شود، "
+        "و دیگر چیزی به‌عنوانِ «مصرفِ غیرعادی» اضافه نخواهد شد.",
+        "",
+        "❌ این کارها رصد و به فاکتور اضافه می‌شوند:",
+        "• تمدیدِ فقط حجم، با نگه‌داشتنِ روزِ قدیمی",
+        "• زیاد کردنِ حجم از طریقِ «ویرایش»",
+        "• ریست کردنِ مصرفِ کاربر برای دور زدنِ فاکتور",
+    ]
     return "\n".join(lines)
 
 
@@ -213,8 +254,7 @@ async def notify_abuse_if_any(session: AsyncSession, invoice, reseller, *, bot=N
         if not extra["abnormal"]:
             return
 
-        price = int(reseller.price_per_gb or await pricing.get_default_price_per_gb(session))
-        text = _abuse_text(invoice.period_label, extra["abnormal"], price)
+        text = _abuse_text(invoice.period_label, extra["abnormal"])
         await notifier.send_to_reseller(
             session, reseller, text, kind=DeliveryKind.abuse_notice, invoice_id=invoice.id, bot=bot
         )
