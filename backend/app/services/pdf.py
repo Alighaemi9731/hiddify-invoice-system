@@ -15,7 +15,7 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -148,10 +148,8 @@ def build_invoice_pdf(
     )
 
     P = lambda t, **k: ParagraphStyle("x", fontName=reg, **k)  # noqa: E731
-    right = P("r", fontSize=10, alignment=2, textColor=INK, leading=16)
     rightMuted = P("rm", fontSize=9, alignment=2, textColor=MUTED, leading=14)
     val = P("v", fontSize=10, alignment=2, textColor=INK, leading=16)
-    cell = ParagraphStyle("c", fontName=reg, fontSize=9, alignment=2, textColor=INK, leading=14)
     cellC = ParagraphStyle("cc", fontName=reg, fontSize=9, alignment=1, textColor=INK, leading=14)
     th = ParagraphStyle("th", fontName=bold, fontSize=9.5, alignment=1, textColor=colors.white, leading=14)
 

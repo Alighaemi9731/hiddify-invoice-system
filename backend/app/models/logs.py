@@ -24,7 +24,6 @@ from app.models.enums import (
     SyncSource,
     SyncStatus,
 )
-from app.models.mixins import TimestampMixin
 
 
 class DeliveryLog(Base):

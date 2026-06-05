@@ -4,7 +4,6 @@ InvoiceLine rows. Delivery (bot) is M4; this only generates draft invoices.
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from dataclasses import dataclass
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Box, Card, Chip, MenuItem, Stack, Table, TableBody, TableCell, TableHead,
+  Box, Card, Chip, Stack, Table, TableBody, TableCell, TableHead,
   TableRow, TableSortLabel, Typography,
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";

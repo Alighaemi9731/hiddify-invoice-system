@@ -18,7 +18,6 @@ tells the reseller (and the owner) exactly what was detected and that it's bille
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 
 from sqlalchemy import select

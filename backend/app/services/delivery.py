@@ -15,7 +15,7 @@ from app.bot import texts
 from app.bot.telegram import build_bot
 from app.models import DeliveryLog, Invoice, Reseller
 from app.models.enums import DeliveryKind, DeliveryStatus, InvoiceStatus
-from app.services import invoice_pdf, notifier, settings_service
+from app.services import invoice_pdf, notifier
 
 log = logging.getLogger("delivery")
 

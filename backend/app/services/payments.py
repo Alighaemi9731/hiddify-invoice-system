@@ -150,7 +150,6 @@ async def verify_payment(
         return PaymentResult("confirmed", True, "این پرداخت قبلاً تأیید شده است.")
 
     invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-    reseller = await session.get(Reseller, payment.reseller_id)
 
     cfg = await settings_service.get_many(
         session,

@@ -9,29 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import EndUserSnapshot, Panel, Reseller
+from app.models import Panel, Reseller
 from app.services.panel_client.admin_api import AdminApiClient
 
 log = logging.getLogger("admin_capacity")
-
-
-async def usage_counts(session: AsyncSession, reseller: Reseller) -> tuple[int, int]:
-    """(total_users, active_users) this admin has created on its panel.
-    active = enabled AND is_active (matches the panel's max_active_users meaning)."""
-    base = select(func.count(EndUserSnapshot.id)).where(
-        EndUserSnapshot.panel_id == reseller.panel_id,
-        EndUserSnapshot.added_by_uuid == reseller.admin_uuid,
-    )
-    total = (await session.execute(base)).scalar_one() or 0
-    active = (
-        await session.execute(
-            base.where(EndUserSnapshot.enable.is_(True), EndUserSnapshot.is_active.is_(True))
-        )
-    ).scalar_one() or 0
-    return int(total), int(active)
 
 
 async def bump_limits(

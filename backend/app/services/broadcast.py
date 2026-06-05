@@ -49,15 +49,6 @@ async def _panel_chat_ids(session: AsyncSession, panel_id: int) -> set[int]:
     return {c for c in rows if c}
 
 
-async def _registered_chat_ids(session: AsyncSession) -> set[int]:
-    rows = (
-        await session.execute(
-            select(Reseller.bot_chat_id).where(Reseller.bot_chat_id.is_not(None)).distinct()
-        )
-    ).scalars().all()
-    return {c for c in rows if c}
-
-
 async def _zero_sale_chat_ids(session: AsyncSession) -> set[int]:
     """Registered resellers whose bundle sells nothing in the current month."""
     from app.services import invoicing

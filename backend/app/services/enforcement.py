@@ -8,7 +8,6 @@ makes no panel writes. Set it True to perform live writes (needs panel admin API
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from collections import defaultdict
 
