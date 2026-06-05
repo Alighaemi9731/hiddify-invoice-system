@@ -14,6 +14,10 @@ import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
 import { fmtToman, fmtNum, fmtCompact, INVOICE_STATUS_FA } from "../format";
 import { CHART_COLORS } from "../theme";
+import { motion } from "framer-motion";
+import { Reveal } from "../components/motion";
+
+const EASE = [0.22, 1, 0.36, 1] as const;
 
 const FONT = "Vazirmatn, sans-serif";
 const grad = (c1: string, c2: string, horizontal = false) => ({
@@ -105,12 +109,26 @@ export default function Dashboard() {
       ) : (
         <>
           <Grid container spacing={2}>
-            <Grid item xs={6} md={3}><StatCard label="پنل‌ها" value={fmtNum(data.panels)} color="#6d5efc" icon={<DnsIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="نمایندگان اصلی" value={fmtNum(data.resellers)} sub={`${fmtNum(data.registered_resellers)} متصل به ربات`} color="#0ea5e9" icon={<GroupIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="فروش دوره" value={fmtToman(data.period_billed_toman)} color="#10b981" icon={<TrendingUpIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="بدهی معوق" value={fmtToman(data.outstanding_toman)} color="#f43f5e" icon={<WarningAmberIcon />} /></Grid>
+            {[
+              { label: "پنل‌ها", value: fmtNum(data.panels), color: "#6d5efc", icon: <DnsIcon /> },
+              { label: "نمایندگان اصلی", value: fmtNum(data.resellers), sub: `${fmtNum(data.registered_resellers)} متصل به ربات`, color: "#0ea5e9", icon: <GroupIcon /> },
+              { label: "فروش دوره", value: fmtToman(data.period_billed_toman), color: "#10b981", icon: <TrendingUpIcon /> },
+              { label: "بدهی معوق", value: fmtToman(data.outstanding_toman), color: "#f43f5e", icon: <WarningAmberIcon /> },
+            ].map((c, i) => (
+              <Grid item xs={6} md={3} key={c.label}>
+                <motion.div
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.45, ease: EASE, delay: i * 0.08 }}
+                  style={{ height: "100%" }}
+                >
+                  <StatCard label={c.label} value={c.value} sub={c.sub} color={c.color} icon={c.icon} />
+                </motion.div>
+              </Grid>
+            ))}
           </Grid>
 
+          <Reveal delay={0.34}>
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
             <Grid item xs={12} md={7}>
               <ChartCard title="فروش بر اساس پنل">
@@ -131,6 +149,7 @@ export default function Dashboard() {
               </ChartCard>
             </Grid>
           </Grid>
+          </Reveal>
         </>
       )}
     </Box>

@@ -28,6 +28,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useColorMode } from "../colorMode";
 import { getInfo } from "../api/client";
 import ErrorBoundary from "./ErrorBoundary";
+import { PageTransition } from "./motion";
 
 const WIDTH = 256;
 
@@ -72,6 +73,7 @@ export default function Layout() {
       },
     },
     "&:hover": { bgcolor: alpha(primary, mode === "dark" ? 0.12 : 0.05) },
+    "&:hover .nav-icon": { transform: "scale(1.14) rotate(-3deg)" },
   });
 
   const sidebar = (
@@ -102,12 +104,12 @@ export default function Layout() {
             <ListItemButton key={item.to} selected={selected}
               onClick={() => { nav(item.to); setOpen(false); }} sx={navItemSx(selected)}>
               <ListItemIcon>
-                <Box sx={{
+                <Box className="nav-icon" sx={{
                   width: 31, height: 31, borderRadius: 2, display: "grid", placeItems: "center",
                   color: item.color,
                   bgcolor: (t) => alpha(item.color, t.palette.mode === "dark" ? 0.22 : 0.14),
                   boxShadow: selected ? (t) => `0 0 0 1px ${alpha(item.color, 0.5)}` : "none",
-                  transition: "box-shadow .15s",
+                  transition: "transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .15s",
                   "& svg": { fontSize: 19 },
                 }}>{item.icon}</Box>
               </ListItemIcon>
@@ -178,7 +180,10 @@ export default function Layout() {
         </AppBar>
         <Box sx={{ p: { xs: 2, md: 3 }, flexGrow: 1 }}>
           <ErrorBoundary>
-            <Outlet />
+            {/* key on the path → the page remounts and replays its entrance on every nav */}
+            <PageTransition key={loc.pathname}>
+              <Outlet />
+            </PageTransition>
           </ErrorBoundary>
         </Box>
       </Box>

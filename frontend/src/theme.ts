@@ -79,6 +79,18 @@ export function makeTheme(mode: PaletteMode) {
             backgroundColor: isDark ? "#090a12" : "#e9ecf7",
             backgroundImage: ambient,
             backgroundAttachment: "fixed",
+            // The ambient color field slowly drifts — gives the frosted glass something
+            // alive to refract. Very slow + low-alpha, so it never distracts.
+            backgroundSize: "175% 175%",
+            animation: "ambientDrift 32s ease-in-out infinite",
+          },
+          "@keyframes ambientDrift": {
+            "0%, 100%": { backgroundPosition: "0% 0%" },
+            "50%": { backgroundPosition: "100% 100%" },
+          },
+          // Respect users who prefer less motion.
+          "@media (prefers-reduced-motion: reduce)": {
+            "*": { animationDuration: "0.001ms !important", transitionDuration: "0.001ms !important" },
           },
           "::selection": { backgroundColor: alpha(primaryMain, 0.28) },
         },
@@ -86,7 +98,12 @@ export function makeTheme(mode: PaletteMode) {
       MuiButton: {
         defaultProps: { disableElevation: true },
         styleOverrides: {
-          root: { borderRadius: 12, textTransform: "none", fontWeight: 700, paddingInline: 18 },
+          root: {
+            borderRadius: 12, textTransform: "none", fontWeight: 700, paddingInline: 18,
+            transition: "transform .14s cubic-bezier(.34,1.56,.64,1), box-shadow .2s ease, background-color .2s",
+            "&:hover": { transform: "translateY(-1px)" },
+            "&:active": { transform: "translateY(0) scale(.97)" },
+          },
           containedPrimary: {
             // glossy top highlight, like a glass pill
             boxShadow: isDark
@@ -184,6 +201,7 @@ export function makeTheme(mode: PaletteMode) {
       MuiTableRow: {
         styleOverrides: {
           root: {
+            transition: "background-color .15s ease",
             "&:last-child td": { borderBottom: 0 },
             "&.MuiTableRow-hover:hover": { backgroundColor: alpha(primaryMain, isDark ? 0.1 : 0.05) },
           },
@@ -212,7 +230,16 @@ export function makeTheme(mode: PaletteMode) {
           arrow: { color: isDark ? "rgba(42,48,71,.92)" : "rgba(27,29,46,.92)" },
         },
       },
-      MuiListItemButton: { styleOverrides: { root: { borderRadius: 12 } } },
+      MuiIconButton: {
+        styleOverrides: {
+          root: {
+            transition: "transform .15s cubic-bezier(.34,1.56,.64,1), background-color .2s, color .2s",
+            "&:hover": { transform: "scale(1.12)" },
+            "&:active": { transform: "scale(.94)" },
+          },
+        },
+      },
+      MuiListItemButton: { styleOverrides: { root: { borderRadius: 12, transition: "background-color .18s ease" } } },
       MuiSwitch: { styleOverrides: { root: { padding: 8 }, track: { borderRadius: 11, opacity: isDark ? 0.4 : 0.3 } } },
       MuiLinearProgress: { styleOverrides: { root: { borderRadius: 6, height: 8 } } },
     },
