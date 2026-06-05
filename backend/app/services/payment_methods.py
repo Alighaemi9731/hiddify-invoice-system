@@ -114,13 +114,15 @@ def instructions_text(
         return "برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
 
     out = ["💳 از یکی از روش‌های زیر پرداخت کنید:", "\n\n".join(blocks)]
-    # After-deposit action, adaptive to the enabled methods.
-    if opts.usdt and (opts.card or opts.ton or opts.screenshot):
-        out.append("📩 پس از واریز: برای USDT شناسهٔ تراکنش (TXID) و برای بقیه تصویر رسید را همین‌جا بفرستید.")
-    elif opts.usdt:
-        out.append("📩 پس از واریز، شناسهٔ تراکنش (TXID) را همین‌جا بفرستید.")
+    # After-deposit action: USDT/TON want a tx hash (TXID), card/screenshot want a receipt photo.
+    txid_m = opts.usdt or opts.ton
+    photo_m = opts.card or opts.screenshot
+    if txid_m and photo_m:
+        out.append("📩 پس از واریز: برای USDT/TON «شناسهٔ تراکنش (TXID)» و برای کارت «تصویر رسید» را همین‌جا بفرستید.")
+    elif txid_m:
+        out.append("📩 پس از واریز، «شناسهٔ تراکنش (TXID)» را همین‌جا بفرستید (لینکِ تراکنش هم قبول است).")
     else:
-        out.append("📩 پس از واریز، تصویر رسید را همین‌جا بفرستید.")
+        out.append("📩 پس از واریز، «تصویر رسید» را همین‌جا بفرستید.")
     if html and (opts.usdt or opts.card or opts.ton):
         out.append("👆 برای کپی، روی آدرس یا شمارهٔ کارت ضربه بزنید.")
     return "\n\n".join(out)

@@ -100,7 +100,48 @@ async def _membership_gate_mw(handler, event, data):
     return await handler(event, data)
 
 
-_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")
+_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")          # BEP-20 (BSC) tx hash
+_TON_EXPLORERS = ("tonscan.org", "tonviewer.com", "ton.cx", "dton.io", "toncoin.org")
+
+
+def _parse_txid(text: str, *, usdt: bool, ton: bool) -> tuple[str, str] | None:
+    """Extract (chain, txid) from raw text OR a pasted explorer URL. chain ∈ {'bsc','ton'}.
+    Classification honors which methods are enabled (so a hash maps to an offered chain). No
+    on-chain check here — the owner verifies via the clickable link in the panel."""
+    t = (text or "").strip()
+    # Explorer URL → pull the hash out of the path.
+    m = re.search(r"bscscan\.com/tx/(0x[0-9a-fA-F]{64})", t, re.I)
+    if m and usdt:
+        return ("bsc", m.group(1))
+    if ton:
+        m = re.search(r"(?:%s)/\S+" % "|".join(re.escape(h) for h in _TON_EXPLORERS), t, re.I)
+        if m:
+            seg = m.group(0).rstrip("/").split("?")[0].split("/")[-1]
+            if len(seg) >= 40:
+                return ("ton", seg)
+    # Bare BEP-20 txid (must carry the 0x prefix).
+    m = _TXID_RE.search(t)
+    if m and usdt:
+        return ("bsc", m.group(0))
+    # Bare TON hash: a base64/base64url token (43–44 chars). A bare 64-hex is only treated as
+    # TON when USDT is NOT enabled — otherwise it's almost certainly a BSC hash pasted without
+    # its 0x prefix, and classifying it as TON would produce a dead tonscan link.
+    if ton and not re.search(r"\s", t):
+        if re.fullmatch(r"[A-Za-z0-9+/_-]{43,48}={0,2}", t):
+            return ("ton", t)
+        if not usdt and re.fullmatch(r"[0-9a-fA-F]{64}", t):
+            return ("ton", t)
+    return None
+
+
+def _proof_wanted_fa(opts) -> str:
+    """What proof the customer should send, given the enabled methods — for the prompt/error."""
+    wants = []
+    if opts.usdt or opts.ton:
+        wants.append("«شناسهٔ تراکنش (TXID)» یا لینکِ آن")
+    if opts.card or opts.screenshot:
+        wants.append("«تصویر رسید»")
+    return " یا ".join(wants) if wants else "رسید پرداخت"
 _UNPAID = (InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 _STATUS_FA = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
@@ -271,7 +312,8 @@ async def _sync_command_menu(bot: Bot, session, user) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, bot: Bot) -> None:
+async def cmd_start(message: Message, state: FSMContext, bot: Bot) -> None:
+    await state.clear()  # leaving any in-progress pay flow resets it (no stale invoice binding)
     async with SessionLocal() as session:
         await _track_user(session, message.from_user)
         await _sync_command_menu(bot, session, message.from_user)
@@ -279,7 +321,8 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
 
 @router.message(Command("menu"))
-async def cmd_menu(message: Message, bot: Bot) -> None:
+async def cmd_menu(message: Message, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
     async with SessionLocal() as session:
         await _sync_command_menu(bot, session, message.from_user)
         await _send_menu(message.answer, session, message.from_user, bot=bot)
@@ -324,7 +367,8 @@ async def cmd_invoices(message: Message) -> None:
 
 
 @router.message(Command("pay"))
-async def cmd_pay(message: Message) -> None:
+async def cmd_pay(message: Message, state: FSMContext) -> None:
+    await state.clear()  # re-opening the pay list resets any prior invoice selection
     async with SessionLocal() as s:
         await _send_pay(message.answer, message.from_user.id, s)
 
@@ -737,7 +781,8 @@ async def cb_interim(cb: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data == "menu:pay")
-async def cb_pay(cb: CallbackQuery) -> None:
+async def cb_pay(cb: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()  # tapping «پرداخت فاکتور» again resets any prior invoice selection
     async with SessionLocal() as s:
         await _send_pay(cb.message.answer, cb.from_user.id, s)
     await cb.answer()
@@ -797,6 +842,7 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(PayState.waiting, F.photo)
 async def pay_state_photo(message: Message, state: FSMContext) -> None:
+    # A photo is always a valid receipt (manual review), regardless of method.
     data = await state.get_data()
     inv_id = data.get("pay_invoice_id")
     await state.clear()
@@ -807,26 +853,47 @@ async def pay_state_photo(message: Message, state: FSMContext) -> None:
 
 
 @router.message(PayState.waiting, F.text)
-async def pay_state_text(message: Message, state: FSMContext, bot: Bot) -> None:
+async def pay_state_text(message: Message, state: FSMContext) -> None:
+    """The pay flow is LOCKED: the customer must send a valid txid/receipt (per the enabled
+    methods) or /cancel. Any other text gets a clear error and keeps them in the flow — it does
+    NOT fall through to the menu."""
     text = (message.text or "").strip()
     if text.lower() in ("/cancel", "cancel", "لغو"):
         await state.clear()
-        await message.answer("پرداخت لغو شد.")
+        await message.answer("پرداخت لغو شد. هر وقت خواستی، دوباره از «💳 پرداخت فاکتور» اقدام کن.")
         return
-    txm = _TXID_RE.search(text)
-    if not txm:
-        # Not a TXID — the customer changed their mind (a panel link, a question, etc.).
-        # Don't trap them in the pay flow: exit PayState and route the message normally.
-        await state.clear()
-        await on_text(message, bot)
-        return
-    data = await state.get_data()
-    inv_id = data.get("pay_invoice_id")
-    await state.clear()
+    from app.services import payment_methods
+
     async with SessionLocal() as s:
         await _track_user(s, message.from_user)
-        inv = await s.get(Invoice, int(inv_id)) if inv_id else None
-        await _handle_txid(message, s, txm.group(0), invoice=inv)
+        opts = await payment_methods.load_options(s)
+        parsed = _parse_txid(text, usdt=opts.usdt, ton=opts.ton)
+        if parsed is None:
+            # Invalid input → explain what's needed and STAY in the pay flow (no menu).
+            await message.answer(
+                f"❌ ورودی نامعتبر است.\n"
+                f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید.\n"
+                "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
+            )
+            return
+        chain, txid = parsed
+        data = await state.get_data()
+        inv = await s.get(Invoice, int(data["pay_invoice_id"])) if data.get("pay_invoice_id") else None
+        await state.clear()
+        await _handle_txid(message, s, txid, invoice=inv, chain=chain)
+
+
+@router.message(PayState.waiting)
+async def pay_state_other(message: Message) -> None:
+    """Any other content (document, sticker, …) while paying → keep them in the locked flow."""
+    from app.services import payment_methods
+
+    async with SessionLocal() as s:
+        opts = await payment_methods.load_options(s)
+    await message.answer(
+        f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید.\n"
+        "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
+    )
 
 
 @router.callback_query(F.data == "menu:removelink")
@@ -1519,9 +1586,12 @@ async def on_text(message: Message, bot: Bot) -> None:
                 "توجه: ربات باید ادمین آن باشد."
             )
             return
-        txm = _TXID_RE.search(text)
-        if txm:
-            await _handle_txid(message, session, txm.group(0))
+        from app.services import payment_methods
+
+        opts = await payment_methods.load_options(session)
+        txp = _parse_txid(text, usdt=opts.usdt, ton=opts.ton)
+        if txp:
+            await _handle_txid(message, session, txp[1], chain=txp[0])
             return
         parsed = parse_link(text)
         if parsed:
@@ -1642,7 +1712,10 @@ async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | N
     return due[0] if due else None
 
 
-async def _handle_txid(message: Message, session, txid: str, *, invoice=None) -> None:
+async def _handle_txid(message: Message, session, txid: str, *, invoice=None, chain: str = "bsc") -> None:
+    """Record a submitted tx hash (USDT/BSC or TON) as a PENDING payment for MANUAL review —
+    no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
+    confirms/rejects."""
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
         await message.answer(await texts.render(session, "tpl_link_not_found"))
@@ -1651,58 +1724,61 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None) ->
         await session.execute(select(Payment).where(Payment.txid == txid))
     ).scalars().first()
     if existing:
-        # Re-sending the SAME TXID while it's still pending re-checks it on-chain — this is the
-        # «چند دقیقه بعد دوباره تلاش کنید» path when confirmations weren't enough the first time.
-        # An already confirmed/rejected one is just acknowledged.
+        if existing.status == PaymentStatus.confirmed:
+            await message.answer("این تراکنش قبلاً ثبت و تأیید شده است.")
+            return
         if existing.status == PaymentStatus.pending:
-            from app.services.payments import verify_payment
-
-            result = await verify_payment(session, existing.id)
-            await message.answer(result.message_fa)
-        else:
-            await message.answer("این تراکنش قبلاً ثبت شده است.")
+            await message.answer("این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
+            return
+        # Rejected → the reject notice told them «دوباره ارسال کنید», and the txid is unique, so
+        # RE-OPEN the same row for another manual review instead of dead-ending them.
+        existing.status = PaymentStatus.pending
+        if "[resubmitted]" not in (existing.note or ""):
+            existing.note = (existing.note or "") + " [resubmitted]"
+        await session.commit()
+        await message.answer(
+            "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
+            f"🔖 شمارهٔ پیگیری: #{existing.id}"
+        )
+        inv2 = await session.get(Invoice, existing.invoice_id) if existing.invoice_id else None
+        await owner_notify.notify_owner(
+            session,
+            f"🔁 نمایندهٔ «{resellers[0].name}» تراکنشِ ردشده را دوباره فرستاد (#{existing.id}).\n"
+            f"دوره: {inv2.period_label if inv2 else '—'} | مبلغ فاکتور: {_invoice_amount_fa(inv2)}\n"
+            "برای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
         return
-    # Link to the chosen invoice (from «پرداخت فاکتور») if given; otherwise the oldest due.
-    # verify_payment settles ONLY this one invoice.
+    # Link to the chosen invoice (from «پرداخت فاکتور») if given; otherwise the oldest payable.
     if invoice is None:
         invoice = await _oldest_due_invoice(session, resellers)
-    # One pending payment per invoice: if a payment for this invoice is already awaiting review,
-    # don't create a duplicate — tell the customer it's under review.
+    # One pending payment per invoice → don't create a duplicate for an invoice under review.
     if invoice is not None and await _pending_payment_for_invoice(session, invoice.id) is not None:
         await message.answer(
             "برای این فاکتور قبلاً پرداختی ثبت کرده‌اید که در انتظار تأیید است؛ "
             "لطفاً منتظر بررسیِ پشتیبانی بمانید."
         )
         return
+    method = PaymentMethod.ton_txid if chain == "ton" else PaymentMethod.usdt_txid
     payment = Payment(
         reseller_id=invoice.reseller_id if invoice else resellers[0].id,
         invoice_id=invoice.id if invoice else None,
-        method=PaymentMethod.usdt_txid, status=PaymentStatus.pending, txid=txid,
+        method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
     )
     session.add(payment)
     await session.commit()
-    from app.services.payments import verify_payment
 
-    result = await verify_payment(session, payment.id)
-    ack = result.message_fa
-    if result.status != "confirmed":  # a confirmed message already carries the tracking ref
-        ack += f"\n🔖 شمارهٔ پیگیری: #{payment.id}"
-    await message.answer(ack)
-
-    # Keep the owner in the loop: a new payment either needs their manual confirm, or was
-    # auto-confirmed on-chain (money arrived).
+    label = "TON" if chain == "ton" else "USDT"
+    await message.answer(
+        f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
+        "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
+        f"🔖 شمارهٔ پیگیری: #{payment.id}"
+    )
     name = resellers[0].name
     period = invoice.period_label if invoice else "—"
     amount = _invoice_amount_fa(invoice)
-    if result.status == "confirmed":
-        await owner_notify.notify_owner(
-            session, f"✅ پرداخت «{name}» به‌صورت خودکار روی زنجیره تأیید شد.\n"
-            f"دوره: {period} | مبلغ فاکتور: {amount}")
-    else:
-        await owner_notify.notify_owner(
-            session, f"💳 پرداخت جدید (TXID) از «{name}» ثبت شد و منتظر تأیید شماست.\n"
-            f"دوره: {period} | مبلغ فاکتور: {amount}\n"
-            f"شناسهٔ پرداخت در پنل: #{payment.id}\nبرای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
+    await owner_notify.notify_owner(
+        session, f"💳 پرداخت جدید ({label} TXID) از «{name}» ثبت شد و منتظر تأیید شماست.\n"
+        f"دوره: {period} | مبلغ فاکتور: {amount}\n"
+        f"شناسهٔ پرداخت در پنل: #{payment.id}\nبرای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
 
 
 async def _handle_payment_proof(message: Message, session, *, invoice=None) -> None:

@@ -106,8 +106,10 @@ export default function Payments() {
                 <TableCell>{p.invoice_period || "—"}</TableCell>
                 <TableCell>{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
                 <TableCell dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {/* Click the hash → open it on the matching explorer (TON → tonscan, else bscscan)
+                      so the owner can verify it manually before confirming. */}
                   {p.txid
-                    ? <Link href={`https://bscscan.com/tx/${p.txid}`} target="_blank">{p.txid.slice(0, 14)}…</Link>
+                    ? <Tooltip title="باز کردن در اکسپلورر برای بررسی"><Link href={p.chain === "ton" ? `https://tonscan.org/tx/${p.txid}` : `https://bscscan.com/tx/${p.txid}`} target="_blank" rel="noopener">{p.txid.slice(0, 14)}…</Link></Tooltip>
                     : p.has_proof
                       ? <Tooltip title="مشاهدهٔ رسید"><IconButton size="small" onClick={() => openPaymentProof(p.id)}><ImageIcon fontSize="small" /></IconButton></Tooltip>
                       : "—"}
@@ -128,7 +130,9 @@ export default function Payments() {
                 <TableCell>{fmtDate(p.created_at)}</TableCell>
                 <TableCell align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
-                  <Tooltip title="بررسی زنجیره (TXID)"><span><IconButton size="small" disabled={!p.txid} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+                  {/* Optional on-chain check — USDT/BSC only (no TON verifier). Legacy rows have
+                      chain='' (treated as bsc); only an explicit TON row disables it. */}
+                  <Tooltip title={p.chain === "ton" ? "بررسی زنجیره فقط برای USDT است؛ TON را با لینک بررسی کنید" : "بررسی زنجیره (USDT)"}><span><IconButton size="small" disabled={!p.txid || p.chain === "ton"} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>

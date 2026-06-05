@@ -39,10 +39,11 @@ class InvoiceStatus(str, enum.Enum):
 
 
 class PaymentMethod(str, enum.Enum):
-    usdt_txid = "usdt_txid"      # MVP: reseller submits a BEP-20 TXID
+    usdt_txid = "usdt_txid"      # reseller submits a BEP-20 TXID (owner confirms manually)
     usdt_hd = "usdt_hd"          # future: per-reseller HD deposit address
     manual = "manual"            # owner records it by hand
     screenshot = "screenshot"    # reseller sends a deposit screenshot (owner confirms)
+    ton_txid = "ton_txid"        # reseller submits a TON tx hash (owner confirms manually)
 
 
 class PaymentStatus(str, enum.Enum):

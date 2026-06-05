@@ -119,6 +119,14 @@ async def verify_payment(
     if payment.status == PaymentStatus.confirmed:
         return PaymentResult("confirmed", True, "این پرداخت قبلاً تأیید شده است.")
 
+    # On-chain verify is BSC/USDT-only. A non-BSC (TON) hash must never be looked up on BscScan —
+    # it would never be found and the message would be misleading. Hold for manual review.
+    if payment.chain and payment.chain not in ("bsc", ""):
+        return PaymentResult(
+            "pending", False,
+            "بررسی خودکار فقط برای USDT است؛ این پرداخت را به‌صورت دستی بررسی و تأیید کنید.",
+        )
+
     invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
 
     cfg = await settings_service.get_many(
