@@ -48,7 +48,7 @@ type Section = {
 };
 
 // Settings that are machine-managed, not user-editable — hidden from the panel entirely.
-const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at"]);
+const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at", "ton_toman_auto"]);
 
 const SECTIONS: Section[] = [
   {
@@ -102,6 +102,7 @@ const SECTIONS: Section[] = [
           { key: "pay_usdt_enabled", label: "USDT (کیف پول + شناسهٔ تراکنش)" },
           { key: "pay_screenshot_enabled", label: "ارسال تصویر رسید" },
           { key: "pay_card_enabled", label: "کارت‌به‌کارت" },
+          { key: "pay_ton_enabled", label: "تون‌کوین (TON)" },
         ],
       },
       {
@@ -109,6 +110,12 @@ const SECTIONS: Section[] = [
         fields: [
           { key: "usdt_bep20_address", label: "آدرس کیف پول USDT", help: "آدرس مقصد روی شبکهٔ BEP-20.", dir: "ltr", when: (v) => !!v("pay_usdt_enabled") },
           { key: "usdt_bep20_contract", label: "قرارداد توکن USDT", advanced: true, dir: "ltr", when: (v) => !!v("pay_usdt_enabled") },
+        ],
+      },
+      {
+        title: "اطلاعات تون‌کوین (TON)",
+        fields: [
+          { key: "ton_wallet_address", label: "آدرس کیف پول TON", help: "آدرس مقصدِ تون‌کوین. مبلغِ معادلِ TON به‌صورت آنلاین (والکس) محاسبه و به مشتری نشان داده می‌شود؛ تأیید به‌صورت دستی (با تصویر رسید) انجام می‌شود.", dir: "ltr", when: (v) => !!v("pay_ton_enabled") },
         ],
       },
       {

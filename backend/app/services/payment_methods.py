@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services import settings_service
 
 _KEYS = [
-    "pay_usdt_enabled", "pay_screenshot_enabled", "pay_card_enabled",
-    "usdt_bep20_address", "card_number", "card_holder_name",
+    "pay_usdt_enabled", "pay_screenshot_enabled", "pay_card_enabled", "pay_ton_enabled",
+    "usdt_bep20_address", "card_number", "card_holder_name", "ton_wallet_address",
 ]
 
 
@@ -24,35 +24,40 @@ class PaymentOptions:
     usdt: bool
     screenshot: bool
     card: bool
+    ton: bool
     wallet: str
     card_number: str
     card_holder: str
+    ton_address: str
 
     @property
     def any_enabled(self) -> bool:
-        return self.usdt or self.screenshot or self.card
+        return self.usdt or self.screenshot or self.card or self.ton
 
 
 async def load_options(session: AsyncSession) -> PaymentOptions:
     cfg = await settings_service.get_many(session, _KEYS)
     wallet = (cfg.get("usdt_bep20_address") or "").strip()
     card = (cfg.get("card_number") or "").strip()
+    ton = (cfg.get("ton_wallet_address") or "").strip()
     return PaymentOptions(
         # A method is only really available if its data is present (a wallet / a card
-        # number), so an enabled-but-unconfigured method is silently skipped rather than
-        # telling the reseller to pay to nowhere.
+        # number / a TON address), so an enabled-but-unconfigured method is silently skipped
+        # rather than telling the reseller to pay to nowhere.
         usdt=bool(cfg.get("pay_usdt_enabled")) and bool(wallet),
         screenshot=bool(cfg.get("pay_screenshot_enabled")),
         card=bool(cfg.get("pay_card_enabled")) and bool(card),
+        ton=bool(cfg.get("pay_ton_enabled")) and bool(ton),
         wallet=wallet,
         card_number=card,
         card_holder=(cfg.get("card_holder_name") or "").strip(),
+        ton_address=ton,
     )
 
 
 def instructions_text(
     opts: PaymentOptions, *, amount_usdt: str | None = None, amount_toman: str | None = None,
-    html: bool = False,
+    amount_ton: str | None = None, html: bool = False,
 ) -> str:
     """Multi-line payment instructions for the enabled methods.
 
@@ -96,11 +101,25 @@ def instructions_text(
             b.append(f"به نام: {holder}")
         b.append("پس از واریز، تصویر رسید را همین‌جا ارسال کنید.")
         blocks.append("\n".join(b))
-    elif opts.screenshot:
-        # Screenshot as a standalone option only matters when card isn't already asking
-        # for a receipt photo; otherwise it's implied above.
+    if opts.ton:
+        b = ["💎 پرداخت با تون‌کوین (TON):"]
+        if amount_ton:
+            line = f"مبلغ: {amount_ton} TON"
+            if amount_toman:
+                line += f" (≈ {amount_toman} تومان)"
+            b.append(line)
+        elif amount_toman:
+            # No live TON rate → show the Toman figure so the customer pays the equivalent.
+            b.append(f"مبلغِ معادلِ {amount_toman} تومان را به TON واریز کنید.")
+        b.append(f"آدرس کیف پول TON:\n{copyable(opts.ton_address)}")
+        b.append("پس از واریز، تصویر رسید را همین‌جا ارسال کنید.")
+        blocks.append("\n".join(b))
+    if opts.screenshot and not (opts.card or opts.ton):
+        # The standalone "send a receipt photo" note is useful next to USDT (whose payers can
+        # send a photo instead of a TXID), but redundant when card/TON already ask for a photo.
         blocks.append("🧾 یا تصویر رسید واریز خود را همین‌جا ارسال کنید تا بررسی شود.")
     if not blocks:
         return "برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
-    tail = "\n\n👆 برای کپی، روی آدرس کیف پول یا شمارهٔ کارت ضربه بزنید." if html and (opts.usdt or opts.card) else ""
+    tail = ("\n\n👆 برای کپی، روی آدرس کیف پول یا شمارهٔ کارت ضربه بزنید."
+            if html and (opts.usdt or opts.card or opts.ton) else "")
     return "\n\n".join(blocks) + tail

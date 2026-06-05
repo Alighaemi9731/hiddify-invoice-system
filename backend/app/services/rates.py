@@ -98,6 +98,48 @@ async def refresh_auto_rate(session: AsyncSession) -> int | None:
     return rate
 
 
+async def fetch_ton_toman() -> int | None:
+    """Fetch the current TON (Toncoin) price in **Toman** from Wallex (TONTMN market). Tetherland
+    has no TON, so Wallex is the only source. Display-only (the TON amount shown to the customer);
+    a failure just hides the amount. Returns None on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "invoice-system/1"}) as client:
+            r = await client.get(_WALLEX)
+            r.raise_for_status()
+            symbols = ((r.json().get("result") or {}).get("symbols") or {})
+            stats = (symbols.get("TONTMN") or {}).get("stats") or {}
+            return _pos_int(stats.get("bidPrice"))
+    except Exception:  # noqa: BLE001
+        log.warning("failed to fetch TON→Toman rate from Wallex", exc_info=True)
+    return None
+
+
+# TON trades far higher than USDT in Toman (a few hundred k–1M+); generous absolute band.
+_TON_MIN, _TON_MAX = 50_000, 5_000_000
+
+
+async def refresh_ton_rate(session: AsyncSession) -> int | None:
+    """Fetch + cache the TON→Toman rate (`ton_toman_auto`) when it's plausible. Best-effort.
+    Same two-part guard as the USDT rate: an absolute band plus a 3× relative band vs the last
+    value (so a Wallex Toman→Rial unit slip = 10× is rejected)."""
+    rate = await fetch_ton_toman()
+    if not rate or rate < _TON_MIN or rate > _TON_MAX:
+        if rate:
+            log.warning("fetched TON rate %s outside absolute band — ignored", rate)
+        return None
+    prev = _pos_int(await settings_service.get(session, "ton_toman_auto", 0))
+    if prev and not (prev / 3 <= rate <= prev * 3):
+        log.warning("fetched TON rate %s is >3× off the previous %s — ignored", rate, prev)
+        return None
+    await settings_service.set_value(session, "ton_toman_auto", rate)
+    return rate
+
+
+async def get_ton_toman(session: AsyncSession) -> int:
+    """Last cached TON→Toman rate (0 if never fetched / unavailable)."""
+    return _pos_int(await settings_service.get(session, "ton_toman_auto", 0)) or 0
+
+
 async def get_effective_rate(session: AsyncSession) -> int:
     """The Toman-per-USDT rate to actually use (no network I/O).
 

@@ -71,7 +71,7 @@ _TPL_PAYMENT_RECEIVED = (
     "فاکتور دوره {period} تسویه شد."
 )
 _TPL_PAYMENT_REJECTED = (
-    "❌ پرداخت شما تأیید نشد.\n"
+    "❌ پرداخت شما برای فاکتور دوره {period} تأیید نشد.\n"
     "لطفاً از صحت مبلغ و شناسهٔ تراکنش/رسید مطمئن شوید و دوباره ارسال کنید، "
     "یا برای پیگیری با پشتیبانی در تماس باشید."
 )
@@ -114,6 +114,9 @@ DEFS: list[SettingDef] = [
     SettingDef("pay_card_enabled", False, False, "payments"),       # card-to-card transfer
     SettingDef("card_number", "", False, "payments"),               # the destination card
     SettingDef("card_holder_name", "", False, "payments"),          # name on the card
+    SettingDef("pay_ton_enabled", False, False, "payments"),        # TON (Toncoin) transfer
+    SettingDef("ton_wallet_address", "", False, "payments"),        # the destination TON wallet
+    SettingDef("ton_toman_auto", 0, False, "payments"),             # last live TON→Toman (status)
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
@@ -199,6 +202,14 @@ async def seed_defaults(session: AsyncSession) -> None:
     if row is not None and isinstance(row.value, str) \
             and "{payment_instructions}" not in row.value:
         row.value = _TPL_INVOICE
+        await session.commit()
+
+    # One-time upgrade of the reject template: older installs don't name the invoice period.
+    # Migrate any saved template that lacks {period} to the new default (a customized one that
+    # already uses {period} is left untouched).
+    rej = await session.get(Setting, "tpl_payment_rejected")
+    if rej is not None and isinstance(rej.value, str) and "{period}" not in rej.value:
+        rej.value = _TPL_PAYMENT_REJECTED
         await session.commit()
 
 

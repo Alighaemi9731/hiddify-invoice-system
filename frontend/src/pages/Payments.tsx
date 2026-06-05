@@ -23,6 +23,7 @@ export default function Payments() {
   const qc = useQueryClient();
   const { node, show } = useToast();
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const { data = [] } = useQuery({
     queryKey: ["payments", status],
     queryFn: () => listPayments({ status: status || undefined }),
@@ -32,6 +33,15 @@ export default function Payments() {
     ["payments", "invoices", "dashboard", "debts"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
   };
   const { sorted, key, dir, toggle } = useSort(data, "created_at", "desc");
+  // Search by tracking number (the «#N» the customer quotes) or reseller name. Persian/Arabic
+  // digits are normalized to ASCII so a hand-typed «#۱۲» matches the (ASCII) id «12».
+  const toAscii = (s: string) =>
+    s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
+     .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
+  const q = toAscii(search.trim().replace(/^#/, "")).toLowerCase();
+  const shown = q
+    ? sorted.filter((p: any) => String(p.id).includes(q) || (p.reseller_name || "").toLowerCase().includes(q))
+    : sorted;
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const [confirmRow, setConfirmRow] = useState<any>(null);
@@ -62,11 +72,14 @@ export default function Payments() {
           <MenuItem value="">همه</MenuItem>
           {Object.entries(PAYMENT_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </TextField>
+        <TextField size="small" label="جستجوی شمارهٔ پیگیری یا نام" value={search} sx={{ minWidth: 240 }}
+          placeholder="مثلاً #۱۲ یا نام نماینده" onChange={(e) => setSearch(e.target.value)} />
       </Stack>
       <Card>
         <Table size="small">
           <TableHead>
             <TableRow>
+              <SortTh id="id" label="#" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="invoice_period" label="فاکتور (دوره)" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="method" label="روش" sortKey={key} dir={dir} onSort={toggle} />
@@ -79,9 +92,17 @@ export default function Payments() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {sorted.map((p: any) => (
+            {shown.map((p: any) => (
               <TableRow key={p.id} hover>
-                <TableCell>{p.reseller_name}</TableCell>
+                <TableCell dir="ltr" sx={{ color: "text.secondary", fontWeight: 600 }}>#{p.id}</TableCell>
+                <TableCell>
+                  {/* Click the name → open the customer's Telegram PV (username if known, else by id). */}
+                  {p.reseller_username
+                    ? <Tooltip title="باز کردن گفتگوی تلگرام"><Link href={`https://t.me/${p.reseller_username}`} target="_blank" rel="noopener" underline="hover">{p.reseller_name}</Link></Tooltip>
+                    : p.reseller_chat_id
+                      ? <Tooltip title="باز کردن گفتگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
+                      : p.reseller_name}
+                </TableCell>
                 <TableCell>{p.invoice_period || "—"}</TableCell>
                 <TableCell>{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
                 <TableCell dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -114,7 +135,7 @@ export default function Payments() {
                 </TableCell>
               </TableRow>
             ))}
-            {data.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>پرداختی ثبت نشده است</TableCell></TableRow>}
+            {shown.length === 0 && <TableRow><TableCell colSpan={10} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "پرداختی با این جستجو یافت نشد" : "پرداختی ثبت نشده است"}</TableCell></TableRow>}
           </TableBody>
         </Table>
       </Card>

@@ -774,12 +774,18 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
             )
             return
         opts = await payment_methods.load_options(s)
+        amount_ton = None
+        if opts.ton:
+            from app.services import rates
+            ton_rate = await rates.get_ton_toman(s)
+            if ton_rate:
+                amount_ton = f"{float(inv.amount_toman) / ton_rate:,.2f}"
         text = (
             f"💳 پرداخت فاکتور دوره {inv.period_label}\n"
             f"مبلغ: {float(inv.amount_toman):,.0f} تومان ({float(inv.amount_usdt):,.2f} USDT)\n\n"
             + payment_methods.instructions_text(
                 opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
-                amount_toman=f"{float(inv.amount_toman):,.0f}", html=True)
+                amount_toman=f"{float(inv.amount_toman):,.0f}", amount_ton=amount_ton, html=True)
             + "\n\nℹ️ این مبلغ فقط برای همین فاکتور است. پس از واریز، شناسهٔ تراکنش (TXID) یا "
               "تصویر رسید را همین‌جا بفرستید (برای لغو: /cancel)."
         )
@@ -1678,7 +1684,10 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None) ->
     from app.services.payments import verify_payment
 
     result = await verify_payment(session, payment.id)
-    await message.answer(result.message_fa)
+    ack = result.message_fa
+    if result.status != "confirmed":  # a confirmed message already carries the tracking ref
+        ack += f"\n🔖 شمارهٔ پیگیری: #{payment.id}"
+    await message.answer(ack)
 
     # Keep the owner in the loop: a new payment either needs their manual confirm, or was
     # auto-confirmed on-chain (money arrived).
@@ -1740,7 +1749,8 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
 
     await message.answer(
         "✅ رسید شما دریافت شد و در انتظار تأیید پشتیبانی است.\n"
-        "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. (نیازی به ارسال دوباره نیست.)"
+        "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. (نیازی به ارسال دوباره نیست.)\n"
+        f"🔖 شمارهٔ پیگیری: #{payment.id}"
     )
 
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.

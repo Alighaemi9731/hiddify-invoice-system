@@ -73,10 +73,13 @@ async def run_dunning(session: AsyncSession = Depends(get_session)) -> dict:
 
 @router.post("/refresh-rate")
 async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
-    """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display."""
-    from app.services import rates
+    """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display.
+    Also refreshes the TON→Toman rate when TON payment is enabled."""
+    from app.services import rates, settings_service
 
     rate = await rates.refresh_auto_rate(session)
+    if await settings_service.get(session, "pay_ton_enabled", False):
+        await rates.refresh_ton_rate(session)
     if rate is None:
         raise HTTPException(
             502, "دریافت نرخ آنلاین ناموفق بود؛ بعداً دوباره تلاش کنید یا نرخ را دستی تنظیم کنید."

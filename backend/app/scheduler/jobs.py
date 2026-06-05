@@ -152,11 +152,14 @@ async def backup_job() -> None:
 
 
 async def rate_refresh_job() -> None:
-    """Refresh the live USDT→Toman rate when in auto mode (no-op in manual mode)."""
+    """Refresh the live USDT→Toman rate (auto mode) and the TON→Toman rate (when TON payment
+    is enabled). Both are independent and best-effort."""
     try:
         async with SessionLocal() as session:
             if str(await settings_service.get(session, "rate_mode", "manual")).lower() == "auto":
                 await rates.refresh_auto_rate(session)
+            if await settings_service.get(session, "pay_ton_enabled", False):
+                await rates.refresh_ton_rate(session)
     except Exception:  # noqa: BLE001
         log.exception("rate_refresh_job failed")
 

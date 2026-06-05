@@ -21,6 +21,7 @@ import datetime as dt
 import io
 import json
 import logging
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -113,6 +114,18 @@ _TERMINATE_SQL = (
 )
 
 
+# pg_dump 17 writes `SET transaction_timeout = 0;` in its preamble — a GUC that only exists
+# from PostgreSQL 17. The backend image bundles postgresql-client 17, but the DB server is 16,
+# which rejects that parameter («unrecognized configuration parameter "transaction_timeout"»);
+# with ON_ERROR_STOP that aborts the entire restore. It's the ONLY 17-only statement pg_dump
+# emits for a 16 schema, so dropping it lets a newer client's dump restore into an older server.
+_PG17_ONLY_SET = re.compile(rb"(?im)^[ \t]*SET[ \t]+transaction_timeout\b[^;\n]*;[ \t]*\r?\n?")
+
+
+def _strip_incompatible_sets(sql: bytes) -> bytes:
+    return _PG17_ONLY_SET.sub(b"", sql)
+
+
 def _pg_restore(sql: bytes) -> bool:
     """Import a pg_dump SQL file into the live database via psql. Returns success.
 
@@ -120,6 +133,7 @@ def _pg_restore(sql: bytes) -> bool:
     `DROP ... ` statements aren't blocked on locks; those services reconnect after."""
     import subprocess
 
+    sql = _strip_incompatible_sets(sql)
     try:
         subprocess.run(
             ["psql", "--dbname", _pg_url(), "-c", _TERMINATE_SQL],
@@ -157,8 +171,6 @@ _ENV_PATHS = [Path("/app/.env"), Path(__file__).resolve().parents[3] / ".env"]
 def _persist_secret_key(secret_key: str) -> None:
     """Write SECRET_KEY into .env so a cross-server restore can decrypt secrets after
     the auto-restart. No-op on the original server (same value)."""
-    import re
-
     # Restore reads this from an uploaded backup's meta.json; reject anything that
     # isn't a plain token so a tampered backup can't inject extra .env lines.
     if not secret_key or not re.fullmatch(r"[A-Za-z0-9_\-+/=]{16,128}", secret_key):

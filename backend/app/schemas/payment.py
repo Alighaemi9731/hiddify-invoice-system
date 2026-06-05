@@ -9,6 +9,8 @@ class PaymentOut(BaseModel):
     id: int
     reseller_id: int
     reseller_name: str | None
+    reseller_chat_id: int | None = None   # Telegram chat id → deep-link to the customer's PV
+    reseller_username: str | None = None
     invoice_id: int | None
     invoice_period: str | None = None   # the period of the single invoice this payment is for
     invoice_amount_toman: float = 0

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import Invoice, Payment, Reseller
+from app.models import BotUser, Invoice, Payment, Reseller
 from app.models.enums import PaymentMethod, PaymentStatus
 from app.schemas.payment import (
     ManualPaymentCreate,
@@ -27,9 +27,11 @@ router = APIRouter(
 def _to_out(
     p: Payment, reseller_name: str | None,
     invoice_period: str | None = None, invoice_amount_toman: float = 0,
+    reseller_chat_id: int | None = None, reseller_username: str | None = None,
 ) -> PaymentOut:
     return PaymentOut(
         id=p.id, reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
+        reseller_chat_id=reseller_chat_id, reseller_username=reseller_username,
         invoice_period=invoice_period, invoice_amount_toman=float(invoice_amount_toman or 0),
         method=p.method.value, status=p.status.value, chain=p.chain, txid=p.txid,
         from_address=p.from_address, to_address=p.to_address, amount_usdt=float(p.amount_usdt),
@@ -46,9 +48,13 @@ async def list_payments(
     session: AsyncSession = Depends(get_session),
 ) -> list[PaymentOut]:
     q = (
-        select(Payment, Reseller.name, Invoice.period_label, Invoice.amount_toman)
+        select(
+            Payment, Reseller.name, Invoice.period_label, Invoice.amount_toman,
+            Reseller.bot_chat_id, BotUser.username,
+        )
         .outerjoin(Reseller, Payment.reseller_id == Reseller.id)
         .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
+        .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
         .order_by(Payment.created_at.desc())
         .limit(limit)
     )
@@ -57,7 +63,10 @@ async def list_payments(
     if reseller_id is not None:
         q = q.where(Payment.reseller_id == reseller_id)
     rows = (await session.execute(q)).all()
-    return [_to_out(p, name, period, toman) for p, name, period, toman in rows]
+    return [
+        _to_out(p, name, period, toman, chat_id, username)
+        for p, name, period, toman, chat_id, username in rows
+    ]
 
 
 @router.get("/{payment_id}", response_model=PaymentOut)
@@ -67,8 +76,15 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
         raise HTTPException(404, "Payment not found")
     reseller = await session.get(Reseller, p.reseller_id)
     inv = await session.get(Invoice, p.invoice_id) if p.invoice_id else None
+    username = None
+    if reseller and reseller.bot_chat_id:
+        bu = (await session.execute(
+            select(BotUser).where(BotUser.telegram_id == reseller.bot_chat_id)
+        )).scalars().first()
+        username = bu.username if bu else None
     return _to_out(p, reseller.name if reseller else None,
-                   inv.period_label if inv else None, float(inv.amount_toman) if inv else 0)
+                   inv.period_label if inv else None, float(inv.amount_toman) if inv else 0,
+                   reseller.bot_chat_id if reseller else None, username)
 
 
 @router.post("/{payment_id}/verify", response_model=PaymentActionResult)

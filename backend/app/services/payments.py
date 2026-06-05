@@ -192,7 +192,8 @@ async def verify_payment(
         payment.verified_at = dt.datetime.now(dt.timezone.utc)
         await session.commit()
         return PaymentResult("confirmed", True,
-                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای این فاکتور نبود.")
+                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای این فاکتور نبود."
+                             + _ref_line(payment.id))
 
     target_amt = Decimal(str(target.amount_usdt or 0))
     # Safety net: never AUTO-confirm a zero-amount invoice. If the conversion rate was 0 when
@@ -226,7 +227,7 @@ async def verify_payment(
     await session.commit()
     await _maybe_restore(session, await session.get(Reseller, target.reseller_id))
 
-    msg = await _payment_received_text(session, target.period_label)
+    msg = await _payment_received_text(session, target.period_label, payment.id)
     if notify_reseller:
         r = await session.get(Reseller, target.reseller_id)
         if r is not None:
@@ -234,16 +235,26 @@ async def verify_payment(
     return PaymentResult("confirmed", True, msg)
 
 
-async def _payment_received_text(session: AsyncSession, period: str) -> str:
+def _ref_line(code: int | None) -> str:
+    """Tracking-number footer so the customer can quote «شمارهٔ پیگیری #N» to support and the
+    owner can find that exact payment in the panel."""
+    return f"\n🔖 شمارهٔ پیگیری: #{code}" if code else ""
+
+
+async def _payment_received_text(session: AsyncSession, period: str, code: int | None = None) -> str:
     from app.bot import texts
 
-    return await texts.render(session, "tpl_payment_received", period=period)
+    # «—» when there's no linked invoice, so the template never renders «فاکتور دوره  …» (a
+    # dangling double space).
+    period = (period or "").strip() or "—"
+    return await texts.render(session, "tpl_payment_received", period=period) + _ref_line(code)
 
 
-async def _payment_rejected_text(session: AsyncSession, period: str) -> str:
+async def _payment_rejected_text(session: AsyncSession, period: str, code: int | None = None) -> str:
     from app.bot import texts
 
-    return await texts.render(session, "tpl_payment_rejected", period=period)
+    period = (period or "").strip() or "—"
+    return await texts.render(session, "tpl_payment_rejected", period=period) + _ref_line(code)
 
 
 def _settled_ids(payment: Payment) -> list[int]:
@@ -303,7 +314,7 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     if reseller is not None and not was_confirmed:
         period = inv.period_label if inv is not None else ""
         await notifier.send_to_reseller(
-            session, reseller, await _payment_received_text(session, period),
+            session, reseller, await _payment_received_text(session, period, payment.id),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
     return PaymentResult("confirmed", True, "Confirmed")
@@ -344,7 +355,7 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     if reseller is not None and not was_rejected:
         period = invoice.period_label if invoice else ""
         await notifier.send_to_reseller(
-            session, reseller, await _payment_rejected_text(session, period),
+            session, reseller, await _payment_rejected_text(session, period, payment.id),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
     return PaymentResult("rejected", False, "Rejected")

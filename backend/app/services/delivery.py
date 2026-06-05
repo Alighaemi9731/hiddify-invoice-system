@@ -26,12 +26,17 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
     HTML-escaped so a name with </>/& can't break it."""
     import html as _html
 
-    from app.services import payment_methods
+    from app.services import payment_methods, rates
 
     opts = await payment_methods.load_options(session)
+    amount_ton = None
+    if opts.ton:
+        ton_rate = await rates.get_ton_toman(session)
+        if ton_rate:
+            amount_ton = f"{float(inv.amount_toman) / ton_rate:,.2f}"
     instructions = payment_methods.instructions_text(
         opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
-        amount_toman=f"{float(inv.amount_toman):,.0f}", html=True,
+        amount_toman=f"{float(inv.amount_toman):,.0f}", amount_ton=amount_ton, html=True,
     )
     text = await texts.render(
         session, "tpl_invoice",

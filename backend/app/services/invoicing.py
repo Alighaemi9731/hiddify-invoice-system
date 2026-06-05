@@ -55,6 +55,13 @@ async def generate_invoices(
         except Exception:  # noqa: BLE001
             import logging
             logging.getLogger("invoicing").warning("pre-billing rate refresh failed", exc_info=True)
+    # TON payment shows the customer a TON amount → keep that rate fresh at billing time too.
+    if await settings_service.get(session, "pay_ton_enabled", False):
+        try:
+            await rates.refresh_ton_rate(session)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("invoicing").warning("pre-billing TON rate refresh failed", exc_info=True)
 
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
