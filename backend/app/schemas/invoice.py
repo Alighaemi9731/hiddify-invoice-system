@@ -30,8 +30,6 @@ class InvoiceOut(BaseModel):
     base_amount_toman: float = 0
     min_sale_toman: int = 0
     floor_applied: bool = False
-    usdt_rate: float
-    amount_usdt: float
     status: str
     sent_at: dt.datetime | None
     paid_at: dt.datetime | None
@@ -68,5 +66,4 @@ class GenerateResult(BaseModel):
     skipped_existing: int
     zero_skipped: int
     total_amount_toman: float
-    total_amount_usdt: float
     invoice_ids: list[int]

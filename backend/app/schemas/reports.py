@@ -11,7 +11,6 @@ class PanelSalesRow(BaseModel):
     invoices: int
     usage_gb: float
     amount_toman: float
-    amount_usdt: float
 
 
 class SalesRow(BaseModel):
@@ -21,7 +20,6 @@ class SalesRow(BaseModel):
     panel_key: str
     usage_gb: float
     amount_toman: float
-    amount_usdt: float
     status: str
 
 
@@ -32,7 +30,6 @@ class DebtRow(BaseModel):
     bot_registered: bool
     invoices_count: int
     outstanding_toman: float
-    outstanding_usdt: float
     oldest_period: str | None
 
 
@@ -73,10 +70,8 @@ class DashboardSummary(BaseModel):
     registered_resellers: int
     invoices_total: int
     period_billed_toman: float
-    period_billed_usdt: float
     period_paid_toman: float
     outstanding_toman: float
-    outstanding_usdt: float
     status_counts: list[StatusCount]
     sales_by_panel: list[PanelSalesRow]
     top_resellers: list[SalesRow]

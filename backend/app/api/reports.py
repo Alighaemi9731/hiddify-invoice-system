@@ -40,7 +40,7 @@ def _sales_row(inv: Invoice, name: str, key: str) -> SalesRow:
     return SalesRow(
         invoice_id=inv.id, reseller_id=inv.reseller_id, reseller_name=name, panel_key=key,
         usage_gb=float(inv.usage_gb), amount_toman=float(inv.amount_toman),
-        amount_usdt=float(inv.amount_usdt), status=inv.status.value,
+        status=inv.status.value,
     )
 
 
@@ -82,17 +82,16 @@ async def sales_by_panel(
 ) -> list[PanelSalesRow]:
     label = period or current_month().label
     rows = await _period_rows(session, label, None)
-    agg: dict[int, dict] = defaultdict(lambda: {"key": "", "invoices": 0, "gb": 0.0, "t": 0.0, "u": 0.0})
+    agg: dict[int, dict] = defaultdict(lambda: {"key": "", "invoices": 0, "gb": 0.0, "t": 0.0})
     for inv, _name, key in rows:
         a = agg[inv.panel_id]
         a["key"] = key
         a["invoices"] += 1
         a["gb"] += float(inv.usage_gb)
         a["t"] += float(inv.amount_toman)
-        a["u"] += float(inv.amount_usdt)
     out = [
         PanelSalesRow(panel_id=pid, panel_key=a["key"], invoices=a["invoices"],
-                      usage_gb=round(a["gb"], 2), amount_toman=a["t"], amount_usdt=round(a["u"], 2))
+                      usage_gb=round(a["gb"], 2), amount_toman=a["t"])
         for pid, a in agg.items()
     ]
     out.sort(key=lambda r: r.amount_toman, reverse=True)
@@ -109,20 +108,19 @@ async def debts(session: AsyncSession = Depends(get_session)) -> list[DebtRow]:
     )
     rows = (await session.execute(q)).all()
     agg: dict[int, dict] = defaultdict(
-        lambda: {"name": "", "key": "", "reg": False, "count": 0, "t": 0.0, "u": 0.0, "oldest": None}
+        lambda: {"name": "", "key": "", "reg": False, "count": 0, "t": 0.0, "oldest": None}
     )
     for inv, name, key, chat in rows:
         a = agg[inv.reseller_id]
         a["name"], a["key"], a["reg"] = name, key, chat is not None
         a["count"] += 1
         a["t"] += float(inv.amount_toman)
-        a["u"] += float(inv.amount_usdt)
         if a["oldest"] is None or inv.period_label < a["oldest"]:
             a["oldest"] = inv.period_label
     out = [
         DebtRow(reseller_id=rid, reseller_name=a["name"], panel_key=a["key"],
                 bot_registered=a["reg"], invoices_count=a["count"],
-                outstanding_toman=a["t"], outstanding_usdt=round(a["u"], 2), oldest_period=a["oldest"])
+                outstanding_toman=a["t"], oldest_period=a["oldest"])
         for rid, a in agg.items()
     ]
     out.sort(key=lambda r: r.outstanding_toman, reverse=True)
@@ -211,7 +209,6 @@ async def financial_history(
             "usage_gb": float(r.usage_gb or 0),
             "price_per_gb": int(r.price_per_gb or 0),
             "amount_toman": float(r.amount_toman or 0),
-            "amount_usdt": float(r.amount_usdt or 0),
             "status": r.status,
             "paid_at": r.paid_at,
             "txid": r.txid,
@@ -264,7 +261,6 @@ async def dashboard(
 
     rows = await _period_rows(session, label, None)
     billed_t = sum(float(i.amount_toman) for i, _, _ in rows)
-    billed_u = sum(float(i.amount_usdt) for i, _, _ in rows)
     paid_t = sum(float(i.amount_toman) for i, _, _ in rows if i.status == InvoiceStatus.paid)
 
     status_map: dict[str, int] = defaultdict(int)
@@ -274,11 +270,10 @@ async def dashboard(
     # outstanding across all periods
     out_rows = (
         await session.execute(
-            select(Invoice.amount_toman, Invoice.amount_usdt).where(Invoice.status.in_(OUTSTANDING))
+            select(Invoice.amount_toman).where(Invoice.status.in_(OUTSTANDING))
         )
     ).all()
-    out_t = sum(float(t) for t, _ in out_rows)
-    out_u = sum(float(u) for _, u in out_rows)
+    out_t = sum(float(t) for (t,) in out_rows)
 
     by_panel = await sales_by_panel(label, session)  # type: ignore[arg-type]
     sales_rows = [_sales_row(i, n, k) for i, n, k in rows]
@@ -287,8 +282,8 @@ async def dashboard(
     return DashboardSummary(
         period=label, panels=panels, resellers=resellers, billable_resellers=billable,
         registered_resellers=registered, invoices_total=invoices_total,
-        period_billed_toman=billed_t, period_billed_usdt=round(billed_u, 2),
-        period_paid_toman=paid_t, outstanding_toman=out_t, outstanding_usdt=round(out_u, 2),
+        period_billed_toman=billed_t,
+        period_paid_toman=paid_t, outstanding_toman=out_t,
         status_counts=[StatusCount(status=k, count=v) for k, v in status_map.items()],
         sales_by_panel=by_panel, top_resellers=sales_rows[:10],
     )

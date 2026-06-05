@@ -27,7 +27,6 @@ class GenerationSummary:
     skipped_existing: int = 0
     zero_skipped: int = 0
     total_amount_toman: float = 0.0
-    total_amount_usdt: float = 0.0
     invoice_ids: list[int] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -335,5 +334,4 @@ async def _persist_bundle(
     await financial_archive.record(session, invoice, panel=panel, reseller=reseller)
 
     summary.total_amount_toman += amount_toman
-    summary.total_amount_usdt += amount_usdt
     summary.invoice_ids.append(invoice.id)
