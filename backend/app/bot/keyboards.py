@@ -124,6 +124,14 @@ def pay_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     )
 
 
+def pay_invoice_button(invoice_id: int) -> InlineKeyboardMarkup:
+    """A single «💳 پرداخت فاکتور» glass button placed under a sent invoice — tapping opens the
+    locked pay flow for THAT invoice. The ONLY way to submit a payment (no cold txid/photo)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💳 پرداخت فاکتور", callback_data=f"payinv:{invoice_id}")
+    ]])
+
+
 def remove_links_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text=f"🗑 حذف {name}", callback_data=f"rm:{rid}")] for rid, name in items]
     return InlineKeyboardMarkup(inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]])

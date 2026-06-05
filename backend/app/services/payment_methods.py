@@ -57,7 +57,7 @@ async def load_options(session: AsyncSession) -> PaymentOptions:
 
 def instructions_text(
     opts: PaymentOptions, *, amount_usdt: str | None = None, amount_toman: str | None = None,
-    amount_ton: str | None = None, html: bool = False,
+    amount_ton: str | None = None, html: bool = False, via_button: bool = False,
 ) -> str:
     """Multi-line payment instructions for the enabled methods.
 
@@ -114,15 +114,20 @@ def instructions_text(
         return "برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
 
     out = ["💳 از یکی از روش‌های زیر پرداخت کنید:", "\n\n".join(blocks)]
-    # After-deposit action: USDT/TON want a tx hash (TXID), card/screenshot want a receipt photo.
-    txid_m = opts.usdt or opts.ton
-    photo_m = opts.card or opts.screenshot
-    if txid_m and photo_m:
-        out.append("📩 پس از واریز: برای USDT/TON «شناسهٔ تراکنش (TXID)» و برای کارت «تصویر رسید» را همین‌جا بفرستید.")
-    elif txid_m:
-        out.append("📩 پس از واریز، «شناسهٔ تراکنش (TXID)» را همین‌جا بفرستید (لینکِ تراکنش هم قبول است).")
+    if via_button:
+        # Shown in the SENT invoice (which has a «پرداخت فاکتور» button under it). Payment is
+        # ONLY accepted through that button — a cold txid/photo is ignored.
+        out.append("💡 برای پرداخت، روی دکمهٔ «💳 پرداخت فاکتور» (زیرِ همین پیام) بزنید، سپس رسید/شناسهٔ تراکنش را بفرستید.")
     else:
-        out.append("📩 پس از واریز، «تصویر رسید» را همین‌جا بفرستید.")
+        # Shown AFTER the customer tapped the pay button (locked flow) → submit the proof now.
+        txid_m = opts.usdt or opts.ton
+        photo_m = opts.card or opts.screenshot
+        if txid_m and photo_m:
+            out.append("📩 پس از واریز: برای USDT/TON «شناسهٔ تراکنش (TXID)» و برای کارت «تصویر رسید» را همین‌جا بفرستید.")
+        elif txid_m:
+            out.append("📩 پس از واریز، «شناسهٔ تراکنش (TXID)» را همین‌جا بفرستید (لینکِ تراکنش هم قبول است).")
+        else:
+            out.append("📩 پس از واریز، «تصویر رسید» را همین‌جا بفرستید.")
     if html and (opts.usdt or opts.card or opts.ton):
         out.append("👆 برای کپی، روی آدرس یا شمارهٔ کارت ضربه بزنید.")
     return "\n\n".join(out)

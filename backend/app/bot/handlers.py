@@ -1556,10 +1556,15 @@ async def on_document(message: Message) -> None:
 
 @router.message(F.photo)
 async def on_photo(message: Message) -> None:
-    """A photo from a reseller is treated as a deposit screenshot (payment proof)."""
+    """A cold photo (NOT inside the pay flow) is NOT a payment — it would create stray,
+    unattributed payments. Guide the customer to the «پرداخت فاکتور» button instead. (Inside
+    PayState, the receipt is handled by pay_state_photo.)"""
     async with SessionLocal() as session:
         await _track_user(session, message.from_user)
-        await _handle_payment_proof(message, session)
+    await message.answer(
+        "📸 برای ثبتِ پرداخت، اول روی دکمهٔ «💳 پرداخت فاکتور» (زیرِ فاکتور یا در منو) بزنید، "
+        "سپس تصویرِ رسید را بفرستید."
+    )
 
 
 _SETCHAT_RE = re.compile(r"^(channel|group|کانال|گروه)\s+(-?\d{5,})$", re.IGNORECASE)
@@ -1590,9 +1595,13 @@ async def on_text(message: Message, bot: Bot) -> None:
         from app.services import payment_methods
 
         opts = await payment_methods.load_options(session)
-        txp = _parse_txid(text, usdt=opts.usdt, ton=opts.ton)
-        if txp:
-            await _handle_txid(message, session, txp[1], chain=txp[0])
+        # A cold TXID/link (NOT inside the pay flow) is NOT a payment — guide them to the button
+        # instead of silently recording a stray payment. (Inside PayState, pay_state_text handles it.)
+        if _parse_txid(text, usdt=opts.usdt, ton=opts.ton):
+            await message.answer(
+                "برای ثبتِ پرداخت، اول روی دکمهٔ «💳 پرداخت فاکتور» (زیرِ فاکتور یا در منو) بزنید، "
+                "سپس شناسهٔ تراکنش را بفرستید."
+            )
             return
         parsed = parse_link(text)
         if parsed:
@@ -1767,6 +1776,10 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
     # Link to the chosen invoice (from «پرداخت فاکتور») if given; otherwise the oldest payable.
     if invoice is None:
         invoice = await _oldest_due_invoice(session, resellers)
+    # Never record an unattributed payment (no payable invoice) — that produced stray «—» rows.
+    if invoice is None:
+        await message.answer("فاکتورِ قابل‌پرداختی ندارید.")
+        return
     # One pending payment per invoice → don't create a duplicate for an invoice under review.
     if invoice is not None and await _pending_payment_for_invoice(session, invoice.id) is not None:
         await message.answer(
@@ -1809,6 +1822,9 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
         return
     if invoice is None:
         invoice = await _oldest_due_invoice(session, resellers)
+    if invoice is None:
+        await message.answer("فاکتورِ قابل‌پرداختی ندارید.")
+        return
     # One pending payment per invoice — block a duplicate receipt for an invoice already
     # awaiting review (so a customer who sends 2–3 receipts doesn't spawn 2–3 payments).
     if invoice is not None and await _pending_payment_for_invoice(session, invoice.id) is not None:

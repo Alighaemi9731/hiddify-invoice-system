@@ -38,6 +38,7 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
     instructions = payment_methods.instructions_text(
         opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
         amount_toman=f"{float(inv.amount_toman):,.0f}", amount_ton=amount_ton, html=True,
+        via_button=True,
     )
     text = await texts.render(
         session, "tpl_invoice",
@@ -144,8 +145,13 @@ async def send_invoice_content(
         bd = None
 
     full_text = text + ("\n\n" + "\n".join(_breakdown_lines(bd)) if bd else "")
+    # A «💳 پرداخت فاکتور» glass button under the invoice — the ONLY way to pay (a cold
+    # txid/photo is ignored). Not shown on an already-paid invoice (re-show of a paid one).
+    from app.bot import keyboards
+
+    markup = keyboards.pay_invoice_button(inv.id) if inv.status != InvoiceStatus.paid else None
     sent_ids: list[int] = []
-    msg = await bot.send_message(chat_id, rtl(full_text), parse_mode="HTML")
+    msg = await bot.send_message(chat_id, rtl(full_text), parse_mode="HTML", reply_markup=markup)
     sent_ids.append(msg.message_id)
     for path, caption in await _render_invoice_pdfs(session, inv, reseller, bd):
         try:
