@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Grid, Box, Card, CardContent, Typography, Stack, CircularProgress,
+  Grid, Box, Card, CardContent, Typography, Stack,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import DnsIcon from "@mui/icons-material/Dns";
@@ -15,7 +15,8 @@ import EChart from "../components/EChart";
 import { fmtToman, fmtNum, fmtCompact, INVOICE_STATUS_FA } from "../format";
 import { CHART_COLORS } from "../theme";
 import { motion } from "framer-motion";
-import { Reveal } from "../components/motion";
+import { Reveal, CountUp } from "../components/motion";
+import { Skeleton } from "@mui/material";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -105,15 +106,27 @@ export default function Dashboard() {
       </Stack>
 
       {isLoading || !data ? (
-        <Box sx={{ display: "grid", placeItems: "center", py: 8 }}><CircularProgress /></Box>
+        <>
+          <Grid container spacing={2}>
+            {[0, 1, 2, 3].map((i) => (
+              <Grid item xs={6} md={3} key={i}>
+                <Skeleton variant="rounded" height={108} animation="wave" sx={{ borderRadius: "18px" }} />
+              </Grid>
+            ))}
+          </Grid>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12} md={7}><Skeleton variant="rounded" height={356} animation="wave" sx={{ borderRadius: "18px" }} /></Grid>
+            <Grid item xs={12} md={5}><Skeleton variant="rounded" height={356} animation="wave" sx={{ borderRadius: "18px" }} /></Grid>
+          </Grid>
+        </>
       ) : (
         <>
           <Grid container spacing={2}>
             {[
-              { label: "پنل‌ها", value: fmtNum(data.panels), color: "#6d5efc", icon: <DnsIcon /> },
-              { label: "نمایندگان اصلی", value: fmtNum(data.resellers), sub: `${fmtNum(data.registered_resellers)} متصل به ربات`, color: "#0ea5e9", icon: <GroupIcon /> },
-              { label: "فروش دوره", value: fmtToman(data.period_billed_toman), color: "#10b981", icon: <TrendingUpIcon /> },
-              { label: "بدهی معوق", value: fmtToman(data.outstanding_toman), color: "#f43f5e", icon: <WarningAmberIcon /> },
+              { label: "پنل‌ها", value: <CountUp to={data.panels} format={fmtNum} />, color: "#6d5efc", icon: <DnsIcon /> },
+              { label: "نمایندگان اصلی", value: <CountUp to={data.resellers} format={fmtNum} />, sub: `${fmtNum(data.registered_resellers)} متصل به ربات`, color: "#0ea5e9", icon: <GroupIcon /> },
+              { label: "فروش دوره", value: <CountUp to={data.period_billed_toman} format={fmtToman} />, color: "#10b981", icon: <TrendingUpIcon /> },
+              { label: "بدهی معوق", value: <CountUp to={data.outstanding_toman} format={fmtToman} />, color: "#f43f5e", icon: <WarningAmberIcon /> },
             ].map((c, i) => (
               <Grid item xs={6} md={3} key={c.label}>
                 <motion.div

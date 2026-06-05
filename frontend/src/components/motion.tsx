@@ -1,6 +1,6 @@
-import { motion, Variants } from "framer-motion";
+import { motion, Variants, animate } from "framer-motion";
 import { Box, BoxProps } from "@mui/material";
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 
 // A soft, slightly-overshooting ease used across all entrances.
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -35,6 +35,28 @@ export const staggerItem: Variants = {
 
 /** A motion-enabled MUI Box (so sx + layout animations compose). */
 export const MotionBox = motion(Box) as React.FC<BoxProps & React.ComponentProps<typeof motion.div>>;
+
+/**
+ * Animate a number from 0 up to `to` on mount (and whenever `to` changes), rendering
+ * it through `format` each frame — e.g. a Toman total ticking up. Honours
+ * prefers-reduced-motion by snapping to the final value.
+ */
+export function CountUp({
+  to, format, duration = 1.2,
+}: { to: number; format: (n: number) => string; duration?: number }) {
+  const reduce =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const [val, setVal] = useState(reduce ? to : 0);
+  useEffect(() => {
+    if (reduce) { setVal(to); return; }
+    const controls = animate(0, to, {
+      duration, ease: [0.22, 1, 0.36, 1], onUpdate: (v) => setVal(v),
+    });
+    return () => controls.stop();
+  }, [to, duration, reduce]);
+  return <>{format(val)}</>;
+}
 
 /** Wrap a block to fade-rise it in on mount (optionally delayed). */
 export function Reveal({ children, delay = 0 }: { children: ReactNode; delay?: number }) {

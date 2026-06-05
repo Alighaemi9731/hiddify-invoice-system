@@ -242,6 +242,19 @@ export function makeTheme(mode: PaletteMode) {
       MuiListItemButton: { styleOverrides: { root: { borderRadius: 12, transition: "background-color .18s ease" } } },
       MuiSwitch: { styleOverrides: { root: { padding: 8 }, track: { borderRadius: 11, opacity: isDark ? 0.4 : 0.3 } } },
       MuiLinearProgress: { styleOverrides: { root: { borderRadius: 6, height: 8 } } },
+      MuiSkeleton: {
+        defaultProps: { animation: "wave" },
+        styleOverrides: {
+          root: {
+            backgroundColor: isDark ? "rgba(255,255,255,.06)" : "rgba(120,130,170,.11)",
+            "&::after": {
+              background: `linear-gradient(90deg, transparent, ${
+                isDark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.6)"
+              }, transparent)`,
+            },
+          },
+        },
+      },
     },
   });
 }
