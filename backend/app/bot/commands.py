@@ -40,10 +40,15 @@ RESELLER_COMMANDS = [
 ]
 
 OWNER_COMMANDS = [
-    BotCommand(command="start", description="منوی مدیریت"),
-    BotCommand(command="menu", description="منوی مدیریت"),
-    BotCommand(command="broadcast", description="پیام همگانی"),
-    BotCommand(command="help", description="راهنما"),
+    BotCommand(command="menu", description="🏠 منوی مدیریت"),
+    BotCommand(command="stats", description="📊 آمار کلی"),
+    BotCommand(command="debtors", description="💰 بدهکاران"),
+    BotCommand(command="idle", description="🟡 فروش صفر این ماه"),
+    BotCommand(command="broadcast", description="📢 پیام همگانی"),
+    BotCommand(command="sync", description="🔄 همگام‌سازی پنل‌ها"),
+    BotCommand(command="dunning", description="🔔 اجرای یادآوری‌ها"),
+    BotCommand(command="backup", description="🗄 پشتیبان‌گیری اکنون"),
+    BotCommand(command="help", description="❓ راهنما"),
 ]
 
 

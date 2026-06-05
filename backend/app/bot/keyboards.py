@@ -95,18 +95,28 @@ def support_reply_keyboard(user_id: int, message_id: int) -> InlineKeyboardMarku
 
 
 def owner_menu_keyboard() -> InlineKeyboardMarkup:
-    # Heavy/irreversible actions (monthly invoice issue+send) stay in the web panel to
-    # avoid accidental taps. The bot exposes the safe, frequently-useful ones.
+    # A compact 2-column grid grouped by purpose: reports, then operations. Heavy/irreversible
+    # actions (monthly invoice issue+send) stay in the web panel to avoid accidental taps.
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📊 آمار کلی", callback_data="owner:stats")],
-            [InlineKeyboardButton(text="💰 بدهکاران", callback_data="owner:debtors")],
-            [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="owner:zerosale")],
-            [InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast")],
-            [InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync")],
-            [InlineKeyboardButton(text="🔔 اجرای یادآوری‌ها", callback_data="owner:dunning")],
+            # — گزارش‌ها —
+            [InlineKeyboardButton(text="📊 آمار کلی", callback_data="owner:stats"),
+             InlineKeyboardButton(text="💰 بدهکاران", callback_data="owner:debtors")],
+            [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="owner:zerosale"),
+             InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast")],
+            # — عملیات —
+            [InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync"),
+             InlineKeyboardButton(text="🔔 اجرای یادآوری‌ها", callback_data="owner:dunning")],
             [InlineKeyboardButton(text="🗄 پشتیبان‌گیری اکنون", callback_data="owner:backup")],
         ]
+    )
+
+
+def my_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """One button per invoice (data: inv:<invoice_id>) — tapping re-sends the full invoice."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"inv:{iid}")] for iid, label in items]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )
 
 

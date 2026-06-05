@@ -687,6 +687,33 @@ async def cb_debt(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data.startswith("inv:"))
+async def cb_invoice_view(cb: CallbackQuery, bot: Bot) -> None:
+    """Re-send the full content of one of the caller's invoices (text + per-node PDFs)."""
+    try:
+        inv_id = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    await cb.answer("در حال ارسال فاکتور…")
+    async with SessionLocal() as s:
+        resellers = await _resellers_for_chat(s, cb.from_user.id)
+        owned_ids = {r.id for r in resellers}
+        inv = await s.get(Invoice, inv_id)
+        # Ownership check: a reseller may only view invoices of their own reseller rows.
+        if inv is None or inv.reseller_id not in owned_ids:
+            await cb.message.answer("این فاکتور در دسترس شما نیست.")
+            return
+        reseller = await s.get(Reseller, inv.reseller_id)
+        from app.services import delivery
+
+        try:
+            await delivery.send_invoice_content(s, bot, cb.from_user.id, inv, reseller)
+        except Exception:  # noqa: BLE001
+            log.warning("invoice view failed for %s", inv_id, exc_info=True)
+            await cb.message.answer("ارسال فاکتور با خطا مواجه شد؛ بعداً دوباره تلاش کنید.")
+
+
 @router.callback_query(F.data == "menu:interim")
 async def cb_interim(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer("در حال ساخت فاکتور علی‌الحساب…")
@@ -730,6 +757,60 @@ async def cb_noop(cb: CallbackQuery) -> None:
 
 
 # --------------------------- owner callbacks ---------------------------
+async def _dispatch_owner(action: str, answer, session) -> None:
+    """Run an owner action. Shared by the menu buttons (cb_owner) AND the owner `/` commands,
+    so the slash-command list and the inline menu always do the exact same thing."""
+    if action == "stats":
+        await _owner_stats(answer, session)
+    elif action == "debtors":
+        await _owner_debtors(answer, session)
+    elif action == "zerosale":
+        await _owner_zerosale(answer, session)
+    elif action == "broadcast":
+        await answer("📢 گیرندگان پیام همگانی را انتخاب کنید:",
+                     reply_markup=keyboards.broadcast_audience_keyboard())
+    elif action == "sync":
+        from app.services import sync as sync_service
+
+        await answer("⏳ در حال همگام‌سازی پنل‌ها…")
+        res = await sync_service.sync_all(session)
+        ok = sum(1 for r in res if r.status.value == "success")
+        await answer(f"🔄 همگام‌سازی انجام شد: {ok}/{len(res)} پنل موفق.")
+    elif action == "backup":
+        from app.services import backup_delivery
+
+        await answer("⏳ در حال تهیهٔ پشتیبان…")
+        r = await backup_delivery.send_backup_to_owner(session)
+        if r.get("status") == "sent":
+            await answer("🗄 پشتیبان تهیه و برای شما ارسال شد.")
+        elif r.get("status") in ("no_owner_chat", "no_bot"):
+            await answer(f"⚠️ پشتیبان روی سرور ذخیره شد ولی ارسال نشد ({r.get('status')}).")
+        else:
+            await answer("❌ ارسال پشتیبان ناموفق بود.")
+    elif action == "dunning":
+        from app.services import dunning
+
+        res = await dunning.run_dunning(session)
+        await answer(
+            f"🔔 یادآوری‌ها اجرا شد:\n"
+            f"یادآوری ۱: {res['reminder1']} | یادآوری ۲: {res['reminder2']} | "
+            f"اخطار: {res['warning']} | مسدودسازی: {res['enforced']} (آزمایشی: {res['enforced_dry']})"
+        )
+    elif action == "monthly":
+        from app.services import delivery, invoicing, sync as sync_service
+        from app.services.periods import previous_month
+
+        await answer("⏳ در حال همگام‌سازی، صدور و ارسال ماه قبل...")
+        await sync_service.sync_all(session)
+        p = previous_month()
+        g = await invoicing.generate_invoices(session, p)
+        d = await delivery.send_period(session, p.label)
+        await answer(
+            f"✅ دوره {p.label}: {g.created} فاکتور ساخته شد، "
+            f"{d.get('sent', 0)} ارسال موفق، {d.get('unmatched', 0)} بدون ربات."
+        )
+
+
 @router.callback_query(F.data.startswith("owner:"))
 async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
     action = cb.data.split(":", 1)[1]
@@ -737,56 +818,28 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
         if not await _is_owner_user(s, cb.from_user):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        if action == "stats":
-            await _owner_stats(cb.message.answer, s)
-        elif action == "debtors":
-            await _owner_debtors(cb.message.answer, s)
-        elif action == "zerosale":
-            await _owner_zerosale(cb.message.answer, s)
-        elif action == "broadcast":
-            await cb.message.answer("📢 گیرندگان پیام همگانی را انتخاب کنید:",
-                                    reply_markup=keyboards.broadcast_audience_keyboard())
-        elif action == "sync":
-            from app.services import sync as sync_service
-
-            await cb.message.answer("⏳ در حال همگام‌سازی پنل‌ها…")
-            res = await sync_service.sync_all(s)
-            ok = sum(1 for r in res if r.status.value == "success")
-            await cb.message.answer(f"🔄 همگام‌سازی انجام شد: {ok}/{len(res)} پنل موفق.")
-        elif action == "backup":
-            from app.services import backup_delivery
-
-            await cb.message.answer("⏳ در حال تهیهٔ پشتیبان…")
-            r = await backup_delivery.send_backup_to_owner(s)
-            if r.get("status") == "sent":
-                await cb.message.answer("🗄 پشتیبان تهیه و برای شما ارسال شد.")
-            elif r.get("status") in ("no_owner_chat", "no_bot"):
-                await cb.message.answer(f"⚠️ پشتیبان روی سرور ذخیره شد ولی ارسال نشد ({r.get('status')}).")
-            else:
-                await cb.message.answer("❌ ارسال پشتیبان ناموفق بود.")
-        elif action == "dunning":
-            from app.services import dunning
-
-            res = await dunning.run_dunning(s)
-            await cb.message.answer(
-                f"🔔 یادآوری‌ها اجرا شد:\n"
-                f"یادآوری ۱: {res['reminder1']} | یادآوری ۲: {res['reminder2']} | "
-                f"اخطار: {res['warning']} | مسدودسازی: {res['enforced']} (آزمایشی: {res['enforced_dry']})"
-            )
-        elif action == "monthly":
-            from app.services import delivery, invoicing, sync as sync_service
-            from app.services.periods import previous_month
-
-            await cb.message.answer("⏳ در حال همگام‌سازی، صدور و ارسال ماه قبل...")
-            await sync_service.sync_all(s)
-            p = previous_month()
-            g = await invoicing.generate_invoices(s, p)
-            d = await delivery.send_period(s, p.label)
-            await cb.message.answer(
-                f"✅ دوره {p.label}: {g.created} فاکتور ساخته شد، "
-                f"{d.get('sent', 0)} ارسال موفق، {d.get('unmatched', 0)} بدون ربات."
-            )
+        await _dispatch_owner(action, cb.message.answer, s)
     await cb.answer()
+
+
+# Owner `/` commands — mirror the owner menu buttons exactly (see commands.OWNER_COMMANDS).
+# `/broadcast` is handled by its own dedicated command handler above (it also accepts inline
+# text), so it's intentionally not duplicated here.
+_OWNER_CMD_ACTION = {
+    "stats": "stats", "debtors": "debtors", "idle": "zerosale",
+    "sync": "sync", "dunning": "dunning", "backup": "backup",
+}
+
+
+@router.message(Command(commands=list(_OWNER_CMD_ACTION)))
+async def cmd_owner_action(message: Message, command: CommandObject) -> None:
+    action = _OWNER_CMD_ACTION.get(command.command)
+    if not action:
+        return
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, message.from_user):
+            return  # owner-only; resellers don't see these commands
+        await _dispatch_owner(action, message.answer, s)
 
 
 async def _owner_stats(answer, session) -> None:
@@ -870,22 +923,30 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
     ids = [r.id for r in resellers]
+    # Only DELIVERED invoices (not drafts) — unpaid first so what needs paying is on top.
     invoices = (
         await session.execute(
-            select(Invoice).where(Invoice.reseller_id.in_(ids))
-            .order_by(Invoice.period_start.desc()).limit(8)
+            select(Invoice)
+            .where(Invoice.reseller_id.in_(ids), Invoice.status != InvoiceStatus.draft)
+            .order_by(Invoice.period_start.desc()).limit(12)
         )
     ).scalars().all()
     if not invoices:
         await answer("فاکتوری برای شما ثبت نشده است.")
         return
-    lines = ["🧾 فاکتورهای اخیر شما:\n"]
+    items: list[tuple[int, str]] = []
     for inv in invoices:
-        lines.append(
-            f"• دوره {inv.period_label}: {float(inv.amount_toman):,.0f} تومان "
-            f"({float(inv.amount_usdt):,.2f} USDT) — {_STATUS_FA.get(inv.status.value, inv.status.value)}"
-        )
-    await answer("\n".join(lines))
+        paid = inv.status == InvoiceStatus.paid
+        emoji = "✅" if paid else "🧾"
+        status_fa = _STATUS_FA.get(inv.status.value, inv.status.value)
+        items.append((
+            inv.id,
+            f"{emoji} {inv.period_label} — {float(inv.amount_toman):,.0f} ت ({status_fa})",
+        ))
+    await answer(
+        "🧾 فاکتورهای شما — برای دیدن کاملِ هر فاکتور (متن + PDF) روی آن بزنید:",
+        reply_markup=keyboards.my_invoices_keyboard(items),
+    )
 
 
 async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None:
@@ -929,8 +990,10 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
         if bd["subs"]:
             lines.append("\n🟨 زیرمجموعه‌های شما:")
             for s in bd["subs"]:
+                # Isolate the (possibly English) name so the GB/Toman after it don't reorder.
                 lines.append(
-                    f"• نماینده {s['name']} — {s['gb']:g} گیگ ({s['users']} سرویس) — {s['amount']:,} تومان"
+                    f"• نماینده {_iso(s['name'])}: حجم {s['gb']:g} گیگ "
+                    f"({s['users']} سرویس) — {s['amount']:,} تومان"
                 )
         lines += [
             "",
@@ -1042,11 +1105,12 @@ async def _send_pay(answer, chat_id: int, session) -> None:
     if len(due) > 1:
         lines.append(f"(مجموع {len(due)} فاکتور — با یک پرداخت همه تسویه می‌شوند)")
     opts = await payment_methods.load_options(session)
-    lines.append("\n" + payment_methods.instructions_text(opts, amount_usdt=f"{total_u:,.2f}"))
+    lines.append("\n" + payment_methods.instructions_text(opts, amount_usdt=f"{total_u:,.2f}", html=True))
     if deferred:
         dsum = sum(float(i.amount_usdt) for i in deferred)
         lines.append(f"\n⏳ {len(deferred)} فاکتور مهلت‌دار ({dsum:,.2f} USDT) فعلاً لازم نیست پرداخت شود.")
-    await answer("\n".join(lines))
+    # HTML so the wallet/card in the instructions are tap-to-copy. The rest is Persian/numbers.
+    await answer("\n".join(lines), parse_mode="HTML")
 
 
 async def _send_removelink(answer, chat_id: int, session) -> None:

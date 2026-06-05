@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from html import escape as _html_escape
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
@@ -16,22 +17,24 @@ from app.models import DeliveryLog, Invoice, Reseller
 from app.models.enums import DeliveryKind, DeliveryStatus, InvoiceStatus
 from app.services import invoice_pdf, notifier, settings_service
 
-# Telegram caption hard limit.
-_CAPTION_MAX = 1024
-
 log = logging.getLogger("delivery")
 
 
 async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Reseller) -> str:
+    """Build the payable invoice text as **HTML** (so the wallet/card render as tap-to-copy
+    <code>). Always sent with parse_mode="HTML"; dynamic free text (the reseller name) is
+    HTML-escaped so a name with </>/& can't break it."""
+    import html as _html
+
     from app.services import payment_methods
 
     opts = await payment_methods.load_options(session)
     instructions = payment_methods.instructions_text(
-        opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}"
+        opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}", html=True
     )
     text = await texts.render(
         session, "tpl_invoice",
-        name=reseller.name, period=inv.period_label,
+        name=_html.escape(reseller.name or ""), period=inv.period_label,
         usage_gb=f"{float(inv.usage_gb):,.0f}",
         amount_toman=f"{float(inv.amount_toman):,.0f}",
         amount_usdt=f"{float(inv.amount_usdt):,.2f}",
@@ -50,10 +53,16 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
     return text
 
 
+# Unicode First-Strong Isolate (U+2068 … U+2069): wraps a possibly-English value so it keeps
+# its own direction and does NOT reorder the surrounding RTL text (e.g. the GB after a name).
+def _iso(value) -> str:
+    return f"⁨{value}⁩"
+
+
 def _breakdown_lines(bd: dict) -> list[str]:
     """Per-node usage breakdown (own + each sub), matching the «فاکتور علی‌الحساب» format.
-    GB only — the payable total + payment instructions live in the main invoice text. Each
-    line starts with a Persian word so an English (sub-)reseller name stays right-aligned."""
+    GB only — the payable total + payment instructions live in the main invoice text. The
+    (sub-)reseller name is isolated so an English name doesn't push the GB to the wrong side."""
     lines = [
         "➖➖➖➖➖➖➖➖",
         "🧾 ریز مصرف این دوره:",
@@ -62,7 +71,9 @@ def _breakdown_lines(bd: dict) -> list[str]:
     if bd["subs"]:
         lines.append("🟨 زیرمجموعه‌های شما:")
         for s in bd["subs"]:
-            lines.append(f"• نماینده {s['name']} — {s['gb']:g} گیگ ({s['users']} سرویس)")
+            # message is sent as HTML → escape the name (then isolate it for RTL).
+            nm = _iso(_html_escape(s["name"]))
+            lines.append(f"• نماینده {nm}: حجم {s['gb']:g} گیگ ({s['users']} سرویس)")
     return lines
 
 
@@ -103,6 +114,41 @@ async def _render_invoice_pdfs(
     return docs
 
 
+async def send_invoice_content(
+    session: AsyncSession, bot: Bot, chat_id: int, inv: Invoice, reseller: Reseller,
+    *, text: str | None = None,
+) -> list[int]:
+    """Send the invoice content to `chat_id`: the payable text + per-node usage breakdown
+    (HTML, so wallet/card are tap-to-copy), then a volume-only PDF for the reseller's own
+    users and one per sub-reseller. Returns the sent message ids. No DB side effects — the
+    delivery wrapper (send_invoice) adds status/log/cleanup; the «فاکتورهای من» view reuses
+    this raw to re-show an invoice on demand."""
+    from app.services import reseller_report
+    from app.services.periods import month_period
+
+    if text is None:
+        text = await build_invoice_text(session, inv, reseller)
+    period = month_period(inv.period_start.year, inv.period_start.month)
+    bd: dict | None = None
+    try:
+        b = await reseller_report.interim_breakdown(session, reseller, period)
+        bd = b if b and b.get("total_gb", 0) > 0 else None
+    except Exception:  # noqa: BLE001
+        bd = None
+
+    full_text = text + ("\n\n" + "\n".join(_breakdown_lines(bd)) if bd else "")
+    sent_ids: list[int] = []
+    msg = await bot.send_message(chat_id, full_text, parse_mode="HTML")
+    sent_ids.append(msg.message_id)
+    for path, caption in await _render_invoice_pdfs(session, inv, reseller, bd):
+        try:
+            doc = await bot.send_document(chat_id, FSInputFile(path), caption=caption)
+            sent_ids.append(doc.message_id)
+        except Exception:  # noqa: BLE001 — a single PDF failure shouldn't fail the invoice
+            log.warning("invoice PDF send failed for invoice %s", inv.id, exc_info=True)
+    return sent_ids
+
+
 async def send_invoice(
     session: AsyncSession, invoice_id: int, *, bot: Bot | None = None
 ) -> DeliveryLog:
@@ -123,22 +169,6 @@ async def send_invoice(
     if bot is None:
         bot = await build_bot(session)
         own_bot = True
-
-    # Per-node breakdown (own + each sub) — for the text AND to know which sub PDFs to render.
-    from app.services import reseller_report
-    from app.services.periods import month_period
-
-    period = month_period(inv.period_start.year, inv.period_start.month)
-    bd: dict | None = None
-    try:
-        b = await reseller_report.interim_breakdown(session, reseller, period)
-        bd = b if b and b.get("total_gb", 0) > 0 else None
-    except Exception:  # noqa: BLE001
-        bd = None
-
-    full_text = text
-    if bd:
-        full_text = text + "\n\n" + "\n".join(_breakdown_lines(bd))
 
     # Resend cleanup: collect ALL message ids of the prior delivery (text + every PDF) and
     # delete them only AFTER the new pieces land, so a failed resend never wipes the chat.
@@ -166,22 +196,15 @@ async def send_invoice(
     try:
         if bot is None:
             raise RuntimeError("no telegram bot token configured")
-        # 1) the payable text + breakdown (the primary message)
-        msg = await bot.send_message(reseller.bot_chat_id, full_text)
-        sent_ids.append(msg.message_id)
-        # 2) one volume-only PDF for own users + one per sub-reseller
-        for path, caption in await _render_invoice_pdfs(session, inv, reseller, bd):
-            try:
-                doc = await bot.send_document(reseller.bot_chat_id, FSInputFile(path), caption=caption)
-                sent_ids.append(doc.message_id)
-            except Exception:  # noqa: BLE001 — a single PDF failure shouldn't fail the invoice
-                log.warning("invoice PDF send failed for invoice %s", inv.id, exc_info=True)
+        sent_ids = await send_invoice_content(
+            session, bot, reseller.bot_chat_id, inv, reseller, text=text
+        )
     except TelegramForbiddenError:
         status, error = DeliveryStatus.blocked, "reseller blocked the bot"
     except Exception as exc:  # noqa: BLE001 — fall back to plain text only
         log.warning("invoice delivery failed for invoice %s: %s", inv.id, exc)
         try:
-            msg = await bot.send_message(reseller.bot_chat_id, text)
+            msg = await bot.send_message(reseller.bot_chat_id, text, parse_mode="HTML")
             sent_ids = [msg.message_id]
         except Exception as exc2:  # noqa: BLE001
             status, error = DeliveryStatus.failed, str(exc2)[:500]

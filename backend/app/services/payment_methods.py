@@ -50,25 +50,39 @@ async def load_options(session: AsyncSession) -> PaymentOptions:
     )
 
 
-def instructions_text(opts: PaymentOptions, *, amount_usdt: str | None = None) -> str:
-    """Multi-line payment instructions for the enabled methods (Telegram / PDF caption)."""
-    # A value that starts with a Latin/hex/digit character (a wallet address, a card number)
-    # would left-align its whole line in Telegram while the Persian lines right-align, so the
-    # message looks jumbled. A leading right-to-left mark (‏ U+200F) keeps the line right-
-    # aligned; the value itself still reads left-to-right within it.
+def instructions_text(
+    opts: PaymentOptions, *, amount_usdt: str | None = None, html: bool = False
+) -> str:
+    """Multi-line payment instructions for the enabled methods.
+
+    `html=True` renders the wallet address / card number inside <code>…</code> so the reseller
+    can TAP to copy them (the message must then be sent with parse_mode="HTML"). `html=False`
+    keeps the plain form: a leading right-to-left mark (‏ U+200F) so a value that starts with a
+    Latin/hex/digit char still right-aligns its line instead of jumbling the message."""
+    import html as _html
+
     rtl = "‏"
+
+    def copyable(value: str) -> str:
+        return f"<code>{_html.escape(str(value))}</code>" if html else f"{rtl}{value}"
+
     blocks: list[str] = []
     if opts.usdt:
-        b = ["💳 پرداخت با USDT (شبکه BEP-20):"]
+        b = ["💳 پرداخت با USDT (فقط شبکهٔ BEP-20):"]
         if amount_usdt:
             b.append(f"مبلغ: {amount_usdt} USDT")
-        b.append(f"آدرس کیف پول:\n{rtl}{opts.wallet}")
+        b.append(f"آدرس کیف پول:\n{copyable(opts.wallet)}")
+        b.append(
+            "⚠️ توجه: فقط در شبکهٔ BEP-20 (BSC) واریز کنید. ارسال از شبکه‌های دیگر "
+            "(مثل TRC20 یا ERC20) باعث از‌دست‌رفتن وجه می‌شود."
+        )
         b.append("پس از واریز، شناسهٔ تراکنش (TXID) را همین‌جا ارسال کنید.")
         blocks.append("\n".join(b))
     if opts.card:
-        b = ["🏦 کارت‌به‌کارت:", f"شماره کارت:\n{rtl}{opts.card_number}"]
+        b = ["🏦 کارت‌به‌کارت:", f"شماره کارت:\n{copyable(opts.card_number)}"]
         if opts.card_holder:
-            b.append(f"به نام: {rtl}{opts.card_holder}")
+            holder = _html.escape(opts.card_holder) if html else f"{rtl}{opts.card_holder}"
+            b.append(f"به نام: {holder}")
         b.append("پس از واریز، تصویر رسید را همین‌جا ارسال کنید.")
         blocks.append("\n".join(b))
     elif opts.screenshot:
@@ -77,4 +91,5 @@ def instructions_text(opts: PaymentOptions, *, amount_usdt: str | None = None) -
         blocks.append("🧾 یا تصویر رسید واریز خود را همین‌جا ارسال کنید تا بررسی شود.")
     if not blocks:
         return "برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
-    return "\n\n".join(blocks)
+    tail = "\n\n👆 برای کپی، روی آدرس کیف پول یا شمارهٔ کارت ضربه بزنید." if html and (opts.usdt or opts.card) else ""
+    return "\n\n".join(blocks) + tail

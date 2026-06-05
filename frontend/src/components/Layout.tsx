@@ -32,19 +32,19 @@ import ErrorBoundary from "./ErrorBoundary";
 const WIDTH = 256;
 
 const NAV = [
-  { to: "/", label: "داشبورد", icon: <DashboardIcon /> },
-  { to: "/panels", label: "پنل‌ها", icon: <DnsIcon /> },
-  { to: "/resellers", label: "نمایندگان", icon: <GroupIcon /> },
-  { to: "/invoices", label: "فاکتورها", icon: <ReceiptLongIcon /> },
-  { to: "/payments", label: "پرداخت‌ها", icon: <PaymentsIcon /> },
-  { to: "/debts", label: "بدهی‌ها", icon: <MoneyOffIcon /> },
-  { to: "/sales", label: "فروش نمایندگان", icon: <BarChartIcon /> },
-  { to: "/financial-history", label: "تاریخچهٔ مالی", icon: <AccountBalanceIcon /> },
-  { to: "/broadcast", label: "پیام همگانی", icon: <CampaignIcon /> },
-  { to: "/logs", label: "گزارش‌ها", icon: <HistoryIcon /> },
-  { to: "/account", label: "حساب و پشتیبان", icon: <ManageAccountsIcon /> },
-  { to: "/settings", label: "تنظیمات", icon: <SettingsIcon /> },
-  { to: "/help", label: "راهنما", icon: <HelpOutlineIcon /> },
+  { to: "/", label: "داشبورد", icon: <DashboardIcon />, color: "#6d5efc" },
+  { to: "/panels", label: "پنل‌ها", icon: <DnsIcon />, color: "#0ea5e9" },
+  { to: "/resellers", label: "نمایندگان", icon: <GroupIcon />, color: "#22c55e" },
+  { to: "/invoices", label: "فاکتورها", icon: <ReceiptLongIcon />, color: "#f59e0b" },
+  { to: "/payments", label: "پرداخت‌ها", icon: <PaymentsIcon />, color: "#10b981" },
+  { to: "/debts", label: "بدهی‌ها", icon: <MoneyOffIcon />, color: "#f43f5e" },
+  { to: "/sales", label: "فروش نمایندگان", icon: <BarChartIcon />, color: "#8b5cf6" },
+  { to: "/financial-history", label: "تاریخچهٔ مالی", icon: <AccountBalanceIcon />, color: "#14b8a6" },
+  { to: "/broadcast", label: "پیام همگانی", icon: <CampaignIcon />, color: "#ec4899" },
+  { to: "/logs", label: "گزارش‌ها", icon: <HistoryIcon />, color: "#0891b2" },
+  { to: "/account", label: "حساب و پشتیبان", icon: <ManageAccountsIcon />, color: "#3b82f6" },
+  { to: "/settings", label: "تنظیمات", icon: <SettingsIcon />, color: "#64748b" },
+  { to: "/help", label: "راهنما", icon: <HelpOutlineIcon />, color: "#06b6d4" },
 ];
 
 export default function Layout() {
@@ -59,9 +59,9 @@ export default function Layout() {
   const { data: info } = useQuery({ queryKey: ["app-info"], queryFn: getInfo, staleTime: 600000 });
 
   const navItemSx = (selected: boolean) => ({
-    position: "relative", borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.85,
-    color: selected ? "primary.main" : "text.secondary",
-    "& .MuiListItemIcon-root": { color: selected ? "primary.main" : "text.secondary", minWidth: 38 },
+    position: "relative", borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.7,
+    color: selected ? "text.primary" : "text.secondary",
+    "& .MuiListItemIcon-root": { minWidth: 40 },
     "&.Mui-selected": {
       bgcolor: alpha(primary, mode === "dark" ? 0.18 : 0.09),
       "&:hover": { bgcolor: alpha(primary, mode === "dark" ? 0.24 : 0.14) },
@@ -101,7 +101,16 @@ export default function Layout() {
           return (
             <ListItemButton key={item.to} selected={selected}
               onClick={() => { nav(item.to); setOpen(false); }} sx={navItemSx(selected)}>
-              <ListItemIcon>{item.icon}</ListItemIcon>
+              <ListItemIcon>
+                <Box sx={{
+                  width: 31, height: 31, borderRadius: 2, display: "grid", placeItems: "center",
+                  color: item.color,
+                  bgcolor: (t) => alpha(item.color, t.palette.mode === "dark" ? 0.22 : 0.14),
+                  boxShadow: selected ? (t) => `0 0 0 1px ${alpha(item.color, 0.5)}` : "none",
+                  transition: "box-shadow .15s",
+                  "& svg": { fontSize: 19 },
+                }}>{item.icon}</Box>
+              </ListItemIcon>
               <ListItemText primary={item.label}
                 primaryTypographyProps={{ fontWeight: selected ? 700 : 500, fontSize: 14.5 }} />
             </ListItemButton>
