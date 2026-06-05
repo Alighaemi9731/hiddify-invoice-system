@@ -63,15 +63,15 @@ _TPL_INVOICE = (
 )
 _TPL_REMINDER1 = (
     "⏰ یادآوری: فاکتور دوره {period} شما هنوز پرداخت نشده است.\n"
-    "مبلغ: {amount_usdt} USDT"
+    "مبلغ: {amount_toman} تومان"
 )
 _TPL_REMINDER2 = (
     "⏰ یادآوری دوم: لطفاً فاکتور دوره {period} را پرداخت کنید.\n"
-    "مبلغ: {amount_usdt} USDT"
+    "مبلغ: {amount_toman} تومان"
 )
 _TPL_WARNING = (
     "⚠️ اخطار نهایی!\n"
-    "فاکتور دوره {period} شما پرداخت نشده است (مبلغ {amount_usdt} USDT).\n"
+    "فاکتور دوره {period} شما پرداخت نشده است (مبلغ {amount_toman} تومان).\n"
     "در صورت عدم پرداخت، تمام کاربران شما و زیرمجموعه‌هایتان غیرفعال شده و "
     "سقف کاربران شما صفر خواهد شد و امکان ویرایش در پنل را نخواهید داشت."
 )
@@ -229,6 +229,15 @@ async def seed_defaults(session: AsyncSession) -> None:
     if rej is not None and isinstance(rej.value, str) and "{period}" not in rej.value:
         rej.value = _TPL_PAYMENT_REJECTED
         await session.commit()
+
+    # One-time upgrade: reminders/warning used to quote the USDT amount; the price is shown in
+    # Toman everywhere now. Migrate any saved template still on {amount_usdt} to the Toman default.
+    for _key, _new in (("tpl_reminder1", _TPL_REMINDER1), ("tpl_reminder2", _TPL_REMINDER2),
+                       ("tpl_warning", _TPL_WARNING)):
+        row = await session.get(Setting, _key)
+        if row is not None and isinstance(row.value, str) and "{amount_usdt}" in row.value:
+            row.value = _new
+    await session.commit()
 
 
 async def get(session: AsyncSession, key: str, default: Any = None) -> Any:

@@ -24,13 +24,17 @@ router = APIRouter(
 )
 
 
-def _equiv_str(chain: str, toman: float | None, usdt: float | None, ton_rate: int) -> str:
-    """The invoice's crypto equivalent in the PAID currency: TON for a TON payment, else USDT."""
+def _equiv_str(method: str, toman: float | None, usdt: float | None, ton_rate: int) -> str:
+    """The invoice's crypto equivalent in the PAID currency — ONLY for crypto methods: TON for a
+    TON payment, USDT for a USDT payment. A card/screenshot/manual payment is in Toman, so no
+    crypto equivalent is shown (the tooltip then has only the Toman amount)."""
     if not toman:
         return ""
-    if chain == "ton":
+    if method == "ton_txid":
         return f"{float(toman) / ton_rate:,.2f} TON" if ton_rate else ""
-    return f"{float(usdt or 0):,.2f} USDT"
+    if method == "usdt_txid":
+        return f"{float(usdt or 0):,.2f} USDT"
+    return ""
 
 
 def _to_out(
@@ -79,7 +83,7 @@ async def list_payments(
     ton_rate = await rates.get_ton_toman(session)
     return [
         _to_out(p, name, period, toman, chat_id, username,
-                _equiv_str(p.chain, toman, usdt, ton_rate))
+                _equiv_str(p.method.value, toman, usdt, ton_rate))
         for p, name, period, toman, chat_id, username, usdt in rows
     ]
 
@@ -100,7 +104,7 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
     from app.services import rates
 
     ton_rate = await rates.get_ton_toman(session)
-    equiv = _equiv_str(p.chain, float(inv.amount_toman) if inv else 0,
+    equiv = _equiv_str(p.method.value, float(inv.amount_toman) if inv else 0,
                        float(inv.amount_usdt) if inv else 0, ton_rate)
     return _to_out(p, reseller.name if reseller else None,
                    inv.period_label if inv else None, float(inv.amount_toman) if inv else 0,

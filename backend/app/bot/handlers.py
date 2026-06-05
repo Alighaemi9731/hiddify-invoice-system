@@ -828,7 +828,7 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
                 amount_ton = f"{float(inv.amount_toman) / ton_rate:,.2f}"
         text = (
             f"💳 پرداخت فاکتور دوره {inv.period_label}\n"
-            f"مبلغ: {float(inv.amount_toman):,.0f} تومان ({float(inv.amount_usdt):,.2f} USDT)\n\n"
+            f"مبلغ: {float(inv.amount_toman):,.0f} تومان\n\n"
             + payment_methods.instructions_text(
                 opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
                 amount_toman=f"{float(inv.amount_toman):,.0f}", amount_ton=amount_ton, html=True)
@@ -1107,7 +1107,7 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
     pending = await _pending_invoice_ids(session, ids)
     items = []
     for inv in invoices:
-        toman = f"{float(inv.amount_toman):,.0f} ت"
+        toman = f"{float(inv.amount_toman):,.0f} تومان"
         if inv.id in pending:
             items.append((inv.id, f"⏳ دوره {inv.period_label} — {toman} (در انتظار تأیید)"))
         else:
@@ -1265,7 +1265,7 @@ async def _send_pay(answer, chat_id: int, session) -> None:
 
     items = [
         (i.id,
-         f"💳 دوره {i.period_label} — {float(i.amount_toman):,.0f} ت ({float(i.amount_usdt):,.2f} USDT)")
+         f"💳 دوره {i.period_label} — {float(i.amount_toman):,.0f} تومان")
         for i in payable
     ]
     msg = "💳 کدام فاکتور را می‌خواهید پرداخت کنید؟\nهر فاکتور را جداگانه پرداخت می‌کنید — روی آن بزنید:"
@@ -1682,10 +1682,11 @@ async def _handle_link(message: Message, session, parsed) -> None:
 
 
 def _invoice_amount_fa(invoice) -> str:
-    """«X تومان (Y USDT)» for an owner-facing receipt; «نامشخص» when there's no invoice."""
+    """«X تومان» for an owner-facing receipt (Toman is the price); «نامشخص» if no invoice.
+    Used for screenshot/card receipts — a Toman payment, so no crypto figure."""
     if invoice is None:
         return "نامشخص"
-    return f"{float(invoice.amount_toman):,.0f} تومان ({float(invoice.amount_usdt):,.2f} USDT)"
+    return f"{float(invoice.amount_toman):,.0f} تومان"
 
 
 async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
