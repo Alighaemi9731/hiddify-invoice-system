@@ -2,7 +2,7 @@ import { Box, Card, Chip, Table, TableBody, TableCell, TableHead, TableRow, Typo
 import { useQuery } from "@tanstack/react-query";
 import { getDebts } from "../api/client";
 import { useSort, SortTh } from "../components/sortable";
-import { fmtToman, fmtUsdt, fmtNum } from "../format";
+import { fmtToman, fmtNum } from "../format";
 
 export default function Debts() {
   const { data = [] } = useQuery({ queryKey: ["debts"], queryFn: getDebts });
@@ -23,7 +23,6 @@ export default function Debts() {
               <SortTh id="bot_registered" label="ربات" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="invoices_count" label="تعداد فاکتور" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="outstanding_toman" label="بدهی (تومان)" sortKey={key} dir={dir} onSort={toggle} />
-              <SortTh id="outstanding_usdt" label="USDT" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="oldest_period" label="قدیمی‌ترین دوره" sortKey={key} dir={dir} onSort={toggle} />
             </TableRow>
           </TableHead>
@@ -35,7 +34,6 @@ export default function Debts() {
                 <TableCell>{d.bot_registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" color="error" label="بدون ربات" />}</TableCell>
                 <TableCell>{fmtNum(d.invoices_count)}</TableCell>
                 <TableCell>{fmtToman(d.outstanding_toman)}</TableCell>
-                <TableCell dir="ltr">{fmtUsdt(d.outstanding_usdt)}</TableCell>
                 <TableCell dir="ltr">{d.oldest_period}</TableCell>
               </TableRow>
             ))}

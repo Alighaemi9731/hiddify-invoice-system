@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getSales } from "../api/client";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
-import { fmtToman, fmtUsdt, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
+import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error" };
 
@@ -48,7 +48,7 @@ export default function Sales() {
               <TableCell>پنل</TableCell>
               {head("usage", "مصرف")}
               {head("amount", "مبلغ (تومان)")}
-              <TableCell>USDT</TableCell><TableCell>وضعیت</TableCell>
+              <TableCell>وضعیت</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -58,7 +58,6 @@ export default function Sales() {
                 <TableCell>{r.panel_key}</TableCell>
                 <TableCell>{fmtGb(r.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(r.amount_toman)}</TableCell>
-                <TableCell dir="ltr">{fmtUsdt(r.amount_usdt)}</TableCell>
                 <TableCell><Chip size="small" color={STATUS_COLOR[r.status]} label={INVOICE_STATUS_FA[r.status]} /></TableCell>
               </TableRow>
             ))}

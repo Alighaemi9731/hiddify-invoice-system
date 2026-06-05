@@ -12,7 +12,7 @@ import { getDashboard } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
-import { fmtToman, fmtUsdt, fmtNum, fmtCompact, INVOICE_STATUS_FA } from "../format";
+import { fmtToman, fmtNum, fmtCompact, INVOICE_STATUS_FA } from "../format";
 import { CHART_COLORS } from "../theme";
 
 const FONT = "Vazirmatn, sans-serif";
@@ -107,8 +107,8 @@ export default function Dashboard() {
           <Grid container spacing={2}>
             <Grid item xs={6} md={3}><StatCard label="پنل‌ها" value={fmtNum(data.panels)} color="#6d5efc" icon={<DnsIcon />} /></Grid>
             <Grid item xs={6} md={3}><StatCard label="نمایندگان اصلی" value={fmtNum(data.resellers)} sub={`${fmtNum(data.registered_resellers)} متصل به ربات`} color="#0ea5e9" icon={<GroupIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="فروش دوره" value={fmtToman(data.period_billed_toman)} sub={fmtUsdt(data.period_billed_usdt)} color="#10b981" icon={<TrendingUpIcon />} /></Grid>
-            <Grid item xs={6} md={3}><StatCard label="بدهی معوق" value={fmtToman(data.outstanding_toman)} sub={fmtUsdt(data.outstanding_usdt)} color="#f43f5e" icon={<WarningAmberIcon />} /></Grid>
+            <Grid item xs={6} md={3}><StatCard label="فروش دوره" value={fmtToman(data.period_billed_toman)} color="#10b981" icon={<TrendingUpIcon />} /></Grid>
+            <Grid item xs={6} md={3}><StatCard label="بدهی معوق" value={fmtToman(data.outstanding_toman)} color="#f43f5e" icon={<WarningAmberIcon />} /></Grid>
           </Grid>
 
           <Grid container spacing={2} sx={{ mt: 0.5 }}>

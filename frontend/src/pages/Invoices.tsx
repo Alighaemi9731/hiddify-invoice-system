@@ -23,7 +23,7 @@ import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
-import { fmtToman, fmtUsdt, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
+import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
 
@@ -151,7 +151,6 @@ export default function Invoices() {
               <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="usage_gb" label="مصرف" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="amount_toman" label="مبلغ (تومان)" sortKey={key} dir={dir} onSort={toggle} />
-              <SortTh id="amount_usdt" label="USDT" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="status" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell align="left">عملیات</TableCell>
             </TableRow>
@@ -163,7 +162,6 @@ export default function Invoices() {
                 <TableCell>{i.panel_key}</TableCell>
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(i.amount_toman)}</TableCell>
-                <TableCell dir="ltr">{fmtUsdt(i.amount_usdt)}</TableCell>
                 <TableCell><Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} /></TableCell>
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>
                   <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
@@ -262,7 +260,6 @@ export default function Invoices() {
               <Typography variant="body2">مصرف کل: <b>{fmtGb(detail.usage_gb)}</b></Typography>
               <Typography variant="body2">قیمت/گیگ: <b>{fmtNum(detail.price_per_gb)}</b></Typography>
               <Typography variant="body2">مبلغ: <b>{fmtToman(detail.amount_toman)}</b></Typography>
-              <Typography variant="body2" dir="ltr">USDT: <b>{fmtUsdt(detail.amount_usdt)}</b></Typography>
             </Stack>
             {detail.floor_applied && (
               <Chip size="small" color="warning" sx={{ mb: 2 }}

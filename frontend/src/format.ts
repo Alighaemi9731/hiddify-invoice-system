@@ -1,9 +1,6 @@
 export const fmtToman = (n: number) =>
   `${Math.round(n || 0).toLocaleString("fa-IR")} تومان`;
 
-export const fmtUsdt = (n: number) =>
-  `${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
-
 // Show real (possibly fractional) GB — e.g. 0.5 GB must not round to "۱ گیگ".
 export const fmtGb = (n: number) => {
   const v = n || 0;

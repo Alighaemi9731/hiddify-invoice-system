@@ -15,7 +15,7 @@ import {
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
-import { fmtUsdt, fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
+import { fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error", duplicate: "default" };
 
@@ -84,7 +84,7 @@ export default function Payments() {
               <SortTh id="invoice_period" label="فاکتور (دوره)" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="method" label="روش" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell>TXID</TableCell>
-              <SortTh id="amount_usdt" label="مبلغ" sortKey={key} dir={dir} onSort={toggle} />
+              <SortTh id="invoice_amount_toman" label="مبلغ" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="confirmations" label="تأییدها" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="status" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="created_at" label="تاریخ" sortKey={key} dir={dir} onSort={toggle} />
@@ -121,7 +121,7 @@ export default function Payments() {
                     </span>
                   }>
                     <span style={{ cursor: "help" }}>
-                      {p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : fmtUsdt(p.amount_usdt)}
+                      {p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}
                     </span>
                   </Tooltip>
                 </TableCell>

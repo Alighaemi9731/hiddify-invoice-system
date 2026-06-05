@@ -238,7 +238,7 @@ const SECTIONS: Section[] = [
     id: "templates",
     title: "متن پیام‌ها",
     icon: <ChatBubbleOutlineIcon fontSize="small" />,
-    description: "متن پیام‌های ربات. از placeholderها مثل {name}، {period}، {amount_usdt} و {payment_instructions} استفاده کنید.",
+    description: "متن پیام‌های ربات. از placeholderها مثل {name}، {period}، {amount_toman} و {payment_instructions} استفاده کنید.",
     subs: [
       {
         fields: [
