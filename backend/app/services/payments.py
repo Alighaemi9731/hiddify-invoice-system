@@ -81,36 +81,6 @@ async def _maybe_restore(session: AsyncSession, reseller: Reseller | None) -> No
             log.info("restore skipped/failed for reseller %s", reseller.id)
 
 
-async def _settle_due_now(
-    session: AsyncSession, reseller_ids: list[int], amount_usdt: Decimal, tolerance: Decimal
-) -> list[Invoice]:
-    """Apply a payment of `amount_usdt` to the due-now invoices (oldest first across all
-    the customer's reseller rows), marking each paid while the amount covers it."""
-    remaining = Decimal(str(amount_usdt))
-    now = dt.datetime.now(dt.timezone.utc)
-    settled: list[Invoice] = []
-    for inv in await _due_now_invoices(session, reseller_ids):
-        amt = Decimal(str(inv.amount_usdt or 0))
-        if remaining >= amt:
-            remaining -= amt
-        elif remaining + tolerance >= amt:
-            # Boundary invoice: cover it using the single rounding tolerance, then stop —
-            # tolerance is slack on the WHOLE transfer, not free per-invoice slack.
-            remaining = Decimal("0")
-            inv.status = InvoiceStatus.paid
-            inv.paid_at = now
-            await financial_archive.record(session, inv)
-            settled.append(inv)
-            break
-        else:
-            break  # can't cover this (oldest remaining) invoice → stop
-        inv.status = InvoiceStatus.paid
-        inv.paid_at = now
-        await financial_archive.record(session, inv)
-        settled.append(inv)
-    return settled
-
-
 @dataclass
 class PaymentResult:
     status: str             # confirmed | pending | rejected
@@ -245,53 +215,40 @@ async def verify_payment(
         return PaymentResult("pending", False,
                              f"تراکنش یافت شد اما هنوز تأییدیه کافی ندارد ({check.confirmations}/{min_conf}).")
 
-    # Settle the customer's DUE-NOW invoices (oldest first) with this payment. One
-    # transfer can clear several invoices; deferred-to-future invoices are excluded.
-    rids = await _chat_reseller_ids(session, reseller)
-    due = await _due_now_invoices(session, rids) if rids else ([invoice] if invoice else [])
-    if not due:
+    # Settle ONLY the invoice this payment is for — payments are per-invoice now (no lumping
+    # several invoices into one transfer), which keeps confirmation simple and unambiguous.
+    target = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else invoice
+    if target is None or target.status not in _OWED:
         payment.status = PaymentStatus.confirmed
         payment.verified_at = dt.datetime.now(dt.timezone.utc)
         await session.commit()
         return PaymentResult("confirmed", True,
-                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای تسویه وجود نداشت.")
+                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای این فاکتور نبود.")
 
-    oldest = Decimal(str(due[0].amount_usdt or 0))
-    if check.amount_usdt + tolerance < oldest:
+    target_amt = Decimal(str(target.amount_usdt or 0))
+    if check.amount_usdt + tolerance < target_amt:
         payment.status = PaymentStatus.rejected
-        payment.note = f"amount too low: {check.amount_usdt} < {oldest}"
+        payment.note = f"amount too low: {check.amount_usdt} < {target_amt}"
         await session.commit()
         return PaymentResult(
             "rejected", False,
-            f"❌ مبلغ واریزی ({check.amount_usdt:.2f} USDT) کمتر از کوچک‌ترین فاکتور "
-            f"قابل‌پرداخت ({oldest:.2f} USDT) است.",
+            f"❌ مبلغ واریزی ({check.amount_usdt:.2f} USDT) کمتر از مبلغ این فاکتور "
+            f"({target_amt:.2f} USDT) است.",
         )
 
-    settled = await _settle_due_now(session, rids, check.amount_usdt, tolerance)
+    await _mark_invoices_paid(session, [target], payment)
     payment.status = PaymentStatus.confirmed
     payment.verified_at = dt.datetime.now(dt.timezone.utc)
-    if settled:
-        payment.invoice_id = settled[0].id
-        payment.settled_invoice_ids = ",".join(str(i.id) for i in settled)
+    payment.invoice_id = target.id
+    payment.settled_invoice_ids = str(target.id)
     await session.commit()
-    # Restore any suspended reseller whose invoice was just settled.
-    for rid in {i.reseller_id for i in settled}:
-        await _maybe_restore(session, await session.get(Reseller, rid))
+    await _maybe_restore(session, await session.get(Reseller, target.reseller_id))
 
-    periods = "، ".join(i.period_label for i in settled)
-    msg = await _payment_received_text(session, periods)
-    leftover = await _due_now_invoices(session, rids)
-    if leftover:
-        rest = sum(float(i.amount_usdt or 0) for i in leftover)
-        msg += f"\n\nهنوز {rest:.2f} USDT بابت {len(leftover)} فاکتور دیگر باقی است."
+    msg = await _payment_received_text(session, target.period_label)
     if notify_reseller:
-        # Panel-triggered verify: tell the resellers whose invoices were settled.
-        for rid in {i.reseller_id for i in settled}:
-            r = await session.get(Reseller, rid)
-            if r is not None:
-                await notifier.send_to_reseller(
-                    session, r, msg, kind=DeliveryKind.payment_ack
-                )
+        r = await session.get(Reseller, target.reseller_id)
+        if r is not None:
+            await notifier.send_to_reseller(session, r, msg, kind=DeliveryKind.payment_ack)
     return PaymentResult("confirmed", True, msg)
 
 

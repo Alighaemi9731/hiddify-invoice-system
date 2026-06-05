@@ -50,6 +50,13 @@ class SubCapState(StatesGroup):
     waiting = State()
 
 
+class PayState(StatesGroup):
+    """A reseller chose ONE invoice to pay and is now sending its TXID / receipt photo
+    (the chosen invoice id is held in FSM data as `pay_invoice_id`)."""
+
+    waiting = State()
+
+
 log = logging.getLogger("bot.handlers")
 router = Router()
 
@@ -319,10 +326,22 @@ async def cmd_pay(message: Message) -> None:
         await _send_pay(message.answer, message.from_user.id, s)
 
 
-@router.message(Command("debt"))
-async def cmd_debt(message: Message) -> None:
+@router.message(Command("panels"))
+async def cmd_panels(message: Message) -> None:
     async with SessionLocal() as s:
-        await _send_debt(message.answer, message.from_user.id, s)
+        await _send_panels(message.answer, message.from_user.id, s)
+
+
+@router.message(Command("interim"))
+async def cmd_interim(message: Message, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        await _send_self_interim(message.answer, message.from_user.id, s, bot=bot)
+
+
+@router.message(Command("support"))
+async def cmd_support(message: Message, state: FSMContext) -> None:
+    await state.set_state(SupportState.waiting)
+    await message.answer("پیام خود را برای پشتیبانی بنویسید (یا /cancel برای لغو):")
 
 
 @router.message(Command("removelink"))
@@ -680,13 +699,6 @@ async def cb_invoices(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
-@router.callback_query(F.data == "menu:debt")
-async def cb_debt(cb: CallbackQuery) -> None:
-    async with SessionLocal() as s:
-        await _send_debt(cb.message.answer, cb.from_user.id, s)
-    await cb.answer()
-
-
 @router.callback_query(F.data.startswith("inv:"))
 async def cb_invoice_view(cb: CallbackQuery, bot: Bot) -> None:
     """Re-send the full content of one of the caller's invoices (text + per-node PDFs)."""
@@ -728,6 +740,72 @@ async def cb_pay(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data.startswith("payinv:"))
+async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
+    """Start paying ONE chosen invoice: show its amount + instructions and wait for the
+    customer's TXID / receipt photo, which is then attributed to exactly this invoice."""
+    from app.services import payment_methods
+
+    try:
+        inv_id = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    async with SessionLocal() as s:
+        resellers = await _resellers_for_chat(s, cb.from_user.id)
+        owned = {r.id for r in resellers}
+        inv = await s.get(Invoice, inv_id)
+        if inv is None or inv.reseller_id not in owned or inv.status not in _OWED:
+            await cb.answer("این فاکتور قابل پرداخت نیست.", show_alert=True)
+            return
+        opts = await payment_methods.load_options(s)
+        text = (
+            f"💳 پرداخت فاکتور دوره {inv.period_label}\n"
+            f"مبلغ: {float(inv.amount_usdt):,.2f} USDT ({float(inv.amount_toman):,.0f} تومان)\n\n"
+            + payment_methods.instructions_text(
+                opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}", html=True)
+            + "\n\nℹ️ این مبلغ فقط برای همین فاکتور است. پس از واریز، شناسهٔ تراکنش (TXID) یا "
+              "تصویر رسید را همین‌جا بفرستید (برای لغو: /cancel)."
+        )
+        await state.set_state(PayState.waiting)
+        await state.update_data(pay_invoice_id=inv_id)
+        await cb.message.answer(text, parse_mode="HTML")
+    await cb.answer()
+
+
+@router.message(PayState.waiting, F.photo)
+async def pay_state_photo(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    inv_id = data.get("pay_invoice_id")
+    await state.clear()
+    async with SessionLocal() as s:
+        await _track_user(s, message.from_user)
+        inv = await s.get(Invoice, int(inv_id)) if inv_id else None
+        await _handle_payment_proof(message, s, invoice=inv)
+
+
+@router.message(PayState.waiting, F.text)
+async def pay_state_text(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if text.lower() in ("/cancel", "cancel", "لغو"):
+        await state.clear()
+        await message.answer("پرداخت لغو شد.")
+        return
+    txm = _TXID_RE.search(text)
+    if not txm:
+        await message.answer(
+            "لطفاً شناسهٔ تراکنش (TXID) را ارسال کنید یا تصویر رسید را بفرستید. برای لغو: /cancel"
+        )
+        return
+    data = await state.get_data()
+    inv_id = data.get("pay_invoice_id")
+    await state.clear()
+    async with SessionLocal() as s:
+        await _track_user(s, message.from_user)
+        inv = await s.get(Invoice, int(inv_id)) if inv_id else None
+        await _handle_txid(message, s, txm.group(0), invoice=inv)
+
+
 @router.callback_query(F.data == "menu:removelink")
 async def cb_removelink(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
@@ -764,8 +842,6 @@ async def _dispatch_owner(action: str, answer, session) -> None:
         await _owner_stats(answer, session)
     elif action == "debtors":
         await _owner_debtors(answer, session)
-    elif action == "zerosale":
-        await _owner_zerosale(answer, session)
     elif action == "broadcast":
         await answer("📢 گیرندگان پیام همگانی را انتخاب کنید:",
                      reply_markup=keyboards.broadcast_audience_keyboard())
@@ -787,15 +863,6 @@ async def _dispatch_owner(action: str, answer, session) -> None:
             await answer(f"⚠️ پشتیبان روی سرور ذخیره شد ولی ارسال نشد ({r.get('status')}).")
         else:
             await answer("❌ ارسال پشتیبان ناموفق بود.")
-    elif action == "dunning":
-        from app.services import dunning
-
-        res = await dunning.run_dunning(session)
-        await answer(
-            f"🔔 یادآوری‌ها اجرا شد:\n"
-            f"یادآوری ۱: {res['reminder1']} | یادآوری ۲: {res['reminder2']} | "
-            f"اخطار: {res['warning']} | مسدودسازی: {res['enforced']} (آزمایشی: {res['enforced_dry']})"
-        )
     elif action == "monthly":
         from app.services import delivery, invoicing, sync as sync_service
         from app.services.periods import previous_month
@@ -826,8 +893,7 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
 # `/broadcast` is handled by its own dedicated command handler above (it also accepts inline
 # text), so it's intentionally not duplicated here.
 _OWNER_CMD_ACTION = {
-    "stats": "stats", "debtors": "debtors", "idle": "zerosale",
-    "sync": "sync", "dunning": "dunning", "backup": "backup",
+    "stats": "stats", "debtors": "debtors", "sync": "sync", "backup": "backup",
 }
 
 
@@ -896,55 +962,34 @@ async def _owner_debtors(answer, session) -> None:
     await answer("\n".join(lines))
 
 
-async def _owner_zerosale(answer, session) -> None:
-    """Bot-registered resellers whose bundle sells nothing this month (idle customers)."""
-    from app.services import invoicing
-    from app.services.periods import current_month
-
-    pairs = await invoicing.preview_bundles(session, current_month())
-    idle = [
-        b.root.name for _panel, b in pairs
-        if b.total_gb <= 0 and b.root.bot_chat_id is not None
-    ]
-    if not idle:
-        await answer(f"🟡 فروش صفر ({current_month().label}): همهٔ نمایندگانِ متصل فروش داشته‌اند.")
-        return
-    lines = [f"🟡 فروش صفر این ماه ({current_month().label}) — {len(idle)} نماینده:\n"]
-    lines += [f"‏• {_iso(n)}" for n in idle[:40]]  # RLM + isolate keeps English names tidy
-    if len(idle) > 40:
-        lines.append(f"… و {len(idle) - 40} نمایندهٔ دیگر")
-    await answer("\n".join(lines))
-
-
 # --------------------------- shared reseller views ---------------------------
 async def _send_invoices(answer, chat_id: int, session) -> None:
+    """«فاکتورهای پرداخت‌نشده» — the reseller's UNPAID, already-issued invoices, each as a
+    button; tapping re-sends the full invoice (text + PDFs)."""
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
     ids = [r.id for r in resellers]
-    # Only DELIVERED invoices (not drafts) — unpaid first so what needs paying is on top.
     invoices = (
         await session.execute(
             select(Invoice)
-            .where(Invoice.reseller_id.in_(ids), Invoice.status != InvoiceStatus.draft)
+            .where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
             .order_by(Invoice.period_start.desc()).limit(12)
         )
     ).scalars().all()
     if not invoices:
-        await answer("فاکتوری برای شما ثبت نشده است.")
+        await answer("فاکتور پرداخت‌نشده‌ای ندارید. 🎉")
         return
-    items: list[tuple[int, str]] = []
-    for inv in invoices:
-        paid = inv.status == InvoiceStatus.paid
-        emoji = "✅" if paid else "🧾"
-        status_fa = _STATUS_FA.get(inv.status.value, inv.status.value)
-        items.append((
-            inv.id,
-            f"{emoji} {inv.period_label} — {float(inv.amount_toman):,.0f} ت ({status_fa})",
-        ))
+    items = [
+        (inv.id,
+         f"🧾 دوره {inv.period_label} — {float(inv.amount_toman):,.0f} ت "
+         f"({_STATUS_FA.get(inv.status.value, inv.status.value)})")
+        for inv in invoices
+    ]
     await answer(
-        "🧾 فاکتورهای شما — برای دیدن کاملِ هر فاکتور (متن + PDF) روی آن بزنید:",
+        "🧾 فاکتورهای پرداخت‌نشدهٔ شما — برای دیدن کاملِ هر فاکتور (متن + PDF) روی آن بزنید.\n"
+        "برای پرداخت، از «💳 پرداخت فاکتور» استفاده کنید.",
         reply_markup=keyboards.my_invoices_keyboard(items),
     )
 
@@ -1053,28 +1098,10 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
         await answer("شما نمایندهٔ اصلی نیستید؛ فاکتور شما از طریق نمایندهٔ بالادستی صادر می‌شود.")
 
 
-async def _send_debt(answer, chat_id: int, session) -> None:
-    resellers = await _resellers_for_chat(session, chat_id)
-    if not resellers:
-        await answer(await texts.render(session, "tpl_link_not_found"))
-        return
-    ids = [r.id for r in resellers]
-    invoices = (
-        await session.execute(
-            select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-        )
-    ).scalars().all()
-    total_t = sum(float(i.amount_toman) for i in invoices)
-    total_u = sum(float(i.amount_usdt) for i in invoices)
-    await answer(
-        f"📊 بدهی فعلی شما: {total_t:,.0f} تومان ({total_u:,.2f} USDT)\n"
-        f"تعداد فاکتورهای پرداخت‌نشده: {len(invoices)}"
-    )
-
-
 async def _send_pay(answer, chat_id: int, session) -> None:
-    from app.services import payment_methods
-
+    """«پرداخت فاکتور» — list each UNPAID, due-now invoice as its OWN button so the customer
+    pays them SEPARATELY (no lumping into one transfer). Tapping a button (payinv:<id>) starts
+    paying just that invoice."""
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
@@ -1083,6 +1110,7 @@ async def _send_pay(answer, chat_id: int, session) -> None:
     owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
+            .order_by(Invoice.period_start.desc())
         )
     ).scalars().all()
     today = dt.date.today()
@@ -1091,26 +1119,21 @@ async def _send_pay(answer, chat_id: int, session) -> None:
 
     if not due:
         if deferred:
-            await answer("در حال حاضر مبلغی برای پرداخت ندارید؛ فاکتورهای شما مهلت‌دار هستند. ⏳")
+            await answer("فاکتورِ سررسیدشده‌ای برای پرداخت ندارید؛ فاکتورهای شما مهلت‌دار هستند. ⏳")
         else:
             await answer("بدهی فعالی برای پرداخت ندارید. 🎉")
         return
 
-    total_u = sum(float(i.amount_usdt) for i in due)
-    total_t = sum(float(i.amount_toman) for i in due)
-    lines = [
-        "💳 پرداخت",
-        f"مبلغ قابل پرداخت (هم‌اکنون): {total_u:,.2f} USDT ({total_t:,.0f} تومان)",
+    items = [
+        (i.id,
+         f"💳 دوره {i.period_label} — {float(i.amount_toman):,.0f} ت ({float(i.amount_usdt):,.2f} USDT)")
+        for i in due
     ]
-    if len(due) > 1:
-        lines.append(f"(مجموع {len(due)} فاکتور — با یک پرداخت همه تسویه می‌شوند)")
-    opts = await payment_methods.load_options(session)
-    lines.append("\n" + payment_methods.instructions_text(opts, amount_usdt=f"{total_u:,.2f}", html=True))
+    msg = "💳 کدام فاکتور را می‌خواهید پرداخت کنید؟\nهر فاکتور را جداگانه پرداخت می‌کنید — روی آن بزنید:"
     if deferred:
         dsum = sum(float(i.amount_usdt) for i in deferred)
-        lines.append(f"\n⏳ {len(deferred)} فاکتور مهلت‌دار ({dsum:,.2f} USDT) فعلاً لازم نیست پرداخت شود.")
-    # HTML so the wallet/card in the instructions are tap-to-copy. The rest is Persian/numbers.
-    await answer("\n".join(lines), parse_mode="HTML")
+        msg += f"\n\n⏳ {len(deferred)} فاکتور مهلت‌دار ({dsum:,.2f} USDT) فعلاً لازم نیست پرداخت شود."
+    await answer(msg, reply_markup=keyboards.pay_invoices_keyboard(items))
 
 
 async def _send_removelink(answer, chat_id: int, session) -> None:
@@ -1532,7 +1555,7 @@ async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | N
     return due[0] if due else None
 
 
-async def _handle_txid(message: Message, session, txid: str) -> None:
+async def _handle_txid(message: Message, session, txid: str, *, invoice=None) -> None:
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
         await message.answer(await texts.render(session, "tpl_link_not_found"))
@@ -1543,9 +1566,10 @@ async def _handle_txid(message: Message, session, txid: str) -> None:
     if existing:
         await message.answer("این تراکنش قبلاً ثبت شده است.")
         return
-    # Link to the oldest DUE-NOW invoice; verification then settles across all of the
-    # customer's due-now invoices.
-    invoice = await _oldest_due_invoice(session, resellers)
+    # Link to the chosen invoice (from «پرداخت فاکتور») if given; otherwise the oldest due.
+    # verify_payment settles ONLY this one invoice.
+    if invoice is None:
+        invoice = await _oldest_due_invoice(session, resellers)
     payment = Payment(
         reseller_id=invoice.reseller_id if invoice else resellers[0].id,
         invoice_id=invoice.id if invoice else None,
@@ -1574,16 +1598,17 @@ async def _handle_txid(message: Message, session, txid: str) -> None:
             f"شناسهٔ پرداخت در پنل: #{payment.id}\nبرای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
 
 
-async def _handle_payment_proof(message: Message, session) -> None:
-    """A reseller sent a deposit screenshot as proof of payment. Store it, link it to their
-    oldest due invoice as a PENDING payment, and forward it to the owner for manual confirm.
-    This is the easy path for customers who can't extract a TXID."""
+async def _handle_payment_proof(message: Message, session, *, invoice=None) -> None:
+    """A reseller sent a deposit screenshot as proof of payment. Store it, link it to the
+    chosen invoice (from «پرداخت فاکتور») or their oldest due one as a PENDING payment, and
+    forward it to the owner for manual confirm. The easy path for customers without a TXID."""
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
         # Not a registered reseller → can't attribute the payment.
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
-    invoice = await _oldest_due_invoice(session, resellers)
+    if invoice is None:
+        invoice = await _oldest_due_invoice(session, resellers)
     payment = Payment(
         reseller_id=invoice.reseller_id if invoice else resellers[0].id,
         invoice_id=invoice.id if invoice else None,

@@ -20,15 +20,14 @@ def membership_keyboard(targets: list[dict] | str | None) -> InlineKeyboardMarku
 def reseller_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
+             InlineKeyboardButton(text="💳 پرداخت فاکتور", callback_data="menu:pay")],
+            [InlineKeyboardButton(text="📄 فاکتور علی‌الحساب (ماه جاری)", callback_data="menu:interim")],
+            [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
+             InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],
             [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
-            [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels")],
-            [InlineKeyboardButton(text="👥 مدیریت زیرمجموعه‌ها", callback_data="menu:subs")],
-            [InlineKeyboardButton(text="🧾 فاکتورهای من", callback_data="menu:invoices")],
-            [InlineKeyboardButton(text="📄 فاکتور علی‌الحساب من", callback_data="menu:interim")],
-            [InlineKeyboardButton(text="💳 پرداخت", callback_data="menu:pay")],
-            [InlineKeyboardButton(text="📊 بدهی من", callback_data="menu:debt")],
-            [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support")],
-            [InlineKeyboardButton(text="🗑 حذف لینک‌های من", callback_data="menu:removelink")],
+            [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support"),
+             InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],
         ]
     )
 
@@ -95,18 +94,14 @@ def support_reply_keyboard(user_id: int, message_id: int) -> InlineKeyboardMarku
 
 
 def owner_menu_keyboard() -> InlineKeyboardMarkup:
-    # A compact 2-column grid grouped by purpose: reports, then operations. Heavy/irreversible
-    # actions (monthly invoice issue+send) stay in the web panel to avoid accidental taps.
+    # A compact 2-column grid. Heavy/irreversible actions (monthly invoice issue+send) stay in
+    # the web panel to avoid accidental taps.
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # — گزارش‌ها —
             [InlineKeyboardButton(text="📊 آمار کلی", callback_data="owner:stats"),
              InlineKeyboardButton(text="💰 بدهکاران", callback_data="owner:debtors")],
-            [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="owner:zerosale"),
-             InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast")],
-            # — عملیات —
-            [InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync"),
-             InlineKeyboardButton(text="🔔 اجرای یادآوری‌ها", callback_data="owner:dunning")],
+            [InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast"),
+             InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync")],
             [InlineKeyboardButton(text="🗄 پشتیبان‌گیری اکنون", callback_data="owner:backup")],
         ]
     )
@@ -115,6 +110,15 @@ def owner_menu_keyboard() -> InlineKeyboardMarkup:
 def my_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     """One button per invoice (data: inv:<invoice_id>) — tapping re-sends the full invoice."""
     rows = [[InlineKeyboardButton(text=label, callback_data=f"inv:{iid}")] for iid, label in items]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
+    )
+
+
+def pay_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """One button per UNPAID invoice (data: payinv:<invoice_id>) — tapping starts paying THAT
+    invoice on its own (separate from the others)."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"payinv:{iid}")] for iid, label in items]
     return InlineKeyboardMarkup(
         inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )

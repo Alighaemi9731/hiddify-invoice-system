@@ -28,25 +28,26 @@ from app.services import settings_service
 
 log = logging.getLogger("bot.commands")
 
+# Mirrors the reseller inline menu (reseller_menu_keyboard) so the `/` list and the menu match.
 RESELLER_COMMANDS = [
-    BotCommand(command="start", description="منوی اصلی"),
-    BotCommand(command="menu", description="منو"),
-    BotCommand(command="invoices", description="فاکتورهای من"),
-    BotCommand(command="pay", description="پرداخت"),
-    BotCommand(command="debt", description="بدهی من"),
-    BotCommand(command="subs", description="مدیریت زیرمجموعه‌ها"),
-    BotCommand(command="removelink", description="حذف لینک‌های من"),
-    BotCommand(command="help", description="راهنما"),
+    BotCommand(command="menu", description="🏠 منوی اصلی"),
+    BotCommand(command="invoices", description="🧾 فاکتورهای پرداخت‌نشده"),
+    BotCommand(command="pay", description="💳 پرداخت فاکتور"),
+    BotCommand(command="interim", description="📄 فاکتور علی‌الحساب (ماه جاری)"),
+    BotCommand(command="panels", description="🖥 پنل‌های من"),
+    BotCommand(command="subs", description="👥 زیرمجموعه‌ها"),
+    BotCommand(command="support", description="💬 پیام به پشتیبانی"),
+    BotCommand(command="removelink", description="🗑 حذف لینک‌ها"),
+    BotCommand(command="help", description="❓ راهنما"),
 ]
 
+# Mirrors the owner inline menu (owner_menu_keyboard).
 OWNER_COMMANDS = [
     BotCommand(command="menu", description="🏠 منوی مدیریت"),
     BotCommand(command="stats", description="📊 آمار کلی"),
     BotCommand(command="debtors", description="💰 بدهکاران"),
-    BotCommand(command="idle", description="🟡 فروش صفر این ماه"),
     BotCommand(command="broadcast", description="📢 پیام همگانی"),
     BotCommand(command="sync", description="🔄 همگام‌سازی پنل‌ها"),
-    BotCommand(command="dunning", description="🔔 اجرای یادآوری‌ها"),
     BotCommand(command="backup", description="🗄 پشتیبان‌گیری اکنون"),
     BotCommand(command="help", description="❓ راهنما"),
 ]
