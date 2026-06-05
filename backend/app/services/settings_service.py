@@ -44,12 +44,21 @@ _TPL_LINK_NOT_FOUND = (
     "❌ نتوانستیم این لینک را به هیچ نماینده‌ای متصل کنیم.\n"
     "لطفاً لینک پنل خودتان را به‌صورت کامل ارسال کنید."
 )
-_TPL_INVOICE = (
+# Previous default — kept only so seed_defaults can migrate an un-customized install to the
+# new, more minimal header (no redundant USDT line; Toman shown once).
+_TPL_INVOICE_LEGACY = (
     "🧾 فاکتور دوره {period}\n"
     "نماینده: {name}\n"
     "مجموع مصرف: {usage_gb} گیگ\n"
     "مبلغ: {amount_toman} تومان\n"
     "معادل: {amount_usdt} USDT\n\n"
+    "{payment_instructions}"
+)
+_TPL_INVOICE = (
+    "🧾 فاکتور دوره {period}\n"
+    "👤 نماینده: {name}\n"
+    "📊 مصرف این دوره: {usage_gb} گیگ\n"
+    "💰 مبلغ قابل پرداخت: {amount_toman} تومان\n\n"
     "{payment_instructions}"
 )
 _TPL_REMINDER1 = (
@@ -202,6 +211,15 @@ async def seed_defaults(session: AsyncSession) -> None:
     if row is not None and isinstance(row.value, str) \
             and "{payment_instructions}" not in row.value:
         row.value = _TPL_INVOICE
+        await session.commit()
+
+    # One-time upgrade to the minimal header (drops the redundant «معادل: USDT» line, shows the
+    # Toman amount once). Only an UN-customized install (stored value == the previous default) is
+    # updated, so an owner's hand-edited template is never clobbered.
+    inv = await session.get(Setting, "tpl_invoice")
+    if inv is not None and isinstance(inv.value, str) \
+            and inv.value.strip() == _TPL_INVOICE_LEGACY.strip():
+        inv.value = _TPL_INVOICE
         await session.commit()
 
     # One-time upgrade of the reject template: older installs don't name the invoice period.

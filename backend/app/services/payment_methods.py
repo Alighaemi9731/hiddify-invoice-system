@@ -65,61 +65,62 @@ def instructions_text(
     (with the Toman equivalent in parentheses); card-to-card payers see the **Toman** amount —
     Iranian customers pay and think in Toman, so the card block leads with it.
 
-    `html=True` renders the wallet address / card number inside <code>…</code> so the reseller
-    can TAP to copy them (the message must then be sent with parse_mode="HTML"). `html=False`
-    keeps the plain form: a leading right-to-left mark (‏ U+200F) so a value that starts with a
-    Latin/hex/digit char still right-aligns its line instead of jumbling the message."""
+    The payable amount is shown ONCE in the invoice header (Toman). Each method block here adds
+    only what's specific to it — its OWN-unit amount (USDT/TON), the address/card, and a network
+    warning — so the Toman figure isn't repeated per method. Card pays the header Toman amount,
+    so its block carries no amount.
+
+    `html=True` wraps copyable values (wallet/card/TON address) in <code>…</code> for tap-to-copy
+    (send with parse_mode="HTML"). `html=False` prepends an RLM (‏ U+200F) so a value starting
+    with a Latin/hex/digit char keeps its line right-aligned."""
     import html as _html
 
     rtl = "‏"
 
     def copyable(value: str) -> str:
-        return f"<code>{_html.escape(str(value))}</code>" if html else f"{rtl}{value}"
+        # 📋 cues "tap to copy"; the <code>/value itself is what gets copied.
+        return f"📋 <code>{_html.escape(str(value))}</code>" if html else f"📋 {rtl}{value}"
 
     blocks: list[str] = []
     if opts.usdt:
-        b = ["💳 پرداخت با USDT (فقط شبکهٔ BEP-20):"]
+        b = ["🟢 USDT (شبکهٔ BEP-20):"]
         if amount_usdt:
-            line = f"مبلغ: {amount_usdt} USDT"
-            if amount_toman:
-                line += f" (≈ {amount_toman} تومان)"
-            b.append(line)
-        b.append(f"آدرس کیف پول:\n{copyable(opts.wallet)}")
-        b.append(
-            "⚠️ توجه: فقط در شبکهٔ BEP-20 (BSC) واریز کنید. ارسال از شبکه‌های دیگر "
-            "(مثل TRC20 یا ERC20) باعث از‌دست‌رفتن وجه می‌شود."
-        )
-        b.append("پس از واریز، شناسهٔ تراکنش (TXID) را همین‌جا ارسال کنید.")
+            b.append(f"💵 مبلغ: {amount_usdt} USDT")
+        b.append(copyable(opts.wallet))
+        b.append("⚠️ فقط شبکهٔ BEP-20 (BSC)؛ واریز از شبکهٔ دیگر = از‌دست‌رفتن وجه.")
         blocks.append("\n".join(b))
     if opts.card:
-        b = ["🏦 کارت‌به‌کارت (پرداخت تومانی):"]
-        if amount_toman:
-            b.append(f"مبلغ: {amount_toman} تومان")
-        b.append(f"شماره کارت:\n{copyable(opts.card_number)}")
+        b = ["🏦 کارت‌به‌کارت (همین مبلغ به تومان):"]
+        b.append(copyable(opts.card_number))
         if opts.card_holder:
             holder = _html.escape(opts.card_holder) if html else f"{rtl}{opts.card_holder}"
-            b.append(f"به نام: {holder}")
-        b.append("پس از واریز، تصویر رسید را همین‌جا ارسال کنید.")
+            b.append(f"👤 به نام: {holder}")
         blocks.append("\n".join(b))
     if opts.ton:
-        b = ["💎 پرداخت با تون‌کوین (TON):"]
+        b = ["💎 تون‌کوین (TON):"]
         if amount_ton:
-            line = f"مبلغ: {amount_ton} TON"
-            if amount_toman:
-                line += f" (≈ {amount_toman} تومان)"
-            b.append(line)
+            b.append(f"💎 مبلغ: {amount_ton} TON")
         elif amount_toman:
-            # No live TON rate → show the Toman figure so the customer pays the equivalent.
-            b.append(f"مبلغِ معادلِ {amount_toman} تومان را به TON واریز کنید.")
-        b.append(f"آدرس کیف پول TON:\n{copyable(opts.ton_address)}")
-        b.append("پس از واریز، تصویر رسید را همین‌جا ارسال کنید.")
+            # No live TON rate → tell them to send the Toman equivalent (header amount).
+            b.append(f"💎 معادلِ {amount_toman} تومان به TON")
+        b.append(copyable(opts.ton_address))
+        b.append("⚠️ فقط روی شبکهٔ TON واریز شود.")
         blocks.append("\n".join(b))
     if opts.screenshot and not (opts.card or opts.ton):
-        # The standalone "send a receipt photo" note is useful next to USDT (whose payers can
-        # send a photo instead of a TXID), but redundant when card/TON already ask for a photo.
-        blocks.append("🧾 یا تصویر رسید واریز خود را همین‌جا ارسال کنید تا بررسی شود.")
+        # Standalone "send a receipt photo" note — useful next to USDT, redundant when card/TON
+        # already ask for a photo.
+        blocks.append("🧾 یا تصویر رسید واریز را همین‌جا بفرستید.")
     if not blocks:
         return "برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
-    tail = ("\n\n👆 برای کپی، روی آدرس کیف پول یا شمارهٔ کارت ضربه بزنید."
-            if html and (opts.usdt or opts.card or opts.ton) else "")
-    return "\n\n".join(blocks) + tail
+
+    out = ["💳 از یکی از روش‌های زیر پرداخت کنید:", "\n\n".join(blocks)]
+    # After-deposit action, adaptive to the enabled methods.
+    if opts.usdt and (opts.card or opts.ton or opts.screenshot):
+        out.append("📩 پس از واریز: برای USDT شناسهٔ تراکنش (TXID) و برای بقیه تصویر رسید را همین‌جا بفرستید.")
+    elif opts.usdt:
+        out.append("📩 پس از واریز، شناسهٔ تراکنش (TXID) را همین‌جا بفرستید.")
+    else:
+        out.append("📩 پس از واریز، تصویر رسید را همین‌جا بفرستید.")
+    if html and (opts.usdt or opts.card or opts.ton):
+        out.append("👆 برای کپی، روی آدرس یا شمارهٔ کارت ضربه بزنید.")
+    return "\n\n".join(out)
