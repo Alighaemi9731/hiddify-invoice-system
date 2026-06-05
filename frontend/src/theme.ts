@@ -34,6 +34,16 @@ export function makeTheme(mode: PaletteMode) {
       "radial-gradient(60% 55% at 100% 100%, rgba(244,63,94,.09), transparent 60%)," +
       "radial-gradient(50% 50% at 0% 100%, rgba(16,185,129,.10), transparent 60%)";
 
+  // Staggered fade-in for table body rows — gives every data page the same "alive"
+  // entrance the dashboard cards have, applied globally (no per-page wiring). Capped at
+  // the first ~14 rows; later rows just fade in together.
+  const rowStagger: Record<string, { animationDelay: string }> = {};
+  for (let i = 1; i <= 14; i++) {
+    rowStagger[`.MuiTableBody-root .MuiTableRow-root:nth-of-type(${i})`] = {
+      animationDelay: `${i * 28}ms`,
+    };
+  }
+
   return createTheme({
     direction: "rtl",
     palette: {
@@ -92,6 +102,15 @@ export function makeTheme(mode: PaletteMode) {
           "@media (prefers-reduced-motion: reduce)": {
             "*": { animationDuration: "0.001ms !important", transitionDuration: "0.001ms !important" },
           },
+          // Site-wide table-row entrance (fade + tiny rise), staggered.
+          "@keyframes rowIn": {
+            from: { opacity: 0, transform: "translateY(5px)" },
+            to: { opacity: 1, transform: "translateY(0)" },
+          },
+          ".MuiTableBody-root .MuiTableRow-root": {
+            animation: "rowIn .45s cubic-bezier(.22,1,.36,1) both",
+          },
+          ...rowStagger,
           "::selection": { backgroundColor: alpha(primaryMain, 0.28) },
         },
       },
