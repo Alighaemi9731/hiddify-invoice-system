@@ -22,9 +22,11 @@ async def notify_owner(session: AsyncSession, text: str, *, html: bool = False) 
     bot = await build_bot(session)
     if bot is None:
         return False
+    from app.bot.rtl import rtl
+
     try:
         await bot.send_message(
-            int(owner_chat), text,
+            int(owner_chat), rtl(text),
             parse_mode="HTML" if html else None,
             disable_web_page_preview=True,
         )

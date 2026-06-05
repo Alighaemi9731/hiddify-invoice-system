@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
+from app.bot.rtl import rtl
 from app.bot.telegram import build_bot
 from app.models import DeliveryLog, Invoice, Reseller
 from app.models.enums import DeliveryKind, DeliveryStatus, InvoiceStatus
@@ -144,7 +145,7 @@ async def send_invoice_content(
 
     full_text = text + ("\n\n" + "\n".join(_breakdown_lines(bd)) if bd else "")
     sent_ids: list[int] = []
-    msg = await bot.send_message(chat_id, full_text, parse_mode="HTML")
+    msg = await bot.send_message(chat_id, rtl(full_text), parse_mode="HTML")
     sent_ids.append(msg.message_id)
     for path, caption in await _render_invoice_pdfs(session, inv, reseller, bd):
         try:
@@ -210,7 +211,7 @@ async def send_invoice(
     except Exception as exc:  # noqa: BLE001 — fall back to plain text only
         log.warning("invoice delivery failed for invoice %s: %s", inv.id, exc)
         try:
-            msg = await bot.send_message(reseller.bot_chat_id, text, parse_mode="HTML")
+            msg = await bot.send_message(reseller.bot_chat_id, rtl(text), parse_mode="HTML")
             sent_ids = [msg.message_id]
         except Exception as exc2:  # noqa: BLE001
             status, error = DeliveryStatus.failed, str(exc2)[:500]

@@ -44,8 +44,10 @@ async def send_to_reseller(
             status = DeliveryStatus.failed
             error = "no telegram bot token configured"
         else:
+            from app.bot.rtl import rtl
+
             try:
-                await bot.send_message(reseller.bot_chat_id, text)
+                await bot.send_message(reseller.bot_chat_id, rtl(text))
             except TelegramForbiddenError:
                 status = DeliveryStatus.blocked
                 error = "reseller blocked the bot"

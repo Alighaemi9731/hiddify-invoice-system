@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 
 from app.bot import keyboards, texts
 from app.bot.matching import parse_link
+from app.bot.rtl import rtl
 from app.core.db import SessionLocal
 from app.models import BotUser, Invoice, Panel, Payment, Reseller
 from app.models.enums import (
@@ -836,7 +837,7 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
         )
         await state.set_state(PayState.waiting)
         await state.update_data(pay_invoice_id=inv_id)
-        await cb.message.answer(text, parse_mode="HTML")
+        await cb.message.answer(rtl(text), parse_mode="HTML")
     await cb.answer()
 
 
@@ -870,11 +871,11 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
         parsed = _parse_txid(text, usdt=opts.usdt, ton=opts.ton)
         if parsed is None:
             # Invalid input → explain what's needed and STAY in the pay flow (no menu).
-            await message.answer(
-                f"❌ ورودی نامعتبر است.\n"
+            await message.answer(rtl(
+                "❌ ورودی نامعتبر است.\n"
                 f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید.\n"
                 "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
-            )
+            ))
             return
         chain, txid = parsed
         data = await state.get_data()
@@ -890,10 +891,10 @@ async def pay_state_other(message: Message) -> None:
 
     async with SessionLocal() as s:
         opts = await payment_methods.load_options(s)
-    await message.answer(
+    await message.answer(rtl(
         f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید.\n"
         "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
-    )
+    ))
 
 
 @router.callback_query(F.data == "menu:removelink")
@@ -1736,10 +1737,10 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
         if "[resubmitted]" not in (existing.note or ""):
             existing.note = (existing.note or "") + " [resubmitted]"
         await session.commit()
-        await message.answer(
+        await message.answer(rtl(
             "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
             f"🔖 شمارهٔ پیگیری: #{existing.id}"
-        )
+        ))
         inv2 = await session.get(Invoice, existing.invoice_id) if existing.invoice_id else None
         await owner_notify.notify_owner(
             session,
@@ -1767,11 +1768,11 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
     await session.commit()
 
     label = "TON" if chain == "ton" else "USDT"
-    await message.answer(
+    await message.answer(rtl(
         f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
         "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
         f"🔖 شمارهٔ پیگیری: #{payment.id}"
-    )
+    ))
     name = resellers[0].name
     period = invoice.period_label if invoice else "—"
     amount = _invoice_amount_fa(invoice)
@@ -1823,11 +1824,11 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
     except Exception:  # noqa: BLE001 — keep the pending payment even if the file fails
         log.warning("failed to save payment proof for payment %s", payment.id, exc_info=True)
 
-    await message.answer(
+    await message.answer(rtl(
         "✅ رسید شما دریافت شد و در انتظار تأیید پشتیبانی است.\n"
         "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. (نیازی به ارسال دوباره نیست.)\n"
         f"🔖 شمارهٔ پیگیری: #{payment.id}"
-    )
+    ))
 
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
@@ -1835,7 +1836,7 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
         r = resellers[0]
         period = invoice.period_label if invoice else "—"
         amount = _invoice_amount_fa(invoice)
-        caption = (
+        caption = rtl(
             f"🧾 رسید پرداخت از «{r.name}»\n"
             f"دوره: {period}\nمبلغ فاکتور: {amount}\n"
             f"شناسهٔ پرداخت در پنل: #{payment.id}\n"
@@ -1848,6 +1849,6 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
             if not saved:
                 await message.bot.send_message(
                     int(owner_chat),
-                    f"🧾 رسید پرداخت از «{resellers[0].name}» ثبت شد (#{payment.id})، "
-                    "اما ارسال تصویر ناموفق بود. در پنل بررسی کنید.",
+                    rtl(f"🧾 رسید پرداخت از «{resellers[0].name}» ثبت شد (#{payment.id})، "
+                        "اما ارسال تصویر ناموفق بود. در پنل بررسی کنید."),
                 )
