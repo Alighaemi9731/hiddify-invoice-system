@@ -843,13 +843,24 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(PayState.waiting, F.photo)
 async def pay_state_photo(message: Message, state: FSMContext) -> None:
-    # A photo is always a valid receipt (manual review), regardless of method.
-    data = await state.get_data()
-    inv_id = data.get("pay_invoice_id")
-    await state.clear()
+    from app.services import payment_methods
+
     async with SessionLocal() as s:
+        opts = await payment_methods.load_options(s)
+        # A photo is a valid proof ONLY when a photo-based method (card / receipt) is enabled.
+        # If the owner turned those off (e.g. only USDT/TON TXID), a photo isn't accepted —
+        # stay locked and ask for the right proof.
+        if not (opts.card or opts.screenshot):
+            await message.answer(
+                "❌ پرداخت با «تصویر رسید» فعال نیست.\n"
+                f"لطفاً {_proof_wanted_fa(opts)} را بفرستید.\n"
+                "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
+            )
+            return
+        data = await state.get_data()
+        inv = await s.get(Invoice, int(data["pay_invoice_id"])) if data.get("pay_invoice_id") else None
+        await state.clear()
         await _track_user(s, message.from_user)
-        inv = await s.get(Invoice, int(inv_id)) if inv_id else None
         await _handle_payment_proof(message, s, invoice=inv)
 
 
