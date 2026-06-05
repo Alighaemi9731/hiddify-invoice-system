@@ -244,6 +244,12 @@ async def _mark_invoices_paid(
 ) -> None:
     now = dt.datetime.now(dt.timezone.utc)
     for inv in invoices:
+        # Only an OWED invoice may be marked paid. Guarding here (not just in the caller)
+        # protects EVERY settlement path: confirming a stale payment whose linked invoice was
+        # meanwhile reverted to draft / canceled / already paid must NOT resurrect it as paid
+        # or write a duplicate ledger row. (verify_payment also guards before calling.)
+        if inv.status not in _OWED:
+            continue
         inv.status = InvoiceStatus.paid
         inv.paid_at = now
         reseller = await session.get(Reseller, inv.reseller_id)

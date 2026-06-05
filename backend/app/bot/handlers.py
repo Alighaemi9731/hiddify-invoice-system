@@ -758,8 +758,12 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
         resellers = await _resellers_for_chat(s, cb.from_user.id)
         owned = {r.id for r in resellers}
         inv = await s.get(Invoice, inv_id)
-        if inv is None or inv.reseller_id not in owned or inv.status not in _OWED:
-            await cb.answer("این فاکتور قابل پرداخت نیست.", show_alert=True)
+        # Not payable if: not the caller's, not owed, OR deferred to a future date (a payment
+        # deadline the owner granted) — `_send_pay` excludes deferred invoices, so a stale
+        # button must not let one be paid early.
+        deferred = inv is not None and inv.deferred_until and inv.deferred_until > dt.date.today()
+        if inv is None or inv.reseller_id not in owned or inv.status not in _OWED or deferred:
+            await cb.answer("این فاکتور در حال حاضر قابل پرداخت نیست.", show_alert=True)
             return
         opts = await payment_methods.load_options(s)
         text = (
@@ -788,7 +792,7 @@ async def pay_state_photo(message: Message, state: FSMContext) -> None:
 
 
 @router.message(PayState.waiting, F.text)
-async def pay_state_text(message: Message, state: FSMContext) -> None:
+async def pay_state_text(message: Message, state: FSMContext, bot: Bot) -> None:
     text = (message.text or "").strip()
     if text.lower() in ("/cancel", "cancel", "لغو"):
         await state.clear()
@@ -796,9 +800,10 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
         return
     txm = _TXID_RE.search(text)
     if not txm:
-        await message.answer(
-            "لطفاً شناسهٔ تراکنش (TXID) را ارسال کنید یا تصویر رسید را بفرستید. برای لغو: /cancel"
-        )
+        # Not a TXID — the customer changed their mind (a panel link, a question, etc.).
+        # Don't trap them in the pay flow: exit PayState and route the message normally.
+        await state.clear()
+        await on_text(message, bot)
         return
     data = await state.get_data()
     inv_id = data.get("pay_invoice_id")

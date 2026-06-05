@@ -126,4 +126,6 @@ async def record_manual(
     await payments_service.confirm_manually(session, payment.id)
     await session.refresh(payment)
     reseller = await session.get(Reseller, payment.reseller_id)
-    return _to_out(payment, reseller.name if reseller else None)
+    await session.refresh(invoice)
+    return _to_out(payment, reseller.name if reseller else None,
+                   invoice.period_label, float(invoice.amount_toman))
