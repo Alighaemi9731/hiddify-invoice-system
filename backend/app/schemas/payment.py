@@ -14,6 +14,9 @@ class PaymentOut(BaseModel):
     invoice_id: int | None
     invoice_period: str | None = None   # the period of the single invoice this payment is for
     invoice_amount_toman: float = 0
+    # Pre-formatted crypto equivalent of the invoice in the PAID currency («30.86 USDT» /
+    # «20.06 TON») — so the panel never shows a 0.00 from the (unverified) payment.amount_usdt.
+    invoice_equiv: str = ""
     method: str
     status: str
     chain: str

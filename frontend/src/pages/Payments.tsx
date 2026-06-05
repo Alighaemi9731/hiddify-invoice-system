@@ -117,7 +117,7 @@ export default function Payments() {
                 <TableCell dir="ltr">
                   <Tooltip title={
                     <span style={{ whiteSpace: "pre-line" }}>
-                      {`فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}\nمعادل: ${fmtUsdt(p.amount_usdt)}`}
+                      {`فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}${p.invoice_equiv ? "\nمعادل: " + p.invoice_equiv : ""}`}
                     </span>
                   }>
                     <span style={{ cursor: "help" }}>

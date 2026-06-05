@@ -1688,6 +1688,21 @@ def _invoice_amount_fa(invoice) -> str:
     return f"{float(invoice.amount_toman):,.0f} تومان ({float(invoice.amount_usdt):,.2f} USDT)"
 
 
+async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
+    """Like _invoice_amount_fa but shows the equivalent in the PAID currency: TON for a TON
+    payment, USDT otherwise — so a TON payment's owner message doesn't show a USDT figure."""
+    if invoice is None:
+        return "نامشخص"
+    toman = f"{float(invoice.amount_toman):,.0f} تومان"
+    if chain == "ton":
+        from app.services import rates
+        rate = await rates.get_ton_toman(session)
+        if rate:
+            return f"{toman} (≈ {float(invoice.amount_toman) / rate:,.2f} TON)"
+        return toman
+    return f"{toman} ({float(invoice.amount_usdt):,.2f} USDT)"
+
+
 async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | None:
     """The customer's oldest PAYABLE invoice (owed, not deferred, and NOT already awaiting
     review) — what a cold-path payment (a TXID/photo sent without picking a button) attaches to.
@@ -1775,7 +1790,7 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
     ))
     name = resellers[0].name
     period = invoice.period_label if invoice else "—"
-    amount = _invoice_amount_fa(invoice)
+    amount = await _invoice_amount_for_chain(session, invoice, chain)
     await owner_notify.notify_owner(
         session, f"💳 پرداخت جدید ({label} TXID) از «{name}» ثبت شد و منتظر تأیید شماست.\n"
         f"دوره: {period} | مبلغ فاکتور: {amount}\n"

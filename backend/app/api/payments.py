@@ -24,15 +24,26 @@ router = APIRouter(
 )
 
 
+def _equiv_str(chain: str, toman: float | None, usdt: float | None, ton_rate: int) -> str:
+    """The invoice's crypto equivalent in the PAID currency: TON for a TON payment, else USDT."""
+    if not toman:
+        return ""
+    if chain == "ton":
+        return f"{float(toman) / ton_rate:,.2f} TON" if ton_rate else ""
+    return f"{float(usdt or 0):,.2f} USDT"
+
+
 def _to_out(
     p: Payment, reseller_name: str | None,
     invoice_period: str | None = None, invoice_amount_toman: float = 0,
     reseller_chat_id: int | None = None, reseller_username: str | None = None,
+    invoice_equiv: str = "",
 ) -> PaymentOut:
     return PaymentOut(
         id=p.id, reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
         reseller_chat_id=reseller_chat_id, reseller_username=reseller_username,
         invoice_period=invoice_period, invoice_amount_toman=float(invoice_amount_toman or 0),
+        invoice_equiv=invoice_equiv,
         method=p.method.value, status=p.status.value, chain=p.chain, txid=p.txid,
         from_address=p.from_address, to_address=p.to_address, amount_usdt=float(p.amount_usdt),
         confirmations=p.confirmations, verified_at=p.verified_at, created_at=p.created_at, note=p.note,
@@ -50,7 +61,7 @@ async def list_payments(
     q = (
         select(
             Payment, Reseller.name, Invoice.period_label, Invoice.amount_toman,
-            Reseller.bot_chat_id, BotUser.username,
+            Reseller.bot_chat_id, BotUser.username, Invoice.amount_usdt,
         )
         .outerjoin(Reseller, Payment.reseller_id == Reseller.id)
         .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
@@ -63,9 +74,13 @@ async def list_payments(
     if reseller_id is not None:
         q = q.where(Payment.reseller_id == reseller_id)
     rows = (await session.execute(q)).all()
+    from app.services import rates
+
+    ton_rate = await rates.get_ton_toman(session)
     return [
-        _to_out(p, name, period, toman, chat_id, username)
-        for p, name, period, toman, chat_id, username in rows
+        _to_out(p, name, period, toman, chat_id, username,
+                _equiv_str(p.chain, toman, usdt, ton_rate))
+        for p, name, period, toman, chat_id, username, usdt in rows
     ]
 
 
@@ -82,9 +97,14 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
             select(BotUser).where(BotUser.telegram_id == reseller.bot_chat_id)
         )).scalars().first()
         username = bu.username if bu else None
+    from app.services import rates
+
+    ton_rate = await rates.get_ton_toman(session)
+    equiv = _equiv_str(p.chain, float(inv.amount_toman) if inv else 0,
+                       float(inv.amount_usdt) if inv else 0, ton_rate)
     return _to_out(p, reseller.name if reseller else None,
                    inv.period_label if inv else None, float(inv.amount_toman) if inv else 0,
-                   reseller.bot_chat_id if reseller else None, username)
+                   reseller.bot_chat_id if reseller else None, username, equiv)
 
 
 @router.post("/{payment_id}/verify", response_model=PaymentActionResult)
