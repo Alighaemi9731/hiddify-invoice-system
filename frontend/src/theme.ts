@@ -25,14 +25,14 @@ export function makeTheme(mode: PaletteMode) {
   // Ambient background — layered radial color blobs over a deep/cool base, fixed so it
   // doesn't scroll. Kept low-saturation so dense tables stay readable through the glass.
   const ambient = isDark
-    ? "radial-gradient(60% 50% at 0% 0%, rgba(124,108,255,.22), transparent 60%)," +
-      "radial-gradient(55% 45% at 100% 0%, rgba(56,189,248,.14), transparent 60%)," +
-      "radial-gradient(60% 55% at 100% 100%, rgba(168,139,250,.16), transparent 60%)," +
-      "radial-gradient(50% 50% at 0% 100%, rgba(16,185,129,.10), transparent 60%)"
-    : "radial-gradient(60% 50% at 0% 0%, rgba(124,108,255,.18), transparent 60%)," +
-      "radial-gradient(55% 45% at 100% 0%, rgba(14,165,233,.14), transparent 60%)," +
-      "radial-gradient(60% 55% at 100% 100%, rgba(244,63,94,.09), transparent 60%)," +
-      "radial-gradient(50% 50% at 0% 100%, rgba(16,185,129,.10), transparent 60%)";
+    ? "radial-gradient(62% 52% at 0% 0%, rgba(124,108,255,.30), transparent 62%)," +
+      "radial-gradient(58% 48% at 100% 0%, rgba(56,189,248,.22), transparent 62%)," +
+      "radial-gradient(62% 56% at 100% 100%, rgba(168,139,250,.24), transparent 62%)," +
+      "radial-gradient(54% 52% at 0% 100%, rgba(16,185,129,.16), transparent 62%)"
+    : "radial-gradient(62% 52% at 0% 0%, rgba(124,108,255,.28), transparent 60%)," +
+      "radial-gradient(58% 48% at 100% 0%, rgba(14,165,233,.22), transparent 60%)," +
+      "radial-gradient(62% 56% at 100% 100%, rgba(244,63,94,.16), transparent 60%)," +
+      "radial-gradient(54% 52% at 0% 100%, rgba(16,185,129,.18), transparent 60%)";
 
   // Staggered fade-in for table body rows — gives every data page the same "alive"
   // entrance the dashboard cards have, applied globally (no per-page wiring). Capped at
@@ -89,14 +89,8 @@ export function makeTheme(mode: PaletteMode) {
             backgroundColor: isDark ? "#090a12" : "#e9ecf7",
             backgroundImage: ambient,
             backgroundAttachment: "fixed",
-            // The ambient color field slowly drifts — gives the frosted glass something
-            // alive to refract. Very slow + low-alpha, so it never distracts.
-            backgroundSize: "175% 175%",
-            animation: "ambientDrift 32s ease-in-out infinite",
-          },
-          "@keyframes ambientDrift": {
-            "0%, 100%": { backgroundPosition: "0% 0%" },
-            "50%": { backgroundPosition: "100% 100%" },
+            // Static gradient — no infinite animation (a moving full-viewport background
+            // forces a per-frame repaint and was pegging the GPU / heating the machine).
           },
           // Respect users who prefer less motion.
           "@media (prefers-reduced-motion: reduce)": {
@@ -205,10 +199,10 @@ export function makeTheme(mode: PaletteMode) {
         styleOverrides: {
           root: {
             "& .MuiTableCell-head": {
-              backgroundColor: isDark ? "rgba(28,34,52,.5)" : "rgba(248,249,253,.55)",
-              color: isDark ? "#aab0c6" : "#5a6173",
-              fontWeight: 700, fontSize: 12.5, letterSpacing: ".01em",
-              borderBottom: `1px solid ${isDark ? "rgba(148,163,184,.16)" : "rgba(120,130,170,.18)"}`,
+              backgroundColor: isDark ? alpha(primaryMain, 0.16) : alpha(primaryMain, 0.08),
+              color: isDark ? "#c9bffb" : "#4b3fb5",
+              fontWeight: 800, fontSize: 12.5, letterSpacing: ".01em",
+              borderBottom: `1px solid ${alpha(primaryMain, isDark ? 0.3 : 0.22)}`,
               whiteSpace: "nowrap", backdropFilter: "blur(6px)",
             },
           },
@@ -222,7 +216,9 @@ export function makeTheme(mode: PaletteMode) {
           root: {
             transition: "background-color .15s ease",
             "&:last-child td": { borderBottom: 0 },
-            "&.MuiTableRow-hover:hover": { backgroundColor: alpha(primaryMain, isDark ? 0.1 : 0.05) },
+            // subtle accent zebra striping → less flat/grey, easier to scan
+            "&:nth-of-type(even)": { backgroundColor: alpha(primaryMain, isDark ? 0.04 : 0.035) },
+            "&.MuiTableRow-hover:hover": { backgroundColor: alpha(primaryMain, isDark ? 0.13 : 0.08) },
           },
         },
       },
