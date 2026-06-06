@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, Tooltip, Typography, Divider, Tabs, Tab,
+  TextField, Tooltip, Typography, Divider, Tabs, Tab, TablePagination,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
@@ -47,6 +47,11 @@ export default function Invoices() {
     enabled: tab === 1,
   });
   const { sorted, key, dir, toggle } = useSort(data, "amount_toman", "desc");
+  // Paginate the (often hundreds of) rows so we never render the whole month at once.
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  useEffect(() => { setPage(0); }, [period, status, tab, key, dir]);
+  const paged = sorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
   const refresh = () => qc.invalidateQueries({ queryKey: ["invoices"] });
   const mut = (fn: any, ok: any) =>
     useMutation({ mutationFn: fn, onSuccess: (r: any) => { show(typeof ok === "function" ? ok(r) : ok); refresh(); }, onError: (e) => show(errMsg(e), "error") });
@@ -156,7 +161,7 @@ export default function Invoices() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {sorted.map((i: any) => (
+            {paged.map((i: any) => (
               <TableRow key={i.id} hover>
                 <TableCell>{i.reseller_name}</TableCell>
                 <TableCell>{i.panel_key}</TableCell>
@@ -201,6 +206,16 @@ export default function Invoices() {
             {sorted.length === 0 && <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: "text.secondary" }}>فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید</TableCell></TableRow>}
           </TableBody>
         </Table>
+        {sorted.length > rowsPerPage && (
+          <TablePagination
+            component="div" count={sorted.length} page={page}
+            onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={rowsPerPage} rowsPerPageOptions={[25, 50, 100]}
+            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            labelRowsPerPage="تعداد در صفحه:"
+            labelDisplayedRows={({ from, to, count }) => `${from}–${to} از ${count}`}
+          />
+        )}
       </Card>
       </>
       )}

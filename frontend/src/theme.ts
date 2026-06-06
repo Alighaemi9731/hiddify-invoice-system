@@ -59,8 +59,8 @@ export function makeTheme(mode: PaletteMode) {
       info: { main: isDark ? "#38bdf8" : "#0284c7" },
       divider: isDark ? "rgba(148,163,184,.14)" : "rgba(120,130,170,.18)",
       text: isDark
-        ? { primary: "#e8eaf4", secondary: "#9aa0b6" }
-        : { primary: "#1b1d2e", secondary: "#5a6175" },
+        ? { primary: "#eceef7", secondary: "#a7adc4" }   // lighter secondary for AA contrast
+        : { primary: "#181a29", secondary: "#515872" },
     },
     typography: {
       fontFamily: "Vazirmatn, system-ui, sans-serif",
