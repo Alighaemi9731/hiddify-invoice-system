@@ -65,7 +65,7 @@ export default function FinancialHistory() {
           disabled={data.length === 0}>CSV</Button>
       </Stack>
       <Card>
-        <Table size="small">
+        <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
               <TableCell>پنل</TableCell>

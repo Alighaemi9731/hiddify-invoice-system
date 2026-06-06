@@ -33,7 +33,7 @@ export default function Sales() {
 
   return (
     <Box>
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
+      <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: "wrap", rowGap: 1 }} alignItems="center">
         <PeriodPicker value={period} onChange={setPeriod} />
         <Box sx={{ flexGrow: 1 }} />
         <Typography variant="body2" color="text.secondary">
@@ -41,7 +41,7 @@ export default function Sales() {
         </Typography>
       </Stack>
       <Card>
-        <Table size="small">
+        <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
               {head("name", "نماینده")}

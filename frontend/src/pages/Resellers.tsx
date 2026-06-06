@@ -141,7 +141,7 @@ export default function Resellers() {
               {" "}— زیرمجموعه‌ها در تب «ساختار درختی» نمایش داده می‌شوند.
             </Typography>
           </Box>
-          <Table size="small">
+          <Table size="small" className="resp-table">
             <TableHead>
               <TableRow>
                 <SortTh id="name" label="نام" sortKey={key} dir={dir} onSort={toggle} />
@@ -181,7 +181,7 @@ export default function Resellers() {
               {fmtNum(tree.length)} نمایندهٔ اصلی — زیرمجموعه‌ها داخل هر نماینده نمایش داده می‌شوند.
             </Typography>
           </Box>
-          <Table size="small">
+          <Table size="small" className="resp-table">
             <TableHead>
               <TableRow>
                 <TableCell>نماینده</TableCell>

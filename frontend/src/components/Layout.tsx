@@ -30,6 +30,7 @@ import { useColorMode } from "../colorMode";
 import { getInfo } from "../api/client";
 import ErrorBoundary from "./ErrorBoundary";
 import { PageTransition } from "./motion";
+import { useResponsiveTableLabels } from "../responsive";
 
 const WIDTH = 256;
 
@@ -59,6 +60,7 @@ export default function Layout() {
   const { mode, toggle } = useColorMode();
   const primary = theme.palette.primary.main;
   const { data: info } = useQuery({ queryKey: ["app-info"], queryFn: getInfo, staleTime: 600000 });
+  useResponsiveTableLabels();   // mobile card-table auto-labeling for any .resp-table
 
   const navItemSx = (selected: boolean) => ({
     position: "relative", borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.7,

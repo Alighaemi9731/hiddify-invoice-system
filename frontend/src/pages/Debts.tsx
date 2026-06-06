@@ -15,7 +15,7 @@ export default function Debts() {
         مجموع بدهی معوق: <b>{fmtToman(total)}</b> — {fmtNum(data.length)} نماینده
       </Typography>
       <Card>
-        <Table size="small">
+        <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />

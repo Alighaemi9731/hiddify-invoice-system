@@ -25,7 +25,7 @@ export default function Logs() {
 
       {tab === 0 && (
         <Card>
-          <Table size="small">
+          <Table size="small" className="resp-table">
             <TableHead><TableRow>
               <TableCell>نماینده</TableCell><TableCell>نوع</TableCell><TableCell>وضعیت</TableCell>
               <TableCell>خطا</TableCell><TableCell>زمان</TableCell>
@@ -51,7 +51,7 @@ export default function Logs() {
 
       {tab === 1 && (
         <Card>
-          <Table size="small">
+          <Table size="small" className="resp-table">
             <TableHead><TableRow>
               <TableCell>نماینده</TableCell><TableCell>اقدام</TableCell><TableCell>وضعیت</TableCell>
               <TableCell>تعداد کاربر</TableCell><TableCell>زمان</TableCell>

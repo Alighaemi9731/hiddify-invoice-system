@@ -117,7 +117,7 @@ export default function Invoices() {
           <Typography variant="body2" color="text.secondary" sx={{ p: 2, pb: 0 }}>
             {fmtNum(zero.length)} نماینده در دوره {period} هیچ فروشی نداشته‌اند.
           </Typography>
-          <Table size="small">
+          <Table size="small" className="resp-table">
             <TableHead>
               <TableRow>
                 <TableCell>نماینده</TableCell><TableCell>پنل</TableCell>
@@ -144,7 +144,7 @@ export default function Invoices() {
       </Typography>
 
       <Card>
-        <Table size="small">
+        <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
