@@ -70,9 +70,11 @@ export default function Login() {
           </Typography>
           <form onSubmit={submit}>
             {err && <Alert severity={need2fa ? "info" : "error"} sx={{ mb: 2 }}>{err}</Alert>}
-            <TextField label="نام کاربری" fullWidth value={u}
+            {/* autoComplete + name so iCloud Keychain / password managers fill BOTH fields */}
+            <TextField label="نام کاربری" fullWidth value={u} name="username" autoComplete="username"
               onChange={(e) => setU(e.target.value)} sx={{ mb: 2 }} autoFocus />
-            <TextField label="رمز عبور" type="password" fullWidth value={p}
+            <TextField label="رمز عبور" type="password" fullWidth value={p} name="password"
+              autoComplete="current-password"
               onChange={(e) => setP(e.target.value)} sx={{ mb: 2 }} />
 
             {/* captcha */}
@@ -82,11 +84,12 @@ export default function Login() {
               </Box>
               <Tooltip title="کد جدید"><IconButton onClick={loadCaptcha}><RefreshIcon /></IconButton></Tooltip>
             </Stack>
-            <TextField label="کد امنیتی تصویر" fullWidth value={captchaAns}
+            <TextField label="کد امنیتی تصویر" fullWidth value={captchaAns} autoComplete="off"
               onChange={(e) => setCaptchaAns(e.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 6, dir: "ltr" }} />
 
             {need2fa && (
               <TextField label="کد تأیید دو مرحله‌ای (Authenticator)" fullWidth value={totp}
+                autoComplete="one-time-code"
                 onChange={(e) => setTotp(e.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 6, dir: "ltr" }} autoFocus />
             )}
 
