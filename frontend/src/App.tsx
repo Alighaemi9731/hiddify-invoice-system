@@ -1,24 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Box, CircularProgress } from "@mui/material";
 import { useAuth } from "./auth/AuthContext";
 import { getSetupStatus } from "./api/client";
 import Layout from "./components/Layout";
+// Login + Setup stay eager — they're the pre-auth entry points and must paint instantly
+// with no chunk flash. Everything behind auth is lazy so each route (and the heavy chart
+// libs) splits into its own chunk, keeping the initial bundle small.
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
-import Dashboard from "./pages/Dashboard";
-import Panels from "./pages/Panels";
-import Resellers from "./pages/Resellers";
-import Invoices from "./pages/Invoices";
-import Payments from "./pages/Payments";
-import Debts from "./pages/Debts";
-import Sales from "./pages/Sales";
-import FinancialHistory from "./pages/FinancialHistory";
-import Logs from "./pages/Logs";
-import Broadcast from "./pages/Broadcast";
-import AccountBackup from "./pages/AccountBackup";
-import Help from "./pages/Help";
-import Settings from "./pages/Settings";
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Panels = lazy(() => import("./pages/Panels"));
+const Resellers = lazy(() => import("./pages/Resellers"));
+const Invoices = lazy(() => import("./pages/Invoices"));
+const Payments = lazy(() => import("./pages/Payments"));
+const Debts = lazy(() => import("./pages/Debts"));
+const Sales = lazy(() => import("./pages/Sales"));
+const FinancialHistory = lazy(() => import("./pages/FinancialHistory"));
+const Logs = lazy(() => import("./pages/Logs"));
+const Broadcast = lazy(() => import("./pages/Broadcast"));
+const AccountBackup = lazy(() => import("./pages/AccountBackup"));
+const Help = lazy(() => import("./pages/Help"));
+const Settings = lazy(() => import("./pages/Settings"));
 import { ReactNode } from "react";
 
 function RequireAuth({ children }: { children: ReactNode }) {

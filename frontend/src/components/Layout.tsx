@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   AppBar, Box, Chip, Drawer, IconButton, List, ListItemButton, ListItemIcon,
   ListItemText, Stack, Toolbar, Typography, Divider, Tooltip, useMediaQuery,
+  CircularProgress,
 } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
 import DashboardIcon from "@mui/icons-material/Dashboard";
@@ -180,10 +181,15 @@ export default function Layout() {
         </AppBar>
         <Box sx={{ p: { xs: 2, md: 3 }, flexGrow: 1 }}>
           <ErrorBoundary>
-            {/* key on the path → the page remounts and replays its entrance on every nav */}
-            <PageTransition key={loc.pathname}>
-              <Outlet />
-            </PageTransition>
+            {/* Suspense covers the lazy route chunks — only the content area shows the
+                loader; the sidebar/header stay put. key on path replays the entrance. */}
+            <Suspense fallback={
+              <Box sx={{ display: "grid", placeItems: "center", py: 12 }}><CircularProgress /></Box>
+            }>
+              <PageTransition key={loc.pathname}>
+                <Outlet />
+              </PageTransition>
+            </Suspense>
           </ErrorBoundary>
         </Box>
       </Box>
