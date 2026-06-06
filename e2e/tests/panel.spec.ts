@@ -1,19 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { login, teardownOcr } from "../helpers/login";
 
-// One login per file (the captcha is rate-limited), reused across tests.
-test.beforeAll(async ({ browser }) => {
-  const page = await browser.newPage();
-  await login(page);
-  await page.close();
-});
-
 test.afterAll(async () => {
   await teardownOcr();
 });
 
-// Each test logs in fresh (cookies/token aren't shared across contexts), but the
-// OCR worker is warm so it's quick. These are READ-ONLY checks — no send/confirm.
+// Each test logs in fresh (cookies/token aren't shared across contexts). The captcha is
+// solved by OCR with retries; no shared beforeAll login (it could exhaust the 90s hook
+// timeout and fail the whole file). READ-ONLY checks — no send/confirm.
 test.beforeEach(async ({ page }) => {
   await login(page);
 });

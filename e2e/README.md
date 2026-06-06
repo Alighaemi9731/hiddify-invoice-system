@@ -30,6 +30,12 @@ npm test
 
 - The CAPTCHA is single-use and noisy, so the login helper retries up to 8 times with a
   fresh captcha each time. `deviceScaleFactor: 3` sharpens the screenshot for OCR.
+- **Reliability caveat (important):** OCR can misread the captcha, and every wrong answer
+  counts toward the login rate-limit — so running the full suite repeatedly against PROD
+  can trip the lockout and make logins fail in a cascade. The app itself is unaffected.
+  The robust fix is to run this against a **staging** stack with the captcha disabled
+  (set `E2E_BASE_URL` there). Until then, treat a flaky run as an OCR/rate-limit artifact,
+  not an app regression — re-run after the lockout window, or verify manually.
 - Point `E2E_BASE_URL` at a **staging** stack before adding destructive tests
   (generate/send/confirm). Against prod, keep tests read-only.
 - Add new specs under `tests/`; reuse `helpers/login.ts`.
