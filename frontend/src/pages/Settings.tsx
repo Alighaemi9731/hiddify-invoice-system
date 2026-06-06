@@ -453,7 +453,17 @@ export default function Settings() {
   return (
     <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center"
-        sx={{ position: "sticky", top: 0, zIndex: 3, bgcolor: "background.default", py: 1.5, mb: 2 }}>
+        sx={{
+          position: "sticky", top: 0, zIndex: 3, mb: 2, py: 1.25, px: 2, gap: 1.5, flexWrap: "wrap",
+          borderRadius: 3,
+          // frosted glass (shows the ambient colour through) instead of a flat grey rectangle
+          bgcolor: (t) => t.palette.mode === "dark" ? "rgba(22,26,43,.62)" : "rgba(255,255,255,.58)",
+          backdropFilter: "saturate(180%) blur(14px)",
+          WebkitBackdropFilter: "saturate(180%) blur(14px)",
+          border: "1px solid", borderColor: "divider",
+          boxShadow: (t) => t.palette.mode === "dark"
+            ? "0 8px 24px -14px rgba(0,0,0,.65)" : "0 8px 24px -16px rgba(31,38,80,.22)",
+        }}>
         <Box>
           <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>تنظیمات سامانه</Typography>
           <Typography variant="caption" color="text.secondary">
