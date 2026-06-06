@@ -123,10 +123,12 @@ export function makeTheme(mode: PaletteMode) {
             },
             ".resp-table td": {
               display: "flex", alignItems: "center", justifyContent: "space-between",
-              gap: 12, textAlign: "start", minHeight: 42,
+              gap: 12, textAlign: "start", minHeight: 42, minWidth: 0, overflow: "hidden",
               padding: "9px 0 !important",
               borderBottom: `1px solid ${isDark ? "rgba(148,163,184,.09)" : "rgba(120,130,170,.11)"} !important`,
             },
+            // the value side may shrink/clip so a long cell never pushes the card wider
+            ".resp-table td > *": { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" },
             ".resp-table td:last-child": { borderBottom: "0 !important" },
             ".resp-table td::before": {
               content: "attr(data-label)", fontWeight: 700, fontSize: 12.5,

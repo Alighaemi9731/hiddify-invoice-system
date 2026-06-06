@@ -67,12 +67,12 @@ export default function Payments() {
 
   return (
     <Box>
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
         <TextField select size="small" label="وضعیت" value={status} sx={{ minWidth: 160 }} onChange={(e) => setStatus(e.target.value)}>
           <MenuItem value="">همه</MenuItem>
           {Object.entries(PAYMENT_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </TextField>
-        <TextField size="small" label="جستجوی شمارهٔ پیگیری یا نام" value={search} sx={{ minWidth: 240 }}
+        <TextField size="small" label="جستجوی شمارهٔ پیگیری یا نام" value={search} sx={{ minWidth: { sm: 240 } }}
           placeholder="مثلاً #۱۲ یا نام نماینده" onChange={(e) => setSearch(e.target.value)} />
       </Stack>
       <Card>
