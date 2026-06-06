@@ -4,6 +4,7 @@ import {
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
 import { getDeliveryLog, getEnforcementActions } from "../api/client";
+import { DataState } from "../components/DataState";
 import { fmtDate } from "../format";
 
 const DELIV_STATUS: any = { sent: ["ارسال‌شده", "success"], failed: ["ناموفق", "error"], blocked: ["مسدود", "error"], unmatched: ["بدون ربات", "warning"], skipped: ["رد‌شده", "default"] };
@@ -13,8 +14,10 @@ const ACTION_FA: any = { warn: "اخطار", disable_users: "غیرفعال‌س
 
 export default function Logs() {
   const [tab, setTab] = useState(0);
-  const { data: deliveries = [] } = useQuery({ queryKey: ["delivery-log"], queryFn: () => getDeliveryLog({ limit: 500 }) });
-  const { data: actions = [] } = useQuery({ queryKey: ["enforcement-actions"], queryFn: getEnforcementActions });
+  const dq = useQuery({ queryKey: ["delivery-log"], queryFn: () => getDeliveryLog({ limit: 500 }) });
+  const aq = useQuery({ queryKey: ["enforcement-actions"], queryFn: getEnforcementActions });
+  const deliveries = dq.data ?? [];
+  const actions = aq.data ?? [];
 
   return (
     <Box>
@@ -24,6 +27,7 @@ export default function Logs() {
       </Tabs>
 
       {tab === 0 && (
+        <DataState isLoading={dq.isLoading} isError={dq.isError} onRetry={dq.refetch}>
         <Card>
           <Table size="small" className="resp-table">
             <TableHead><TableRow>
@@ -47,9 +51,11 @@ export default function Logs() {
             </TableBody>
           </Table>
         </Card>
+        </DataState>
       )}
 
       {tab === 1 && (
+        <DataState isLoading={aq.isLoading} isError={aq.isError} onRetry={aq.refetch}>
         <Card>
           <Table size="small" className="resp-table">
             <TableHead><TableRow>
@@ -73,6 +79,7 @@ export default function Logs() {
             </TableBody>
           </Table>
         </Card>
+        </DataState>
       )}
     </Box>
   );

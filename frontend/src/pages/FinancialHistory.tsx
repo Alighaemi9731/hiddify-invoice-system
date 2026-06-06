@@ -7,6 +7,7 @@ import DownloadIcon from "@mui/icons-material/Download";
 import { useQuery } from "@tanstack/react-query";
 import { getFinancialHistory } from "../api/client";
 import PeriodPicker from "../components/PeriodPicker";
+import { DataState } from "../components/DataState";
 import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = {
@@ -19,7 +20,7 @@ export default function FinancialHistory() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
 
-  const { data = [] } = useQuery({
+  const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["financial-history", period, q, status],
     queryFn: () => getFinancialHistory({
       period: period || undefined, q: q || undefined, status: status || undefined,
@@ -64,6 +65,7 @@ export default function FinancialHistory() {
         <Button size="small" variant="outlined" startIcon={<DownloadIcon />} onClick={exportCsv}
           disabled={data.length === 0}>CSV</Button>
       </Stack>
+      <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         <Table size="small" className="resp-table">
           <TableHead>
@@ -100,6 +102,7 @@ export default function FinancialHistory() {
           </TableBody>
         </Table>
       </Card>
+      </DataState>
     </Box>
   );
 }

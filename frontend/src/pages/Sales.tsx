@@ -8,6 +8,7 @@ import { getSales } from "../api/client";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
+import { DataState } from "../components/DataState";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error" };
 
@@ -15,7 +16,7 @@ export default function Sales() {
   const [period, setPeriod] = useState(currentPeriod());
   const [sort, setSort] = useState("amount");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
-  const { data = [] } = useQuery({
+  const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["sales", period, sort, order],
     queryFn: () => getSales({ period, sort, order }),
   });
@@ -40,6 +41,7 @@ export default function Sales() {
           {fmtNum(data.length)} فاکتور — {fmtGb(totalGb)} — جمع {fmtToman(total)}
         </Typography>
       </Stack>
+      <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         <Table size="small" className="resp-table">
           <TableHead>
@@ -65,6 +67,7 @@ export default function Sales() {
           </TableBody>
         </Table>
       </Card>
+      </DataState>
     </Box>
   );
 }

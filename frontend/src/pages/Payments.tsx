@@ -15,6 +15,7 @@ import {
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
+import { DataState } from "../components/DataState";
 import { fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error", duplicate: "default" };
@@ -24,7 +25,7 @@ export default function Payments() {
   const { node, show } = useToast();
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
-  const { data = [] } = useQuery({
+  const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["payments", status],
     queryFn: () => listPayments({ status: status || undefined }),
   });
@@ -75,6 +76,7 @@ export default function Payments() {
         <TextField size="small" label="جستجوی شمارهٔ پیگیری یا نام" value={search} sx={{ minWidth: { sm: 240 } }}
           placeholder="مثلاً #۱۲ یا نام نماینده" onChange={(e) => setSearch(e.target.value)} />
       </Stack>
+      <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         <Table size="small" className="resp-table">
           <TableHead>
@@ -143,6 +145,7 @@ export default function Payments() {
           </TableBody>
         </Table>
       </Card>
+      </DataState>
 
       {/* A payment is for ONE invoice — just confirm it (view the receipt first if a screenshot). */}
       <Dialog open={!!confirmRow} onClose={() => setConfirmRow(null)} fullWidth maxWidth="xs">

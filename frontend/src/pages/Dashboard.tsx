@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Grid, Box, Card, CardContent, Typography, Stack,
+  Grid, Box, Card, CardContent, Typography, Stack, Alert, Button,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import DnsIcon from "@mui/icons-material/Dns";
@@ -41,7 +41,7 @@ export default function Dashboard() {
   const [period, setPeriod] = useState(currentPeriod());
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === "dark";
-  const { data, isLoading } = useQuery({ queryKey: ["dashboard", period], queryFn: () => getDashboard(period) });
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["dashboard", period], queryFn: () => getDashboard(period) });
 
   // theme-aware chart colors
   const axisText = isDark ? "#94a3b8" : "#475569";
@@ -105,7 +105,11 @@ export default function Dashboard() {
         <PeriodPicker value={period} onChange={setPeriod} />
       </Stack>
 
-      {isLoading || !data ? (
+      {isError ? (
+        <Alert severity="error" action={
+          <Button color="inherit" size="small" onClick={() => refetch()}>تلاش دوباره</Button>
+        }>خطا در بارگذاری داشبورد. اتصال را بررسی کنید.</Alert>
+      ) : isLoading || !data ? (
         <>
           <Grid container spacing={2}>
             {[0, 1, 2, 3].map((i) => (

@@ -2,10 +2,11 @@ import { Box, Card, Chip, Table, TableBody, TableCell, TableHead, TableRow, Typo
 import { useQuery } from "@tanstack/react-query";
 import { getDebts } from "../api/client";
 import { useSort, SortTh } from "../components/sortable";
+import { DataState } from "../components/DataState";
 import { fmtToman, fmtNum } from "../format";
 
 export default function Debts() {
-  const { data = [] } = useQuery({ queryKey: ["debts"], queryFn: getDebts });
+  const { data = [], isLoading, isError, refetch } = useQuery({ queryKey: ["debts"], queryFn: getDebts });
   const { sorted, key, dir, toggle } = useSort(data, "outstanding_toman", "desc");
   const total = data.reduce((s: number, d: any) => s + d.outstanding_toman, 0);
 
@@ -14,6 +15,7 @@ export default function Debts() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         مجموع بدهی معوق: <b>{fmtToman(total)}</b> — {fmtNum(data.length)} نماینده
       </Typography>
+      <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         <Table size="small" className="resp-table">
           <TableHead>
@@ -41,6 +43,7 @@ export default function Debts() {
           </TableBody>
         </Table>
       </Card>
+      </DataState>
     </Box>
   );
 }
