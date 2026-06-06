@@ -76,7 +76,7 @@ export default function Payments() {
           placeholder="مثلاً #۱۲ یا نام نماینده" onChange={(e) => setSearch(e.target.value)} />
       </Stack>
       <Card>
-        <Table size="small">
+        <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
               <SortTh id="id" label="#" sortKey={key} dir={dir} onSort={toggle} />
@@ -94,8 +94,8 @@ export default function Payments() {
           <TableBody>
             {shown.map((p: any) => (
               <TableRow key={p.id} hover>
-                <TableCell dir="ltr" sx={{ color: "text.secondary", fontWeight: 600 }}>#{p.id}</TableCell>
-                <TableCell>
+                <TableCell data-label="#" dir="ltr" sx={{ color: "text.secondary", fontWeight: 600 }}>#{p.id}</TableCell>
+                <TableCell data-label="نماینده">
                   {/* Click the name → open the customer's Telegram PV (username if known, else by id). */}
                   {p.reseller_username
                     ? <Tooltip title="باز کردن گفتگوی تلگرام"><Link href={`https://t.me/${p.reseller_username}`} target="_blank" rel="noopener" underline="hover">{p.reseller_name}</Link></Tooltip>
@@ -103,9 +103,9 @@ export default function Payments() {
                       ? <Tooltip title="باز کردن گفتگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
                       : p.reseller_name}
                 </TableCell>
-                <TableCell>{p.invoice_period || "—"}</TableCell>
-                <TableCell>{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
-                <TableCell dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
+                <TableCell data-label="فاکتور (دوره)">{p.invoice_period || "—"}</TableCell>
+                <TableCell data-label="روش">{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
+                <TableCell data-label="TXID" dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
                   {/* Click the hash → open it on the matching explorer (TON → tonscan, else bscscan)
                       so the owner can verify it manually before confirming. */}
                   {p.txid
@@ -114,7 +114,7 @@ export default function Payments() {
                       ? <Tooltip title="مشاهدهٔ رسید"><IconButton size="small" onClick={() => openPaymentProof(p.id)}><ImageIcon fontSize="small" /></IconButton></Tooltip>
                       : "—"}
                 </TableCell>
-                <TableCell dir="ltr">
+                <TableCell data-label="مبلغ" dir="ltr">
                   <Tooltip title={
                     <span style={{ whiteSpace: "pre-line" }}>
                       {`فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}${p.invoice_equiv ? "\nمعادل: " + p.invoice_equiv : ""}`}
@@ -125,10 +125,10 @@ export default function Payments() {
                     </span>
                   </Tooltip>
                 </TableCell>
-                <TableCell>{p.confirmations}</TableCell>
-                <TableCell><Chip size="small" color={COLOR[p.status]} label={PAYMENT_STATUS_FA[p.status]} /></TableCell>
-                <TableCell>{fmtDate(p.created_at)}</TableCell>
-                <TableCell align="left">
+                <TableCell data-label="تأییدها">{p.confirmations}</TableCell>
+                <TableCell data-label="وضعیت"><Chip size="small" color={COLOR[p.status]} label={PAYMENT_STATUS_FA[p.status]} /></TableCell>
+                <TableCell data-label="تاریخ">{fmtDate(p.created_at)}</TableCell>
+                <TableCell data-label="عملیات" align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
                   {/* Optional on-chain check — USDT/BSC only (no TON verifier). Legacy rows have
                       chain='' (treated as bsc); only an explicit TON row disables it. */}

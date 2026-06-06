@@ -105,6 +105,35 @@ export function makeTheme(mode: PaletteMode) {
             animation: "rowIn .45s cubic-bezier(.22,1,.36,1) both",
           },
           ...rowStagger,
+          // Responsive tables → cards on phones. A <Table className="resp-table"> collapses
+          // each body row into a stacked "label: value" card below the sm breakpoint. Each
+          // body cell carries data-label="<column>"; the header is hidden on mobile.
+          "@media (max-width:599.95px)": {
+            ".resp-table thead": { display: "none" },
+            ".resp-table, .resp-table tbody, .resp-table tr, .resp-table td": {
+              display: "block", width: "100%",
+            },
+            ".resp-table tr": {
+              marginBottom: 10, borderRadius: 14, padding: "2px 12px",
+              border: `1px solid ${glassBorder}`,
+              backgroundColor: isDark ? "rgba(28,34,52,.45)" : "rgba(255,255,255,.5)",
+            },
+            ".resp-table tr:nth-of-type(even)": {
+              backgroundColor: isDark ? "rgba(28,34,52,.45)" : "rgba(255,255,255,.5)",
+            },
+            ".resp-table td": {
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 12, textAlign: "start", minHeight: 42,
+              padding: "9px 0 !important",
+              borderBottom: `1px solid ${isDark ? "rgba(148,163,184,.09)" : "rgba(120,130,170,.11)"} !important`,
+            },
+            ".resp-table td:last-child": { borderBottom: "0 !important" },
+            ".resp-table td::before": {
+              content: "attr(data-label)", fontWeight: 700, fontSize: 12.5,
+              color: isDark ? "#9aa0b6" : "#5a6175", whiteSpace: "nowrap", flexShrink: 0,
+            },
+            ".resp-table td[data-label='']::before": { content: '""' },
+          },
           "::selection": { backgroundColor: alpha(primaryMain, 0.28) },
         },
       },
