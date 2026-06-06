@@ -64,6 +64,20 @@ export async function login(payload: {
 }
 export const getMe = () => api.get("/api/auth/me").then((r) => r.data);
 
+// ---- Passkey (WebAuthn / Face ID) ----
+export const passkeyRegisterBegin = () =>
+  api.post("/api/auth/passkey/register/begin").then((r) => r.data as { handle: string; options: any });
+export const passkeyRegisterComplete = (body: { handle: string; credential: any; name?: string }) =>
+  api.post("/api/auth/passkey/register/complete", body).then((r) => r.data);
+export const passkeyLoginBegin = () =>
+  api.post("/api/auth/passkey/login/begin").then((r) => r.data as { handle: string; options: any });
+export const passkeyLoginComplete = (body: { handle: string; credential: any }) =>
+  api.post("/api/auth/passkey/login/complete", body).then((r) => r.data as { access_token: string });
+export const passkeyList = () =>
+  api.get("/api/auth/passkey/list").then((r) => r.data as { id: number; name: string; created_at: string }[]);
+export const passkeyDelete = (id: number) =>
+  api.delete(`/api/auth/passkey/${id}`).then((r) => r.data);
+
 // ---- 2FA ----
 export const totpSetup = () => api.post("/api/auth/2fa/setup").then((r) => r.data);
 export const totpEnable = (code: string) => api.post("/api/auth/2fa/enable", { code }).then((r) => r.data);

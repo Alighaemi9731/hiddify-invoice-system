@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Box, Button, Card, CardContent, TextField, Typography, Alert, Stack, IconButton, Tooltip,
+  Box, Button, Card, CardContent, TextField, Typography, Alert, Stack, IconButton, Tooltip, Divider,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import FingerprintIcon from "@mui/icons-material/Fingerprint";
+import { startAuthentication } from "@simplewebauthn/browser";
 import { useAuth } from "../auth/AuthContext";
-import { getCaptcha, login } from "../api/client";
+import { getCaptcha, login, passkeyLoginBegin, passkeyLoginComplete } from "../api/client";
+
+const passkeySupported =
+  typeof window !== "undefined" && !!window.PublicKeyCredential;
 
 export default function Login() {
   const { finishLogin, authed } = useAuth();
@@ -31,6 +36,22 @@ export default function Login() {
 
   useEffect(() => { loadCaptcha(); }, []);
   useEffect(() => { if (authed) nav("/", { replace: true }); }, [authed]);
+
+  const loginWithPasskey = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const { handle, options } = await passkeyLoginBegin();
+      const credential = await startAuthentication({ optionsJSON: options });
+      const { access_token } = await passkeyLoginComplete({ handle, credential });
+      await finishLogin(access_token);
+      nav("/", { replace: true });
+    } catch (e: any) {
+      // a user cancelling the Face ID sheet isn't an error worth shouting about
+      if (e?.name !== "NotAllowedError" && e?.name !== "AbortError") {
+        setErr(e?.response?.data?.detail || "ورود با Face ID ناموفق بود. با رمز وارد شوید.");
+      }
+    } finally { setBusy(false); }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,6 +91,15 @@ export default function Login() {
           </Typography>
           <form onSubmit={submit}>
             {err && <Alert severity={need2fa ? "info" : "error"} sx={{ mb: 2 }}>{err}</Alert>}
+            {passkeySupported && (
+              <>
+                <Button fullWidth size="large" variant="outlined" startIcon={<FingerprintIcon />}
+                  onClick={loginWithPasskey} disabled={busy} sx={{ mb: 2 }}>
+                  ورود با Face ID / کلید عبور
+                </Button>
+                <Divider sx={{ mb: 2, fontSize: 12.5, color: "text.secondary" }}>یا با رمز عبور</Divider>
+              </>
+            )}
             {/* autoComplete + name so iCloud Keychain / password managers fill BOTH fields */}
             <TextField label="نام کاربری" fullWidth value={u} name="username" autoComplete="username"
               onChange={(e) => setU(e.target.value)} sx={{ mb: 2 }} autoFocus />

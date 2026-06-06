@@ -23,9 +23,11 @@ from app.models.payment import Payment
 from app.models.reseller import Reseller
 from app.models.setting import Setting
 from app.models.usage_meter import UsageMeter
+from app.models.webauthn_credential import WebauthnCredential
 
 __all__ = [
     "AppUser",
+    "WebauthnCredential",
     "BotUser",
     "Panel",
     "Reseller",

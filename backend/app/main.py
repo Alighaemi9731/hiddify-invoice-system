@@ -15,6 +15,7 @@ from app.api import (
     meta,
     operations,
     panels,
+    passkey,
     payments,
     reports,
     resellers,
@@ -96,6 +97,7 @@ app.add_middleware(
 app.include_router(meta.router)
 app.include_router(setup_api.router)
 app.include_router(auth.router)
+app.include_router(passkey.router)
 app.include_router(panels.router)
 app.include_router(resellers.router)
 app.include_router(invoices.router)

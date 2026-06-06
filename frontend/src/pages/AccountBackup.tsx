@@ -9,6 +9,8 @@ import TelegramIcon from "@mui/icons-material/Telegram";
 import RestoreIcon from "@mui/icons-material/Restore";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import ShieldIcon from "@mui/icons-material/Shield";
+import FingerprintIcon from "@mui/icons-material/Fingerprint";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import LanguageIcon from "@mui/icons-material/Language";
 import SystemUpdateAltIcon from "@mui/icons-material/SystemUpdateAlt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,8 +18,10 @@ import {
   updateAccount, downloadBackup, sendBackupToTelegram, restoreBackup, setToken, wipeData,
   getMe, totpSetup, totpEnable, totpDisable, setDomain, restartService,
   getInfo, updateSystem, getUpdateStatus, pingInfo,
+  passkeyList, passkeyRegisterBegin, passkeyRegisterComplete, passkeyDelete,
 } from "../api/client";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import { startRegistration } from "@simplewebauthn/browser";
 import { useToast, errMsg } from "../components/Toast";
 
 export default function AccountBackup() {
@@ -33,6 +37,26 @@ export default function AccountBackup() {
   const [setup, setSetup] = useState<any>(null);   // {secret, otpauth_uri, qr}
   const [code, setCode] = useState("");
   const [disablePass, setDisablePass] = useState("");
+
+  // Passkey (Face ID / WebAuthn)
+  const passkeySupported = typeof window !== "undefined" && !!window.PublicKeyCredential;
+  const { data: passkeys = [] } = useQuery({ queryKey: ["passkeys"], queryFn: passkeyList, enabled: passkeySupported });
+  const addPasskey = useMutation({
+    mutationFn: async () => {
+      const { handle, options } = await passkeyRegisterBegin();
+      const credential = await startRegistration({ optionsJSON: options });
+      return passkeyRegisterComplete({ handle, credential, name: "Face ID" });
+    },
+    onSuccess: () => { show("کلید عبور ثبت شد ✓", "success"); qc.invalidateQueries({ queryKey: ["passkeys"] }); },
+    onError: (e: any) => {
+      if (e?.name !== "NotAllowedError" && e?.name !== "AbortError") show(errMsg(e), "error");
+    },
+  });
+  const delPasskey = useMutation({
+    mutationFn: (id: number) => passkeyDelete(id),
+    onSuccess: () => { show("کلید عبور حذف شد"); qc.invalidateQueries({ queryKey: ["passkeys"] }); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
 
   // domain / SSL
   const [domain, setDomainVal] = useState("");
@@ -260,6 +284,38 @@ export default function AccountBackup() {
           )}
         </CardContent>
       </Card>
+
+      {/* Passkey / Face ID */}
+      {passkeySupported && (
+        <Card>
+          <CardContent>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+              <FingerprintIcon color={passkeys.length ? "success" : "primary"} />
+              <Typography variant="h6">ورود با Face ID / کلید عبور</Typography>
+            </Stack>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              پس از ثبتِ این دستگاه، می‌توانید بدونِ رمز و کپچا فقط با Face ID / Touch ID وارد شوید.
+              رمز عبور به‌عنوان پشتیبان باقی می‌ماند.
+            </Typography>
+            {passkeys.length > 0 && (
+              <Stack spacing={1} sx={{ mb: 2 }}>
+                {passkeys.map((k) => (
+                  <Stack key={k.id} direction="row" alignItems="center" spacing={1}>
+                    <FingerprintIcon fontSize="small" color="action" />
+                    <Typography variant="body2" sx={{ flexGrow: 1 }}>{k.name || "کلید عبور"}</Typography>
+                    <Button size="small" color="error" startIcon={<DeleteOutlineIcon />}
+                      disabled={delPasskey.isPending} onClick={() => delPasskey.mutate(k.id)}>حذف</Button>
+                  </Stack>
+                ))}
+              </Stack>
+            )}
+            <Button variant="contained" startIcon={<FingerprintIcon />}
+              disabled={addPasskey.isPending} onClick={() => addPasskey.mutate()}>
+              افزودن این دستگاه (Face ID)
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent>
