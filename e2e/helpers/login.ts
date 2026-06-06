@@ -39,7 +39,8 @@ export async function login(page: Page): Promise<void> {
 
     const captchaBox = page.getByRole("textbox", { name: "کد امنیتی تصویر" });
     await captchaBox.fill(code);
-    await page.getByRole("button", { name: "ورود" }).click();
+    // exact:true so we don't also match the «ورود با Face ID / کلید عبور» passkey button
+    await page.getByRole("button", { name: "ورود", exact: true }).click();
 
     // Success = we navigated off /login (the SPA replaces the route).
     try {
