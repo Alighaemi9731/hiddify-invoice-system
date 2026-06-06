@@ -149,19 +149,19 @@ export default function Dashboard() {
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
             <Grid item xs={12} md={7}>
               <ChartCard title="فروش بر اساس پنل">
-                {panelData.length ? <EChart option={salesByPanelOption} height={300} /> :
+                {panelData.length ? <EChart option={salesByPanelOption} height={300} ariaLabel="نمودار فروش بر اساس پنل" /> :
                   <Box sx={{ height: 300, display: "grid", placeItems: "center", color: "text.secondary" }}>داده‌ای نیست</Box>}
               </ChartCard>
             </Grid>
             <Grid item xs={12} md={5}>
               <ChartCard title="وضعیت فاکتورها">
-                {statusData.length ? <EChart option={statusOption} height={300} /> :
+                {statusData.length ? <EChart option={statusOption} height={300} ariaLabel="نمودار وضعیت فاکتورها" /> :
                   <Box sx={{ height: 300, display: "grid", placeItems: "center", color: "text.secondary" }}>هنوز فاکتور ارسال‌شده‌ای در این دوره نیست</Box>}
               </ChartCard>
             </Grid>
             <Grid item xs={12}>
               <ChartCard title="۱۰ نماینده برتر دوره">
-                {top.length ? <EChart option={topOption} height={Math.max(240, top.length * 40)} /> :
+                {top.length ? <EChart option={topOption} height={Math.max(240, top.length * 40)} ariaLabel="نمودار ۱۰ نمایندهٔ برتر دوره" /> :
                   <Box sx={{ height: 240, display: "grid", placeItems: "center", color: "text.secondary" }}>داده‌ای نیست</Box>}
               </ChartCard>
             </Grid>

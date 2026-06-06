@@ -14,15 +14,20 @@ echarts.use([
   CanvasRenderer,
 ]);
 
-export default function EChart({ option, height = 300 }: { option: any; height?: number }) {
+export default function EChart({
+  option, height = 300, ariaLabel,
+}: { option: any; height?: number; ariaLabel?: string }) {
+  // The canvas is opaque to screen readers, so expose a text label describing the chart.
   return (
-    <ReactEChartsCore
-      echarts={echarts}
-      option={option}
-      notMerge
-      lazyUpdate
-      style={{ height, width: "100%" }}
-      opts={{ renderer: "canvas" }}
-    />
+    <div role="img" aria-label={ariaLabel || "نمودار"}>
+      <ReactEChartsCore
+        echarts={echarts}
+        option={option}
+        notMerge
+        lazyUpdate
+        style={{ height, width: "100%" }}
+        opts={{ renderer: "canvas" }}
+      />
+    </div>
   );
 }

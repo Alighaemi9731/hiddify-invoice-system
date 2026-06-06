@@ -257,7 +257,7 @@ export default function AccountBackup() {
                 ۲) سپس کد ۶ رقمی را وارد و تأیید کنید.
               </Typography>
               <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
-                <img src={setup.qr} alt="2FA QR" width={170} height={170}
+                <img src={setup.qr} alt="کد QR تأیید دو مرحله‌ای" width={170} height={170}
                   style={{ border: "1px solid #e5e7eb", borderRadius: 8 }} />
                 <Box>
                   <Typography variant="caption" color="text.secondary">کلید دستی:</Typography>

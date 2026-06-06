@@ -1,5 +1,4 @@
-import { motion, Variants, animate } from "framer-motion";
-import { Box, BoxProps } from "@mui/material";
+import { motion, animate } from "framer-motion";
 import { ReactNode, useEffect, useState } from "react";
 
 // A soft, slightly-overshooting ease used across all entrances.
@@ -21,20 +20,6 @@ export function PageTransition({ children }: { children: ReactNode }) {
     </motion.div>
   );
 }
-
-// Stagger container + item — reveal grids/lists one-by-one.
-export const staggerContainer: Variants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
-};
-
-export const staggerItem: Variants = {
-  hidden: { opacity: 0, y: 18 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: EASE } },
-};
-
-/** A motion-enabled MUI Box (so sx + layout animations compose). */
-export const MotionBox = motion(Box) as React.FC<BoxProps & React.ComponentProps<typeof motion.div>>;
 
 /**
  * Animate a number from 0 up to `to` on mount (and whenever `to` changes), rendering

@@ -109,7 +109,11 @@ export default function Invoices() {
         <Button variant="outlined" color="warning" onClick={() => {
           if (confirm(`همهٔ پیش‌نویس‌های دوره ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده می‌مانند)`)) discard.mutate();
         }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>
-        <Button variant="contained" startIcon={<SendIcon />} onClick={() => sendAll.mutate()} disabled={sendAll.isPending}>ارسال همه پیش‌نویس‌ها</Button>
+        <Button variant="contained" startIcon={<SendIcon />} disabled={sendAll.isPending}
+          onClick={() => {
+            if (confirm(`فاکتورهای پیش‌نویسِ دورهٔ ${period} برای همهٔ نماینده‌ها ارسال شوند؟ این عمل به همهٔ نماینده‌ها پیام می‌فرستد و قابلِ بازگشت نیست.`))
+              sendAll.mutate();
+          }}>ارسال همه پیش‌نویس‌ها</Button>
       </Stack>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>

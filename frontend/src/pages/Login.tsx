@@ -110,7 +110,7 @@ export default function Login() {
             {/* captcha */}
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
               <Box sx={{ borderRadius: 1, overflow: "hidden", border: "1px solid", borderColor: "divider", height: 56 }}>
-                {captchaImg ? <img src={captchaImg} alt="captcha" height={56} /> : <Box sx={{ width: 160, height: 56 }} />}
+                {captchaImg ? <img src={captchaImg} alt="تصویر کد امنیتی" height={56} /> : <Box sx={{ width: 160, height: 56 }} />}
               </Box>
               <Tooltip title="کد جدید"><IconButton onClick={loadCaptcha}><RefreshIcon /></IconButton></Tooltip>
             </Stack>

@@ -309,7 +309,7 @@ export default function Settings() {
 
   const refreshRateM = useMutation({
     mutationFn: refreshRate,
-    onSuccess: (r: any) => { show(`نرخ آنلاین به‌روزرسانی شد: ${Number(r?.rate || 0).toLocaleString("en-US")} تومان`); qc.invalidateQueries({ queryKey: ["settings"] }); },
+    onSuccess: (r: any) => { show(`نرخ آنلاین به‌روزرسانی شد: ${Number(r?.rate || 0).toLocaleString("fa-IR")} تومان`); qc.invalidateQueries({ queryKey: ["settings"] }); },
     onError: (e) => show(errMsg(e), "error"),
   });
 
@@ -402,7 +402,7 @@ export default function Settings() {
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               {Number(byKey["toman_per_usdt_auto"]?.value) > 0
                 ? <Chip color={getVal("rate_mode") === "auto" ? "success" : "default"} size="small"
-                    label={`نرخ آنلاین تتر: ${Number(byKey["toman_per_usdt_auto"].value).toLocaleString("en-US")} تومان`} />
+                    label={`نرخ آنلاین تتر: ${Number(byKey["toman_per_usdt_auto"].value).toLocaleString("fa-IR")} تومان`} />
                 : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین هنوز دریافت نشده" />}
               {byKey["toman_per_usdt_auto_at"]?.value && (
                 <Typography variant="caption" color="text.secondary" dir="ltr">
