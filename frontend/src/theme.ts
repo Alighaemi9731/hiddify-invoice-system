@@ -137,6 +137,14 @@ export function makeTheme(mode: PaletteMode) {
             ".resp-table td[data-label='']::before": { content: '""' },
           },
           "::selection": { backgroundColor: alpha(primaryMain, 0.28) },
+          // Accessibility: a clear keyboard-focus ring on every interactive element, but only
+          // for keyboard users (:focus-visible) — mouse clicks don't get the ring.
+          ":focus-visible": {
+            outline: `2px solid ${alpha(primaryMain, 0.7)}`,
+            outlineOffset: 2,
+            borderRadius: 4,
+          },
+          "a:focus:not(:focus-visible), button:focus:not(:focus-visible)": { outline: "none" },
         },
       },
       MuiButton: {
