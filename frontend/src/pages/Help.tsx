@@ -299,7 +299,7 @@ export default function Help() {
           sx={{ flexGrow: 1 }} aria-disabled={!!ql}>
           {GROUPS.map((g) => <Tab key={g.label} label={g.label} />)}
         </Tabs>
-        <TextField size="small" placeholder="جستجو در راهنما…" value={q} sx={{ minWidth: 220 }}
+        <TextField size="small" placeholder="جستجو در راهنما…" value={q} sx={{ minWidth: { xs: "100%", sm: 220 } }}
           onChange={(e) => setQ(e.target.value)}
           InputProps={{ startAdornment: <SearchIcon fontSize="small" sx={{ ml: 1, color: "text.secondary" }} /> }} />
       </Stack>

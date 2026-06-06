@@ -121,7 +121,8 @@ export default function Panels() {
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" sx={{ mb: 2 }}>
+      <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between"
+        alignItems={{ xs: "stretch", sm: "center" }} spacing={1.5} sx={{ mb: 2 }}>
         <Typography variant="body2" color="text.secondary">
           پنل‌های هیدیفای متصل (حداکثر ۱۰)
         </Typography>
@@ -132,7 +133,7 @@ export default function Panels() {
         </Stack>
       </Stack>
       <Card>
-        <Table>
+        <Table className="resp-table">
           <TableHead>
             <TableRow>
               <SortTh id="key" label="کلید" sortKey={key} dir={dir} onSort={toggle} />

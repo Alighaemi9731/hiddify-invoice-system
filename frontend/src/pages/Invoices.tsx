@@ -283,7 +283,7 @@ export default function Invoices() {
             <Divider sx={{ mb: 1 }} />
             <Typography variant="subtitle2" sx={{ mb: 1 }}>{fmtNum(detail.lines?.length)} سرویس</Typography>
             <Box sx={{ maxHeight: 360, overflow: "auto" }}>
-              <Table size="small" stickyHeader>
+              <Table size="small" stickyHeader className="resp-table">
                 <TableHead><TableRow><TableCell>نام</TableCell><TableCell>تاریخ ساخت</TableCell><TableCell>حجم</TableCell></TableRow></TableHead>
                 <TableBody>
                   {detail.lines?.map((l: any, idx: number) => (
