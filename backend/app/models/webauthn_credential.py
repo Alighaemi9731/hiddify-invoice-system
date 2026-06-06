@@ -2,7 +2,7 @@
 Windows Hello / a security key. Login with one is passwordless and captcha-less."""
 from __future__ import annotations
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -13,7 +13,9 @@ class WebauthnCredential(Base, TimestampMixin):
     __tablename__ = "webauthn_credentials"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, index=True)  # AppUser.id
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), index=True
+    )  # deleting the owner drops their passkeys
     credential_id: Mapped[str] = mapped_column(String(512), unique=True, index=True)  # base64url
     public_key: Mapped[str] = mapped_column(Text)  # base64 of the COSE public key
     sign_count: Mapped[int] = mapped_column(Integer, default=0)

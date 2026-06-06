@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 
 import webauthn
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,8 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from app.core import webauthn_store
+from app.api.auth import _client_ip
+from app.core import loginsec, webauthn_store
 from app.core.db import get_session
 from app.core.security import create_access_token, get_current_subject
 from app.models.app_user import AppUser
@@ -28,7 +30,23 @@ from app.models.webauthn_credential import WebauthnCredential
 from app.schemas.auth import Token
 from app.services import settings_service
 
+log = logging.getLogger("passkey")
 router = APIRouter(prefix="/api/auth/passkey", tags=["passkey"])
+
+# Passkey login is usernameless; rate-limit it per-IP under a synthetic username so a
+# challenge/assertion flood is throttled the same way password login is.
+_PK_USER = "__passkey__"
+
+
+def _check_locked(request: Request) -> str:
+    ip = _client_ip(request)
+    locked = loginsec.is_locked(_PK_USER, ip)
+    if locked:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"تعداد تلاش‌ها بیش از حد مجاز است. {locked // 60 + 1} دقیقه بعد دوباره تلاش کنید.",
+        )
+    return ip
 
 
 def _b64url(b: bytes) -> str:
@@ -111,8 +129,9 @@ async def register_complete(
             expected_origin=origin,
             require_user_verification=True,
         )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"ثبت کلید عبور ناموفق بود: {exc}")
+    except Exception:  # noqa: BLE001 — details to the log only, never to the client
+        log.warning("passkey registration verification failed", exc_info=True)
+        raise HTTPException(400, "ثبت کلید عبور ناموفق بود. دوباره تلاش کنید.")
     session.add(WebauthnCredential(
         user_id=user.id,
         credential_id=_b64url(ver.credential_id),
@@ -126,7 +145,8 @@ async def register_complete(
 
 # ------------------------------- login (unauthenticated) -------------------------------
 @router.post("/login/begin")
-async def login_begin(session: AsyncSession = Depends(get_session)) -> dict:
+async def login_begin(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    _check_locked(request)
     rp_id, _origin = await _rp(session)
     opts = webauthn.generate_authentication_options(
         rp_id=rp_id, user_verification=UserVerificationRequirement.REQUIRED,
@@ -141,7 +161,10 @@ class LoginComplete(BaseModel):
 
 
 @router.post("/login/complete", response_model=Token)
-async def login_complete(body: LoginComplete, session: AsyncSession = Depends(get_session)) -> Token:
+async def login_complete(
+    body: LoginComplete, request: Request, session: AsyncSession = Depends(get_session)
+) -> Token:
+    ip = _check_locked(request)
     rp_id, origin = await _rp(session)
     taken = webauthn_store.take(body.handle)
     if not taken:
@@ -152,6 +175,7 @@ async def login_complete(body: LoginComplete, session: AsyncSession = Depends(ge
         await session.execute(select(WebauthnCredential).where(WebauthnCredential.credential_id == raw_id))
     ).scalar_one_or_none()
     if not cred:
+        loginsec.record_failure(_PK_USER, ip)
         raise HTTPException(401, "این کلید عبور شناخته نشد.")
     try:
         ver = webauthn.verify_authentication_response(
@@ -163,13 +187,16 @@ async def login_complete(body: LoginComplete, session: AsyncSession = Depends(ge
             credential_current_sign_count=cred.sign_count,
             require_user_verification=True,
         )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(401, f"ورود با کلید عبور ناموفق بود: {exc}")
+    except Exception:  # noqa: BLE001 — details to the log only
+        loginsec.record_failure(_PK_USER, ip)
+        log.warning("passkey login verification failed", exc_info=True)
+        raise HTTPException(401, "ورود با کلید عبور ناموفق بود. دوباره تلاش کنید.")
     user = await session.get(AppUser, cred.user_id)
     if not user or not user.is_active:
         raise HTTPException(401, "حساب غیرفعال است.")
     cred.sign_count = ver.new_sign_count
     await session.commit()
+    loginsec.reset(_PK_USER, ip)
     return Token(access_token=_token_for(user))
 
 
@@ -191,7 +218,9 @@ async def delete_passkey(
 ) -> dict:
     user = await _user(session, username)
     c = await session.get(WebauthnCredential, cred_id)
-    if c and c.user_id == user.id:
-        await session.delete(c)
-        await session.commit()
+    # 404 whether it's missing OR not the caller's — never reveal another user's credential ids.
+    if not c or c.user_id != user.id:
+        raise HTTPException(404, "کلید عبور یافت نشد.")
+    await session.delete(c)
+    await session.commit()
     return {"ok": True}
