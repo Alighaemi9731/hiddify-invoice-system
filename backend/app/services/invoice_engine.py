@@ -128,6 +128,38 @@ def _excluded(usage_gb: float, excluded: set[int], free_threshold_gb: float) -> 
     return any(abs(gb - e) < 1e-9 for e in excluded)
 
 
+def billable_gb_for_user(
+    u: Any,
+    period: Period,
+    excluded_usage_gb: set[int],
+    free_threshold_gb: float,
+    panel_synced_at: dt.datetime | None = None,
+) -> tuple[float, bool] | None:
+    """The single source of truth for one user's billable GB in a period.
+
+    Returns `(gb, from_deleted)` or `None` if the user isn't billed. A user the panel no
+    longer has (its snapshot predates the panel's latest sync) is billed on what it actually
+    CONSUMED before deletion (`current_usage_gb`); everyone still on the panel is billed on the
+    SOLD quota (`usage_limit_gb`). The "is it a test config?" exclusion always uses the SOLD
+    quota, so a deleted real config isn't mistaken for a test one. `panel_synced_at=None`
+    disables deletion detection (everyone billed on sold quota — the legacy behaviour)."""
+    if not period.contains(u.start_date):
+        return None
+    gb_sold = float(u.usage_limit_gb or 0)
+    if _excluded(gb_sold, excluded_usage_gb, free_threshold_gb):
+        return None
+    deleted = bool(
+        panel_synced_at and getattr(u, "last_synced_at", None)
+        and u.last_synced_at < panel_synced_at
+    )
+    if deleted:
+        gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
+        if gb <= 0:
+            return None  # removed with no recorded usage → nothing to bill
+        return gb, True
+    return gb_sold, False
+
+
 def compute_invoices(
     resellers: list[Any],
     users: list[Any],
@@ -157,26 +189,12 @@ def compute_invoices(
         lines: list[LineResult] = []
         for uuid in admin_uuids:
             for u in users_by_adder.get(uuid, []):
-                if not period.contains(u.start_date):
-                    continue
-                gb_sold = float(u.usage_limit_gb or 0)
-                # "Is it a billable (non-test) config?" stays on the SOLD quota — so a deleted
-                # config is judged a test config the same way a live one is.
-                if _excluded(gb_sold, excluded_usage_gb, free_threshold_gb):
-                    continue
-                # A user the panel no longer has (its snapshot predates the panel's latest
-                # sync) is billed on what it actually CONSUMED before deletion, not the quota
-                # it was sold. Everyone still on the panel is billed on the sold quota.
-                deleted = bool(
-                    panel_synced_at and getattr(u, "last_synced_at", None)
-                    and u.last_synced_at < panel_synced_at
+                res = billable_gb_for_user(
+                    u, period, excluded_usage_gb, free_threshold_gb, panel_synced_at
                 )
-                if deleted:
-                    gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
-                    if gb <= 0:
-                        continue  # removed with no recorded usage → nothing to bill
-                else:
-                    gb = gb_sold
+                if res is None:
+                    continue
+                gb, deleted = res
                 lines.append(LineResult(
                     user_uuid=u.user_uuid, name=u.name or "", start_date=u.start_date,
                     usage_gb=gb, added_by_uuid=u.added_by_uuid,
@@ -185,9 +203,9 @@ def compute_invoices(
                 ))
 
         # Sort lines newest-first within the month, biggest package first.
-        lines.sort(key=lambda l: (l.start_date or period.start, l.usage_gb), reverse=True)
+        lines.sort(key=lambda ln: (ln.start_date or period.start, ln.usage_gb), reverse=True)
 
-        total_gb = round(sum(l.usage_gb for l in lines), 3)
+        total_gb = round(sum(ln.usage_gb for ln in lines), 3)
         price = int(getattr(root, "price_per_gb", None) or default_price_per_gb)
         min_sale = int(
             getattr(root, "min_sale_toman", None)

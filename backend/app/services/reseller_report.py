@@ -11,7 +11,7 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import EndUserSnapshot, Reseller
+from app.models import EndUserSnapshot, Panel, Reseller
 from app.services import pricing
 from app.services.invoice_engine import (
     BundleResult, build_children_map, collect_descendants, compute_invoices,
@@ -64,6 +64,7 @@ async def node_invoice(
         excluded_usage_gb=await pricing.get_excluded_usage_gb(session),
         default_min_sale_toman=await pricing.get_default_min_sale(session),
         free_threshold_gb=await pricing.get_free_threshold_gb(session),
+        panel_synced_at=await _panel_synced_at(session, node.panel_id),
     )
     return next((b for b in bundles if b.root.id == node.id), None)
 
@@ -91,28 +92,36 @@ async def node_invoice_own(
         excluded_usage_gb=await pricing.get_excluded_usage_gb(session),
         default_min_sale_toman=await pricing.get_default_min_sale(session),
         free_threshold_gb=await pricing.get_free_threshold_gb(session),
+        panel_synced_at=await _panel_synced_at(session, node.panel_id),
     )
     return next((b for b in bundles if b.root.id == node.id), None)
 
 
+async def _panel_synced_at(session: AsyncSession, panel_id: int) -> dt.datetime | None:
+    """The panel's latest sync time — a user whose snapshot is older than this is gone from
+    the panel, so it's billed on consumption (mirrors the real invoice)."""
+    p = await session.get(Panel, panel_id)
+    return p.last_synced_at if p else None
+
+
 def _billable_gb_for_period(
-    users, period: Period, free_threshold: float, excluded: set[int] | None = None
+    users, period: Period, free_threshold: float, excluded: set[int] | None = None,
+    panel_synced_at: dt.datetime | None = None,
 ) -> tuple[float, int]:
-    """Sum of SOLD quota (and count) of services created in `period` that the invoice engine
-    would bill — using its EXACT rule (free threshold AND the extra excluded sizes) via
-    `invoice_engine._excluded`, so this report/interim/cap math matches the real invoice."""
-    from app.services.invoice_engine import _excluded
+    """Sum of billable GB (and count) of services created in `period`, using the invoice
+    engine's EXACT per-user rule via `billable_gb_for_user` — free threshold, excluded sizes,
+    AND consumption-billing for users removed from the panel — so this report/interim/cap math
+    matches the real invoice. Pass `panel_synced_at` to enable the deleted-user rule."""
+    from app.services.invoice_engine import billable_gb_for_user
 
     excluded = excluded or set()
     gb = 0.0
     cnt = 0
     for u in users:
-        if not period.contains(u.start_date):
+        res = billable_gb_for_user(u, period, excluded, free_threshold, panel_synced_at)
+        if res is None:
             continue
-        g = float(u.usage_limit_gb or 0)
-        if _excluded(g, excluded, free_threshold):
-            continue
-        gb += g
+        gb += res[0]
         cnt += 1
     return round(gb, 2), cnt
 
@@ -133,10 +142,11 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     price = int(reseller.price_per_gb or default_price)
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
+    psa = await _panel_synced_at(session, reseller.panel_id)
 
     by_month = []
     for p in _last_months(months):
-        gb, cnt = _billable_gb_for_period(users, p, free_threshold, excluded)
+        gb, cnt = _billable_gb_for_period(users, p, free_threshold, excluded, psa)
         by_month.append({
             "label": p.label,
             "gb": gb,
@@ -182,6 +192,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
     price = int(reseller.price_per_gb or default_price)
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
+    psa = await _panel_synced_at(session, reseller.panel_id)
 
     # All resellers on the panel → children map, to find this node's DIRECT subs + subtrees.
     panel_resellers = (
@@ -203,7 +214,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
 
     # Own users: exactly this reseller's admin_uuid (NOT descendants).
     own_users = await _users_for({reseller.admin_uuid})
-    own_gb, own_cnt = _billable_gb_for_period(own_users, period, free_threshold, excluded)
+    own_gb, own_cnt = _billable_gb_for_period(own_users, period, free_threshold, excluded, psa)
 
     # Each direct sub-reseller, counted as its whole subtree (so no user is double-counted).
     subs_out: list[dict] = []
@@ -211,7 +222,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
         subtree = collect_descendants(child, children)
         sub_uuids = {d.admin_uuid for d in subtree}
         sub_users = await _users_for(sub_uuids)
-        sgb, scnt = _billable_gb_for_period(sub_users, period, free_threshold, excluded)
+        sgb, scnt = _billable_gb_for_period(sub_users, period, free_threshold, excluded, psa)
         if scnt == 0 and sgb == 0:
             continue  # skip sub-resellers with no sales this period (keeps the report tidy)
         subs_out.append({
@@ -237,7 +248,8 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
 
 
 async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> float:
-    """The sub-tree's billable SOLD-quota GB for the CURRENT billing month (for cap checks)."""
+    """The sub-tree's billable GB for the CURRENT billing month (for cap checks) — matches the
+    real invoice: sold quota for live users, consumption for users removed from the panel."""
     descendants = await node_descendants(session, reseller)
     uuids = {d.admin_uuid for d in descendants}
     users = (
@@ -250,5 +262,6 @@ async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> floa
     ).scalars().all()
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
-    gb, _ = _billable_gb_for_period(users, current_month(), free_threshold, excluded)
+    psa = await _panel_synced_at(session, reseller.panel_id)
+    gb, _ = _billable_gb_for_period(users, current_month(), free_threshold, excluded, psa)
     return gb
