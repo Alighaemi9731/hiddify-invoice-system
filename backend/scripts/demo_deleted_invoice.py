@@ -71,7 +71,7 @@ async def seed(session: AsyncSession, now: dt.datetime, period_start: dt.date) -
 
 
 async def main() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///./data/demo_inv.db")
+    engine = create_async_engine("sqlite+aiosqlite:////tmp/demo_inv.db")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
@@ -110,10 +110,10 @@ async def main() -> None:
             chat_id = int(os.environ["DEMO_CHAT_ID"])
             # Read the configured bot token from the app's real DB (NOT printed).
             from aiogram import Bot
-            from app.core.db import async_session as prod_session
+            from app.core.db import SessionLocal as prod_session
             from app.services import settings_service
             async with prod_session() as ps:
-                token = await settings_service.get_value(ps, "telegram_bot_token")
+                token = await settings_service.get(ps, "telegram_bot_token")
             if not token:
                 raise SystemExit("no telegram_bot_token configured")
             invoice.status = InvoiceStatus.sent  # so the «pay» button shows like a real send
