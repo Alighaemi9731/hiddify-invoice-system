@@ -101,6 +101,7 @@ def test_deleted_users_billed_on_consumption_not_quota():
         _UD("present", 30, 5, synced),       # still on panel → billed 30 (sold quota)
         _UD("deleted", 30, 5, stale),        # removed → billed 5 (consumption), flagged
         _UD("deleted_unused", 30, 0, stale), # removed, never used → no line
+        _UD("deleted_tiny", 30, 0.6, stale), # removed, consumed <1GB (renew-by-recreate) → dropped
         _UD("deleted_test", 1, 0.5, stale),  # test config (sold ≤1) → excluded as before
     ]
     b = compute_invoices(
@@ -111,6 +112,7 @@ def test_deleted_users_billed_on_consumption_not_quota():
     assert by["present"].usage_gb == 30 and by["present"].from_deleted is False
     assert by["deleted"].usage_gb == 5 and by["deleted"].from_deleted is True
     assert "deleted_unused" not in by   # 0 consumption → nothing to bill
+    assert "deleted_tiny" not in by     # consumption below the free threshold → dropped
     assert "deleted_test" not in by     # excluded by SOLD quota, not consumption
     assert b.total_gb == 35             # 30 (present, sold) + 5 (deleted, consumed)
 

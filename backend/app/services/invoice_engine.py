@@ -140,9 +140,10 @@ def billable_gb_for_user(
     Returns `(gb, from_deleted)` or `None` if the user isn't billed. A user the panel no
     longer has (its snapshot predates the panel's latest sync) is billed on what it actually
     CONSUMED before deletion (`current_usage_gb`); everyone still on the panel is billed on the
-    SOLD quota (`usage_limit_gb`). The "is it a test config?" exclusion always uses the SOLD
-    quota, so a deleted real config isn't mistaken for a test one. `panel_synced_at=None`
-    disables deletion detection (everyone billed on sold quota — the legacy behaviour)."""
+    SOLD quota (`usage_limit_gb`). The "is it a test config?" exclusion uses the SOLD quota (so a
+    deleted real config isn't mistaken for a test one); a removed config whose CONSUMPTION is
+    below the free threshold is also dropped as negligible. `panel_synced_at=None` disables
+    deletion detection (everyone billed on sold quota — the legacy behaviour)."""
     if not period.contains(u.start_date):
         return None
     gb_sold = float(u.usage_limit_gb or 0)
@@ -154,8 +155,11 @@ def billable_gb_for_user(
     )
     if deleted:
         gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
-        if gb <= 0:
-            return None  # removed with no recorded usage → nothing to bill
+        # A removed config whose CONSUMPTION is below the free threshold is negligible (e.g. a
+        # config renewed by delete+recreate that was barely used, or one that used a few MB) →
+        # not billed, just like a test config. Real removed usage (above the threshold) is billed.
+        if gb <= free_threshold_gb:
+            return None
         return gb, True
     return gb_sold, False
 
