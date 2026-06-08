@@ -311,11 +311,14 @@ async def _persist_bundle(
     await session.flush()
 
     for line in bundle.lines:
+        # A user removed from the panel is billed on consumption and flagged in its name (same
+        # convention as the metering "extra" lines below) so the reseller sees why.
+        nm = ((line.name or "")[:235] + " — مصرف حذف‌شده از پنل") if line.from_deleted else line.name[:255]
         session.add(
             InvoiceLine(
                 invoice_id=invoice.id,
                 end_user_uuid=line.user_uuid,
-                name=line.name[:255],
+                name=nm,
                 start_date=line.start_date,
                 usage_gb=line.usage_gb,
                 added_by_uuid=line.added_by_uuid,
