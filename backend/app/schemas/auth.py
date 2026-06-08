@@ -27,11 +27,6 @@ class CaptchaOut(BaseModel):
     image: str  # data: URI PNG
 
 
-class PasswordChange(BaseModel):
-    current_password: str
-    new_password: str
-
-
 class AccountUpdate(BaseModel):
     current_password: str
     new_username: str | None = None

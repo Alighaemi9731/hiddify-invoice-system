@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class PaymentOut(BaseModel):
@@ -29,12 +29,6 @@ class PaymentOut(BaseModel):
     created_at: dt.datetime | None
     note: str | None
     has_proof: bool = False
-
-
-class ManualPaymentCreate(BaseModel):
-    invoice_id: int
-    amount_usdt: float = Field(0, ge=0)   # never negative; 0 falls back to the invoice amount
-    note: str | None = None
 
 
 class PaymentActionResult(BaseModel):

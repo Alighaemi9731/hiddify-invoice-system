@@ -11,9 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import BotUser, Invoice, Payment, Reseller
-from app.models.enums import PaymentMethod, PaymentStatus
+from app.models.enums import PaymentStatus
 from app.schemas.payment import (
-    ManualPaymentCreate,
     PaymentActionResult,
     PaymentOut,
 )
@@ -160,24 +159,3 @@ async def proof(payment_id: int, session: AsyncSession = Depends(get_session)) -
                         filename=f"proof_{payment_id}.jpg")
 
 
-@router.post("", response_model=PaymentOut, status_code=201)
-async def record_manual(
-    body: ManualPaymentCreate, session: AsyncSession = Depends(get_session)
-) -> PaymentOut:
-    """Owner records an off-chain / manual payment against an invoice and applies it."""
-    invoice = await session.get(Invoice, body.invoice_id)
-    if not invoice:
-        raise HTTPException(404, "Invoice not found")
-    payment = Payment(
-        reseller_id=invoice.reseller_id, invoice_id=invoice.id, method=PaymentMethod.manual,
-        status=PaymentStatus.pending, amount_usdt=body.amount_usdt or float(invoice.amount_usdt),
-        note=body.note,
-    )
-    session.add(payment)
-    await session.commit()
-    await payments_service.confirm_manually(session, payment.id)
-    await session.refresh(payment)
-    reseller = await session.get(Reseller, payment.reseller_id)
-    await session.refresh(invoice)
-    return _to_out(payment, reseller.name if reseller else None,
-                   invoice.period_label, float(invoice.amount_toman))

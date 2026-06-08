@@ -19,7 +19,6 @@ from app.schemas.auth import (
     AccountUpdate,
     CaptchaOut,
     LoginRequest,
-    PasswordChange,
     Token,
     TotpDisable,
     TotpEnable,
@@ -115,19 +114,6 @@ async def me(subject: str = Depends(get_current_subject),
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return UserOut(username=user.username, role=user.role, totp_enabled=user.totp_enabled)
-
-
-@router.post("/change-password", response_model=Token)
-async def change_password(body: PasswordChange, subject: str = Depends(get_current_subject),
-                          session: AsyncSession = Depends(get_session)) -> Token:
-    user = await _get_user(session, subject)
-    if not user or not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(status_code=400, detail="رمز عبور فعلی نادرست است")
-    _validate_password(body.new_password)
-    user.password_hash = hash_password(body.new_password)
-    user.token_epoch = int(user.token_epoch or 0) + 1  # invalidate older tokens
-    await session.commit()
-    return Token(access_token=_token_for(user))
 
 
 @router.post("/account", response_model=Token)
