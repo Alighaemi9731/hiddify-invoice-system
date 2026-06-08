@@ -141,6 +141,7 @@ async def update_account(body: AccountUpdate, subject: str = Depends(get_current
         if await _get_user(session, body.new_username):
             raise HTTPException(status_code=409, detail="این نام کاربری قبلاً استفاده شده است")
         user.username = body.new_username
+        user.token_epoch = int(user.token_epoch or 0) + 1  # invalidate tokens with the old name
     if body.new_password:
         _validate_password(body.new_password)
         user.password_hash = hash_password(body.new_password)

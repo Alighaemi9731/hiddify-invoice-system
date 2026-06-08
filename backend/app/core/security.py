@@ -77,10 +77,14 @@ async def get_current_subject(
         ).scalar_one_or_none()
     except Exception:  # noqa: BLE001 — a DB hiccup must not lock the owner out
         return subject
-    if user is not None:
-        if not user.is_active:
-            raise credentials_error
-        tok_epoch = payload.get("epoch")
-        if tok_epoch is not None and int(tok_epoch) != int(user.token_epoch or 0):
-            raise credentials_error
+    # The query SUCCEEDED. If it found no user, the token is for an account that no longer
+    # exists (e.g. the username was changed) → reject. (Only a DB ERROR above falls back to
+    # trusting the token, so a transient hiccup doesn't lock the owner out.)
+    if user is None:
+        raise credentials_error
+    if not user.is_active:
+        raise credentials_error
+    tok_epoch = payload.get("epoch")
+    if tok_epoch is not None and int(tok_epoch) != int(user.token_epoch or 0):
+        raise credentials_error
     return subject

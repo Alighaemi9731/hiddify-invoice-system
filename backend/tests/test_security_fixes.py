@@ -91,3 +91,42 @@ def test_reseller_report_applies_excluded_sizes():
     # free threshold 1 excludes 0.5 and 1; excluded {5} also drops the 5 → only 10 remains.
     gb, cnt = _billable_gb_for_period(users, P, free_threshold=1.0, excluded={5})
     assert gb == 10.0 and cnt == 1
+
+
+def test_owner_notify_escapes_reseller_name():
+    """A reseller name with HTML metachars must be escaped so it can't break/inject the
+    owner's HTML notification (finding #5)."""
+    from types import SimpleNamespace
+
+    from app.services.owner_notify import user_link
+
+    link = user_link(SimpleNamespace(name="A & B <x>", id=1, bot_chat_id=123))
+    assert "&amp;" in link and "&lt;x&gt;" in link  # name escaped
+    assert link.startswith("<a href") and "</a>" in link  # the anchor markup itself is intact
+
+
+def test_get_current_subject_rejects_unknown_user(tmp_path):
+    """A token whose user no longer exists (e.g. username changed) is rejected, not trusted —
+    only a DB ERROR falls back to trusting the token (finding #2)."""
+    import asyncio
+
+    import pytest
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.core.db import Base
+    from app.core.security import create_access_token, get_current_subject
+
+    async def run():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'s.db'}")
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine)
+        token = create_access_token("ghost", {"role": "owner", "epoch": 0})
+        async with Session() as s:
+            with pytest.raises(HTTPException) as ei:
+                await get_current_subject(token=token, session=s)
+            assert ei.value.status_code == 401
+        await engine.dispose()
+
+    asyncio.run(run())

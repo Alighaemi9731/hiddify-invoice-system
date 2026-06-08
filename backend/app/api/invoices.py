@@ -174,6 +174,11 @@ async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
+    # Manually marking an invoice paid must restore a suspended reseller, exactly like
+    # confirming a payment does — otherwise an enforced reseller stays cut off after the owner
+    # records their (e.g. cash) payment here.
+    from app.services.payments import _maybe_restore
+    await _maybe_restore(session, reseller)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
 

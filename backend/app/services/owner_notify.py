@@ -1,6 +1,7 @@
 """Send activity-log / alert messages to the owner's Telegram PV."""
 from __future__ import annotations
 
+import html
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +40,9 @@ async def notify_owner(session: AsyncSession, text: str, *, html: bool = False) 
 
 
 def user_link(reseller) -> str:
-    """An HTML link to a reseller's Telegram profile (clickable in the owner's chat)."""
-    label = reseller.name or str(reseller.id)
+    """An HTML link to a reseller's Telegram profile (clickable in the owner's chat).
+    The name is HTML-escaped so a name with <, > or & can't break the message or inject markup."""
+    label = html.escape(reseller.name or str(reseller.id))
     if reseller.bot_chat_id:
         return f"<a href='tg://user?id={reseller.bot_chat_id}'>{label}</a>"
     return label

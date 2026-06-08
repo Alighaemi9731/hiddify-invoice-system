@@ -69,7 +69,10 @@ export default function Login() {
       const detail = e?.response?.data?.detail;
       if (status === 401 && e?.response?.headers?.["x-2fa-required"]) {
         setNeed2fa(true);
-        setErr("کد تأیید دو مرحله‌ای را وارد کنید.");
+        // The password step already consumed the captcha (single-use), so the 2FA submit needs
+        // a fresh one — load it and ask the user to re-enter it alongside the 2FA code.
+        await loadCaptcha();
+        setErr("کد تأیید دو مرحله‌ای و کد امنیتیِ جدید را وارد کنید.");
       } else {
         setErr(detail || "ورود ناموفق بود.");
         await loadCaptcha(); // captcha is single-use → refresh on any failure
