@@ -22,7 +22,10 @@ async def test_overage_tolerance_ignores_soft_cutoff(tmp_path):
             # xray soft-cutoff: 0.13 GB over → below the 0.5 default tolerance → NOT billed.
             UsageMeter(panel_id=1, user_uuid="soft", period_label="2026-06", added_by_uuid=R,
                        name="soft", overage_gb=0.13, edit_renewal_gb=0),
-            # real daily-reset abuse: 10 GB over → billed (minus the 0.5 tolerance).
+            # just above the 0.5 threshold → the FULL overage is billed (not minus the threshold).
+            UsageMeter(panel_id=1, user_uuid="mid", period_label="2026-06", added_by_uuid=R,
+                       name="mid", overage_gb=0.786, edit_renewal_gb=0),
+            # real daily-reset abuse: 10 GB over → full amount billed.
             UsageMeter(panel_id=1, user_uuid="abuse", period_label="2026-06", added_by_uuid=R,
                        name="abuse", overage_gb=10.0, edit_renewal_gb=0),
         ])
@@ -31,8 +34,9 @@ async def test_overage_tolerance_ignores_soft_cutoff(tmp_path):
         res = await metering.bundle_extra(s, 1, {R}, "2026-06", free_threshold_gb=1.0)
 
         billed = {ln["user_uuid"]: ln["usage_gb"] for ln in res["lines"]}
-        assert "soft" not in billed                       # soft-cutoff ignored entirely
-        assert abs(billed["abuse"] - 9.5) < 1e-6          # 10 − 0.5 tolerance
-        assert abs(res["gb"] - 9.5) < 1e-6                # only the real abuse is in the total
+        assert "soft" not in billed                       # ≤ 0.5 → ignored entirely
+        assert abs(billed["mid"] - 0.786) < 1e-6          # > 0.5 → FULL overage, not 0.786−0.5
+        assert abs(billed["abuse"] - 10.0) < 1e-6         # full abuse billed
+        assert abs(res["gb"] - (0.786 + 10.0)) < 1e-6
 
     await engine.dispose()
