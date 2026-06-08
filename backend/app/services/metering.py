@@ -162,11 +162,16 @@ async def bundle_extra(
         )
     ).scalars().all()
 
+    # A user keeps consuming for a couple of minutes after hitting their quota (xray cuts off
+    # lazily), so a few hundred MB of "overage" is normal, not abuse — subtract that slack per
+    # user before billing. Real reset-abuse is many GB, so it's barely affected.
+    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 0.5) or 0)
+
     total = 0.0
     lines: list[dict] = []
     abnormal: list[dict] = []
     for m in rows:
-        over = float(m.overage_gb or 0)
+        over = max(0.0, float(m.overage_gb or 0) - overage_tol)
         edit = float(m.edit_renewal_gb or 0)
         extra = 0.0
         if over > _EPS:

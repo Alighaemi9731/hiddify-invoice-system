@@ -142,6 +142,10 @@ DEFS: list[SettingDef] = [
     # Abuse-resistant metering (billing model "C"): bill usage beyond the paid quota
     # (daily-reset trick) + renew-by-edit that skips start_date. On by default.
     SettingDef("metering_enabled", True, False, "pricing"),
+    # Per-user overage below this many GB is treated as unavoidable xray "soft-cutoff" slack
+    # (a user keeps using a few hundred MB for a couple of minutes after their quota is hit)
+    # and is NOT billed as abuse. Real reset-abuse is many GB, so it's unaffected.
+    SettingDef("overage_tolerance_gb", 0.5, False, "pricing"),
     # Scheduler timings — ALL automated jobs. Every value here actually drives the
     # APScheduler cron triggers (see app.scheduler.jobs.load_config). Hour/day values fire
     # at that fixed clock time in the owner's timezone (Asia/Tehran); the "every N hours/
