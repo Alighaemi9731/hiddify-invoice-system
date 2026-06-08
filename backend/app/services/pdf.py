@@ -139,7 +139,8 @@ def build_invoice_pdf(
     reg = _font_or_default(FONT)
     bold = _font_or_default(BOLD)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    issued = issued_at or dt.date.today()
+    from app.services.periods import today as _tehran_today
+    issued = issued_at or _tehran_today()  # Tehran date, not UTC, for the «issued» line
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,

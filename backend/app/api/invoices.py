@@ -24,7 +24,7 @@ from app.schemas.invoice import (
 from app.services import (
     delivery, financial_archive, invoice_pdf as invoice_pdf_service, invoicing, pricing,
 )
-from app.services.periods import parse_period
+from app.services.periods import parse_period, today as tehran_today
 
 router = APIRouter(
     prefix="/api/invoices", tags=["invoices"], dependencies=[Depends(get_current_subject)]
@@ -244,7 +244,7 @@ async def defer_invoice(
     inv.deferred_until = body.deferred_until
     inv.defer_note = body.defer_note
 
-    if body.deferred_until and body.deferred_until > dt.date.today():
+    if body.deferred_until and body.deferred_until > tehran_today():
         # Wipe prior reminder/warning marks so the cycle starts fresh from the deadline.
         await session.execute(
             delete(DeliveryLog).where(

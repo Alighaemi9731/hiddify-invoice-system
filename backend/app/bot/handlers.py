@@ -807,7 +807,8 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
         # Not payable if: not the caller's, not owed, OR deferred to a future date (a payment
         # deadline the owner granted) — `_send_pay` excludes deferred invoices, so a stale
         # button must not let one be paid early.
-        deferred = inv is not None and inv.deferred_until and inv.deferred_until > dt.date.today()
+        from app.services.periods import today as _tehran_today
+        deferred = inv is not None and inv.deferred_until and inv.deferred_until > _tehran_today()
         if inv is None or inv.reseller_id not in owned or inv.status not in _OWED or deferred:
             await cb.answer("این فاکتور در حال حاضر قابل پرداخت نیست.", show_alert=True)
             return
@@ -1768,7 +1769,12 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
             await message.answer("این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
             return
         # Rejected → the reject notice told them «دوباره ارسال کنید», and the txid is unique, so
-        # RE-OPEN the same row for another manual review instead of dead-ending them.
+        # RE-OPEN the same row for another manual review instead of dead-ending them. But only
+        # the reseller the payment belongs to may re-open it (don't let someone who happens to
+        # know another's tx hash resurrect — or claim — their payment).
+        if existing.reseller_id not in {r.id for r in resellers}:
+            await message.answer("این شناسهٔ تراکنش به حساب شما مربوط نیست.")
+            return
         existing.status = PaymentStatus.pending
         if "[resubmitted]" not in (existing.note or ""):
             existing.note = (existing.note or "") + " [resubmitted]"

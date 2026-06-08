@@ -303,6 +303,14 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
     inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+    # Don't "confirm" a payment whose invoice can't actually be settled (it was reverted to
+    # draft or canceled) — that would leave the payment marked confirmed while the invoice stays
+    # unpaid, misleading the owner. Tell them to fix the invoice first; leave the payment pending.
+    if inv is not None and inv.status in (InvoiceStatus.draft, InvoiceStatus.canceled):
+        return PaymentResult(
+            "pending", False,
+            "فاکتورِ مرتبط در وضعیتِ پیش‌نویس/لغوشده است؛ ابتدا آن را صادر یا اصلاح کنید.",
+        )
     targets = [inv] if inv is not None else []
 
     await _mark_invoices_paid(session, targets, payment)

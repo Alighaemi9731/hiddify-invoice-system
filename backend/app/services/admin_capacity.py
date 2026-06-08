@@ -24,8 +24,8 @@ async def bump_limits(
     persist the new values locally. Reads the CURRENT limits from the API first (the
     backup sync may lag), so repeated clicks compound correctly. Returns the new
     (max_users, max_active_users). Raises on API failure."""
-    if amount == 0:
-        raise ValueError("amount must be non-zero")
+    if amount <= 0:
+        raise ValueError("amount must be a positive number")  # «bump» only ever increases capacity
     panel = await session.get(Panel, reseller.panel_id)
     client = AdminApiClient()
     # Authenticate as the admin's parent (Hiddify permits editing an admin_user when the

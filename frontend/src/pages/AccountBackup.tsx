@@ -100,10 +100,10 @@ export default function AccountBackup() {
 
   const sendTg = useMutation({
     mutationFn: () => sendBackupToTelegram(),
-    onSuccess: (r: any) => show(
-      r?.status === "ok" ? "پشتیبان به تلگرام شما ارسال شد" : `وضعیت: ${r?.status}`,
-      r?.status === "ok" ? "success" : "info",
-    ),
+    onSuccess: (r: any) => {
+      const ok = r?.status === "ok" || r?.status === "sent";  // backend returns "sent"
+      show(ok ? "پشتیبان به تلگرام شما ارسال شد" : `وضعیت: ${r?.status}`, ok ? "success" : "info");
+    },
     onError: (e) => show(errMsg(e), "error"),
   });
 
