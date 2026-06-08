@@ -89,6 +89,7 @@ async def generate_invoices(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
+            panel_synced_at=panel.last_synced_at,
         )
         for bundle in bundles:
             # Abuse-resistant extra (overage from usage resets + renew-by-edit), added
@@ -138,6 +139,7 @@ async def preview_bundles(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
+            panel_synced_at=panel.last_synced_at,
         ):
             out.append((panel, b))
     return out
@@ -186,6 +188,7 @@ async def recompute_invoice(
         resellers, users, period,
         default_price_per_gb=default_price, excluded_usage_gb=excluded,
         default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
+        panel_synced_at=panel.last_synced_at,
     )
     bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
 
@@ -215,8 +218,11 @@ async def recompute_invoice(
     invoice.floor_applied = floor_applied
     invoice.amount_toman = amount_toman
     for line in base_lines:
+        # A user removed from the panel is billed on consumption and flagged in its name so the
+        # reseller sees why (same naming convention as the metering "extra" lines below).
+        nm = ((line.name or "")[:235] + " — مصرف حذف‌شده از پنل") if line.from_deleted else line.name[:255]
         session.add(InvoiceLine(
-            invoice_id=invoice.id, end_user_uuid=line.user_uuid, name=line.name[:255],
+            invoice_id=invoice.id, end_user_uuid=line.user_uuid, name=nm,
             start_date=line.start_date, usage_gb=line.usage_gb,
             added_by_uuid=line.added_by_uuid,
             sub_reseller_name=(line.sub_reseller_name or "")[:255],

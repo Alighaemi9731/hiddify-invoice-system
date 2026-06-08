@@ -81,3 +81,48 @@ def test_no_carryover_each_period_standalone():
     bundles = compute_invoices(resellers, users, month_period(2026, 3),
                                default_price_per_gb=1000, excluded_usage_gb={1})
     assert all(b.total_gb == 0 for b in bundles)
+
+
+def _UD(uuid, gb_sold, used, last_synced):
+    """A user with sync time + consumption, for deleted-user billing tests."""
+    return SimpleNamespace(
+        user_uuid=uuid, added_by_uuid="r1", name=uuid,
+        start_date=dt.date(2026, 2, 10), usage_limit_gb=gb_sold,
+        current_usage_gb=used, last_synced_at=last_synced,
+    )
+
+
+def test_deleted_users_billed_on_consumption_not_quota():
+    owner = R("owner", None, owner=True)
+    r1 = R("r1", "owner", name="R1")
+    synced = dt.datetime(2026, 2, 20, 12, 0)
+    stale = synced - dt.timedelta(days=1)   # snapshot older than the panel's latest sync
+    users = [
+        _UD("present", 30, 5, synced),       # still on panel → billed 30 (sold quota)
+        _UD("deleted", 30, 5, stale),        # removed → billed 5 (consumption), flagged
+        _UD("deleted_unused", 30, 0, stale), # removed, never used → no line
+        _UD("deleted_test", 1, 0.5, stale),  # test config (sold ≤1) → excluded as before
+    ]
+    b = compute_invoices(
+        [owner, r1], users, month_period(2026, 2),
+        default_price_per_gb=1000, excluded_usage_gb={1}, panel_synced_at=synced,
+    )[0]
+    by = {ln.user_uuid: ln for ln in b.lines}
+    assert by["present"].usage_gb == 30 and by["present"].from_deleted is False
+    assert by["deleted"].usage_gb == 5 and by["deleted"].from_deleted is True
+    assert "deleted_unused" not in by   # 0 consumption → nothing to bill
+    assert "deleted_test" not in by     # excluded by SOLD quota, not consumption
+    assert b.total_gb == 35             # 30 (present, sold) + 5 (deleted, consumed)
+
+
+def test_no_panel_synced_at_keeps_quota_billing():
+    # Backward-compat: without panel_synced_at, deletion isn't detected → all on sold quota.
+    owner = R("owner", None, owner=True)
+    r1 = R("r1", "owner", name="R1")
+    synced = dt.datetime(2026, 2, 20, 12, 0)
+    users = [_UD("a", 30, 5, synced), _UD("b", 30, 5, synced - dt.timedelta(days=1))]
+    b = compute_invoices(
+        [owner, r1], users, month_period(2026, 2),
+        default_price_per_gb=1000, excluded_usage_gb={1},
+    )[0]
+    assert b.total_gb == 60 and not any(ln.from_deleted for ln in b.lines)

@@ -45,6 +45,7 @@ class LineResult:
     usage_gb: float
     added_by_uuid: str | None
     sub_reseller_name: str = ""  # which (sub-)reseller created this service
+    from_deleted: bool = False   # user removed from the panel → billed on consumption, not quota
 
 
 @dataclass
@@ -136,6 +137,7 @@ def compute_invoices(
     excluded_usage_gb: set[int],
     default_min_sale_toman: int = 0,
     free_threshold_gb: float = 1.0,
+    panel_synced_at: dt.datetime | None = None,
 ) -> list[BundleResult]:
     """Return one BundleResult per billable top-level reseller (including zero ones)."""
     children_map = build_children_map(resellers)
@@ -157,13 +159,29 @@ def compute_invoices(
             for u in users_by_adder.get(uuid, []):
                 if not period.contains(u.start_date):
                     continue
-                gb = float(u.usage_limit_gb or 0)
-                if _excluded(gb, excluded_usage_gb, free_threshold_gb):
+                gb_sold = float(u.usage_limit_gb or 0)
+                # "Is it a billable (non-test) config?" stays on the SOLD quota — so a deleted
+                # config is judged a test config the same way a live one is.
+                if _excluded(gb_sold, excluded_usage_gb, free_threshold_gb):
                     continue
+                # A user the panel no longer has (its snapshot predates the panel's latest
+                # sync) is billed on what it actually CONSUMED before deletion, not the quota
+                # it was sold. Everyone still on the panel is billed on the sold quota.
+                deleted = bool(
+                    panel_synced_at and getattr(u, "last_synced_at", None)
+                    and u.last_synced_at < panel_synced_at
+                )
+                if deleted:
+                    gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
+                    if gb <= 0:
+                        continue  # removed with no recorded usage → nothing to bill
+                else:
+                    gb = gb_sold
                 lines.append(LineResult(
                     user_uuid=u.user_uuid, name=u.name or "", start_date=u.start_date,
                     usage_gb=gb, added_by_uuid=u.added_by_uuid,
                     sub_reseller_name=names.get(u.added_by_uuid or "", ""),
+                    from_deleted=deleted,
                 ))
 
         # Sort lines newest-first within the month, biggest package first.
