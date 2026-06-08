@@ -155,6 +155,11 @@ async def proof(payment_id: int, session: AsyncSession = Depends(get_session)) -
         raise HTTPException(404, "Payment not found")
     if not p.proof_path or not os.path.exists(p.proof_path):
         raise HTTPException(404, "No proof image for this payment")
+    # Defense-in-depth: only ever serve a file that resolves INSIDE the proofs directory, so a
+    # tampered proof_path (e.g. "/etc/passwd") can't turn this into arbitrary file disclosure.
+    proof_dir = os.path.realpath("data/payment_proofs")
+    if not os.path.realpath(p.proof_path).startswith(proof_dir + os.sep):
+        raise HTTPException(404, "No proof image for this payment")
     return FileResponse(p.proof_path, media_type="image/jpeg",
                         filename=f"proof_{payment_id}.jpg")
 

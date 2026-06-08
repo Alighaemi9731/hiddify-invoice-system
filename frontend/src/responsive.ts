@@ -40,5 +40,5 @@ export function useResponsiveTableLabels(): void {
       obs.disconnect();
       cancelAnimationFrame(raf);
     };
-  });
+  }, []); // set up the observer ONCE on mount — it (not re-renders) drives subsequent updates
 }
