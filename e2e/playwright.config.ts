@@ -1,9 +1,23 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const baseURL = process.env.E2E_BASE_URL;
+if (!baseURL) {
+  throw new Error("Set E2E_BASE_URL explicitly. E2E tests never default to production.");
+}
+
+const productionURL = "https://invoice.varzesh3.com.de";
+if (
+  baseURL.replace(/\/+$/, "") === productionURL &&
+  process.env.E2E_ALLOW_PRODUCTION !== "1"
+) {
+  throw new Error(
+    "Refusing to run E2E against production. Set E2E_ALLOW_PRODUCTION=1 only for an intentional read-only run.",
+  );
+}
+
 /**
- * E2E config for the invoice panel. Target is configurable via E2E_BASE_URL
- * (default = prod). Point it at a staging stack once one exists so destructive
- * tests can be added safely.
+ * E2E config for the invoice panel. The target must be explicit so a local or CI
+ * command cannot accidentally send repeated login attempts to production.
  */
 export default defineConfig({
   testDir: "./tests",
@@ -14,7 +28,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
   use: {
-    baseURL: process.env.E2E_BASE_URL || "https://invoice.varzesh3.com.de",
+    baseURL,
     headless: true,
     ignoreHTTPSErrors: true,
     // Higher DPI → sharper captcha screenshot → better OCR.

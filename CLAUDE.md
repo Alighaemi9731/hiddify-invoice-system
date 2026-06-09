@@ -7,9 +7,28 @@ Guidance for working in this repository. Keep this file up to date as the projec
 Automated **reseller management & invoicing** for a VPN business running on **Hiddify** panels (~10 panels, ~400 resellers). Each month the system pulls usage from every panel, computes each reseller's invoice, sends it via a Telegram bot, collects **USDT (BEP-20)**, and (optionally) runs reminders + suspension for unpaid invoices. Replaces a manual desktop tool.
 
 - **Phase 1:** localhost MVP — admin web panel + Telegram bot + Postgres + invoicing/dunning flow. Everything dockerized. **Complete.**
-- **Phase 2 (in progress):** server deploy scaffolding lives in `deploy/` — one-line installer (`deploy/install.sh`, Ubuntu 24.04/26.04), `deploy/docker-compose.prod.yml`, and a **Caddy** reverse proxy (`deploy/Caddyfile`) for one-domain + automatic HTTPS. See `deploy/README.md`.
+- **Phase 2:** production deployment is live — one-line installer (`deploy/install.sh`,
+  Ubuntu 24.04/26.04), `deploy/docker-compose.prod.yml`, **Caddy** reverse proxy,
+  automatic HTTPS, and a host-side self-update watcher. See `deploy/README.md`.
 
 Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`. (The earlier `MY_UNDERSTANDING.md` and the three reference folders were removed once their content was absorbed.)
+
+## Current remediation program
+
+The whole-codebase audit from 2026-06-09 is tracked in
+`docs/REMEDIATION_PLAN.md`. Fix exactly one batch per release, in the documented
+order, and use `docs/RELEASE_PROCESS.md` for versioning, GitHub publication,
+production deployment, smoke checks, and rollback.
+Record user-visible release notes in `CHANGELOG.md`; the long milestone history
+below remains the archive for releases before this process was introduced.
+
+Claude commands:
+
+- `/fix-batch B01` — implement and verify one remediation batch.
+- `/release vX.Y.Z ...` — validate and publish; add `deploy` explicitly to deploy.
+
+Production coordinates are stored only in `.claude/OPS.local.md` (gitignored).
+Never copy that file or its values into commits, release notes, logs, or chat output.
 
 ## Architecture (one-liner)
 
@@ -98,6 +117,15 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M47** Audit remediation B00 — trustworthy build baseline (`v1.37.36`).
+  Fixed the invoice-list TypeScript inference and MUI `PaletteMode` import; made
+  `npm run build` type-check before Vite; switched the frontend Docker build to
+  lockfile-based `npm ci`; corrected the Playwright CAPTCHA locator; required an
+  explicit E2E target with a production opt-in; and added GitHub Actions for backend
+  tests/Ruff, frontend type/build, deploy script syntax, and Compose validation.
+  Added the staged remediation, changelog, release/deploy, rollback, and local-only
+  production operations documentation. Verified: 36 backend tests, Ruff, TypeScript,
+  Vite build, six E2E tests collected, deploy script syntax, and production Compose.
 - [x] **M1** scaffold, models, auth, settings, docker, docs
 - [x] **M2** panel sync + Panels CRUD + sample seed (`python -m app.cli.seed_sample`)
 - [x] **M3** invoice engine + Toman→USDT + Persian PDF + invoices/resellers/reports(sales,debts,dashboard)/settings APIs
@@ -152,6 +180,7 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 - [x] **M11** Backup now carries `secret_key` in meta.json (restore writes it to `.env` first) so a cross-server restore can decrypt the encrypted settings — restore is self-sufficient. (Note: a bulk "reset admin passwords" feature was considered but removed — Hiddify v12's REST API has no admin-password field; only the web form sets it.)
 - [x] **M10** No-terminal ops: panel «راه‌اندازی مجدد سرویس» button + auto-restart after restore (`/api/ops/restart`, process exits → Docker `unless-stopped` restarts; pooled conns dropped via `engine.dispose()`/`pool_pre_ping`). Bot sub-reseller management: a reseller picks a panel → lists their sub-resellers → views a report (user count, per-month sold-quota sales via `reseller_report.node_report`) → **suspend/restore** that sub-reseller (reuses `enforcement.enforce_reseller`/`restore_reseller` with `dry_run=False`; ownership-gated by `_owns_sub`).
 
-**Phase 1 MVP is complete and runnable.** Phase 2 (installer/domain/SSL/systemd) is intentionally NOT built.
+**Phase 1 and the production deployment stack are complete and live.** Ongoing
+correctness/security work is tracked in `docs/REMEDIATION_PLAN.md`.
 
 Backend API surface: auth, panels, resellers, invoices, payments, reports (sales/sales-by-panel/debts/dashboard/delivery-log/enforcement-actions), operations (dunning/run, run-monthly), settings. Scheduler jobs: monthly invoicing, daily dunning, periodic sync.

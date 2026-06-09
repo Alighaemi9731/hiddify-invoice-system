@@ -1,4 +1,4 @@
-# Deploy to a real server (Phase 2)
+# Production deployment
 
 Production stack: **Caddy** (automatic HTTPS) in front of the **React SPA** and the
 **FastAPI backend**, with **PostgreSQL** and the **Telegram bot** — all in Docker.
@@ -46,10 +46,25 @@ git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up 
 ```
 
 ## Backups
-Automatic backups (DB + settings, encrypted secrets) are sent to the owner's
+Automatic backups (DB + settings) are sent to the owner's
 Telegram PV every 2 hours, and can be downloaded/sent on demand from
 **Account & Backup**. To restore: upload a backup zip there, or send it to the bot,
-then `docker compose --env-file .env -f deploy/docker-compose.prod.yml restart backend`.
+then restart both application processes so they reload the restored encryption key:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.prod.yml restart backend bot
+```
+
+Before relying on a backup, verify that the ZIP contains a non-empty PostgreSQL dump.
+Treat every backup archive as highly sensitive: it carries the encryption material
+needed for cross-server restore and is not currently password-protected.
+The hardened backup/restore work is tracked in `docs/REMEDIATION_PLAN.md` B02.
+
+## Release and deploy
+
+The updater deploys the highest `v*` tag, not an arbitrary untagged `main` commit.
+Use [`docs/RELEASE_PROCESS.md`](../docs/RELEASE_PROCESS.md) for the required test,
+version, tag, GitHub release, backup, deploy, smoke-check, and rollback sequence.
 
 ## Files
 - `docker-compose.prod.yml` — the production stack (db, backend, bot, frontend, caddy).

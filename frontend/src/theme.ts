@@ -1,4 +1,5 @@
-import { createTheme, PaletteMode, alpha } from "@mui/material/styles";
+import type { PaletteMode } from "@mui/material";
+import { createTheme, alpha } from "@mui/material/styles";
 
 /**
  * Design language: Apple "Liquid Glass" — translucent frosted surfaces that float over a

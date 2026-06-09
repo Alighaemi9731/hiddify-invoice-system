@@ -7,6 +7,8 @@ suspension for non-payers. Owner web panel is **Persian / RTL**.
 
 - Architecture & diagrams: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Working guidance & conventions: [`CLAUDE.md`](CLAUDE.md)
+- Changes and releases: [`CHANGELOG.md`](CHANGELOG.md)
+- Audit remediation tracker: [`docs/REMEDIATION_PLAN.md`](docs/REMEDIATION_PLAN.md)
 
 ## Install (one line, on a fresh Ubuntu server)
 
@@ -33,10 +35,10 @@ secrets you enter in the panel is configured for you. See [`deploy/README.md`](d
 1. **Panels** → add each Hiddify panel (paste its admin link + API key). Hit **همگام‌سازی** (sync) to pull data.
 2. **Dashboard** → **صدور و ارسال ماهانه** generates the previous month's invoices and sends
    them, or use the **Invoices** tab to generate / preview / send per period (PDF per invoice).
-3. **Telegram bot**: a reseller `/start`s, joins the announcement channel, pastes their panel
-   link (matched by host+UUID), then receives invoices and submits a USDT **TXID**.
-4. **Payments** → on-chain TXID verification (BscScan) auto-marks invoices paid; or confirm
-   manually. Paid + previously-suspended resellers are auto-restored.
+3. **Telegram bot**: a reseller `/start`s, joins the required chats, pastes their panel
+   link, then receives invoices and submits a receipt or supported transaction hash.
+4. **Payments** → the owner reviews and confirms submitted payments manually. Transaction
+   hashes link to the appropriate explorer; paid, previously-suspended resellers are restored.
 5. **Dunning/enforcement**: unpaid invoices trigger reminders, a warning, then suspension.
    Setting a **payment deadline** on an invoice restarts that cycle from the new date.
    **Automatic suspension defaults to OFF** — enable it in **Settings** (`enforcement_enabled`)

@@ -94,7 +94,7 @@ export default function Invoices() {
   });
 
   const openDetail = async (id: number) => setDetail(await getInvoice(id));
-  const total = sorted.reduce((s: number, i: any) => s + i.amount_toman, 0);
+  const total = sorted.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
 
   return (
     <Box>

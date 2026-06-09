@@ -33,7 +33,7 @@ export async function login(page: Page): Promise<void> {
     await page.getByRole("textbox", { name: "نام کاربری" }).fill(user);
     await page.getByRole("textbox", { name: "رمز عبور" }).fill(pass);
 
-    const buf = await page.getByRole("img", { name: "captcha" }).screenshot();
+    const buf = await page.getByAltText("تصویر کد امنیتی").screenshot();
     const { data } = await worker.recognize(buf);
     const code = (data.text || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 

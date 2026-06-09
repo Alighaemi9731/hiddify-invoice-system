@@ -56,3 +56,7 @@ invoice-backup/
 .DS_Store
 .idea/
 .vscode/
+
+# ───────────────────── Local operator metadata ─────────────────────
+# Production host/user/path are intentionally local. Keep public docs generic.
+.claude/*.local.md

@@ -14,10 +14,13 @@ npx playwright install chromium   # first time only
 # credentials + target (never commit these)
 export E2E_USER='admin'
 export E2E_PASS='your-password'
-export E2E_BASE_URL='https://invoice.varzesh3.com.de'   # or a staging URL
+export E2E_BASE_URL='https://invoice-staging.example.com'
 
 npm test
 ```
+
+`E2E_BASE_URL` is mandatory. The runner refuses the production domain unless an
+intentional read-only run also sets `E2E_ALLOW_PRODUCTION=1`.
 
 ## What it checks
 
@@ -36,6 +39,5 @@ npm test
   The robust fix is to run this against a **staging** stack with the captcha disabled
   (set `E2E_BASE_URL` there). Until then, treat a flaky run as an OCR/rate-limit artifact,
   not an app regression — re-run after the lockout window, or verify manually.
-- Point `E2E_BASE_URL` at a **staging** stack before adding destructive tests
-  (generate/send/confirm). Against prod, keep tests read-only.
+- Never add destructive tests (generate/send/confirm) to a suite that can target production.
 - Add new specs under `tests/`; reuse `helpers/login.ts`.

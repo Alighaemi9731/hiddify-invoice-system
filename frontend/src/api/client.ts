@@ -110,8 +110,32 @@ export const setResellerCanAddAdmin = (id: number, enabled: boolean) =>
   api.post(`/api/resellers/${id}/can-add-admin`, { enabled }).then((r) => r.data);
 
 // ---- invoices ----
+export interface InvoiceListItem {
+  id: number;
+  reseller_id: number;
+  reseller_name: string;
+  panel_id: number;
+  panel_key: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  usage_gb: number;
+  users_count: number;
+  price_per_gb: number;
+  amount_toman: number;
+  base_amount_toman: number;
+  min_sale_toman: number;
+  floor_applied: boolean;
+  status: string;
+  sent_at: string | null;
+  paid_at: string | null;
+  deferred_until: string | null;
+  defer_note: string | null;
+  created_at: string | null;
+}
+
 export const listInvoices = (params: any = {}) =>
-  api.get("/api/invoices", { params }).then((r) => r.data);
+  api.get("/api/invoices", { params }).then((r) => r.data as InvoiceListItem[]);
 export const getInvoice = (id: number) => api.get(`/api/invoices/${id}`).then((r) => r.data);
 export const generateInvoices = (b: any) => api.post("/api/invoices/generate", b).then((r) => r.data);
 export const discardDrafts = (period?: string) =>
