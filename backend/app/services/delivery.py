@@ -48,7 +48,7 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
         amount_usdt=f"{float(inv.amount_usdt):,.2f}",
         payment_instructions=instructions,
         # kept for backward-compat with any owner-customized template still using it
-        wallet_address=opts.wallet or "(تنظیم نشده)",
+        wallet_address=_html.escape(opts.wallet or "(تنظیم نشده)"),
     )
     # When the minimum-sale floor was applied, explain it transparently.
     if getattr(inv, "floor_applied", False):

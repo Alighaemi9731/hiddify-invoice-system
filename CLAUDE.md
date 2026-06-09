@@ -117,6 +117,16 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M53** Audit remediation B06 — bot identity, membership, and input safety
+  (`v1.37.43`). A router-level message middleware now enforces channel/group membership on
+  direct commands and FSM/payment messages as well as callbacks (`/start` and `/cancel`
+  remain reachable); gate-check failures fail closed. Registration no longer falls back to
+  the first duplicate UUID: it requires one normalized host + complete proxy path + UUID
+  match, with case-insensitive UUID/host handling and ambiguous/incomplete links rejected.
+  Owner-facing support HTML escapes Telegram names and message text, the legacy invoice
+  wallet placeholder is escaped, and bot/API deadline eligibility uses the shared
+  Tehran-local date helper. Regression tests are in `tests/test_bot_identity_safety.py` and
+  `tests/test_matching.py`.
 - [x] **M52** Audit remediation B05 — enforcement and reminder consistency (`v1.37.42`).
   `enforcement.restore_reseller` now flips the reseller to `active` (and clears the snapshot)
   ONLY when every user re-enable succeeds; a partial restore stays `enforced` with the snapshot

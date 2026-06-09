@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import html
 import logging
 import os
 import re
@@ -14,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 
 from app.bot import keyboards, texts
-from app.bot.matching import parse_link
+from app.bot.matching import normalize_host, normalize_path, parse_link
 from app.bot.rtl import rtl
 from app.core.db import SessionLocal
 from app.models import BotUser, Invoice, Panel, Payment, Reseller
@@ -26,6 +27,7 @@ from app.models.enums import (
     PaymentStatus,
 )
 from app.services import owner_notify, settings_service
+from app.services.periods import today as tehran_today
 
 
 class BroadcastState(StatesGroup):
@@ -71,6 +73,7 @@ router.message.filter(F.chat.type == "private")
 
 # Callbacks that must work even for a NON-member (so they can pass the gate or are inert).
 _GATE_EXEMPT_CALLBACKS = {"check_membership", "noop"}
+_GATE_EXEMPT_COMMANDS = {"start", "cancel"}
 
 
 @router.callback_query.outer_middleware
@@ -98,6 +101,55 @@ async def _membership_gate_mw(handler, event, data):
                             return  # block the real handler
     except Exception:  # noqa: BLE001 — a gate error must never break the bot
         log.warning("membership gate middleware failed", exc_info=True)
+        await event.answer(
+            "بررسی عضویت موقتاً ممکن نیست؛ لطفاً کمی بعد دوباره تلاش کنید.",
+            show_alert=True,
+        )
+        return
+    return await handler(event, data)
+
+
+def _message_command(text: str | None) -> str | None:
+    """Return a normalized Telegram slash command, excluding any @bot suffix."""
+    parts = (text or "").strip().split(maxsplit=1)
+    if not parts:
+        return None
+    first = parts[0]
+    if not first.startswith("/"):
+        return None
+    return first[1:].split("@", 1)[0].lower()
+
+
+@router.message.outer_middleware
+async def _membership_gate_message_mw(handler, event, data):
+    """Apply forced membership to direct commands and FSM messages as well as callbacks.
+
+    `/start` must remain reachable so a non-member can obtain join links, and `/cancel`
+    remains reachable so an in-progress FSM can always be exited. Owners are exempt.
+    """
+    chat = getattr(event, "chat", None)
+    if getattr(chat, "type", None) != "private":
+        return await handler(event, data)
+    if _message_command(getattr(event, "text", None)) in _GATE_EXEMPT_COMMANDS:
+        return await handler(event, data)
+    try:
+        bot = data.get("bot")
+        user = getattr(event, "from_user", None)
+        if bot is not None and user is not None:
+            async with SessionLocal() as session:
+                if not await _is_owner_user(session, user):
+                    missing = await _missing_gates(bot, session, user.id)
+                    if missing:
+                        names = " و ".join(g["label"] for g in missing)
+                        await event.answer(
+                            f"برای استفاده از ربات باید عضو {names} باشید.\n"
+                            "ابتدا /start را بزنید تا لینک عضویت برایتان ارسال شود."
+                        )
+                        return
+    except Exception:  # noqa: BLE001 — gate failures must not grant access
+        log.warning("message membership gate middleware failed", exc_info=True)
+        await event.answer("بررسی عضویت موقتاً ممکن نیست؛ لطفاً کمی بعد دوباره تلاش کنید.")
+        return
     return await handler(event, data)
 
 
@@ -482,14 +534,26 @@ async def on_support_text(message: Message, state: FSMContext) -> None:
         if not owner_chat:
             await message.answer("در حال حاضر پشتیبانی در دسترس نیست. بعداً تلاش کنید.")
             return
-        handle = f"@{u.username}" if u.username else f"<a href='tg://user?id={u.id}'>{u.first_name or u.id}</a>"
         await bot.send_message(
             int(owner_chat),
-            f"💬 پیام پشتیبانی\nاز: {handle} (id: <code>{u.id}</code>)\n\n{text}",
+            _support_message_html(u, text),
             reply_markup=keyboards.support_reply_keyboard(u.id, message.message_id),
             parse_mode="HTML",
         )
         await message.answer("✅ پیام شما برای پشتیبانی ارسال شد. به‌زودی پاسخ می‌گیرید.")
+
+
+def _support_message_html(user, text: str) -> str:
+    """Build owner-facing support HTML with every Telegram/user value escaped."""
+    handle = (
+        f"@{html.escape(user.username)}"
+        if user.username
+        else f"<a href='tg://user?id={user.id}'>{html.escape(str(user.first_name or user.id))}</a>"
+    )
+    return (
+        f"💬 پیام پشتیبانی\nاز: {handle} (id: <code>{user.id}</code>)\n\n"
+        f"{html.escape(text)}"
+    )
 
 
 @router.callback_query(F.data.startswith("sup:"))
@@ -807,8 +871,7 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
         # Not payable if: not the caller's, not owed, OR deferred to a future date (a payment
         # deadline the owner granted) — `_send_pay` excludes deferred invoices, so a stale
         # button must not let one be paid early.
-        from app.services.periods import today as _tehran_today
-        deferred = inv is not None and inv.deferred_until and inv.deferred_until > _tehran_today()
+        deferred = inv is not None and inv.deferred_until and inv.deferred_until > tehran_today()
         if inv is None or inv.reseller_id not in owned or inv.status not in _OWED or deferred:
             await cb.answer("این فاکتور در حال حاضر قابل پرداخت نیست.", show_alert=True)
             return
@@ -1254,7 +1317,7 @@ async def _send_pay(answer, chat_id: int, session) -> None:
             .order_by(Invoice.period_start.desc())
         )
     ).scalars().all()
-    today = dt.date.today()
+    today = tehran_today()
     due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
     deferred = [i for i in owed if i.deferred_until and i.deferred_until > today]
     # An invoice with a payment already awaiting review is NOT offered for payment again —
@@ -1650,29 +1713,14 @@ async def _is_top_level_reseller(session, reseller: Reseller) -> bool:
 
 
 async def _handle_link(message: Message, session, parsed) -> None:
-    # The same admin_uuid can exist on more than one panel, so a uuid-only lookup may return
-    # several rows — `scalar_one_or_none()` would raise MultipleResultsFound and crash the
-    # handler (no reply). Fetch all and disambiguate by the link's host (the documented
-    # "host + UUID identifies the panel" rule); fall back to the first if host can't resolve.
-    candidates = (
-        await session.execute(select(Reseller).where(Reseller.admin_uuid == parsed.uuid))
-    ).scalars().all()
-    if not candidates:
-        reseller = None
-    elif len(candidates) == 1:
-        reseller = candidates[0]
-    else:
-        reseller = None
-        host = (parsed.host or "").lower()
-        if host:
-            for c in candidates:
-                p = await session.get(Panel, c.panel_id)
-                if p and (p.host or "").lower() == host:
-                    reseller = c
-                    break
-        reseller = reseller or candidates[0]
+    reseller = await _registration_candidate(session, parsed)
+    # A registration identity is the normalized host + complete proxy path + UUID. Missing,
+    # mismatched, or ambiguous identities are rejected rather than selecting an arbitrary row.
+    if reseller is None:
+        await message.answer(await texts.render(session, "tpl_link_not_found"))
+        return
     # Must be a real, non-owner reseller that came from one of the registered panels.
-    if reseller is None or reseller.is_owner:
+    if reseller.is_owner:
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
     # Only TOP-LEVEL resellers may register. A sub-reseller is handled by its parent (the
@@ -1684,14 +1732,6 @@ async def _handle_link(message: Message, session, parsed) -> None:
             "نمایندهٔ بالادستی‌تان انجام می‌شود. لطفاً با او هماهنگ کنید."
         )
         return
-    if parsed.host:
-        hosts = {
-            (h or "").lower()
-            for h in (await session.execute(select(Panel.host))).scalars().all()
-        }
-        if parsed.host.lower() not in hosts:
-            await message.answer("این لینک به هیچ‌کدام از پنل‌های ثبت‌شدهٔ شما تعلق ندارد.")
-            return
     # Prevent duplicate / takeover: if bound to another account, refuse.
     if reseller.bot_chat_id and reseller.bot_chat_id != message.from_user.id:
         await message.answer("این نماینده قبلاً توسط حساب دیگری ثبت شده است.")
@@ -1709,6 +1749,30 @@ async def _handle_link(message: Message, session, parsed) -> None:
         await owner_notify.notify_owner(
             session, f"🔗 نمایندهٔ جدید در ربات ثبت شد: «{reseller.name}»"
             + (f" (پنل {panel.key})" if panel else ""))
+
+
+async def _registration_candidate(session, parsed) -> Reseller | None:
+    """Return the unique reseller matching normalized host + proxy path + UUID."""
+    expected_host = normalize_host(parsed.host)
+    expected_path = normalize_path(parsed.path)
+    if not expected_host or not expected_path:
+        return None
+    candidates = (
+        await session.execute(
+            select(Reseller).where(func.lower(Reseller.admin_uuid) == parsed.uuid.lower())
+        )
+    ).scalars().all()
+    matches: list[Reseller] = []
+    for candidate in candidates:
+        panel = await session.get(Panel, candidate.panel_id)
+        if panel is None:
+            continue
+        if (
+            normalize_host(panel.host) == expected_host
+            and normalize_path(panel.proxy_path) == expected_path
+        ):
+            matches.append(candidate)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _invoice_amount_fa(invoice) -> str:
@@ -1744,7 +1808,7 @@ async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | N
     ids = [r.id for r in resellers]
     if not ids:
         return None
-    today = dt.date.today()
+    today = tehran_today()
     owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
@@ -1773,7 +1837,7 @@ async def _revalidate_payable(session, invoice, reseller_ids: set[int]):
         return None
     if fresh.status not in _OWED:
         return None
-    if fresh.deferred_until and fresh.deferred_until > dt.date.today():
+    if fresh.deferred_until and fresh.deferred_until > tehran_today():
         return None
     return fresh
 

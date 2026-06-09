@@ -133,7 +133,7 @@ Primary files:
 
 ## B06 - Bot identity, membership, and input safety
 
-Priority: P1. Status: TODO.
+Priority: P1. Status: DONE in `v1.37.43`.
 
 - Apply membership gates to direct commands and payment-state messages, not callbacks only.
 - Match registration by normalized host + proxy path + UUID; never select the first

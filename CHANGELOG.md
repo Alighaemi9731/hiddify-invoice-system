@@ -8,6 +8,29 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.43 - 2026-06-09
+
+Audit remediation B06 — bot identity, membership, and input safety.
+
+### Fixed
+
+- Forced channel/group membership is now checked for every private bot message, including
+  direct slash commands and payment-state text/photos, not only inline button callbacks.
+  `/start` remains available for join links and `/cancel` remains available to exit a flow.
+  Membership-check failures now fail closed instead of granting access.
+- Panel-link registration now requires one unique normalized `host + proxy path + UUID`
+  match. Incomplete, mismatched, or ambiguous links are rejected instead of falling back to
+  the first reseller with the same UUID.
+- User names and support-message text are HTML-escaped before Telegram HTML rendering.
+  The legacy invoice-template wallet placeholder is escaped as well.
+- Bot and invoice API payment/deadline eligibility checks now use the same Tehran-local date
+  helper, avoiding different results around UTC/Tehran midnight.
+
+### Verification
+
+- Added router-middleware, matching ambiguity, HTML-injection, and Tehran-date regression
+  coverage in `tests/test_bot_identity_safety.py` and expanded `tests/test_matching.py`.
+
 ## 1.37.42 - 2026-06-09
 
 Audit remediation B05 — enforcement and reminder consistency.

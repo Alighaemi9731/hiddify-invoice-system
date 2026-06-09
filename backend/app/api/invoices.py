@@ -273,7 +273,7 @@ async def defer_invoice(
             reseller and reseller.enforcement_state == EnforcementState.enforced
         )
         if was_enforced and reseller:
-            today = dt.date.today()
+            today = tehran_today()
             others = (
                 await session.execute(
                     select(Invoice).where(
