@@ -306,17 +306,28 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
         except Exception as ue:  # noqa: BLE001
             errors.append(f"user {uuid[-6:]}: {str(ue)[:90]}")
 
-    reseller.enforcement_state = EnforcementState.active
-    reseller.max_users_snapshot = None
-    reseller.max_active_users_snapshot = None
-    if last:
-        last.status = EnforcementActionStatus.reverted
-    restore.status = EnforcementActionStatus.done
+    # Only declare the reseller restored when EVERY required user re-enable succeeded. A
+    # partial restore must stay `enforced` so the next trigger (payment confirm, manual
+    # restore) RETRIES the still-disabled users — otherwise flipping to `active` here would
+    # strand them disabled forever (a future restore is a no-op once state != enforced).
+    fully_restored = (re_enabled == len(users_map)) and not errors
     restore.affected_count = re_enabled
-    if errors:
-        restore.error = (f"{re_enabled}/{len(users_map)} re-enabled; "
+    if fully_restored:
+        reseller.enforcement_state = EnforcementState.active
+        reseller.max_users_snapshot = None
+        reseller.max_active_users_snapshot = None
+        if last:
+            last.status = EnforcementActionStatus.reverted
+        restore.status = EnforcementActionStatus.done
+        log.info("Restored reseller %s: re-enabled %d/%d users", reseller.name,
+                 re_enabled, len(users_map))
+    else:
+        # Leave state=enforced and KEEP the enforce snapshot (last stays `done`) so a retry
+        # re-runs the full set (re-enabling an already-enabled user is harmless/idempotent).
+        restore.status = EnforcementActionStatus.failed
+        restore.error = (f"partial restore: {re_enabled}/{len(users_map)} users re-enabled; "
                          f"{len(errors)} issue(s): " + " | ".join(errors[:8]))[:1000]
+        log.warning("Partial restore for reseller %s: %d/%d users; staying enforced for retry",
+                    reseller.name, re_enabled, len(users_map))
     await session.commit()
-    log.info("Restored reseller %s: re-enabled %d/%d users (%d issues)",
-             reseller.name, re_enabled, len(users_map), len(errors))
     return restore

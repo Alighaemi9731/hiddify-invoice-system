@@ -172,6 +172,9 @@ DEFS: list[SettingDef] = [
     SettingDef("enforcement_day", 5, False, "dunning"),
     SettingDef("enforcement_enabled", False, False, "dunning"),  # False = dry-run
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
+    # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
+    # so a stale, never-reviewed proof can't shield a debt forever. Default 7.
+    SettingDef("pending_payment_hold_days", 7, False, "dunning"),
     # Owner
     SettingDef("owner_name", "", False, "general"),
     SettingDef("owner_telegram", "", False, "general"),

@@ -85,7 +85,8 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
 
     cfg = await settings_service.get_many(
         session,
-        ["reminder1_day", "reminder2_day", "warning_day", "enforcement_day", "enforcement_enabled"],
+        ["reminder1_day", "reminder2_day", "warning_day", "enforcement_day",
+         "enforcement_enabled", "pending_payment_hold_days"],
     )
     d1 = int(cfg.get("reminder1_day") or 2)
     d2 = int(cfg.get("reminder2_day") or 4)
@@ -98,45 +99,34 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
         )
     ).scalars().all()
 
-    # A pending payment means the customer paid and is waiting on the OWNER's review.
-    # Don't punish them in the meantime: hold the whole reminder/warning/enforce cycle for
-    # the invoice the payment is attached to, and never auto-suspend a reseller who has any
-    # pending payment. The hold lifts as soon as the owner confirms (→ paid, leaves _ACTIVE)
-    # or rejects (→ no longer pending, cycle resumes on the original timeline).
+    # A pending payment means the customer paid and is waiting on the OWNER's review — don't
+    # punish that invoice in the meantime. Scope is PER-INVOICE (payments are per-invoice since
+    # B03): a pending proof for invoice A pauses dunning ONLY on invoice A, never on the
+    # customer's unrelated debts (other invoices / other panels). And the hold EXPIRES after
+    # `pending_payment_hold_days` so a stale, never-reviewed proof can't shield a debt forever.
+    # The hold also lifts as soon as the owner confirms (→ paid, leaves _ACTIVE) or rejects.
+    hold_days = int(cfg.get("pending_payment_hold_days") or 7)
+    cutoff = now - dt.timedelta(days=hold_days)
+
+    def _aware(ts: dt.datetime | None) -> dt.datetime | None:
+        if ts is not None and ts.tzinfo is None:
+            return ts.replace(tzinfo=dt.timezone.utc)
+        return ts
+
     pending_rows = (
         await session.execute(
-            select(Payment.invoice_id, Payment.reseller_id)
+            select(Payment.invoice_id, Payment.created_at)
             .where(Payment.status == PaymentStatus.pending)
         )
     ).all()
-    held_invoice_ids = {iid for iid, _ in pending_rows if iid is not None}
-    held_reseller_ids = {rid for _, rid in pending_rows if rid is not None}
+    held_invoice_ids = {
+        iid for iid, created in pending_rows
+        if iid is not None and (created is None or (_aware(created) or cutoff) >= cutoff)
+    }
 
-    # A customer can be an admin on several panels (sibling reseller rows share bot_chat_id),
-    # and ONE payment settles their due invoices across ALL of those rows. So a pending payment
-    # must pause dunning on EVERY sibling row — otherwise the customer gets auto-suspended on
-    # another panel while waiting on the owner's review. Expand the hold to the full sibling set.
-    if held_reseller_ids:
-        chat_ids = set(
-            (await session.execute(
-                select(Reseller.bot_chat_id).where(
-                    Reseller.id.in_(held_reseller_ids), Reseller.bot_chat_id.is_not(None)
-                )
-            )).scalars().all()
-        )
-        if chat_ids:
-            sibling_ids = set(
-                (await session.execute(
-                    select(Reseller.id).where(Reseller.bot_chat_id.in_(chat_ids))
-                )).scalars().all()
-            )
-            held_reseller_ids |= sibling_ids
-            # Also hold every owed invoice of those siblings so reminders pause too (matching
-            # the cross-panel settlement scope), not just enforcement.
-            held_invoice_ids |= {inv.id for inv in invoices if inv.reseller_id in sibling_ids}
-
-    counts = {"reminder1": 0, "reminder2": 0, "warning": 0, "enforced": 0,
-              "enforced_dry": 0, "deferred": 0, "on_hold": 0}
+    counts = {"reminder1": 0, "reminder2": 0, "warning": 0,
+              "reminder1_sent": 0, "reminder2_sent": 0, "warning_sent": 0,
+              "enforced": 0, "enforced_dry": 0, "deferred": 0, "on_hold": 0}
     enforced_links: list[str] = []  # clickable owner-facing links of enforced resellers
     bot: Bot | None = await build_bot(session)
     try:
@@ -166,21 +156,25 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
             done = await _done_kinds(session, inv.id)
 
             if days >= d1 and DeliveryKind.reminder1.value not in done:
-                await notifier.send_to_reseller(
+                dl = await notifier.send_to_reseller(
                     session, reseller, await _msg(session, "tpl_reminder1", inv, reseller),
                     kind=DeliveryKind.reminder1, invoice_id=inv.id, bot=bot,
                 )
-                counts["reminder1"] += 1
+                counts["reminder1"] += 1  # attempted
+                if dl.status == DeliveryStatus.sent:
+                    counts["reminder1_sent"] += 1
 
             if days >= d2 and DeliveryKind.reminder2.value not in done:
-                await notifier.send_to_reseller(
+                dl = await notifier.send_to_reseller(
                     session, reseller, await _msg(session, "tpl_reminder2", inv, reseller),
                     kind=DeliveryKind.reminder2, invoice_id=inv.id, bot=bot,
                 )
                 counts["reminder2"] += 1
+                if dl.status == DeliveryStatus.sent:
+                    counts["reminder2_sent"] += 1
 
             if days >= dw and DeliveryKind.warning.value not in done:
-                await notifier.send_to_reseller(
+                dl = await notifier.send_to_reseller(
                     session, reseller, await _msg(session, "tpl_warning", inv, reseller),
                     kind=DeliveryKind.warning, invoice_id=inv.id, bot=bot,
                 )
@@ -188,9 +182,10 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                     inv.status = InvoiceStatus.overdue
                     await session.commit()
                 counts["warning"] += 1
+                if dl.status == DeliveryStatus.sent:
+                    counts["warning_sent"] += 1
 
-            if (days >= de and reseller.enforcement_state == EnforcementState.active
-                    and inv.reseller_id not in held_reseller_ids):
+            if days >= de and reseller.enforcement_state == EnforcementState.active:
                 # A live enforcement flips enforcement_state away from `active`, so it's
                 # naturally skipped next run. A DRY-RUN doesn't change state, so without a
                 # guard it would log a fresh EnforcementAction every single day. In

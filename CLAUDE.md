@@ -117,6 +117,16 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M52** Audit remediation B05 — enforcement and reminder consistency (`v1.37.42`).
+  `enforcement.restore_reseller` now flips the reseller to `active` (and clears the snapshot)
+  ONLY when every user re-enable succeeds; a partial restore stays `enforced` with the snapshot
+  intact so the next trigger retries (no more stranded-disabled users). `dunning.run_dunning`
+  scopes a pending-payment hold to that payment's own invoice (per-invoice since B03, not the
+  whole sibling set) and expires it after `pending_payment_hold_days` (default 7) so a stale
+  proof can't shield debts forever; reminder counts now track delivered (`*_sent`) vs attempted,
+  and the daily report shows both. `gb_cap.check_caps` arms the once-per-month alert flag only
+  after every configured recipient receives it (transient failures retry). Tests in
+  `tests/test_enforcement_dunning.py`.
 - [x] **M51** Audit remediation B04 — billing and synchronization correctness (`v1.37.41`).
   `generate_invoices`/`preview_bundles` now skip panels whose latest sync failed or never ran
   (`_panel_billable`) — billing on stale data is worse than skipping; skipped panels are

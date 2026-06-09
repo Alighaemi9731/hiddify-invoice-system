@@ -118,7 +118,7 @@ Primary files:
 
 ## B05 - Enforcement and reminder consistency
 
-Priority: P1. Status: TODO.
+Priority: P1. Status: DONE in `v1.37.42`.
 
 - Keep partial restores retryable; do not mark a reseller active until every required
   user/admin operation succeeds.

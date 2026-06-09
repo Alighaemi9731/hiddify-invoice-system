@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.42 - 2026-06-09
+
+Audit remediation B05 — enforcement and reminder consistency.
+
+### Fixed
+
+- A partial restore (some users fail to re-enable) now keeps the reseller **enforced** so the
+  next trigger retries, instead of flipping to active and leaving those users disabled forever.
+  The restore snapshot is preserved for the retry; the reseller is marked active only when every
+  user re-enable succeeds.
+- A pending (under-review) payment now pauses dunning only on **its own invoice** — not on the
+  customer's unrelated invoices or other panels — matching the per-invoice payment model. The
+  hold also **expires** after `pending_payment_hold_days` (default 7), so a stale, never-reviewed
+  proof can no longer shield a debt indefinitely.
+- The daily dunning report now distinguishes **delivered** reminders from merely **attempted**
+  ones (a reminder that was blocked/unmatched/errored is shown as such, not counted as sent).
+- The per-sub GB-cap monthly alert flag is armed only after the alert **actually reaches every
+  configured recipient**; a transient Telegram failure is retried on the next check instead of
+  being suppressed for the rest of the month.
+
+### Verification
+
+- Added `tests/test_enforcement_dunning.py`: partial-restore-stays-enforced-then-succeeds,
+  per-invoice hold with expiry plus attempted-vs-delivered counting, and the GB-cap
+  flag-only-after-delivery behaviour.
+
 ## 1.37.41 - 2026-06-09
 
 Audit remediation B04 — billing and synchronization correctness.

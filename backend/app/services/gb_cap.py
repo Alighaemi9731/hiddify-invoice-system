@@ -70,10 +70,13 @@ async def check_caps(session: AsyncSession, *, bot: Bot | None = None) -> dict:
             counts["over"] += 1
             if sub.gb_cap_alerted_period == period:
                 continue  # already warned this month
+            from app.models.enums import DeliveryStatus
+
             parent = await _parent_of(session, sub)
+            delivery_results: list[bool] = []
             # Notify the parent (the one who set the cap and gets paid).
             if parent is not None and parent.bot_chat_id is not None:
-                await notifier.send_to_reseller(
+                dl = await notifier.send_to_reseller(
                     session, parent,
                     (f"📊 زیرمجموعهٔ شما «{sub.name}» در دورهٔ {period} به سقف حجمی رسید.\n"
                      f"سقف: {cap:g} گیگ | ساخته‌شده: {used:g} گیگ\n"
@@ -81,16 +84,23 @@ async def check_caps(session: AsyncSession, *, bot: Bot | None = None) -> dict:
                      "(منوی «مدیریت زیرمجموعه‌ها»)."),
                     bot=bot,
                 )
+                delivery_results.append(dl.status == DeliveryStatus.sent)
             # Also let the sub-reseller know, if they're on the bot.
             if sub.bot_chat_id is not None:
-                await notifier.send_to_reseller(
+                dl = await notifier.send_to_reseller(
                     session, sub,
                     (f"📊 شما در دورهٔ {period} به سقف حجمی تعیین‌شده ({cap:g} گیگ) رسیدید.\n"
                      "برای ادامه با نمایندهٔ بالادست خود هماهنگ کنید."),
                     bot=bot,
                 )
-            sub.gb_cap_alerted_period = period
-            counts["alerted"] += 1
+                delivery_results.append(dl.status == DeliveryStatus.sent)
+            # Arm the once-per-month flag only after ALL configured recipients received the
+            # alert. If one delivery fails, the next check retries the alert instead of
+            # suppressing that recipient for the rest of the month. With no recipients there
+            # is nothing actionable to retry, so arm it to avoid pointless scans every sync.
+            if not delivery_results or all(delivery_results):
+                sub.gb_cap_alerted_period = period
+                counts["alerted"] += 1
         await session.commit()
     finally:
         if own_bot and bot is not None:

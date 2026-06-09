@@ -109,9 +109,17 @@ async def daily_dunning_job() -> None:
             # Only ping the owner when something actionable happened.
             acted = res["reminder1"] + res["reminder2"] + res["warning"] + res["enforced"] + res["enforced_dry"]
             if acted:
+                # Show DELIVERED counts with ATTEMPTED in parentheses, so a reminder that was
+                # tried but didn't reach the reseller (blocked/unmatched/Telegram error) is
+                # visible rather than reported as a success.
+                def _da(sent_key: str, att_key: str) -> str:
+                    sent, att = res.get(sent_key, 0), res.get(att_key, 0)
+                    return f"{sent}" + (f" (از {att} تلاش)" if att != sent else "")
                 lines = [
-                    "🔔 گزارش روزانهٔ یادآوری/مسدودسازی:",
-                    f"• یادآوری اول: {res['reminder1']} | یادآوری دوم: {res['reminder2']} | اخطار: {res['warning']}",
+                    "🔔 گزارش روزانهٔ یادآوری/مسدودسازی (ارسال‌شده / تلاش):",
+                    f"• یادآوری اول: {_da('reminder1_sent', 'reminder1')} | "
+                    f"یادآوری دوم: {_da('reminder2_sent', 'reminder2')} | "
+                    f"اخطار: {_da('warning_sent', 'warning')}",
                 ]
                 if res["enforced"]:
                     lines.append(f"• مسدودسازی واقعی: {res['enforced']}")
