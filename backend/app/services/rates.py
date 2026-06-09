@@ -140,14 +140,35 @@ async def get_ton_toman(session: AsyncSession) -> int:
     return _pos_int(await settings_service.get(session, "ton_toman_auto", 0)) or 0
 
 
+def _rate_is_fresh(stamp: str | None, max_age_hours: float) -> bool:
+    """True if the cached auto-rate timestamp is within max_age_hours of now. A missing or
+    unparseable stamp, or max_age_hours<=0 (disabled), is treated as NOT fresh / always-fresh
+    respectively (see caller)."""
+    if max_age_hours <= 0:
+        return True  # staleness check disabled → always accept the cached rate
+    if not stamp:
+        return False
+    try:
+        ts = dt.datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    age = dt.datetime.now(dt.timezone.utc) - ts
+    return age <= dt.timedelta(hours=max_age_hours)
+
+
 async def get_effective_rate(session: AsyncSession) -> int:
     """The Toman-per-USDT rate to actually use (no network I/O).
 
-    `auto` → the last-fetched live rate if we have one, else the manual rate as a safety net.
-    `manual` → the owner-set rate.
+    `auto` → the last-fetched live rate IF it's still fresh (younger than `rate_max_age_hours`,
+    default 48h); a stale or missing live rate falls back to the manual rate so billing never
+    silently uses a days-old quote when the source has been down. `manual` → the owner-set rate.
     """
     cfg = await settings_service.get_many(
-        session, ["rate_mode", "toman_per_usdt", "toman_per_usdt_auto"]
+        session,
+        ["rate_mode", "toman_per_usdt", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
+         "rate_max_age_hours"],
     )
 
     def _int(v) -> int:
@@ -159,5 +180,10 @@ async def get_effective_rate(session: AsyncSession) -> int:
     manual = _int(cfg.get("toman_per_usdt"))
     if str(cfg.get("rate_mode") or "manual").lower() == "auto":
         auto = _int(cfg.get("toman_per_usdt_auto"))
-        return auto if auto > 0 else manual
+        max_age = _int(cfg.get("rate_max_age_hours")) or 48
+        if auto > 0 and _rate_is_fresh(cfg.get("toman_per_usdt_auto_at"), max_age):
+            return auto
+        if auto > 0:
+            log.warning("auto rate is stale (>%dh) — falling back to manual rate %s", max_age, manual)
+        return manual
     return manual

@@ -117,6 +117,19 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M51** Audit remediation B04 — billing and synchronization correctness (`v1.37.41`).
+  `generate_invoices`/`preview_bundles` now skip panels whose latest sync failed or never ran
+  (`_panel_billable`) — billing on stale data is worse than skipping; skipped panels are
+  reported in `GenerateResult.skipped_panels` and the monthly job pings the owner. A removed
+  reseller (older `last_seen_at` than the panel's `last_synced_at`, via `_reseller_present`) is
+  no longer billed, and a leftover DRAFT whose reseller is now zero/removed is reconciled away
+  on regeneration (`reconciled_zero`). The backup fetch requires BOTH `admin_users` and `users`
+  lists (non-empty admins) so a truncated backup fails the sync instead of mass-deleting.
+  `rates.get_effective_rate` falls back to the manual rate when the cached live rate is older
+  than `rate_max_age_hours` (default 48). Preview folds in the metering extra so a metered-only
+  reseller isn't shown as a zero sale. Tests in `tests/test_billing_sync.py`. DEFERRED (doc'd):
+  rendering the per-sub GB-only PDFs from persisted invoice lines (money is already authoritative
+  from the locked invoice row + line-based `render_invoice_pdf`).
 - [x] **M50** Audit remediation B03 — payment and invoice state machine (`v1.37.40`).
   Legal invoice status transitions are now centralized in `app/services/invoice_state.py`
   (matrix + `ensure_can_mark_paid/cancel/defer/edit/unmark_paid`), wired into the invoices API

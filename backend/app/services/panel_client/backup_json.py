@@ -49,12 +49,20 @@ class BackupJsonClient(PanelClient):
                 except Exception:  # noqa: BLE001
                     last = f"non-JSON response (content-type={resp.headers.get('content-type')})"
                     continue
-                if isinstance(payload, dict) and ("admin_users" in payload or "users" in payload):
+                # A valid Hiddify backup carries BOTH collections. Requiring only ONE let a
+                # truncated/partial response through, which on sync looked like every user (or
+                # every admin) had vanished — mass "deletion" and wrong billing. Require both,
+                # as lists, and a non-empty admin set (every panel has at least the owner admin).
+                if isinstance(payload, dict) and isinstance(payload.get("admin_users"), list) \
+                        and isinstance(payload.get("users"), list):
                     data = parse_backup(payload)
+                    if not data.admins:
+                        last = "backup has no admins (truncated/partial?)"
+                        continue
                     log.info(
                         "Fetched backup for panel '%s': %d admins, %d users",
                         panel.key, len(data.admins), len(data.users),
                     )
                     return data
-                last = "JSON missing admin_users/users"
+                last = "JSON missing admin_users/users list(s)"
         raise RuntimeError(f"could not fetch backup ({last})")

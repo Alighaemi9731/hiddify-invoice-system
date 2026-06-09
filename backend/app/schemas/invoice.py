@@ -67,3 +67,5 @@ class GenerateResult(BaseModel):
     zero_skipped: int
     total_amount_toman: float
     invoice_ids: list[int]
+    skipped_panels: list[str] = []
+    reconciled_zero: int = 0

@@ -8,6 +8,43 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.41 - 2026-06-09
+
+Audit remediation B04 — billing and synchronization correctness.
+
+### Fixed
+
+- Billing now excludes any panel whose latest sync failed or never ran, instead of
+  invoicing last month's stale snapshots. Skipped panels are reported in the generate
+  result and the monthly job notifies the owner so the shortfall is never silent.
+- A leftover DRAFT invoice whose reseller drops to zero usage (or is removed from the
+  panel) is reconciled away when the period is regenerated, so a stale positive draft
+  can no longer be delivered.
+- A reseller (admin) removed from the panel is no longer billed forever — billing skips
+  resellers not present in the panel's latest sync.
+- The backup fetch now requires BOTH the `admin_users` and `users` collections (as lists,
+  with a non-empty admin set). A truncated/partial backup fails the sync — which then
+  excludes that panel from billing — instead of silently looking like every user/admin
+  was deleted.
+- In auto mode the exchange rate falls back to the manual rate when the cached live rate
+  is stale (older than the new `rate_max_age_hours`, default 48h), so billing never uses a
+  days-old quote when the source has been down.
+- The "zero sale" preview now folds in the abuse-metered extra, so a reseller billed only
+  on metered overage no longer shows up as a zero sale.
+
+### Deferred (within B04, documented)
+
+- Rendering the per-sub usage-breakdown PDFs from persisted invoice lines rather than live
+  snapshots: the payable amount is always authoritative (rendered from the locked invoice
+  row in the text and the line-based invoice PDF), and the per-node PDFs are GB-only usage
+  breakdowns; reworking that pipeline is a larger, higher-risk change tracked as a follow-up.
+
+### Verification
+
+- Added `tests/test_billing_sync.py`: panel-billable gate, removed-reseller exclusion,
+  partial-backup rejection, stale-rate fallback, and an end-to-end generate that skips a
+  failed-sync panel and reconciles a zeroed draft while leaving the failed panel's draft intact.
+
 ## 1.37.40 - 2026-06-09
 
 Audit remediation B03 — payment and invoice state machine.

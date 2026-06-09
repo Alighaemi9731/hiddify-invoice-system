@@ -82,14 +82,22 @@ async def monthly_invoicing_job() -> None:
             summary = await invoicing.generate_invoices(session, period)
             d = await delivery.send_period(session, period.label)
             log.info("Monthly invoicing job completed for %s", period.label)
-            await owner_notify.notify_owner(
-                session,
+            msg = (
                 f"🧾 صدور و ارسال خودکار فاکتورهای دورهٔ {period.label} انجام شد.\n"
                 f"• ساخته‌شده: {summary.created}\n"
                 f"• مبلغ کل: {summary.total_amount_toman:,.0f} تومان\n"
                 f"• ارسال موفق: {d.get('sent', 0)} | بدون ربات: {d.get('unmatched', 0)} | "
-                f"ناموفق: {d.get('failed', 0)}",
+                f"ناموفق: {d.get('failed', 0)}"
             )
+            # Surface any panel skipped because its sync failed — those resellers were NOT billed
+            # this run and need attention (otherwise the shortfall is silent).
+            if summary.skipped_panels:
+                msg += (
+                    "\n\n⚠️ پنل‌های زیر به‌دلیل ناموفق‌بودن همگام‌سازی فاکتور نشدند "
+                    "(بررسی و سپس «صدور فاکتورهای دوره» را برای آن‌ها بزنید):\n"
+                    + "\n".join(f"• {p}" for p in summary.skipped_panels)
+                )
+            await owner_notify.notify_owner(session, msg)
     except Exception:  # noqa: BLE001
         log.exception("monthly_invoicing_job failed")
 

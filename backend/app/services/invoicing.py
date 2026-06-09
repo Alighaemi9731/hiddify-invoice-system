@@ -4,19 +4,43 @@ InvoiceLine rows. Delivery (bot) is M4; this only generates draft invoices.
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import EndUserSnapshot, Invoice, InvoiceLine, Panel, Reseller
-from app.models.enums import InvoiceStatus
+from app.models import EndUserSnapshot, FinancialRecord, Invoice, InvoiceLine, Panel, Reseller
+from app.models.enums import InvoiceStatus, PanelStatus
 from app.services import financial_archive, metering, pricing
 from app.services.invoice_engine import BundleResult, compute_invoices
 from app.services.periods import Period
 
 log = logging.getLogger("invoicing")
+
+# Allow for sub-second clock/reload skew when comparing a reseller's last_seen_at to the
+# panel's last_synced_at (both stamped from the same value during a sync).
+_PRESENCE_SKEW = dt.timedelta(seconds=2)
+
+
+def _panel_billable(panel: Panel) -> tuple[bool, str]:
+    """A panel may only be billed from FRESH data. Never bill on a failed or absent sync —
+    stale snapshots would invoice last month's reality. Returns (ok, reason)."""
+    if panel.last_synced_at is None:
+        return False, "هرگز همگام‌سازی نشده"
+    if panel.status == PanelStatus.error:
+        return False, "آخرین همگام‌سازی ناموفق بود"
+    return True, ""
+
+
+def _reseller_present(reseller: Reseller, panel: Panel) -> bool:
+    """True if the reseller was seen in the panel's latest sync. A reseller (admin) removed
+    from the panel keeps an older last_seen_at than the panel's last_synced_at, so it's no
+    longer billed (instead of being invoiced forever on lingering data)."""
+    if reseller.last_seen_at is None or panel.last_synced_at is None:
+        return True  # not enough info → don't silently drop
+    return reseller.last_seen_at >= panel.last_synced_at - _PRESENCE_SKEW
 
 
 @dataclass
@@ -28,6 +52,11 @@ class GenerationSummary:
     zero_skipped: int = 0
     total_amount_toman: float = 0.0
     invoice_ids: list[int] = None  # type: ignore[assignment]
+    # Panels excluded because their latest sync failed / never ran (billed on stale data is worse
+    # than skipping). Each entry is "<panel key>: <reason>".
+    skipped_panels: list[str] = field(default_factory=list)
+    # DRAFT invoices removed because the reseller's usage dropped to zero / they were removed.
+    reconciled_zero: int = 0
 
     def __post_init__(self) -> None:
         if self.invoice_ids is None:
@@ -74,8 +103,16 @@ async def generate_invoices(
     panels = (await session.execute(panel_q)).scalars().all()
 
     summary = GenerationSummary(period=period.label)
+    processed_panel_ids: list[int] = []
+    billed_reseller_ids: set[int] = set()
 
     for panel in panels:
+        ok, reason = _panel_billable(panel)
+        if not ok:
+            summary.skipped_panels.append(f"{panel.key}: {reason}")
+            log.warning("billing: skipping panel '%s' (%s)", panel.key, reason)
+            continue
+        processed_panel_ids.append(panel.id)
         resellers = (
             await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
         ).scalars().all()
@@ -92,6 +129,10 @@ async def generate_invoices(
             panel_synced_at=panel.last_synced_at,
         )
         for bundle in bundles:
+            # A reseller removed from the panel (gone in the latest sync) must not be billed
+            # forever on lingering data.
+            if not _reseller_present(bundle.root, panel):
+                continue
             # Abuse-resistant extra (overage from usage resets + renew-by-edit), added
             # on top of the normal snapshot total. See app.services.metering.
             extra = await metering.bundle_extra(
@@ -101,6 +142,27 @@ async def generate_invoices(
                 summary.zero_skipped += 1
                 continue
             await _persist_bundle(session, panel, bundle, extra, period, rate, summary, force)
+            billed_reseller_ids.add(bundle.root.id)
+
+    # Reconcile stale DRAFT invoices: a reseller that had a draft for this period from a prior
+    # run but is now zero / removed gets no bundle above — its leftover draft would otherwise
+    # still be sendable with last month's amount. Delete those drafts (drafts aren't in the
+    # ledger; delivered/paid invoices are never touched).
+    if processed_panel_ids:
+        stale_q = select(Invoice.id).where(
+            Invoice.period_start == period.start, Invoice.period_end == period.end,
+            Invoice.panel_id.in_(processed_panel_ids), Invoice.status == InvoiceStatus.draft,
+        )
+        if billed_reseller_ids:
+            stale_q = stale_q.where(Invoice.reseller_id.notin_(billed_reseller_ids))
+        stale_ids = (await session.execute(stale_q)).scalars().all()
+        if stale_ids:
+            await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id.in_(stale_ids)))
+            await session.execute(
+                delete(FinancialRecord).where(FinancialRecord.invoice_id.in_(stale_ids))
+            )
+            await session.execute(delete(Invoice).where(Invoice.id.in_(stale_ids)))
+            summary.reconciled_zero = len(stale_ids)
 
     await session.commit()
     log.info(
@@ -127,6 +189,11 @@ async def preview_bundles(
 
     out: list[tuple[Panel, BundleResult]] = []
     for panel in panels:
+        # Mirror generate_invoices: don't preview a panel we wouldn't bill, and skip resellers
+        # no longer present so the "zero sale" view matches reality.
+        ok, _ = _panel_billable(panel)
+        if not ok:
+            continue
         resellers = (
             await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
         ).scalars().all()
@@ -141,6 +208,14 @@ async def preview_bundles(
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
             panel_synced_at=panel.last_synced_at,
         ):
+            if not _reseller_present(b.root, panel):
+                continue
+            # Fold in the abuse-metered extra so total_gb here equals what billing would invoice
+            # (a reseller with only metered overage must NOT show up as a "zero sale").
+            extra = await metering.bundle_extra(
+                session, panel.id, b.admin_uuids, period.label, free_threshold
+            )
+            b.total_gb = round(b.total_gb + float(extra.get("gb", 0) or 0), 3)
             out.append((panel, b))
     return out
 

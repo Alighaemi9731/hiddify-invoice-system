@@ -133,6 +133,9 @@ DEFS: list[SettingDef] = [
     # Last live USDT→Toman rate fetched from Tetherland/Wallex + when (read-only status, auto-updated).
     SettingDef("toman_per_usdt_auto", 0, False, "pricing"),
     SettingDef("toman_per_usdt_auto_at", "", False, "pricing"),
+    # In auto mode, a cached live rate older than this many hours is treated as stale and billing
+    # falls back to the manual rate (0 disables the staleness check). Default 48h.
+    SettingDef("rate_max_age_hours", 48, False, "pricing"),
     SettingDef("rate_refresh_hours", 1, False, "schedule"),  # how often to refresh the live rate
     SettingDef("excluded_usage_gb", [1], False, "pricing"),  # extra exact sizes to skip
     # Any config whose quota is <= this many GB is a free test config and is NOT

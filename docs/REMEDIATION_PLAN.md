@@ -98,7 +98,8 @@ Primary files:
 
 ## B04 - Billing and synchronization correctness
 
-Priority: P0. Status: TODO.
+Priority: P0. Status: DONE in `v1.37.41` (per-node-PDF-from-persisted-lines item
+consciously deferred — see CHANGELOG; the payable amount is already authoritative).
 
 - Abort monthly billing, or exclude affected panels, when sync fails.
 - Reconcile an existing invoice when recomputation becomes zero.

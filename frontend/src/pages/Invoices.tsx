@@ -64,7 +64,12 @@ export default function Invoices() {
       const parts = [`${r.created} فاکتور جدید`];
       if (r.updated) parts.push(`${r.updated} پیش‌نویس بازمحاسبه`);
       if (r.skipped_existing) parts.push(`${r.skipped_existing} ارسال/پرداخت‌شده دست‌نخورده`);
-      return `${parts.join(" • ")} (${fmtToman(r.total_amount_toman)})`;
+      if (r.reconciled_zero) parts.push(`${r.reconciled_zero} پیش‌نویسِ صفرشده حذف شد`);
+      let msg = `${parts.join(" • ")} (${fmtToman(r.total_amount_toman)})`;
+      if (r.skipped_panels?.length) {
+        msg += ` — ⚠️ ${r.skipped_panels.length} پنل به‌دلیل همگام‌سازی ناموفق فاکتور نشد: ${r.skipped_panels.join("، ")}`;
+      }
+      return msg;
     },
   );
   const discard = mut(
