@@ -172,6 +172,7 @@ const SECTIONS: Section[] = [
         fields: [
           { key: "backup_enabled", label: "پشتیبان‌گیری خودکار به تلگرام" },
           { key: "backup_interval_hours", label: "پشتیبان‌گیری: هر چند ساعت", type: "number", min: 1, max: 23, when: (v) => !!v("backup_enabled") },
+          { key: "backup_passphrase", label: "گذرواژهٔ رمزگذاری پشتیبان (اختیاری)", help: "اگر تنظیم شود، همهٔ فایل‌های پشتیبان رمزگذاری می‌شوند و برای بازیابی همین گذرواژه لازم است. آن را جایی امن و خارج از سامانه نگه دارید؛ در صورت فراموشی، پشتیبان‌های رمزگذاری‌شده قابل بازیابی نیستند.", dir: "ltr", advanced: true },
           { key: "sync_interval_hours", label: "همگام‌سازی پنل‌ها: هر چند ساعت", type: "number", min: 1, max: 23 },
           { key: "guard_interval_minutes", label: "گارد کانال/گروه: هر چند دقیقه", type: "number", min: 1, max: 59 },
         ],

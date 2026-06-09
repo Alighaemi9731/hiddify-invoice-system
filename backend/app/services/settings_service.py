@@ -159,6 +159,9 @@ DEFS: list[SettingDef] = [
     SettingDef("guard_interval_minutes", 10, False, "schedule"), # channel/group guard: every N minutes
     SettingDef("backup_enabled", True, False, "schedule"),       # auto-backup on/off
     SettingDef("backup_interval_hours", 2, False, "schedule"),   # auto-backup: every N hours
+    # Optional passphrase: when set, every backup archive is encrypted (PBKDF2→Fernet) and
+    # restore requires the same passphrase. Keep it somewhere safe OUTSIDE the system.
+    SettingDef("backup_passphrase", "", True, "schedule"),
     # Dunning / enforcement
     SettingDef("reminder1_day", 2, False, "dunning"),
     SettingDef("reminder2_day", 4, False, "dunning"),

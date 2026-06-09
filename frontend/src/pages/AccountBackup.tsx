@@ -107,8 +107,9 @@ export default function AccountBackup() {
     onError: (e) => show(errMsg(e), "error"),
   });
 
+  const [restorePass, setRestorePass] = useState("");
   const restore = useMutation({
-    mutationFn: (f: File) => restoreBackup(f),
+    mutationFn: (f: File) => restoreBackup(f, restorePass || undefined),
     onSuccess: (r: any) => show(`بازیابی: ${r.note || r.status}`, "success"),
     onError: (e) => show(errMsg(e), "error"),
   });
@@ -336,9 +337,12 @@ export default function AccountBackup() {
           </Stack>
           <Divider sx={{ my: 2 }} />
           <Alert severity="warning" sx={{ mb: 2 }}>
-            بازیابی، دیتابیس فعلی را با فایل پشتیبان جایگزین می‌کند. پس از بازیابی، سرویس بک‌اند
-            باید یک‌بار ری‌استارت شود.
+            بازیابی، دیتابیس فعلی را با فایل پشتیبان جایگزین می‌کند. اگر در حین بازیابی خطایی رخ دهد،
+            دیتابیس فعلی بدون تغییر می‌ماند. پس از بازیابیِ موفق، سرویس‌ها به‌صورت خودکار ری‌استارت می‌شوند.
           </Alert>
+          <TextField label="گذرواژهٔ پشتیبان (فقط اگر پشتیبان رمزگذاری‌شده باشد)" type="password"
+            value={restorePass} onChange={(e) => setRestorePass(e.target.value)}
+            sx={{ mb: 2, maxWidth: 420, display: "block" }} inputProps={{ dir: "ltr" }} />
           <input ref={fileRef} type="file" accept=".zip" hidden
             onChange={(e) => { const f = e.target.files?.[0]; if (f) restore.mutate(f); e.currentTarget.value = ""; }} />
           <Button variant="contained" color="warning" startIcon={<RestoreIcon />}

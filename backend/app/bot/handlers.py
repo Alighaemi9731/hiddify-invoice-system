@@ -1550,12 +1550,21 @@ async def on_document(message: Message) -> None:
         return
     await message.answer("⏳ در حال بازیابی از فایل پشتیبان...")
     try:
+        import asyncio
+
         from app.services import backup as backup_service
 
+        async with SessionLocal() as session:
+            passphrase = await settings_service.get(session, "backup_passphrase", "") or None
         buf = await message.bot.download(doc)
-        result = backup_service.restore_from_zip(buf.read())
+        # Blocking dump/restore subprocess work runs off the event loop.
+        result = await asyncio.to_thread(
+            backup_service.restore_from_zip, buf.read(), passphrase=passphrase
+        )
         if result.get("restored"):
-            # Drop the bot's pooled connections so it reconnects to the restored data.
+            # Drop the bot's pooled connections so it reconnects to the restored data; the
+            # restore wrote a restart marker, so this process (and the backend) self-restart
+            # shortly via the restart watcher to pick up the restored data / SECRET_KEY.
             from app.core.db import engine
 
             await engine.dispose()

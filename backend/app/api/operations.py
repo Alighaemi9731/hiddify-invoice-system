@@ -7,7 +7,7 @@ import logging
 import os
 import signal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import delete
@@ -164,14 +164,34 @@ async def backup_send(session: AsyncSession = Depends(get_session)) -> dict:
 
 
 @router.post("/backup/restore")
-async def backup_restore(file: UploadFile, session: AsyncSession = Depends(get_session)) -> dict:
+async def backup_restore(
+    file: UploadFile,
+    passphrase: str | None = Form(None),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     """Restore the system from an uploaded backup .zip. On success the backend
-    reconnects and restarts itself automatically — no server terminal needed."""
+    reconnects and restarts itself automatically — no server terminal needed.
+
+    `passphrase` is required only for an encrypted backup; if omitted, the configured
+    `backup_passphrase` setting is used as a fallback."""
     if not (file.filename or "").endswith(".zip"):
         raise HTTPException(400, "فایل باید زیپ (.zip) باشد")
+    if file.size and file.size > backup_service.MAX_ARCHIVE_BYTES:
+        raise HTTPException(400, "حجم فایل پشتیبان بیش از حد مجاز است.")
+    if not (passphrase or "").strip():
+        from app.services import settings_service
+
+        passphrase = await settings_service.get(session, "backup_passphrase", "") or None
     try:
         content = await file.read()
-        result = backup_service.restore_from_zip(content)
+        if len(content) > backup_service.MAX_ARCHIVE_BYTES:
+            raise HTTPException(400, "حجم فایل پشتیبان بیش از حد مجاز است.")
+        # The dump/restore subprocess work is blocking — keep it off the event loop.
+        result = await asyncio.to_thread(
+            backup_service.restore_from_zip, content, passphrase=passphrase
+        )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"بازیابی ناموفق بود: {exc}")
 

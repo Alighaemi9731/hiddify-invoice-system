@@ -147,8 +147,19 @@ async def backup_job() -> None:
         async with SessionLocal() as session:
             if await settings_service.get(session, "backup_enabled", True):
                 await backup_delivery.send_backup_to_owner(session)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         log.exception("backup_job failed")
+        # A failed backup used to silently produce a dump-less archive reported as success;
+        # now it fails loudly — tell the owner so they know automated backups need attention.
+        try:
+            async with SessionLocal() as session:
+                await owner_notify.notify_owner(
+                    session,
+                    "⚠️ پشتیبان‌گیری خودکار ناموفق بود. لطفاً وضعیت سرور/دیتابیس را بررسی کنید.\n"
+                    f"خطا: {exc}",
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("backup_job failure notification failed")
 
 
 async def rate_refresh_job() -> None:

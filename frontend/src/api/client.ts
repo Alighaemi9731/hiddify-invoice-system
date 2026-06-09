@@ -212,9 +212,10 @@ export async function downloadBackup() {
 }
 export const sendBackupToTelegram = () => api.post("/api/ops/backup/send").then((r) => r.data);
 export const wipeData = () => api.post("/api/ops/wipe-data", { confirm: "DELETE" }).then((r) => r.data);
-export const restoreBackup = (file: File) => {
+export const restoreBackup = (file: File, passphrase?: string) => {
   const fd = new FormData();
   fd.append("file", file);
+  if (passphrase) fd.append("passphrase", passphrase);
   return api
     .post("/api/ops/backup/restore", fd, { headers: { "Content-Type": "multipart/form-data" } })
     .then((r) => r.data);

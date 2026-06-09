@@ -117,6 +117,19 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M49** Audit remediation B02 — backup, restore, and operational recovery
+  (`v1.37.39`). Backups now fail loudly when no usable DB image can be produced (failed/empty
+  `pg_dump` or invalid SQLite → `BackupError`, not a dump-less "success"); the scheduled
+  backup job notifies the owner on failure. Postgres restore is atomic
+  (`psql --single-transaction` + `ON_ERROR_STOP`) so a mid-restore failure rolls back and the
+  live DB is untouched, with a pre-restore safety dump kept on disk. The restored
+  `SECRET_KEY` is persisted to `.env` only after the DB restore succeeds. Uploaded archives
+  are validated (size cap, member allowlist, per-member/total decompressed limits,
+  zip-bomb ratio guard, `meta.json` shape). Blocking dump/restore subprocess work runs off
+  the event loop. After a successful restore both backend and bot self-restart via a shared
+  restart marker (`app/services/restart_signal.py`, provably loop-free) so neither keeps a
+  stale key. Optional password-protected backups via a `backup_passphrase` setting
+  (PBKDF2→Fernet envelope), off by default. Regression tests in `tests/test_backup_restore.py`.
 - [x] **M48** Audit remediation B01 — authentication and account hardening
   (`v1.37.38`). JWT authorization now fails closed on database errors and requires
   mandatory owner-role + token-epoch claims matching the active live account.

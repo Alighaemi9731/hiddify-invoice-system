@@ -60,7 +60,7 @@ Primary files:
 
 ## B02 - Backup, restore, and operational recovery
 
-Priority: P0. Status: TODO.
+Priority: P0. Status: DONE in `v1.37.39`.
 
 - Abort backup creation when `pg_dump` fails, is empty, or cannot be validated.
 - Validate ZIP size, members, dump presence, metadata, and decompression limits.

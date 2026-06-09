@@ -30,6 +30,11 @@ async def _current_token() -> str | None:
 
 async def main() -> None:
     await run_bootstrap()
+    # Self-restart if a restore (here or in the backend) changed the DB / SECRET_KEY, so the
+    # bot never keeps a stale key or a pooled handle to the pre-restore database.
+    from app.services import restart_signal
+
+    restart_signal.start_watcher()
     # Build the Dispatcher ONCE — a router can only be attached to one dispatcher,
     # so we reuse it across reconnects (only the Bot/session is recreated).
     dp = Dispatcher(storage=MemoryStorage())

@@ -8,6 +8,45 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.39 - 2026-06-09
+
+Audit remediation B02 — backup, restore, and operational recovery.
+
+### Fixed
+
+- A backup is now refused (with a clear error) when no usable database image can be
+  produced: a failed/empty `pg_dump` or an invalid SQLite file raises instead of shipping
+  a dump-less archive that was previously reported as a successful backup.
+- The scheduled backup job now notifies the owner on Telegram when an automatic backup
+  fails, instead of failing silently.
+- Postgres restore is now atomic: the import runs in a single transaction
+  (`--single-transaction`, `ON_ERROR_STOP`), so a mid-restore failure rolls back and the
+  live database is left exactly as it was — never half-dropped. A pre-restore safety dump
+  of the current database is kept on disk before each restore.
+- A restored `SECRET_KEY` is written to `.env` only after the database restore succeeds.
+  A failed restore no longer leaves a new key against an unchanged database.
+- Uploaded backups are validated before anything is read: archive size cap, member
+  allowlist, per-member and total decompressed-size limits, compression-ratio (zip-bomb)
+  guard, and `meta.json` shape.
+- Blocking `pg_dump`/`psql` work runs off the request event loop (panel and bot restore).
+- After a successful restore both the backend and the bot self-restart (via a shared
+  restart marker) so neither keeps a stale `SECRET_KEY` or a handle to the pre-restore DB.
+
+### Added
+
+- Optional password-protected backups: set a `backup_passphrase` (Settings → زمان‌بندی) to
+  encrypt every archive (PBKDF2 → Fernet). Restore then requires the same passphrase,
+  entered on the panel restore form or read from the configured setting. Off by default —
+  unencrypted self-sufficient cross-server restore is unchanged when no passphrase is set.
+
+### Verification
+
+- Added regression tests for dump/SQLite validation, passphrase encryption round-trip and
+  wrong/missing passphrase, archive guards (stray member, oversize, zip bomb), the
+  persist-key-only-after-success invariant on both failure and success paths, refusal to
+  build a dump-less backup, encrypted-restore-without-passphrase, and the loop-free
+  cross-process restart signal.
+
 ## 1.37.38 - 2026-06-09
 
 ### Security

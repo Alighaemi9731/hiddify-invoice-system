@@ -40,6 +40,12 @@ async def lifespan(app: FastAPI):
 
         await scheduler.start()
 
+        # Self-restart if a restore performed by the bot process changed the DB / SECRET_KEY,
+        # so the backend never keeps a stale key or a pooled handle to the pre-restore DB.
+        from app.services import restart_signal
+
+        restart_signal.start_watcher()
+
     yield
 
     if settings.run_scheduler:
