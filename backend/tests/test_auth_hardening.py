@@ -4,12 +4,12 @@ import asyncio
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import auth, setup
 from app.core import crypto, loginsec
-from app.core.db import Base, _sync_missing_columns
+from app.core.db import Base
 from app.core.security import (
     create_access_token,
     get_current_subject,
@@ -96,29 +96,6 @@ def test_password_validation_enforces_bcrypt_byte_limit():
         validate_new_password("é" * 37)  # 74 UTF-8 bytes
     with pytest.raises(ValueError, match="72"):
         hash_password("a" * 73)
-
-
-def test_auto_migration_adds_pending_totp_column(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
-    with engine.begin() as conn:
-        conn.exec_driver_sql(
-            """
-            CREATE TABLE app_users (
-                id INTEGER PRIMARY KEY,
-                username VARCHAR(64) NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
-                role VARCHAR(32) NOT NULL,
-                is_active BOOLEAN NOT NULL,
-                token_epoch INTEGER NOT NULL,
-                totp_secret_enc VARCHAR(255),
-                totp_enabled BOOLEAN NOT NULL
-            )
-            """
-        )
-        _sync_missing_columns(conn)
-        columns = {column["name"] for column in inspect(conn).get_columns("app_users")}
-    assert "totp_pending_secret_enc" in columns
-    engine.dispose()
 
 
 @pytest.mark.asyncio

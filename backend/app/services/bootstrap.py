@@ -1,4 +1,4 @@
-"""First-boot bootstrap: create tables, seed the owner login and default settings."""
+"""First-boot bootstrap: migrate schema, seed the owner login and default settings."""
 from __future__ import annotations
 
 import logging

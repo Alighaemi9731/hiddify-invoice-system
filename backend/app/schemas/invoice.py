@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class InvoiceLineOut(BaseModel):
@@ -39,13 +39,15 @@ class InvoiceOut(BaseModel):
 
 
 class InvoiceDetail(InvoiceOut):
-    lines: list[InvoiceLineOut] = []
+    lines: list[InvoiceLineOut] = Field(default_factory=list)
 
 
 class InvoiceEdit(BaseModel):
-    usage_gb: float | None = None
-    price_per_gb: int | None = None
-    amount_toman: float | None = None  # if set, overrides usage*price
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    usage_gb: float | None = Field(default=None, ge=0)
+    price_per_gb: int | None = Field(default=None, ge=0)
+    amount_toman: float | None = Field(default=None, ge=0)  # overrides usage*price
 
 
 class InvoiceDefer(BaseModel):
@@ -54,8 +56,8 @@ class InvoiceDefer(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    period: str  # "YYYY-MM"
-    panel_id: int | None = None
+    period: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")  # "YYYY-MM"
+    panel_id: int | None = Field(default=None, gt=0)
     force: bool = False
 
 
@@ -66,6 +68,6 @@ class GenerateResult(BaseModel):
     skipped_existing: int
     zero_skipped: int
     total_amount_toman: float
-    invoice_ids: list[int]
-    skipped_panels: list[str] = []
+    invoice_ids: list[int] = Field(default_factory=list)
+    skipped_panels: list[str] = Field(default_factory=list)
     reconciled_zero: int = 0

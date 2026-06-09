@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Date, DateTime, Integer, Numeric, String
+from sqlalchemy import CheckConstraint, Date, DateTime, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -20,6 +20,12 @@ from app.models.mixins import TimestampMixin
 
 class FinancialRecord(Base, TimestampMixin):
     __tablename__ = "financial_records"
+    __table_args__ = (
+        CheckConstraint("usage_gb >= 0", name="ck_financial_records_usage_nonnegative"),
+        CheckConstraint("price_per_gb >= 0", name="ck_financial_records_price_nonnegative"),
+        CheckConstraint("amount_toman >= 0", name="ck_financial_records_toman_nonnegative"),
+        CheckConstraint("amount_usdt >= 0", name="ck_financial_records_usdt_nonnegative"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # Soft reference to the source invoice (no FK → survives invoice deletion). Unique so a

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ResellerOut(BaseModel):
@@ -34,13 +34,13 @@ class ResellerOut(BaseModel):
 
 
 class ResellerUpdate(BaseModel):
-    price_per_gb: int | None = None
-    min_sale_toman: int | None = None
+    price_per_gb: int | None = Field(default=None, ge=0)
+    min_sale_toman: int | None = Field(default=None, ge=0)
     exclude_from_billing: bool | None = None
 
 
 class BumpLimitsBody(BaseModel):
-    amount: int = 100  # added to BOTH max_users and max_active_users
+    amount: int = Field(default=100, ge=1, le=1_000_000)
 
 
 class CanAddAdminBody(BaseModel):

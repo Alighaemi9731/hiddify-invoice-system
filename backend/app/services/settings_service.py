@@ -10,6 +10,7 @@ Message templates use Python `str.format` placeholders, e.g. {name}, {amount_usd
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from sqlalchemy import select
@@ -200,6 +201,100 @@ DEFS: list[SettingDef] = [
 ]
 
 _DEF_BY_KEY = {d.key: d for d in DEFS}
+_API_READ_ONLY = {
+    "owner_chat_id", "setup_done", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
+    "ton_toman_auto",
+}
+_INT_RANGES: dict[str, tuple[int, int | None]] = {
+    "default_price_per_gb": (0, None),
+    "toman_per_usdt": (0, None),
+    "rate_max_age_hours": (0, 24 * 365),
+    "rate_refresh_hours": (1, 23),
+    "min_sale_toman": (0, None),
+    "invoice_day_of_month": (1, 28),
+    "invoice_hour": (0, 23),
+    "dunning_hour": (0, 23),
+    "sync_interval_hours": (1, 23),
+    "guard_interval_minutes": (1, 59),
+    "backup_interval_hours": (1, 23),
+    "reminder1_day": (0, 365),
+    "reminder2_day": (0, 365),
+    "warning_day": (0, 365),
+    "enforcement_day": (0, 365),
+    "pending_payment_hold_days": (1, 365),
+    "kick_grace_minutes": (0, 24 * 60),
+    "min_confirmations": (0, 10_000),
+}
+_NONNEGATIVE_NUMBERS = {
+    "payment_amount_tolerance_usdt", "free_under_gb", "overage_tolerance_gb",
+}
+_STRING_MAX = 10_000
+
+
+def _api_definition(key: str) -> SettingDef:
+    definition = _DEF_BY_KEY.get(key)
+    if definition is None:
+        raise ValueError(f"Unknown setting key: {key}")
+    if key in _API_READ_ONLY:
+        raise ValueError(f"Setting is managed internally: {key}")
+    return definition
+
+
+def is_unchanged_secret_mask(key: str, value: Any) -> bool:
+    definition = _api_definition(key)
+    return (
+        definition.is_secret
+        and isinstance(value, str)
+        and bool(value)
+        and set(value) <= {"•"}
+    )
+
+
+def validate_api_value(key: str, value: Any) -> Any:
+    """Validate and normalize one owner-editable runtime setting."""
+    definition = _api_definition(key)
+
+    default = definition.default
+    if isinstance(default, bool):
+        if type(value) is not bool:
+            raise ValueError(f"{key} must be a boolean")
+        return value
+    if isinstance(default, int) and not isinstance(default, bool):
+        if type(value) is not int:
+            raise ValueError(f"{key} must be an integer")
+        lo, hi = _INT_RANGES.get(key, (0, None))
+        if value < lo or (hi is not None and value > hi):
+            suffix = f"..{hi}" if hi is not None else " or greater"
+            raise ValueError(f"{key} must be {lo}{suffix}")
+        return value
+    if isinstance(default, float):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} must be a number")
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"{key} must be finite")
+        if key in _NONNEGATIVE_NUMBERS and number < 0:
+            raise ValueError(f"{key} must be non-negative")
+        return number
+    if isinstance(default, list):
+        if key != "excluded_usage_gb" or not isinstance(value, list):
+            raise ValueError(f"{key} must be a list")
+        normalized: list[float] = []
+        for item in value:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{key} entries must be numbers")
+            number = float(item)
+            if not math.isfinite(number) or number < 0:
+                raise ValueError(f"{key} entries must be finite and non-negative")
+            normalized.append(number)
+        return normalized
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    if len(value) > _STRING_MAX:
+        raise ValueError(f"{key} is too long")
+    if key == "rate_mode" and value not in {"manual", "auto"}:
+        raise ValueError("rate_mode must be 'manual' or 'auto'")
+    return value
 
 
 async def seed_defaults(session: AsyncSession) -> None:
@@ -270,7 +365,9 @@ async def get_many(session: AsyncSession, keys: list[str]) -> dict[str, Any]:
     return {k: await get(session, k) for k in keys}
 
 
-async def set_value(session: AsyncSession, key: str, value: Any) -> None:
+async def set_value(
+    session: AsyncSession, key: str, value: Any, *, commit: bool = True
+) -> None:
     """Write a setting. Secret keys are encrypted at rest."""
     d = _DEF_BY_KEY.get(key)
     is_secret = d.is_secret if d else False
@@ -284,7 +381,8 @@ async def set_value(session: AsyncSession, key: str, value: Any) -> None:
     else:
         row.value = stored
         row.is_secret = is_secret
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def all_for_api(session: AsyncSession) -> list[dict]:

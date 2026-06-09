@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SettingOut(BaseModel):
@@ -14,9 +14,9 @@ class SettingOut(BaseModel):
 
 
 class SettingUpdate(BaseModel):
-    key: str
+    key: str = Field(min_length=1, max_length=64)
     value: Any
 
 
 class SettingsBulkUpdate(BaseModel):
-    items: list[SettingUpdate]
+    items: list[SettingUpdate] = Field(min_length=1, max_length=200)

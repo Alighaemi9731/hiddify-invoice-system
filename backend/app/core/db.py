@@ -1,8 +1,12 @@
 """Async SQLAlchemy engine, session factory, and declarative base."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -41,60 +45,12 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_models() -> None:
-    """Create all tables, then add any missing columns (lightweight auto-migrate).
-
-    Alembic handles real migrations in Phase 2; for the SQLite MVP this keeps an
-    existing DB (with the owner's real config/data) in sync as the schema evolves,
-    without dropping anything."""
-    # Import models so they are registered on Base.metadata before create_all.
-    import app.models  # noqa: F401
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_sync_missing_columns)
+    """Upgrade the database to the current versioned Alembic head."""
+    await asyncio.to_thread(_upgrade_schema)
 
 
-def _sync_missing_columns(sync_conn) -> None:
-    """Add columns present in the ORM models but missing from the live tables.
-
-    Only ADD COLUMN (safe, non-destructive). Columns are added as NULLable with a
-    sensible DEFAULT so SQLite accepts the ALTER on a populated table."""
-    import logging
-
-    from sqlalchemy import Boolean, Integer, Numeric
-    from sqlalchemy import inspect as sa_inspect
-
-    log = logging.getLogger("db.migrate")
-    inspector = sa_inspect(sync_conn)
-    dialect = sync_conn.dialect
-
-    for table in Base.metadata.sorted_tables:
-        if not inspector.has_table(table.name):
-            continue
-        existing = {c["name"] for c in inspector.get_columns(table.name)}
-        for column in table.columns:
-            if column.name in existing:
-                continue
-            try:
-                type_sql = column.type.compile(dialect=dialect)
-            except Exception:  # noqa: BLE001
-                type_sql = "VARCHAR"
-            # Give NOT NULL columns a type-appropriate default so the ADD COLUMN succeeds
-            # on a populated table and existing rows get a sane value. Nullable columns
-            # need no default (NULL is fine), which also avoids an invalid `DEFAULT ''`
-            # on a date/datetime column. NOTE: Postgres rejects `DEFAULT 0` for BOOLEAN.
-            if column.nullable:
-                default = ""
-            elif isinstance(column.type, Boolean):
-                default = " DEFAULT FALSE"
-            elif isinstance(column.type, (Integer, Numeric)):
-                default = " DEFAULT 0"
-            else:
-                default = " DEFAULT ''"  # String / Enum (native_enum=False, stored VARCHAR)
-            ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {type_sql}{default}'
-            try:
-                sync_conn.exec_driver_sql(ddl)
-                log.info("auto-migrate: added %s.%s", table.name, column.name)
-            except Exception:  # noqa: BLE001
-                log.warning("auto-migrate: could not add %s.%s", table.name, column.name,
-                            exc_info=True)
+def _upgrade_schema() -> None:
+    backend_dir = Path(__file__).resolve().parents[2]
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_dir / "alembic"))
+    command.upgrade(cfg, "head")

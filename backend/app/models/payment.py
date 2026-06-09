@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -21,6 +22,14 @@ from app.models.mixins import TimestampMixin
 
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
+    __table_args__ = (
+        CheckConstraint("confirmations >= 0", name="ck_payments_confirmations_nonnegative"),
+        CheckConstraint("amount_usdt >= 0", name="ck_payments_usdt_nonnegative"),
+        CheckConstraint(
+            "amount_toman IS NULL OR amount_toman >= 0",
+            name="ck_payments_toman_nonnegative",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     reseller_id: Mapped[int] = mapped_column(

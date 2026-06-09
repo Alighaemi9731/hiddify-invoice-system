@@ -30,7 +30,7 @@ log = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # First-boot: create tables, seed owner + settings.
+    # First-boot/startup: apply versioned DB migrations, then seed owner + settings.
     from app.services.bootstrap import run_bootstrap
 
     await run_bootstrap()

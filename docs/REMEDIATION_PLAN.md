@@ -147,7 +147,7 @@ Primary files:
 
 ## B07 - Database evolution and input contracts
 
-Priority: P1. Status: TODO.
+Priority: P1. Status: DONE in `v1.37.44`.
 
 - Replace ad-hoc `create_all`/`ADD COLUMN` evolution with versioned Alembic migrations.
 - Baseline the current production schema before applying new constraints.

@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -26,6 +27,13 @@ class Invoice(Base, TimestampMixin):
         UniqueConstraint(
             "reseller_id", "period_start", "period_end", name="uq_invoice_period"
         ),
+        CheckConstraint("usage_gb >= 0", name="ck_invoices_usage_nonnegative"),
+        CheckConstraint("price_per_gb >= 0", name="ck_invoices_price_nonnegative"),
+        CheckConstraint("amount_toman >= 0", name="ck_invoices_toman_nonnegative"),
+        CheckConstraint("base_amount_toman >= 0", name="ck_invoices_base_toman_nonnegative"),
+        CheckConstraint("min_sale_toman >= 0", name="ck_invoices_min_sale_nonnegative"),
+        CheckConstraint("usdt_rate >= 0", name="ck_invoices_rate_nonnegative"),
+        CheckConstraint("amount_usdt >= 0", name="ck_invoices_usdt_nonnegative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -72,6 +80,9 @@ class Invoice(Base, TimestampMixin):
 
 class InvoiceLine(Base):
     __tablename__ = "invoice_lines"
+    __table_args__ = (
+        CheckConstraint("usage_gb >= 0", name="ck_invoice_lines_usage_nonnegative"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     invoice_id: Mapped[int] = mapped_column(

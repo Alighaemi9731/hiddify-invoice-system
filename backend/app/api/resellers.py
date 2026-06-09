@@ -79,7 +79,7 @@ async def list_resellers(
         False, description="only main (top-level) resellers — exclude sub-resellers"
     ),
     limit: int = Query(500, le=5000),
-    offset: int = 0,
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> list[ResellerOut]:
     default_price = await pricing.get_default_price_per_gb(session)
@@ -131,23 +131,46 @@ async def reseller_tree(
     rows = (await session.execute(query)).all()
     counts = await _usage_counts(session, panel_id)
 
-    # Index by (panel_id, admin_uuid); group children by parent.
+    # Identity is panel-scoped and UUIDs are case-insensitive.
+    def identity(r: Reseller) -> tuple[int, str]:
+        return (r.panel_id, r.admin_uuid.lower())
+
+    def parent_identity(r: Reseller) -> tuple[int, str] | None:
+        return (r.panel_id, r.parent_admin_uuid.lower()) if r.parent_admin_uuid else None
+
     by_key: dict[tuple[int, str], tuple[Reseller, str]] = {}
-    owner_uuids: set[str] = set()
+    owner_keys: set[tuple[int, str]] = set()
     children: dict[tuple[int, str], list[tuple[Reseller, str]]] = {}
     for r, key in rows:
-        by_key[(r.panel_id, r.admin_uuid)] = (r, key)
+        by_key[identity(r)] = (r, key)
         if r.is_owner:
-            owner_uuids.add(r.admin_uuid)
+            owner_keys.add(identity(r))
     for r, key in rows:
-        if r.parent_admin_uuid:
-            children.setdefault((r.panel_id, r.parent_admin_uuid), []).append((r, key))
+        parent_key = parent_identity(r)
+        if parent_key:
+            children.setdefault(parent_key, []).append((r, key))
 
-    def node(r: Reseller, key: str) -> dict:
-        kids = sorted(children.get((r.panel_id, r.admin_uuid), []), key=lambda x: x[0].name)
+    emitted: set[tuple[int, str]] = set()
+
+    def node(r: Reseller, key: str, ancestors: frozenset[tuple[int, str]]) -> dict:
+        current = identity(r)
+        emitted.add(current)
+        kids = sorted(children.get(current, []), key=lambda x: x[0].name)
+        child_nodes: list[dict] = []
+        cycle_detected = False
+        next_ancestors = ancestors | {current}
+        for child, child_panel_key in kids:
+            child_key = identity(child)
+            if child.is_owner or child_key in next_ancestors or child_key in emitted:
+                cycle_detected = True
+                continue
+            child_nodes.append(node(child, child_panel_key, next_ancestors))
         out = _to_out(r, key, default_price, counts).model_dump()
-        out["children"] = [node(c, k) for c, k in kids if not c.is_owner]
+        out["children"] = child_nodes
         out["descendant_count"] = _count(out["children"])
+        out["cycle_detected"] = cycle_detected or any(
+            child.get("cycle_detected", False) for child in child_nodes
+        )
         return out
 
     # Roots = non-owner resellers whose parent is an Owner (or has no parent in set).
@@ -155,13 +178,27 @@ async def reseller_tree(
     for r, key in sorted(rows, key=lambda x: x[0].name):
         if r.is_owner:
             continue
-        parent_is_owner = r.parent_admin_uuid in owner_uuids
-        parent_missing = (r.panel_id, r.parent_admin_uuid) not in by_key
+        current = identity(r)
+        parent_key = parent_identity(r)
+        parent_is_owner = parent_key in owner_keys
+        parent_missing = parent_key not in by_key
         if parent_is_owner or parent_missing or not r.parent_admin_uuid:
-            n = node(r, key)
+            if current in emitted:
+                continue
+            n = node(r, key, frozenset())
             if q:
                 ql = q.lower()
                 # keep the root if it or any descendant matches
+                if ql not in (n["name"] or "").lower() and not _matches(n["children"], ql):
+                    continue
+            roots.append(n)
+    # A malformed cyclic component has no natural root. Surface it once as a synthetic root
+    # instead of recursing forever or silently hiding all of its members.
+    for r, key in sorted(rows, key=lambda x: x[0].name):
+        if not r.is_owner and identity(r) not in emitted:
+            n = node(r, key, frozenset())
+            if q:
+                ql = q.lower()
                 if ql not in (n["name"] or "").lower() and not _matches(n["children"], ql):
                     continue
             roots.append(n)
@@ -201,7 +238,7 @@ async def update_reseller(
     if body.min_sale_toman is not None:
         # Keep an explicit 0 ("no minimum-sale floor") as 0 — `or None` used to coerce it to
         # None, silently reverting the reseller to the global default floor.
-        r.min_sale_toman = int(body.min_sale_toman) if body.min_sale_toman >= 0 else None
+        r.min_sale_toman = int(body.min_sale_toman)
     if body.exclude_from_billing is not None:
         r.exclude_from_billing = body.exclude_from_billing
     await session.commit()
@@ -249,7 +286,7 @@ async def bump_limits(
     r = await session.get(Reseller, reseller_id)
     if not r:
         raise HTTPException(404, "Reseller not found")
-    amount = (body.amount if body else 100) or 100
+    amount = body.amount if body else 100
     try:
         new_mu, new_mau = await admin_capacity.bump_limits(session, r, amount)
     except Exception as exc:  # noqa: BLE001

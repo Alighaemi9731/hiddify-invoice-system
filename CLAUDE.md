@@ -111,12 +111,24 @@ It prints `http://<server-ip>`; the first visit shows the one-time **setup wizar
 (username / password / domain → auto-HTTPS). Stack = Caddy + SPA + FastAPI(+scheduler)
 + bot + Postgres, via `deploy/docker-compose.prod.yml`. The DB is Postgres only; the
 backend image bundles `postgresql-client` so auto-backups capture a real `pg_dump` and
-restores import via `psql`. Schema evolves on boot via `init_models()` +
-`_sync_missing_columns` (dialect-aware `ADD COLUMN`). Running `backend/tests` (pytest,
-`requirements-dev.txt`) is the only thing that touches SQLite — there is no local-run app variant.
+restores import via `psql`. Schema evolves on boot through versioned Alembic migrations;
+pre-Alembic databases are validated table/column-by-table/column before the baseline is
+stamped. Running `backend/tests` (pytest, `requirements-dev.txt`) is the only thing that
+touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M54** Audit remediation B07 — database evolution and input contracts
+  (`v1.37.44`). Startup now runs versioned Alembic migrations instead of `create_all` plus
+  ad-hoc `ADD COLUMN`: fresh DBs build from baseline, while existing DBs are schema-validated
+  before baseline stamp and serialized across backend/bot with a PostgreSQL advisory lock.
+  A follow-up migration adds 23 non-negative financial/usage constraints. Invoice/reseller
+  request schemas reject negative/non-finite values; settings writes use known-key/type/range
+  validation, internal read-only keys, and validate a bulk request before any write.
+  Reseller trees now use case-insensitive `(panel_id, uuid)` identity and terminate/surface
+  cyclic components. Mutable Pydantic list defaults use factories. Migration and contract
+  coverage is in `tests/test_migrations_contracts.py`; the migration was rehearsed against a
+  restored clone of production PostgreSQL before release.
 - [x] **M53** Audit remediation B06 — bot identity, membership, and input safety
   (`v1.37.43`). A router-level message middleware now enforces channel/group membership on
   direct commands and FSM/payment messages as well as callbacks (`/start` and `/cancel`

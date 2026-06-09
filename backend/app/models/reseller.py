@@ -5,6 +5,7 @@ import datetime as dt
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -24,6 +25,15 @@ class Reseller(Base, TimestampMixin):
     __tablename__ = "resellers"
     __table_args__ = (
         UniqueConstraint("panel_id", "admin_uuid", name="uq_reseller_panel_uuid"),
+        CheckConstraint(
+            "price_per_gb IS NULL OR price_per_gb >= 0",
+            name="ck_resellers_price_nonnegative",
+        ),
+        CheckConstraint(
+            "min_sale_toman IS NULL OR min_sale_toman >= 0",
+            name="ck_resellers_min_sale_nonnegative",
+        ),
+        CheckConstraint("gb_cap IS NULL OR gb_cap >= 0", name="ck_resellers_gb_cap_nonnegative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

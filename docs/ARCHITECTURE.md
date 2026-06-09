@@ -102,6 +102,11 @@ reseller to paste their panel link, e.g.
 `#tag` is stored as `link_tag`. On match we bind `bot_chat_id` so invoices/reminders
 reach that reseller. `panel_telegram_id` (when the panel has it) is a secondary auto-match.
 
+Database schema changes are versioned under `backend/alembic/versions`. On startup, fresh
+databases migrate from the baseline to head. An older database without `alembic_version` is
+stamped at the baseline only after all expected tables and columns are present; PostgreSQL
+uses an advisory lock so the backend and bot cannot race the migration.
+
 ## 5. PanelClient interface
 
 ```mermaid

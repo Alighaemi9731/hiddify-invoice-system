@@ -12,7 +12,7 @@ Billing adds (overage_gb + edit_renewal_gb) on top of the normal snapshot total.
 from __future__ import annotations
 
 
-from sqlalchemy import Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -23,6 +23,13 @@ class UsageMeter(Base, TimestampMixin):
     __tablename__ = "usage_meters"
     __table_args__ = (
         UniqueConstraint("panel_id", "user_uuid", "period_label", name="uq_usage_meter"),
+        CheckConstraint("quota_added_gb >= 0", name="ck_usage_meters_quota_nonnegative"),
+        CheckConstraint("consumed_gb >= 0", name="ck_usage_meters_consumed_nonnegative"),
+        CheckConstraint("overage_gb >= 0", name="ck_usage_meters_overage_nonnegative"),
+        CheckConstraint(
+            "edit_renewal_gb >= 0", name="ck_usage_meters_edit_renewal_nonnegative"
+        ),
+        CheckConstraint("reset_count >= 0", name="ck_usage_meters_reset_count_nonnegative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

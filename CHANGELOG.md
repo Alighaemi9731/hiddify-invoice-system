@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.44 - 2026-06-09
+
+Audit remediation B07 — database evolution and input contracts.
+
+### Fixed
+
+- Replaced startup `create_all` / ad-hoc `ADD COLUMN` evolution with versioned Alembic
+  migrations. Fresh databases run the complete baseline; existing pre-Alembic databases are
+  stamped only after every expected table and column is validated, then upgraded to head.
+- Serialized backend/bot migration startup with a PostgreSQL advisory lock, preventing both
+  processes from racing to migrate the same database.
+- Added database check constraints for non-negative invoice, ledger, payment, reseller
+  pricing/cap, and usage-meter values.
+- Added strict API validation for non-negative invoice/reseller edits and capacity bumps.
+  Runtime settings now use a known-key allowlist, strict value types, safe ranges, finite
+  numeric values, read-only internal keys, and atomic bulk validation before writes.
+- Reseller-tree construction now uses case-insensitive panel-scoped UUID identities, detects
+  cycles, and surfaces malformed cyclic components without recursion failure or hidden rows.
+- Replaced mutable Pydantic list defaults with `Field(default_factory=list)`.
+
+### Verification
+
+- Added migration tests for fresh install, safe adoption of an existing schema, rejection of
+  an incomplete schema, input contracts, atomic settings, and cyclic reseller trees.
+- Rehearsed the migrations against a restored clone of the production PostgreSQL database:
+  revision `6a9c7f21d4e0`, 23 non-negative constraints, then removed the temporary database.
+
 ## 1.37.43 - 2026-06-09
 
 Audit remediation B06 — bot identity, membership, and input safety.
