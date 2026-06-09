@@ -1759,6 +1759,25 @@ async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | N
     return due[0] if due else None
 
 
+async def _revalidate_payable(session, invoice, reseller_ids: set[int]):
+    """Re-check a chosen invoice under lock at submission time: it must still belong to the
+    caller, still be OWED, and not be deferred to a future date. The invoice could have been
+    paid / canceled / reverted / re-deadlined between the button tap and the proof arriving —
+    attaching a payment to that stale invoice would mis-settle or mis-attribute the money.
+    Returns the (fresh) invoice if still payable, else None (the caller falls back to the
+    oldest currently-payable invoice)."""
+    if invoice is None:
+        return None
+    fresh = await session.get(Invoice, invoice.id, with_for_update=True)
+    if fresh is None or fresh.reseller_id not in reseller_ids:
+        return None
+    if fresh.status not in _OWED:
+        return None
+    if fresh.deferred_until and fresh.deferred_until > dt.date.today():
+        return None
+    return fresh
+
+
 async def _handle_txid(message: Message, session, txid: str, *, invoice=None, chain: str = "bsc") -> None:
     """Record a submitted tx hash (USDT/BSC or TON) as a PENDING payment for MANUAL review —
     no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
@@ -1800,6 +1819,9 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
             "برای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
         return
     # Link to the chosen invoice (from «پرداخت فاکتور») if given; otherwise the oldest payable.
+    # Re-validate the chosen invoice under lock — it may be stale (paid/canceled/reverted/
+    # re-deadlined) since the button was tapped; if so, fall back to the oldest payable one.
+    invoice = await _revalidate_payable(session, invoice, {r.id for r in resellers})
     if invoice is None:
         invoice = await _oldest_due_invoice(session, resellers)
     # Never record an unattributed payment (no payable invoice) — that produced stray «—» rows.
@@ -1846,6 +1868,8 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
         # Not a registered reseller → can't attribute the payment.
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
+    # Re-validate the chosen invoice under lock (stale since the button tap?) then fall back.
+    invoice = await _revalidate_payable(session, invoice, {r.id for r in resellers})
     if invoice is None:
         invoice = await _oldest_due_invoice(session, resellers)
     if invoice is None:

@@ -26,6 +26,8 @@ import PeriodPicker from "../components/PeriodPicker";
 import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
+// Delivered-but-unpaid states money is collected against (mirrors the backend state machine).
+const OWED_STATES = ["sent", "overdue", "enforced"];
 
 export default function Invoices() {
   const qc = useQueryClient();
@@ -174,7 +176,9 @@ export default function Invoices() {
                 <TableCell><Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} /></TableCell>
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>
                   <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
-                  <Tooltip title="ویرایش"><IconButton size="small" onClick={() => setEditRow({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                  {i.status !== "paid" && i.status !== "canceled" && (
+                    <Tooltip title="ویرایش"><IconButton size="small" onClick={() => setEditRow({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                  )}
                   {i.status !== "paid" && (
                     <Tooltip title="بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)">
                       <IconButton size="small" disabled={recompute.isPending}
@@ -195,15 +199,17 @@ export default function Invoices() {
                   )}
                   {i.status === "paid" ? (
                     <Tooltip title="لغو پرداخت"><IconButton size="small" color="warning" onClick={() => unpay.mutate(i.id)}><UndoIcon fontSize="small" /></IconButton></Tooltip>
-                  ) : (
+                  ) : OWED_STATES.includes(i.status) ? (
                     <Tooltip title="ثبت پرداخت"><IconButton size="small" color="success" onClick={() => pay.mutate(i.id)}><CheckCircleIcon fontSize="small" /></IconButton></Tooltip>
+                  ) : null}
+                  {OWED_STATES.includes(i.status) && (
+                    <Tooltip title={i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت"}>
+                      <IconButton size="small" color={i.deferred_until ? "info" : "default"}
+                        onClick={() => setDeferRow({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
+                        <ScheduleIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
                   )}
-                  <Tooltip title={i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت"}>
-                    <IconButton size="small" color={i.deferred_until ? "info" : "default"}
-                      onClick={() => setDeferRow({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
-                      <ScheduleIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
                 </TableCell>
               </TableRow>
             ))}

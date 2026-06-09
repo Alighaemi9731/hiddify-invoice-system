@@ -39,16 +39,46 @@ USDT_DECIMALS = 18
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 
 
-async def _maybe_restore(session: AsyncSession, reseller: Reseller | None) -> None:
+async def _reseller_has_other_due(
+    session: AsyncSession, reseller_id: int, exclude_invoice_id: int | None
+) -> bool:
+    """True if the reseller still has another OWED, non-deferred invoice. Used to avoid
+    restoring a suspended reseller while they still owe on a different invoice — paying one
+    invoice must not lift enforcement when other debts remain."""
+    today = dt.date.today()
+    rows = (
+        await session.execute(
+            select(Invoice).where(
+                Invoice.reseller_id == reseller_id, Invoice.status.in_(_OWED)
+            )
+        )
+    ).scalars().all()
+    for inv in rows:
+        if exclude_invoice_id is not None and inv.id == exclude_invoice_id:
+            continue
+        if inv.deferred_until and inv.deferred_until > today:
+            continue  # deadline in the future → not currently due
+        return True
+    return False
+
+
+async def _maybe_restore(
+    session: AsyncSession, reseller: Reseller | None, *, exclude_invoice_id: int | None = None
+) -> None:
     if reseller is None:
         return
-    if await settings_service.get(session, "auto_restore_on_payment", True):
-        try:
-            from app.services import enforcement
+    if not await settings_service.get(session, "auto_restore_on_payment", True):
+        return
+    # Only lift enforcement when NO other due (non-deferred) invoice remains for this reseller.
+    if await _reseller_has_other_due(session, reseller.id, exclude_invoice_id):
+        log.info("restore held for reseller %s: other due invoice(s) remain", reseller.id)
+        return
+    try:
+        from app.services import enforcement
 
-            await enforcement.restore_reseller(session, reseller)
-        except Exception:  # noqa: BLE001 — enforcement module/credentials may be absent
-            log.info("restore skipped/failed for reseller %s", reseller.id)
+        await enforcement.restore_reseller(session, reseller)
+    except Exception:  # noqa: BLE001 — enforcement module/credentials may be absent
+        log.info("restore skipped/failed for reseller %s", reseller.id)
 
 
 @dataclass
@@ -233,7 +263,9 @@ async def verify_payment(
     payment.invoice_id = target.id
     payment.settled_invoice_ids = str(target.id)
     await session.commit()
-    await _maybe_restore(session, await session.get(Reseller, target.reseller_id))
+    await _maybe_restore(
+        session, await session.get(Reseller, target.reseller_id), exclude_invoice_id=target.id
+    )
 
     msg = await _payment_received_text(session, target.period_label, payment.id)
     if notify_reseller:
@@ -270,6 +302,49 @@ def _settled_ids(payment: Payment) -> list[int]:
     if payment.settled_invoice_ids:
         return [int(x) for x in payment.settled_invoice_ids.split(",") if x.strip().isdigit()]
     return [payment.invoice_id] if payment.invoice_id else []
+
+
+async def _settled_by_other_confirmed(
+    session: AsyncSession, invoice_id: int, exclude_payment_id: int
+) -> bool:
+    """True if a DIFFERENT confirmed payment also settled this invoice. Reversing/deleting one
+    payment must not un-pay an invoice that another confirmed payment still settles — otherwise
+    rejecting a duplicate/mis-clicked payment would wrongly mark a genuinely-paid invoice owed."""
+    others = (
+        await session.execute(
+            select(Payment).where(
+                Payment.id != exclude_payment_id, Payment.status == PaymentStatus.confirmed
+            )
+        )
+    ).scalars().all()
+    return any(invoice_id in _settled_ids(p) for p in others)
+
+
+async def _revert_settled_invoices(
+    session: AsyncSession, payment: Payment
+) -> None:
+    """Revert the invoices a (confirmed) payment settled back to owed — UNLESS another
+    confirmed payment still settles them. Reverted invoices get a fresh dunning cycle and the
+    stale txid cleared from the ledger."""
+    from app.services import dunning
+
+    ids = _settled_ids(payment)
+    if not ids:
+        return
+    rows = (
+        await session.execute(select(Invoice).where(Invoice.id.in_(ids)))
+    ).scalars().all()
+    for inv in rows:
+        if inv.status != InvoiceStatus.paid:
+            continue
+        if await _settled_by_other_confirmed(session, inv.id, payment.id):
+            continue  # still settled elsewhere — leave it paid
+        inv.status = InvoiceStatus.sent
+        inv.paid_at = None
+        await dunning.reset_cycle(session, inv, restamp_sent_at=True)
+        r = await session.get(Reseller, inv.reseller_id)
+        # record() clears the stale txid because the invoice is no longer paid.
+        await financial_archive.record(session, inv, reseller=r)
 
 
 async def _mark_invoices_paid(
@@ -325,7 +400,9 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     await session.commit()
 
     if inv is not None:
-        await _maybe_restore(session, await session.get(Reseller, inv.reseller_id))
+        await _maybe_restore(
+            session, await session.get(Reseller, inv.reseller_id), exclude_invoice_id=inv.id
+        )
 
     if reseller is not None and not was_confirmed:
         period = inv.period_label if inv is not None else ""
@@ -354,17 +431,7 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     payment.status = PaymentStatus.rejected
     payment.verified_at = None
     if was_confirmed:
-        ids = _settled_ids(payment)
-        if ids:
-            rows = (
-                await session.execute(select(Invoice).where(Invoice.id.in_(ids)))
-            ).scalars().all()
-            for inv in rows:
-                if inv.status == InvoiceStatus.paid:
-                    inv.status = InvoiceStatus.sent
-                    inv.paid_at = None
-                    r = await session.get(Reseller, inv.reseller_id)
-                    await financial_archive.record(session, inv, reseller=r)
+        await _revert_settled_invoices(session, payment)
     await session.commit()
     # Tell the customer their payment wasn't accepted — but only on a real state change
     # (so toggling reject→confirm→reject, or a double-click, doesn't spam them).
@@ -388,15 +455,7 @@ async def delete_payment(session: AsyncSession, payment_id: int) -> bool:
     if payment is None:
         return False
     if payment.status == PaymentStatus.confirmed:
-        rows = (
-            await session.execute(select(Invoice).where(Invoice.id.in_(_settled_ids(payment))))
-        ).scalars().all()
-        for inv in rows:
-            if inv.status == InvoiceStatus.paid:
-                inv.status = InvoiceStatus.sent
-                inv.paid_at = None
-                r = await session.get(Reseller, inv.reseller_id)
-                await financial_archive.record(session, inv, reseller=r)
+        await _revert_settled_invoices(session, payment)
     if payment.proof_path and os.path.exists(payment.proof_path):
         try:
             os.remove(payment.proof_path)

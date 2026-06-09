@@ -117,6 +117,21 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M50** Audit remediation B03 — payment and invoice state machine (`v1.37.40`).
+  Legal invoice status transitions are now centralized in `app/services/invoice_state.py`
+  (matrix + `ensure_can_mark_paid/cancel/defer/edit/unmark_paid`), wired into the invoices API
+  and surfaced as a `400` via a global `InvoiceStateError` handler — so a paid invoice can't be
+  canceled/deferred/edited, a draft/canceled invoice can't be marked paid, etc.; the frontend
+  action buttons are gated to match (`OWED_STATES`). `_maybe_restore` now takes
+  `exclude_invoice_id` and only lifts enforcement when `_reseller_has_other_due` finds no other
+  due (non-deferred) invoice. `reject_payment`/`delete_payment` route through
+  `_revert_settled_invoices`, which skips any invoice still settled by another confirmed payment
+  (`_settled_by_other_confirmed`) and, on revert, calls `dunning.reset_cycle(restamp_sent_at=True)`
+  (fresh reminder window) and re-records the ledger so `financial_archive` clears the stale txid
+  (txid is now cleared whenever an invoice is not paid). The bot `_revalidate_payable` re-checks a
+  chosen invoice under lock (owner/owed/not-future-deferred) before attaching a TXID/receipt,
+  falling back to the oldest payable. Tests in `tests/test_invoice_state.py`. NOTE: the
+  pending-payment dunning-hold rework stays in B05 (not mixed in here).
 - [x] **M49** Audit remediation B02 — backup, restore, and operational recovery
   (`v1.37.39`). Backups now fail loudly when no usable DB image can be produced (failed/empty
   `pg_dump` or invalid SQLite → `BackupError`, not a dump-less "success"); the scheduled

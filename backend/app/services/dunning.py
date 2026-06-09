@@ -15,7 +15,7 @@ import datetime as dt
 import logging
 
 from aiogram import Bot
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
@@ -33,6 +33,26 @@ from app.services import enforcement, notifier, settings_service
 log = logging.getLogger("dunning")
 
 _ACTIVE = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+
+_REMINDER_KINDS = [DeliveryKind.reminder1, DeliveryKind.reminder2, DeliveryKind.warning]
+
+
+async def reset_cycle(
+    session: AsyncSession, invoice: Invoice, *, restamp_sent_at: bool = False
+) -> None:
+    """Restart the dunning cycle for an invoice: clear its reminder/warning delivery marks
+    so they re-fire. With `restamp_sent_at`, also re-anchor `sent_at` to now — used when a
+    CONFIRMED payment is reversed (reject/delete/unmark), so the reseller gets a fresh
+    reminder window instead of jumping straight back to overdue/enforcement on the next run.
+    Does NOT commit (the caller's transaction does)."""
+    await session.execute(
+        delete(DeliveryLog).where(
+            DeliveryLog.invoice_id == invoice.id,
+            DeliveryLog.kind.in_(_REMINDER_KINDS),
+        )
+    )
+    if restamp_sent_at and invoice.sent_at is not None:
+        invoice.sent_at = dt.datetime.now(dt.timezone.utc)
 
 
 async def _done_kinds(session: AsyncSession, invoice_id: int) -> set[str]:

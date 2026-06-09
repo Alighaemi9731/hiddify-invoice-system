@@ -1,3 +1,3 @@
 """Hiddify Reseller Invoicing System — backend application package."""
 
-__version__ = "1.37.39"
+__version__ = "1.37.40"

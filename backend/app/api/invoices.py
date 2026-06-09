@@ -22,7 +22,8 @@ from app.schemas.invoice import (
     InvoiceOut,
 )
 from app.services import (
-    delivery, financial_archive, invoice_pdf as invoice_pdf_service, invoicing, pricing,
+    delivery, financial_archive, invoice_pdf as invoice_pdf_service, invoice_state,
+    invoicing, pricing,
 )
 from app.services.periods import parse_period, today as tehran_today
 
@@ -169,16 +170,17 @@ async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_mark_paid(inv.status)
     inv.status = InvoiceStatus.paid
     inv.paid_at = dt.datetime.now(dt.timezone.utc)
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     # Manually marking an invoice paid must restore a suspended reseller, exactly like
-    # confirming a payment does — otherwise an enforced reseller stays cut off after the owner
-    # records their (e.g. cash) payment here.
+    # confirming a payment does — but ONLY when no other debt remains (see _maybe_restore),
+    # otherwise recording one cash payment would un-suspend a reseller who still owes.
     from app.services.payments import _maybe_restore
-    await _maybe_restore(session, reseller)
+    await _maybe_restore(session, reseller, exclude_invoice_id=inv.id)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
 
@@ -189,8 +191,14 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_unmark_paid(inv.status)
     inv.status = InvoiceStatus.sent if inv.sent_at else InvoiceStatus.draft
     inv.paid_at = None
+    # An un-paid invoice gets a fresh dunning window (reminders restart) instead of jumping
+    # straight back to overdue/enforcement on the next run; the txid is cleared from the ledger.
+    if inv.status == InvoiceStatus.sent:
+        from app.services import dunning
+        await dunning.reset_cycle(session, inv, restamp_sent_at=True)
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
@@ -206,6 +214,7 @@ async def edit_invoice(
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_edit(inv.status)
     if body.usage_gb is not None:
         inv.usage_gb = body.usage_gb
     if body.price_per_gb is not None:
@@ -238,6 +247,7 @@ async def defer_invoice(
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_defer(inv.status)
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)
 
@@ -329,6 +339,7 @@ async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) 
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_cancel(inv.status)
     inv.status = InvoiceStatus.canceled
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)

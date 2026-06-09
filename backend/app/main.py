@@ -100,6 +100,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Illegal invoice state transitions (B03) surface as a clean 400 with a Persian message.
+from fastapi.responses import JSONResponse  # noqa: E402
+
+from app.services.invoice_state import InvoiceStateError  # noqa: E402
+
+
+@app.exception_handler(InvoiceStateError)
+async def _invoice_state_error_handler(_request: Request, exc: InvoiceStateError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 app.include_router(meta.router)
 app.include_router(setup_api.router)
 app.include_router(auth.router)

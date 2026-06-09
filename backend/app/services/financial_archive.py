@@ -85,6 +85,10 @@ async def record(
         row.paid_at = invoice.paid_at
         if txid:
             row.txid = txid[:128]
+        elif _status_str(invoice.status) != InvoiceStatus.paid.value:
+            # The invoice is no longer paid (reverted/canceled) — clear any stale settling txid
+            # so the durable ledger never shows a tx hash against an unpaid invoice.
+            row.txid = None
         if commit:
             await session.commit()
     except Exception:  # noqa: BLE001 — the ledger must never break a billing/payment flow

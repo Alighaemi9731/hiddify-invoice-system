@@ -79,7 +79,7 @@ Primary files:
 
 ## B03 - Payment and invoice state machine
 
-Priority: P0. Status: TODO.
+Priority: P0. Status: DONE in `v1.37.40`.
 
 - Define and enforce legal invoice/payment transitions in one service.
 - Prevent cancel/defer/edit/mark-paid operations on incompatible invoice states.

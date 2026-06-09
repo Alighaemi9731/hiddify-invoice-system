@@ -8,6 +8,37 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.40 - 2026-06-09
+
+Audit remediation B03 — payment and invoice state machine.
+
+### Fixed
+
+- Invoice status transitions are now enforced in one place (`app/services/invoice_state.py`).
+  The panel can no longer cancel/defer/edit a paid invoice, mark a draft or canceled invoice
+  paid, or defer a draft/paid/canceled invoice — each returns a clear `400` instead of
+  silently corrupting state. The invoice action buttons are gated to match.
+- Confirming a payment for one invoice no longer restores a suspended reseller while other
+  due (non-deferred) invoices remain — enforcement lifts only when the reseller has no other
+  current debt. The same guard applies to the manual «ثبت پرداخت».
+- Rejecting or deleting a payment no longer un-pays an invoice that another confirmed payment
+  still settles.
+- When a confirmed payment is reversed (reject/delete) or an invoice is un-marked paid, the
+  invoice gets a fresh dunning window (reminder/warning marks cleared, `sent_at` re-anchored)
+  instead of jumping straight back to overdue/enforcement on the next run.
+- Reverting an invoice to unpaid clears the stale settling TXID from the durable financial
+  ledger, so the ledger never shows a transaction hash against an unpaid invoice.
+- A submitted TXID/receipt re-validates the chosen invoice under lock (still owned, still owed,
+  not deferred to the future); a stale selection falls back to the oldest payable invoice
+  instead of mis-attributing the payment.
+
+### Verification
+
+- Added regression tests (`tests/test_invoice_state.py`) for the transition matrix and
+  operation guards, the multi-payment "don't un-pay an invoice settled elsewhere" rule, ledger
+  TXID clearing + dunning reset on reversal, the restore-only-when-no-other-debt invariant, and
+  the under-lock proof re-validation.
+
 ## 1.37.39 - 2026-06-09
 
 Audit remediation B02 — backup, restore, and operational recovery.
