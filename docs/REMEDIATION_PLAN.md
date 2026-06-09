@@ -162,7 +162,7 @@ Primary files:
 
 ## B08 - Build, test, and frontend quality gate
 
-Priority: P1. Status: TODO.
+Priority: P1. Status: DONE in `v1.37.46`.
 
 - Resolve high-signal mypy errors; configure third-party stubs separately from real errors.
 - Add staging configuration and meaningful backup/payment/billing workflow tests.

@@ -1,4 +1,5 @@
 """Panel access adapters. Read = backup JSON; write = Hiddify Admin API."""
+from app.services.panel_client.backup_json import BackupJsonClient
 from app.services.panel_client.base import (
     PanelAdmin,
     PanelClient,
@@ -6,7 +7,6 @@ from app.services.panel_client.base import (
     PanelUser,
     parse_backup,
 )
-from app.services.panel_client.backup_json import BackupJsonClient
 
 __all__ = [
     "PanelClient",

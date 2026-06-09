@@ -121,6 +121,8 @@ async def enforce_reseller(
         return noop
 
     panel = await session.get(Panel, reseller.panel_id)
+    if panel is None:
+        raise ValueError("panel not found for reseller")
     descendants = await _bundle(session, reseller)
     admin_uuids = {d.admin_uuid for d in descendants}
     users = await _enabled_users(session, panel.id, admin_uuids)
@@ -247,7 +249,9 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
     ).scalar_one_or_none()
 
     panel = await session.get(Panel, reseller.panel_id)
-    snapshot = last.snapshot if last else {"limits": {}, "users": {}}
+    if panel is None:
+        raise ValueError("panel not found for reseller")
+    snapshot = last.snapshot if last and last.snapshot else {"limits": {}, "users": {}}
     client = AdminApiClient()
     descendants = await _bundle(session, reseller)
     limits_map = snapshot.get("limits") or {}

@@ -154,11 +154,13 @@ def test_generate_skips_failed_panel_and_reconciles_zero_draft(tmp_path):
                              last_synced_at=now, status=PanelStatus.ok)
             bad_panel = Panel(key="bad", host="h", proxy_path_enc="x", owner_uuid="o",
                               last_synced_at=now, status=PanelStatus.error)
-            s.add_all([ok_panel, bad_panel]); await s.flush()
+            s.add_all([ok_panel, bad_panel])
+            await s.flush()
             # A reseller on each panel; both present in the latest sync, neither has any users.
             r_ok = Reseller(panel_id=ok_panel.id, admin_uuid="a-ok", name="OK", last_seen_at=now)
             r_bad = Reseller(panel_id=bad_panel.id, admin_uuid="a-bad", name="BAD", last_seen_at=now)
-            s.add_all([r_ok, r_bad]); await s.flush()
+            s.add_all([r_ok, r_bad])
+            await s.flush()
             # A leftover DRAFT for the OK reseller from a prior run (positive amount).
             stale = Invoice(reseller_id=r_ok.id, panel_id=ok_panel.id,
                             period_start=period.start, period_end=period.end,
@@ -169,7 +171,8 @@ def test_generate_skips_failed_panel_and_reconciles_zero_draft(tmp_path):
                                 period_start=period.start, period_end=period.end,
                                 period_label=period.label, usage_gb=5, amount_toman=5000,
                                 status=InvoiceStatus.draft)
-            s.add_all([stale, stale_bad]); await s.commit()
+            s.add_all([stale, stale_bad])
+            await s.commit()
 
             summary = await invoicing.generate_invoices(s, period)
             assert any("bad" in p for p in summary.skipped_panels)

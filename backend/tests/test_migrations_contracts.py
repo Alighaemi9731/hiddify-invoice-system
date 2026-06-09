@@ -1,10 +1,10 @@
 """B07 versioned migrations and input-contract regressions."""
 import asyncio
 import os
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -19,7 +19,6 @@ from app.schemas.invoice import GenerateRequest, InvoiceDetail, InvoiceEdit
 from app.schemas.reseller import BumpLimitsBody, ResellerUpdate
 from app.schemas.setting import SettingsBulkUpdate
 from app.services import settings_service
-
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))

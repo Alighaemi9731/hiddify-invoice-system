@@ -10,6 +10,7 @@ import datetime as dt
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import arabic_reshaper
 from bidi.algorithm import get_display
@@ -20,7 +21,11 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
 )
 
 FONT = "Vazir"
@@ -215,7 +220,9 @@ def build_invoice_pdf(
     # Monospace style so the UUID slice has equal-width characters across rows.
     mono = ParagraphStyle("mono", fontName="Courier", fontSize=8, alignment=1,
                           textColor=MUTED, leading=12)
-    show_sub = any((l.get("sub_reseller_name") or "") != reseller_name for l in lines)
+    show_sub = any(
+        (line.get("sub_reseller_name") or "") != reseller_name for line in lines
+    )
 
     head = [Paragraph(rtl("ردیف"), th), Paragraph(rtl("نام سرویس"), th), Paragraph(rtl("شناسه"), th)]
     if show_sub:
@@ -229,16 +236,16 @@ def build_invoice_pdf(
         # First 8 chars of the uuid — fixed width, enough to disambiguate same-name users.
         return (u or "").replace("-", "")[:8].upper() or "—"
 
-    data = [head]
-    for idx, l in enumerate(lines, 1):
+    data: list[list[Any]] = [head]
+    for idx, line in enumerate(lines, 1):
         row = [Paragraph(_fa_digits(str(idx)), cellC),
-               Paragraph(rtl(l.get("name", "")), cellC),
-               Paragraph(uuid_slice(l.get("uuid", "")), mono)]
+               Paragraph(rtl(line.get("name", "")), cellC),
+               Paragraph(uuid_slice(line.get("uuid", "")), mono)]
         if show_sub:
-            row.append(Paragraph(rtl(l.get("sub_reseller_name", "")), cellC))
-        sd = l.get("start_date")
+            row.append(Paragraph(rtl(line.get("sub_reseller_name", "")), cellC))
+        sd = line.get("start_date")
         row += [Paragraph(_fa_digits(str(sd)) if sd else "—", cellC),
-                Paragraph(gb(float(l.get("usage_gb", 0))), cellC)]
+                Paragraph(gb(float(line.get("usage_gb", 0))), cellC)]
         data.append(row)
 
     if not lines:
@@ -246,7 +253,7 @@ def build_invoice_pdf(
         data.append([Paragraph(rtl("در این دوره سرویسی ثبت نشده است"), cellC)] + [""] * (span - 1))
 
     table = Table(data, colWidths=widths, repeatRows=1)
-    style = [
+    style: list[Any] = [
         ("BACKGROUND", (0, 0), (-1, 0), PRIMARY),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, STRIPE]),
         ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),

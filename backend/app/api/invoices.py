@@ -10,7 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import DeliveryLog, FinancialRecord, Invoice, InvoiceLine, Panel, Reseller
+from app.models import (
+    DeliveryLog,
+    FinancialRecord,
+    Invoice,
+    InvoiceLine,
+    Panel,
+    Reseller,
+)
 from app.models.enums import DeliveryKind, EnforcementState, InvoiceStatus
 from app.schemas.invoice import (
     GenerateRequest,
@@ -22,10 +29,17 @@ from app.schemas.invoice import (
     InvoiceOut,
 )
 from app.services import (
-    delivery, financial_archive, invoice_pdf as invoice_pdf_service, invoice_state,
-    invoicing, pricing,
+    delivery,
+    financial_archive,
+    invoice_state,
+    invoicing,
+    pricing,
 )
-from app.services.periods import parse_period, today as tehran_today
+from app.services import (
+    invoice_pdf as invoice_pdf_service,
+)
+from app.services.periods import parse_period
+from app.services.periods import today as tehran_today
 
 router = APIRouter(
     prefix="/api/invoices", tags=["invoices"], dependencies=[Depends(get_current_subject)]
@@ -55,12 +69,22 @@ def _to_out(inv: Invoice, reseller_name: str, panel_key: str) -> InvoiceOut:
     )
 
 
+async def _invoice_context(
+    session: AsyncSession, inv: Invoice
+) -> tuple[Reseller, Panel]:
+    reseller = await session.get(Reseller, inv.reseller_id)
+    panel = await session.get(Panel, inv.panel_id)
+    if reseller is None or panel is None:
+        raise HTTPException(409, "Invoice references a missing reseller or panel")
+    return reseller, panel
+
+
 @router.post("/generate", response_model=GenerateResult)
 async def generate(body: GenerateRequest, session: AsyncSession = Depends(get_session)) -> GenerateResult:
     try:
         period = parse_period(body.period)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     summary = await invoicing.generate_invoices(
         session, period, panel_id=body.panel_id, force=body.force
     )
@@ -147,11 +171,11 @@ async def get_invoice(invoice_id: int, session: AsyncSession = Depends(get_sessi
         **out.model_dump(),
         lines=[
             InvoiceLineOut(
-                end_user_uuid=l.end_user_uuid, name=l.name, start_date=l.start_date,
-                usage_gb=float(l.usage_gb), added_by_uuid=l.added_by_uuid,
-                sub_reseller_name=l.sub_reseller_name or "",
+                end_user_uuid=line.end_user_uuid, name=line.name, start_date=line.start_date,
+                usage_gb=float(line.usage_gb), added_by_uuid=line.added_by_uuid,
+                sub_reseller_name=line.sub_reseller_name or "",
             )
-            for l in lines
+            for line in lines
         ],
     )
 
@@ -173,8 +197,7 @@ async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session
     invoice_state.ensure_can_mark_paid(inv.status)
     inv.status = InvoiceStatus.paid
     inv.paid_at = dt.datetime.now(dt.timezone.utc)
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
+    reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     # Manually marking an invoice paid must restore a suspended reseller, exactly like
     # confirming a payment does — but ONLY when no other debt remains (see _maybe_restore),
@@ -199,8 +222,7 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     if inv.status == InvoiceStatus.sent:
         from app.services import dunning
         await dunning.reset_cycle(session, inv, restamp_sent_at=True)
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
+    reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
@@ -229,8 +251,7 @@ async def edit_invoice(
     rate = int(inv.usdt_rate) or await pricing.get_rate(session)
     inv.usdt_rate = rate
     inv.amount_usdt = float(pricing.toman_to_usdt(inv.amount_toman, rate))
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
+    reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
@@ -248,8 +269,7 @@ async def defer_invoice(
     if not inv:
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_defer(inv.status)
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
+    reseller, panel = await _invoice_context(session, inv)
 
     inv.deferred_until = body.deferred_until
     inv.defer_note = body.defer_note
@@ -313,11 +333,18 @@ async def recompute_invoice(
     try:
         result = await invoicing.recompute_invoice(session, inv, sync_first=sync)
     except ValueError:
-        raise HTTPException(400, "فاکتور پرداخت‌شده را نمی‌توان بازمحاسبه کرد؛ ابتدا «لغو پرداخت» را بزنید.")
+        raise HTTPException(
+            400,
+            "فاکتور پرداخت‌شده را نمی‌توان بازمحاسبه کرد؛ ابتدا «لغو پرداخت» را بزنید.",
+        ) from None
     inv = await session.get(Invoice, invoice_id)
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
-    return {**_to_out(inv, reseller.name, panel.key).model_dump(), "synced": bool(result.get("synced"))}
+    if inv is None:
+        raise HTTPException(404, "Invoice not found after recompute")
+    reseller, panel = await _invoice_context(session, inv)
+    return {
+        **_to_out(inv, reseller.name, panel.key).model_dump(),
+        "synced": bool(result.get("synced")),
+    }
 
 
 @router.post("/{invoice_id}/send")
@@ -341,8 +368,7 @@ async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) 
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_cancel(inv.status)
     inv.status = InvoiceStatus.canceled
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
+    reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
@@ -367,8 +393,7 @@ async def revert_to_draft(
     inv.sent_at = None
     inv.deferred_until = None
     inv.defer_note = None
-    reseller = await session.get(Reseller, inv.reseller_id)
-    panel = await session.get(Panel, inv.panel_id)
+    reseller, panel = await _invoice_context(session, inv)
     # Draft status → financial_archive removes the ledger row.
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()

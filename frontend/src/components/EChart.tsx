@@ -1,16 +1,14 @@
 import ReactEChartsCore from "echarts-for-react/lib/core";
 import * as echarts from "echarts/core";
-import { BarChart, PieChart, LineChart } from "echarts/charts";
-import {
-  GridComponent, TooltipComponent, LegendComponent, TitleComponent, DatasetComponent,
-} from "echarts/components";
+import { BarChart, PieChart } from "echarts/charts";
+import { GridComponent, TooltipComponent, LegendComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
 // Register only what the dashboard charts use — pulls in a fraction of full `echarts`,
 // roughly halving the (lazy) dashboard chunk.
 echarts.use([
-  BarChart, PieChart, LineChart,
-  GridComponent, TooltipComponent, LegendComponent, TitleComponent, DatasetComponent,
+  BarChart, PieChart,
+  GridComponent, TooltipComponent, LegendComponent,
   CanvasRenderer,
 ]);
 

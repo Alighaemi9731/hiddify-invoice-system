@@ -182,5 +182,5 @@ def totp_qr_data_uri(uri: str) -> str:
 
     img = qrcode.make(uri)
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()

@@ -11,7 +11,6 @@ Billing adds (overage_gb + edit_renewal_gb) on top of the normal snapshot total.
 """
 from __future__ import annotations
 
-
 from sqlalchemy import CheckConstraint, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 

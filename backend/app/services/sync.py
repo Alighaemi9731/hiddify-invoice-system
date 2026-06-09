@@ -66,10 +66,10 @@ async def sync_panel(
         # The flushed run row is gone after rollback; record a fresh failure row.
         await session.rollback()
         err = str(exc)[:1000]
-        panel = await session.get(Panel, panel_id)  # re-attach after rollback
-        if panel is not None:
-            panel.status = PanelStatus.error
-            panel.last_error = err
+        current_panel = await session.get(Panel, panel_id)  # re-attach after rollback
+        if current_panel is not None:
+            current_panel.status = PanelStatus.error
+            current_panel.last_error = err
         run = SyncRun(
             panel_id=panel_id,
             source=source,
@@ -79,7 +79,7 @@ async def sync_panel(
         )
         session.add(run)
         await session.commit()
-        log.exception("Sync failed for panel '%s'", getattr(panel, "key", "?"))
+        log.exception("Sync failed for panel '%s'", getattr(current_panel, "key", "?"))
 
     return run
 

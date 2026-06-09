@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -19,6 +20,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.db import Base
 from app.models.enums import EnforcementState
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.invoice import Invoice
+    from app.models.panel import Panel
 
 
 class Reseller(Base, TimestampMixin):
@@ -95,7 +100,7 @@ class Reseller(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    panel: Mapped["Panel"] = relationship(back_populates="resellers")  # noqa: F821
-    invoices: Mapped[list["Invoice"]] = relationship(  # noqa: F821
+    panel: Mapped[Panel] = relationship(back_populates="resellers")
+    invoices: Mapped[list[Invoice]] = relationship(
         back_populates="reseller", cascade="all, delete-orphan"
     )

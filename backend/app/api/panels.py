@@ -12,8 +12,6 @@ from app.core.db import SessionLocal, get_session
 from app.core.security import get_current_subject
 from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
 from app.models.enums import PanelStatus
-
-log = logging.getLogger("api.panels")
 from app.schemas.panel import (
     PanelCreate,
     PanelOut,
@@ -23,6 +21,8 @@ from app.schemas.panel import (
 )
 from app.services import sync as sync_service
 from app.services.panel_client import BackupJsonClient
+
+log = logging.getLogger("api.panels")
 
 router = APIRouter(
     prefix="/api/panels", tags=["panels"], dependencies=[Depends(get_current_subject)]

@@ -167,7 +167,8 @@ def _parse_txid(text: str, *, usdt: bool, ton: bool) -> tuple[str, str] | None:
     if m and usdt:
         return ("bsc", m.group(1))
     if ton:
-        m = re.search(r"(?:%s)/\S+" % "|".join(re.escape(h) for h in _TON_EXPLORERS), t, re.I)
+        explorers = "|".join(re.escape(host) for host in _TON_EXPLORERS)
+        m = re.search(rf"(?:{explorers})/\S+", t, re.I)
         if m:
             seg = m.group(0).rstrip("/").split("?")[0].split("/")[-1]
             if len(seg) >= 40:
@@ -1030,7 +1031,8 @@ async def _dispatch_owner(action: str, answer, session) -> None:
         else:
             await answer("❌ ارسال پشتیبان ناموفق بود.")
     elif action == "monthly":
-        from app.services import delivery, invoicing, sync as sync_service
+        from app.services import delivery, invoicing
+        from app.services import sync as sync_service
         from app.services.periods import previous_month
 
         await answer("⏳ در حال همگام‌سازی، صدور و ارسال ماه قبل...")
@@ -1418,7 +1420,7 @@ async def _send_sub_panels(answer, chat_id: int, session) -> None:
         ).scalar_one()
         if subs > 0:
             panel = await session.get(Panel, r.panel_id)
-            items.append((r.id, f"پنل {_iso((panel.name or panel.key))} — {_iso(r.name)} ({subs})"))
+            items.append((r.id, f"پنل {_iso(panel.name or panel.key)} — {_iso(r.name)} ({subs})"))
     if not items:
         await answer("شما زیرمجموعه‌ای ندارید.")
         return

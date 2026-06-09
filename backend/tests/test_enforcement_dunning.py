@@ -18,11 +18,20 @@ os.environ.setdefault("SECRET_KEY", "k")
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.models import (  # noqa: E402
-    EnforcementAction, Invoice, Panel, Payment, Reseller,
+    EnforcementAction,
+    Invoice,
+    Panel,
+    Payment,
+    Reseller,
 )
 from app.models.enums import (  # noqa: E402
-    DeliveryStatus, EnforcementActionStatus, EnforcementActionType, EnforcementState,
-    InvoiceStatus, PaymentMethod, PaymentStatus,
+    DeliveryStatus,
+    EnforcementActionStatus,
+    EnforcementActionType,
+    EnforcementState,
+    InvoiceStatus,
+    PaymentMethod,
+    PaymentStatus,
 )
 
 
@@ -60,7 +69,8 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="o"))
         r = Reseller(panel_id=1, admin_uuid="A", name="R",
                      enforcement_state=EnforcementState.enforced, max_users_snapshot=100)
-        s.add(r); await s.flush()
+        s.add(r)
+        await s.flush()
         s.add(EnforcementAction(
             reseller_id=r.id, action=EnforcementActionType.disable_users,
             dry_run=False, status=EnforcementActionStatus.done, affected_count=2,
@@ -107,10 +117,12 @@ def test_pending_hold_is_per_invoice_and_expires(tmp_path):
         # bot_chat_id=None → reminders are "attempted" but unmatched (not delivered).
         r = Reseller(panel_id=1, admin_uuid="A", name="R",
                      enforcement_state=EnforcementState.active, bot_chat_id=None)
-        s.add(r); await s.flush()
+        s.add(r)
+        await s.flush()
         inv_a = _invoice(r.id, label="2026-01")   # held (fresh pending payment)
         inv_b = _invoice(r.id, label="2026-02")   # NOT held (pending payment is stale)
-        s.add_all([inv_a, inv_b]); await s.flush()
+        s.add_all([inv_a, inv_b])
+        await s.flush()
         s.add(Payment(reseller_id=r.id, invoice_id=inv_a.id, method=PaymentMethod.screenshot,
                       status=PaymentStatus.pending, created_at=now))
         s.add(Payment(reseller_id=r.id, invoice_id=inv_b.id, method=PaymentMethod.screenshot,
@@ -134,7 +146,8 @@ def test_gb_cap_flag_only_after_delivery(tmp_path, monkeypatch):
         parent = Reseller(panel_id=1, admin_uuid="P", name="Parent", bot_chat_id=456)
         sub = Reseller(panel_id=1, admin_uuid="S", name="Sub", parent_admin_uuid="P",
                        bot_chat_id=123, gb_cap=10, gb_cap_alerted_period=None)
-        s.add_all([parent, sub]); await s.commit()
+        s.add_all([parent, sub])
+        await s.commit()
 
         async def fake_billable(session, r):
             return 15.0  # over the 10 GB cap

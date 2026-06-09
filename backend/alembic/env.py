@@ -5,13 +5,13 @@ import asyncio
 import logging
 from logging.config import fileConfig
 
-from alembic import context
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 import app.models  # noqa: F401  (register all tables on Base.metadata)
+from alembic import context
 from app.core.config import settings
 from app.core.db import Base
 

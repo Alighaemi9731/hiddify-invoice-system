@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 from app.services.periods import Period
 
@@ -95,7 +96,7 @@ def collect_descendants(root: Any, children_map: dict[str, list[Any]]) -> list[A
     return out
 
 
-def select_billable_roots(resellers: list[Any]) -> list[Any]:
+def select_billable_roots(resellers: Sequence[Any]) -> list[Any]:
     """Top-level resellers to bill: non-owner, not excluded, direct child of an Owner.
 
     Falls back to structural roots when the dataset has no Owner row."""
@@ -149,10 +150,17 @@ def billable_gb_for_user(
     gb_sold = float(u.usage_limit_gb or 0)
     if _excluded(gb_sold, excluded_usage_gb, free_threshold_gb):
         return None
-    deleted = bool(
-        panel_synced_at and getattr(u, "last_synced_at", None)
-        and u.last_synced_at < panel_synced_at
-    )
+    user_synced_at = getattr(u, "last_synced_at", None)
+    if user_synced_at and panel_synced_at:
+        # SQLite and older imported rows may return naive datetimes even when the model
+        # column is timezone-aware. Normalize both sides before freshness comparison.
+        if user_synced_at.tzinfo is None:
+            user_synced_at = user_synced_at.replace(tzinfo=dt.timezone.utc)
+        if panel_synced_at.tzinfo is None:
+            panel_synced_at = panel_synced_at.replace(tzinfo=dt.timezone.utc)
+        deleted = user_synced_at < panel_synced_at
+    else:
+        deleted = False
     if deleted:
         gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
         # A removed config whose CONSUMPTION is below the free threshold is negligible (e.g. a
@@ -165,8 +173,8 @@ def billable_gb_for_user(
 
 
 def compute_invoices(
-    resellers: list[Any],
-    users: list[Any],
+    resellers: Sequence[Any],
+    users: Sequence[Any],
     period: Period,
     *,
     default_price_per_gb: int,
@@ -211,11 +219,8 @@ def compute_invoices(
 
         total_gb = round(sum(ln.usage_gb for ln in lines), 3)
         price = int(getattr(root, "price_per_gb", None) or default_price_per_gb)
-        min_sale = int(
-            getattr(root, "min_sale_toman", None)
-            if getattr(root, "min_sale_toman", None) is not None
-            else default_min_sale_toman
-        )
+        root_min_sale = getattr(root, "min_sale_toman", None)
+        min_sale = int(default_min_sale_toman if root_min_sale is None else root_min_sale)
         base = round(total_gb * price)
 
         b = BundleResult(

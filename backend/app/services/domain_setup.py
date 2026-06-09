@@ -15,6 +15,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,7 +66,7 @@ def _persist_env(domain: str, email: str | None) -> bool:
 
 async def _caddy_set_domain(domain: str, email: str | None) -> tuple[bool, str]:
     """Reconfigure the running Caddy to serve `domain` with automatic HTTPS."""
-    config = {
+    config: dict[str, Any] = {
         "admin": {"listen": "0.0.0.0:2019"},
         "apps": {
             "http": {

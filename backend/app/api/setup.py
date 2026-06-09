@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends
-from pydantic import BaseModel
 
 from app.core.db import get_session
 from app.core.security import hash_password, validate_new_password

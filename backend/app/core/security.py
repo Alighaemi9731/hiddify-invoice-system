@@ -79,8 +79,8 @@ async def get_current_subject(
     )
     try:
         payload = decode_token(token)
-    except jwt.PyJWTError:
-        raise credentials_error
+    except jwt.PyJWTError as exc:
+        raise credentials_error from exc
     subject = payload.get("sub")
     token_role = payload.get("role")
     token_epoch = payload.get("epoch")

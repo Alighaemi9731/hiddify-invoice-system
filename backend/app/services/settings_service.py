@@ -9,8 +9,8 @@ Message templates use Python `str.format` placeholders, e.g. {name}, {amount_usd
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select

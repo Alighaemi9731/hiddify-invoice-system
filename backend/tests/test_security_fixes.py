@@ -79,8 +79,8 @@ def test_periods_use_local_timezone_today():
 def test_reseller_report_applies_excluded_sizes():
     from types import SimpleNamespace
 
-    from app.services.reseller_report import _billable_gb_for_period
     from app.services.periods import month_period
+    from app.services.reseller_report import _billable_gb_for_period
 
     P = month_period(2026, 2)
 

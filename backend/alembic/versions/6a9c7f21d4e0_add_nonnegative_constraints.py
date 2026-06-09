@@ -4,14 +4,14 @@ Revision ID: 6a9c7f21d4e0
 Revises: 18a3b4fd6e33
 Create Date: 2026-06-09
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "6a9c7f21d4e0"
-down_revision: Union[str, None] = "18a3b4fd6e33"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "18a3b4fd6e33"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _CONSTRAINTS = {

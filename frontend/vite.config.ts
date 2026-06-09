@@ -24,6 +24,26 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("/zrender/")) return "vendor-zrender";
+          if (id.includes("/echarts-for-react/")) return "vendor-chart-react";
+          if (id.includes("/echarts/")) return "vendor-echarts";
+          if (id.includes("/@mui/") || id.includes("/@emotion/") ||
+              id.includes("/stylis")) return "vendor-ui";
+          if (id.includes("/react/") || id.includes("/react-dom/") ||
+              id.includes("/react-router") || id.includes("/scheduler/"))
+            return "vendor-react";
+          if (id.includes("/@tanstack/") || id.includes("/axios/")) return "vendor-data";
+          if (id.includes("/framer-motion/")) return "vendor-motion";
+          return undefined;
+        },
+      },
+    },
+  },
   server: { host: true, port: 5173 },
   preview: { host: true, port: 5173 },
 });

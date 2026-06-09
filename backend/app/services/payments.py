@@ -104,7 +104,7 @@ async def _bscscan_tokentx(
     api_url: str, api_key: str, wallet: str, contract: str, txid: str
 ) -> _ChainCheck:
     """Look up the USDT token transfers for our wallet and find the matching tx."""
-    params = {
+    params: dict[str, str | int] = {
         "module": "account",
         "action": "tokentx",
         "address": wallet,
@@ -180,7 +180,10 @@ async def verify_payment(
         )
 
     try:
-        check = await _bscscan_tokentx(cfg["bscscan_api_url"], api_key, wallet, contract, payment.txid)
+        api_url = str(cfg.get("bscscan_api_url") or "")
+        if not payment.txid:
+            return PaymentResult("rejected", False, "شناسه تراکنش ثبت نشده است.")
+        check = await _bscscan_tokentx(api_url, api_key, wallet, contract, payment.txid)
     except Exception as exc:  # noqa: BLE001
         log.exception("on-chain lookup failed")
         return PaymentResult("pending", False,

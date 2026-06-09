@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.46 - 2026-06-09
+
+Audit remediation B08 — build, test, and frontend quality gate.
+
+### Fixed
+
+- Added a maintained mypy configuration and resolved the high-signal typing failures in
+  billing, payment, delivery, enforcement, API relationship loading, and ORM models.
+  Untyped third-party packages and aiogram callback narrowing are isolated explicitly
+  instead of globally suppressing type errors.
+- Expanded Ruff from undefined-name checks to import, syntax, modernization, whitespace,
+  ambiguous-name, and exception-chaining rules; CI now runs the full configured baseline.
+- Normalized naive/aware snapshot timestamps before billing freshness comparisons, avoiding
+  a runtime `TypeError` on SQLite/legacy timestamp rows.
+- Added an isolated staging Compose stack bound to localhost with separate volumes, no bot,
+  and scheduler jobs disabled.
+- Split React, MUI, ECharts/zrender, data, and animation dependencies into bounded frontend
+  chunks. The production build now fails when any JavaScript chunk exceeds 500 KiB.
+
+### Verification
+
+- Added an integrated billing → manual payment → ledger → backup workflow regression test.
+- Backend gate: 83 tests, Ruff, mypy over 92 source files, and Alembic drift checks.
+- Frontend production build/typecheck passes with every JavaScript chunk below 500 KiB.
+- CI validates both production and isolated staging Compose configurations.
+
 ## 1.37.45 - 2026-06-09
 
 ### Fixed

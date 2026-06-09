@@ -7,6 +7,7 @@ snapshots, the same way the invoice engine does for a bundle.
 from __future__ import annotations
 
 import datetime as dt
+from typing import TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,9 +15,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import EndUserSnapshot, Panel, Reseller
 from app.services import pricing
 from app.services.invoice_engine import (
-    BundleResult, build_children_map, collect_descendants, compute_invoices,
+    BundleResult,
+    build_children_map,
+    collect_descendants,
+    compute_invoices,
 )
-from app.services.periods import Period, current_month, month_period, today as _today
+from app.services.periods import Period, current_month, month_period
+from app.services.periods import today as _today
+
+
+class MonthSummary(TypedDict):
+    label: str
+    gb: float
+    amount_toman: int
+    new_services: int
 
 
 def _last_months(n: int, today: dt.date | None = None) -> list[Period]:
@@ -144,7 +156,7 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     excluded = await pricing.get_excluded_usage_gb(session)
     psa = await _panel_synced_at(session, reseller.panel_id)
 
-    by_month = []
+    by_month: list[MonthSummary] = []
     for p in _last_months(months):
         gb, cnt = _billable_gb_for_period(users, p, free_threshold, excluded, psa)
         by_month.append({
@@ -157,7 +169,9 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     # Current-month progress against the parent-set GB cap (the bot shows this so the
     # parent can see how much of the sub's monthly quota is used).
     this_period = current_month()
-    used_gb = next((m["gb"] for m in by_month if m["label"] == this_period.label), 0.0)
+    used_gb = float(
+        next((m["gb"] for m in by_month if m["label"] == this_period.label), 0.0)
+    )
     cap = int(reseller.gb_cap or 0)
 
     return {

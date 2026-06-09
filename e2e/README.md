@@ -19,6 +19,19 @@ export E2E_BASE_URL='https://invoice-staging.example.com'
 npm test
 ```
 
+For the repository's isolated staging stack:
+
+```bash
+cp deploy/.env.staging.example .env.staging
+# Replace every placeholder before starting.
+docker compose -p invoice-staging --env-file .env.staging \
+  -f deploy/docker-compose.staging.yml up -d --build
+E2E_BASE_URL=http://127.0.0.1:18080 E2E_USER=staging E2E_PASS='...' npm test
+```
+
+The staging stack uses separate named volumes, binds only to localhost, disables the
+scheduler, and does not start the Telegram bot.
+
 `E2E_BASE_URL` is mandatory. The runner refuses the production domain unless an
 intentional read-only run also sets `E2E_ALLOW_PRODUCTION=1`.
 

@@ -30,6 +30,10 @@ The stack: `caddy` (reverse proxy + auto-HTTPS), `frontend` (SPA), `backend`
 (FastAPI + scheduler), `bot` (Telegram), `db` (PostgreSQL 16). Everything but the
 secrets you enter in the panel is configured for you. See [`deploy/README.md`](deploy/README.md).
 
+CI runs backend Ruff, mypy and workflow tests, the frontend type/build plus a 500 KiB
+chunk budget, shell syntax, and both production/staging Compose validation. The isolated
+staging stack is documented in [`deploy/README.md`](deploy/README.md#isolated-staging).
+
 ## Using the system
 
 1. **Panels** → add each Hiddify panel (paste its admin link + API key). Hit **همگام‌سازی** (sync) to pull data.

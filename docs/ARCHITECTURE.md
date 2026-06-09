@@ -132,10 +132,22 @@ Read path = `BackupJsonClient` (the `/admin/backup/backupfile/` endpoint). Write
 `AdminApiClient` (Hiddify Admin REST API, needs the per-panel admin API key). Enforcement
 uses the write path; a future REST read adapter and HD-wallet payment monitor slot in here.
 
-## 6. Deployment (Phase 1)
+## 6. Deployment
 
-`docker compose` runs four services: `db` (Postgres), `backend` (API + scheduler),
-`bot` (aiogram polling), `frontend` (nginx serving the built SPA). The bot and backend
-share the same code image and DB; the backend's scheduler instantiates a Telegram `Bot`
-only to *send* invoices/reminders (the `bot` service owns polling). Phase 2 swaps compose
-for a one-line installer + systemd units + Caddy for domain/TLS.
+Production Compose runs `db`, `backend`, `bot`, `frontend`, and `caddy`. The bot and
+backend share the same code image and DB; only the backend runs scheduler jobs. Caddy
+provides same-origin API routing and automatic TLS.
+
+`deploy/docker-compose.staging.yml` is an isolated validation stack: separate named
+volumes, localhost-only ingress, scheduler disabled, and no Telegram bot. It is suitable
+for Playwright/workflow checks without touching production data or external chats.
+
+## 7. Quality gates
+
+Backend CI runs Ruff, mypy, and pytest. The integrated workflow gate executes billing,
+manual payment confirmation, financial-ledger persistence, and creation of a readable
+database backup. Alembic drift is checked against a freshly migrated database.
+
+Frontend routes are lazy-loaded; large dependencies are split into React, UI, data,
+animation, ECharts, and zrender chunks. `npm run build` runs TypeScript checking and
+enforces a 500 KiB maximum for every generated JavaScript chunk.

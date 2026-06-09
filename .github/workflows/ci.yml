@@ -24,8 +24,16 @@ jobs:
             backend/requirements-dev.txt
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements-dev.txt
-      - run: ruff check app tests --select F
+      - run: ruff check app tests alembic
+      - run: mypy app
       - run: pytest -q
+      - name: Check Alembic migrations and model drift
+        run: |
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          db="$tmpdir/schema.db"
+          DATABASE_URL="sqlite+aiosqlite:///$db" alembic upgrade head
+          DATABASE_URL="sqlite+aiosqlite:///$db" alembic check
 
   frontend:
     runs-on: ubuntu-latest
@@ -51,3 +59,7 @@ jobs:
         run: |
           printf 'POSTGRES_PASSWORD=ci-only-not-a-secret\n' > .env
           docker compose --env-file .env -f deploy/docker-compose.prod.yml config >/dev/null
+      - name: Validate isolated staging Compose
+        run: |
+          cp deploy/.env.staging.example .env.staging
+          docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml config >/dev/null

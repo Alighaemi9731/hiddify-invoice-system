@@ -52,9 +52,11 @@ def rtl(text: str) -> str:
         if ch == _FSI:                          # already-isolated run → pass through to its PDI
             j = text.find(_PDI, i)
             if j == -1:                         # lone FSI (no PDI) → emit as a single char
-                out.append(ch); i += 1
+                out.append(ch)
+                i += 1
                 continue
-            out.append(text[i:j + 1]); i = j + 1
+            out.append(text[i:j + 1])
+            i = j + 1
             continue
         if ch == "<" and _TAG_AT.match(text, i):  # a real HTML tag → pass through; track code
             j = text.find(">", i)
@@ -65,7 +67,8 @@ def rtl(text: str) -> str:
                 in_code = True
             elif low.startswith(("</code", "</pre")):
                 in_code = False
-            out.append(tag); i = j
+            out.append(tag)
+            i = j
             continue
         j = i                                   # plain run up to the next isolate / real tag
         while j < n:

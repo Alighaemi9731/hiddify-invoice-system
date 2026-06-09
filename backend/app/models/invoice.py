@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
@@ -19,6 +20,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.db import Base
 from app.models.enums import InvoiceStatus
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.reseller import Reseller
 
 
 class Invoice(Base, TimestampMixin):
@@ -72,8 +76,8 @@ class Invoice(Base, TimestampMixin):
 
     pdf_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
-    reseller: Mapped["Reseller"] = relationship(back_populates="invoices")  # noqa: F821
-    lines: Mapped[list["InvoiceLine"]] = relationship(
+    reseller: Mapped[Reseller] = relationship(back_populates="invoices")
+    lines: Mapped[list[InvoiceLine]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan"
     )
 
@@ -96,4 +100,4 @@ class InvoiceLine(Base):
     added_by_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sub_reseller_name: Mapped[str] = mapped_column(String(255), default="")
 
-    invoice: Mapped["Invoice"] = relationship(back_populates="lines")
+    invoice: Mapped[Invoice] = relationship(back_populates="lines")

@@ -66,6 +66,21 @@ The updater deploys the highest `v*` tag, not an arbitrary untagged `main` commi
 Use [`docs/RELEASE_PROCESS.md`](../docs/RELEASE_PROCESS.md) for the required test,
 version, tag, GitHub release, backup, deploy, smoke-check, and rollback sequence.
 
+## Isolated staging
+
+`docker-compose.staging.yml` runs a separate PostgreSQL/backend/frontend stack on
+`127.0.0.1:18080`. It has its own volumes, disables scheduler jobs, and omits the bot:
+
+```bash
+cp deploy/.env.staging.example .env.staging
+# Replace every placeholder in .env.staging first.
+docker compose -p invoice-staging --env-file .env.staging \
+  -f deploy/docker-compose.staging.yml up -d --build
+```
+
+Stop it with the same command plus `down`; add `-v` only when its staging data should
+be discarded.
+
 ## Files
 - `docker-compose.prod.yml` — the production stack (db, backend, bot, frontend, caddy).
 - `Caddyfile` — reverse-proxy + auto-TLS rules.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import TypedDict
 
 from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy import select
@@ -14,6 +15,14 @@ from app.models.enums import InvoiceStatus
 log = logging.getLogger("broadcast")
 
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+
+
+class BroadcastResult(TypedDict):
+    audience: str
+    total: int
+    sent: int
+    failed: int
+    blocked: int
 
 
 async def _all_chat_ids(session: AsyncSession) -> set[int]:
@@ -76,10 +85,12 @@ async def resolve_audience(
 
 async def broadcast(
     session: AsyncSession, text: str, *, audience: str = "all", panel_id: int | None = None
-) -> dict:
+) -> BroadcastResult:
     """Send `text` to the chosen audience: all | debtors | zero_sale | panel(panel_id)."""
     chat_ids = sorted(await resolve_audience(session, audience, panel_id))
-    counts = {"audience": audience, "total": len(chat_ids), "sent": 0, "failed": 0, "blocked": 0}
+    counts = BroadcastResult(
+        audience=audience, total=len(chat_ids), sent=0, failed=0, blocked=0
+    )
     if not chat_ids or not text.strip():
         return counts
 

@@ -16,17 +16,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
-    BotUser, DeliveryLog, EndUserSnapshot, EnforcementAction, Invoice, InvoiceLine,
-    Panel, Payment, Reseller, SyncRun, UsageMeter,
+    BotUser,
+    DeliveryLog,
+    EndUserSnapshot,
+    EnforcementAction,
+    Invoice,
+    InvoiceLine,
+    Panel,
+    Payment,
+    Reseller,
+    SyncRun,
+    UsageMeter,
 )
 from app.services import (
     backup as backup_service,
+)
+from app.services import (
     backup_delivery,
-    broadcast as broadcast_service,
     channel_guard,
     delivery,
     dunning,
     invoicing,
+)
+from app.services import (
+    broadcast as broadcast_service,
+)
+from app.services import (
     sync as sync_service,
 )
 from app.services.periods import parse_period, previous_month
@@ -135,7 +150,9 @@ async def set_domain(body: DomainBody, session: AsyncSession = Depends(get_sessi
 
 
 @router.post("/broadcast")
-async def broadcast(body: BroadcastBody, session: AsyncSession = Depends(get_session)) -> dict:
+async def broadcast(
+    body: BroadcastBody, session: AsyncSession = Depends(get_session)
+) -> broadcast_service.BroadcastResult:
     return await broadcast_service.broadcast(
         session, body.text, audience=body.audience, panel_id=body.panel_id
     )
@@ -193,7 +210,7 @@ async def backup_restore(
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"بازیابی ناموفق بود: {exc}")
+        raise HTTPException(400, f"بازیابی ناموفق بود: {exc}") from exc
 
     if result.get("restored"):
         # Drop pooled connections (they point at the pre-restore DB) and restart so
@@ -267,7 +284,7 @@ async def update_now() -> dict:
         with open(_UPDATE_REQUEST, "w", encoding="utf-8") as fh:
             fh.write(__version__)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"ثبت درخواست به‌روزرسانی ناموفق بود: {exc}")
+        raise HTTPException(500, f"ثبت درخواست به‌روزرسانی ناموفق بود: {exc}") from exc
     return {
         "status": "requested",
         "current_version": __version__,

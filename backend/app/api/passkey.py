@@ -131,7 +131,9 @@ async def register_complete(
         )
     except Exception:  # noqa: BLE001 — details to the log only, never to the client
         log.warning("passkey registration verification failed", exc_info=True)
-        raise HTTPException(400, "ثبت کلید عبور ناموفق بود. دوباره تلاش کنید.")
+        raise HTTPException(
+            400, "ثبت کلید عبور ناموفق بود. دوباره تلاش کنید."
+        ) from None
     session.add(WebauthnCredential(
         user_id=user.id,
         credential_id=_b64url(ver.credential_id),
@@ -190,7 +192,9 @@ async def login_complete(
     except Exception:  # noqa: BLE001 — details to the log only
         loginsec.record_failure(_PK_USER, ip)
         log.warning("passkey login verification failed", exc_info=True)
-        raise HTTPException(401, "ورود با کلید عبور ناموفق بود. دوباره تلاش کنید.")
+        raise HTTPException(
+            401, "ورود با کلید عبور ناموفق بود. دوباره تلاش کنید."
+        ) from None
     user = await session.get(AppUser, cred.user_id)
     if not user or not user.is_active or user.role != OWNER_ROLE:
         raise HTTPException(401, "حساب غیرفعال است.")

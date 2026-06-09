@@ -138,6 +138,9 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                 anchor = inv.deferred_until
             else:
                 sent_at = inv.sent_at
+                if sent_at is None:
+                    log.warning("dunning: invoice %s has owed status without sent_at", inv.id)
+                    continue
                 if sent_at.tzinfo is None:
                     sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
                 anchor = sent_at.date()

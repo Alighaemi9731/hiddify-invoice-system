@@ -1,0 +1,57 @@
+# Isolated staging stack for local/CI workflow checks.
+# Usage:
+#   cp deploy/.env.staging.example .env.staging
+#   docker compose -p invoice-staging --env-file .env.staging \
+#     -f deploy/docker-compose.staging.yml up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-invoice_staging}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.staging}
+      POSTGRES_DB: ${POSTGRES_DB:-invoice_staging}
+    volumes:
+      - staging_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-invoice_staging} -d ${POSTGRES_DB:-invoice_staging}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    env_file: ../.env.staging
+    environment:
+      APP_ENV: staging
+      POSTGRES_HOST: db
+      RUN_SCHEDULER: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - staging_app_data:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "127.0.0.1:${STAGING_PORT:-18080}:80"
+    volumes:
+      - ./Caddyfile.staging:/etc/caddy/Caddyfile:ro
+
+volumes:
+  staging_db_data:
+  staging_app_data:

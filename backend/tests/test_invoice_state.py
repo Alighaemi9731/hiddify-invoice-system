@@ -17,7 +17,13 @@ os.environ.setdefault("SECRET_KEY", "k")
 import pytest  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
-from app.models import DeliveryLog, FinancialRecord, Invoice, Payment, Reseller  # noqa: E402
+from app.models import (  # noqa: E402
+    DeliveryLog,
+    FinancialRecord,
+    Invoice,
+    Payment,
+    Reseller,
+)
 from app.models.enums import (  # noqa: E402
     DeliveryKind,
     DeliveryStatus,
@@ -110,15 +116,20 @@ def _invoice(reseller_id, *, status=S.sent, label="2026-01", sent_days_ago=10, *
 # ------------------------------ multi-payment: don't un-pay -------------------
 def test_reject_does_not_unpay_invoice_settled_by_other_payment(tmp_path):
     async def body(s):
-        r = _reseller(); s.add(r); await s.flush()
-        inv = _invoice(r.id, status=S.paid); inv.paid_at = dt.datetime.now(dt.timezone.utc)
-        s.add(inv); await s.flush()
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        inv = _invoice(r.id, status=S.paid)
+        inv.paid_at = dt.datetime.now(dt.timezone.utc)
+        s.add(inv)
+        await s.flush()
         # Two confirmed payments both claim to settle this invoice (e.g. a duplicate).
         p1 = Payment(reseller_id=r.id, invoice_id=inv.id, method=PaymentMethod.manual,
                      status=PaymentStatus.confirmed, settled_invoice_ids=str(inv.id))
         p2 = Payment(reseller_id=r.id, invoice_id=inv.id, method=PaymentMethod.manual,
                      status=PaymentStatus.confirmed, settled_invoice_ids=str(inv.id))
-        s.add_all([p1, p2]); await s.commit()
+        s.add_all([p1, p2])
+        await s.commit()
 
         from app.services import payments
         # Rejecting p1 must leave the invoice PAID (p2 still settles it).
@@ -138,10 +149,13 @@ def test_reject_does_not_unpay_invoice_settled_by_other_payment(tmp_path):
 def test_revert_clears_ledger_txid_and_resets_dunning(tmp_path):
     async def body(s):
         from app.services import financial_archive, payments
-        r = _reseller(); s.add(r); await s.flush()
+        r = _reseller()
+        s.add(r)
+        await s.flush()
         inv = _invoice(r.id, status=S.paid, sent_days_ago=20)
         inv.paid_at = dt.datetime.now(dt.timezone.utc)
-        s.add(inv); await s.flush()
+        s.add(inv)
+        await s.flush()
         # Ledger row with a txid + a stale 'warning' dunning mark.
         await financial_archive.record(s, inv, txid="0xdeadbeef")
         s.add(DeliveryLog(invoice_id=inv.id, kind=DeliveryKind.warning,
@@ -149,7 +163,8 @@ def test_revert_clears_ledger_txid_and_resets_dunning(tmp_path):
         p = Payment(reseller_id=r.id, invoice_id=inv.id, method=PaymentMethod.usdt_txid,
                     txid="0xdeadbeef", status=PaymentStatus.confirmed,
                     settled_invoice_ids=str(inv.id))
-        s.add(p); await s.commit()
+        s.add(p)
+        await s.commit()
         old_sent = inv.sent_at
 
         await payments.reject_payment(s, p.id)
@@ -180,19 +195,23 @@ def test_revert_clears_ledger_txid_and_resets_dunning(tmp_path):
 def test_restore_held_when_other_due_invoice_remains(tmp_path):
     async def body(s):
         from app.services import payments
-        r = _reseller(); s.add(r); await s.flush()
+        r = _reseller()
+        s.add(r)
+        await s.flush()
         paid = _invoice(r.id, status=S.paid, label="2026-01")
         paid.paid_at = dt.datetime.now(dt.timezone.utc)
         owed = _invoice(r.id, status=S.sent, label="2026-02")
         deferred = _invoice(r.id, status=S.sent, label="2026-03",
                             deferred_until=dt.date.today() + dt.timedelta(days=30))
-        s.add_all([paid, owed, deferred]); await s.commit()
+        s.add_all([paid, owed, deferred])
+        await s.commit()
 
         # Another non-deferred owed invoice remains → restore must be HELD.
         assert await payments._reseller_has_other_due(s, r.id, exclude_invoice_id=paid.id) is True
 
         # Pay it off too; now only deferred (future) remains → no current debt → restore allowed.
-        owed.status = S.paid; owed.paid_at = dt.datetime.now(dt.timezone.utc)
+        owed.status = S.paid
+        owed.paid_at = dt.datetime.now(dt.timezone.utc)
         await s.commit()
         assert await payments._reseller_has_other_due(s, r.id, exclude_invoice_id=paid.id) is False
 
@@ -203,13 +222,16 @@ def test_restore_held_when_other_due_invoice_remains(tmp_path):
 def test_revalidate_payable_rejects_stale_invoice(tmp_path):
     async def body(s):
         from app.bot import handlers
-        r = _reseller(); s.add(r); await s.flush()
+        r = _reseller()
+        s.add(r)
+        await s.flush()
         owed = _invoice(r.id, status=S.sent)
         paid = _invoice(r.id, status=S.paid, label="2026-02")
         canceled = _invoice(r.id, status=S.canceled, label="2026-03")
         deferred = _invoice(r.id, status=S.sent, label="2026-04",
                             deferred_until=dt.date.today() + dt.timedelta(days=5))
-        s.add_all([owed, paid, canceled, deferred]); await s.commit()
+        s.add_all([owed, paid, canceled, deferred])
+        await s.commit()
         ids = {r.id}
         assert (await handlers._revalidate_payable(s, owed, ids)) is not None
         assert (await handlers._revalidate_payable(s, paid, ids)) is None

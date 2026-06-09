@@ -118,6 +118,16 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M55** Audit remediation B08 — build, test, and frontend quality gate
+  (`v1.37.46`). Backend CI now runs the repository Ruff baseline plus mypy over all 92 app
+  modules; real nullable/typing failures in financial and delivery paths were fixed while
+  untyped third-party packages and aiogram narrowing are isolated explicitly. An integrated
+  workflow test covers billing, manual payment, ledger persistence, and a readable backup.
+  The isolated staging Compose stack uses localhost-only ingress, separate volumes, no bot,
+  and no scheduler. Frontend vendor/chart chunks are split and a 500 KiB JavaScript budget is
+  enforced by the production build. The workflow test also exposed and fixed naive/aware
+  snapshot timestamp comparison during billing. Verified with 83 tests, Ruff, mypy, Alembic
+  drift, frontend type/build, and both Compose configurations.
 - [x] **M54** Audit remediation B07 — database evolution and input contracts
   (`v1.37.44`; logging preservation hotfix in `v1.37.45`). Startup now runs versioned Alembic
   migrations instead of `create_all` plus

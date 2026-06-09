@@ -11,7 +11,14 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import EndUserSnapshot, FinancialRecord, Invoice, InvoiceLine, Panel, Reseller
+from app.models import (
+    EndUserSnapshot,
+    FinancialRecord,
+    Invoice,
+    InvoiceLine,
+    Panel,
+    Reseller,
+)
 from app.models.enums import InvoiceStatus, PanelStatus
 from app.services import financial_archive, metering, pricing
 from app.services.invoice_engine import BundleResult, compute_invoices
@@ -241,10 +248,14 @@ async def recompute_invoice(
 
             run = await sync_service.sync_panel(session, panel)
             synced = run.status == SyncStatus.success
-            panel = await session.get(Panel, invoice.panel_id)        # re-attach post-commit
-            invoice = await session.get(Invoice, invoice.id)
         except Exception:  # noqa: BLE001 — fall back to existing snapshots
             log.warning("recompute: panel sync failed, using existing snapshots", exc_info=True)
+        refreshed_panel = await session.get(Panel, invoice.panel_id)
+        refreshed_invoice = await session.get(Invoice, invoice.id)
+        if refreshed_panel is None or refreshed_invoice is None:
+            raise ValueError("invoice or panel disappeared during recompute")
+        panel = refreshed_panel
+        invoice = refreshed_invoice
 
     period = Period(invoice.period_start, invoice.period_end)
     default_price = await pricing.get_default_price_per_gb(session)

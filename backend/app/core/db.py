@@ -5,7 +5,6 @@ import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from alembic import command
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -14,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from alembic import command
 from app.core.config import settings
 
 

@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Invoice, InvoiceLine, Panel, Reseller
-from app.services import pdf as pdf_service, settings_service
+from app.services import pdf as pdf_service
+from app.services import settings_service
 
 
 def _safe_name(name: str) -> str:
@@ -21,6 +22,8 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
     """Build the PDF for an invoice, store its path, and return (path, download_name)."""
     reseller = await session.get(Reseller, inv.reseller_id)
     panel = await session.get(Panel, inv.panel_id)
+    if reseller is None or panel is None:
+        raise ValueError("invoice references a missing reseller or panel")
     lines = (
         await session.execute(
             select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id)
@@ -41,9 +44,10 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
         reseller_name=reseller.name, panel_label=panel.key, period_label=inv.period_label,
         period_start=inv.period_start, period_end=inv.period_end,
         lines=[
-            {"name": l.name, "uuid": l.end_user_uuid, "start_date": l.start_date,
-             "usage_gb": float(l.usage_gb), "sub_reseller_name": l.sub_reseller_name or reseller.name}
-            for l in lines
+            {"name": line.name, "uuid": line.end_user_uuid, "start_date": line.start_date,
+             "usage_gb": float(line.usage_gb),
+             "sub_reseller_name": line.sub_reseller_name or reseller.name}
+            for line in lines
         ],
         total_gb=float(inv.usage_gb), price_per_gb=inv.price_per_gb,
         amount_toman=float(inv.amount_toman), amount_usdt=float(inv.amount_usdt),
@@ -80,9 +84,10 @@ async def render_node_usage_pdf(
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
         lines=[
-            {"name": l.name, "uuid": l.user_uuid, "start_date": l.start_date,
-             "usage_gb": float(l.usage_gb), "sub_reseller_name": l.sub_reseller_name or node.name}
-            for l in bundle.lines
+            {"name": line.name, "uuid": line.user_uuid, "start_date": line.start_date,
+             "usage_gb": float(line.usage_gb),
+             "sub_reseller_name": line.sub_reseller_name or node.name}
+            for line in bundle.lines
         ],
         total_gb=float(bundle.total_gb), price_per_gb=0,
         amount_toman=0, amount_usdt=0, usdt_rate=0,
@@ -112,9 +117,10 @@ async def render_own_usage_pdf(
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
         lines=[
-            {"name": l.name, "uuid": l.user_uuid, "start_date": l.start_date,
-             "usage_gb": float(l.usage_gb), "sub_reseller_name": l.sub_reseller_name or node.name}
-            for l in bundle.lines
+            {"name": line.name, "uuid": line.user_uuid, "start_date": line.start_date,
+             "usage_gb": float(line.usage_gb),
+             "sub_reseller_name": line.sub_reseller_name or node.name}
+            for line in bundle.lines
         ],
         total_gb=float(bundle.total_gb), price_per_gb=0,
         amount_toman=0, amount_usdt=0, usdt_rate=0,
@@ -148,9 +154,10 @@ async def render_sub_invoice_pdf(
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
         lines=[
-            {"name": l.name, "uuid": l.user_uuid, "start_date": l.start_date,
-             "usage_gb": float(l.usage_gb), "sub_reseller_name": l.sub_reseller_name or node.name}
-            for l in bundle.lines
+            {"name": line.name, "uuid": line.user_uuid, "start_date": line.start_date,
+             "usage_gb": float(line.usage_gb),
+             "sub_reseller_name": line.sub_reseller_name or node.name}
+            for line in bundle.lines
         ],
         total_gb=float(bundle.total_gb), price_per_gb=bundle.price_per_gb,
         amount_toman=float(amount_toman), amount_usdt=amount_usdt,

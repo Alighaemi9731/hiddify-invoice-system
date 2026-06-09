@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -10,6 +11,9 @@ from app.core import crypto
 from app.core.db import Base
 from app.models.enums import PanelStatus, SyncSource
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.reseller import Reseller
 
 
 class Panel(Base, TimestampMixin):
@@ -37,7 +41,7 @@ class Panel(Base, TimestampMixin):
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    resellers: Mapped[list["Reseller"]] = relationship(  # noqa: F821
+    resellers: Mapped[list[Reseller]] = relationship(
         back_populates="panel", cascade="all, delete-orphan"
     )
 
@@ -48,7 +52,7 @@ class Panel(Base, TimestampMixin):
 
     @proxy_path.setter
     def proxy_path(self, value: str | None) -> None:
-        self.proxy_path_enc = crypto.encrypt(value)
+        self.proxy_path_enc = crypto.encrypt(value) or ""
 
     @property
     def admin_api_key(self) -> str | None:

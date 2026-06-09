@@ -169,7 +169,11 @@ async def send_invoice(
     payment instructions + a per-node usage breakdown), then a SEPARATE volume-only PDF for
     the reseller's own users and one per sub-reseller. Falls back to text-only on failure."""
     inv = await session.get(Invoice, invoice_id)
+    if inv is None:
+        raise ValueError(f"invoice {invoice_id} not found")
     reseller = await session.get(Reseller, inv.reseller_id)
+    if reseller is None:
+        raise ValueError(f"reseller {inv.reseller_id} not found for invoice {invoice_id}")
     text = await build_invoice_text(session, inv, reseller)
 
     # Not registered with the bot → log unmatched, nothing to send.
@@ -217,6 +221,8 @@ async def send_invoice(
     except Exception as exc:  # noqa: BLE001 — fall back to plain text only
         log.warning("invoice delivery failed for invoice %s: %s", inv.id, exc)
         try:
+            if bot is None:
+                raise RuntimeError("no telegram bot token configured")
             msg = await bot.send_message(reseller.bot_chat_id, rtl(text), parse_mode="HTML")
             sent_ids = [msg.message_id]
         except Exception as exc2:  # noqa: BLE001

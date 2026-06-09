@@ -107,7 +107,7 @@ async def list_resellers(
     if q:
         query = query.where(or_(Reseller.name.ilike(f"%{q}%"), Reseller.admin_uuid.ilike(f"%{q}%")))
     query = query.order_by(Reseller.name).limit(limit).offset(offset)
-    rows = (await session.execute(query)).all()
+    rows = list((await session.execute(query)).tuples().all())
     if root_keys is not None:
         rows = [(r, key) for r, key in rows if (r.panel_id, r.admin_uuid) in root_keys]
     counts = await _usage_counts(session, panel_id)
@@ -223,6 +223,8 @@ async def get_reseller(reseller_id: int, session: AsyncSession = Depends(get_ses
     if not r:
         raise HTTPException(404, "Reseller not found")
     panel = await session.get(Panel, r.panel_id)
+    if panel is None:
+        raise HTTPException(409, "Reseller references a missing panel")
     return _to_out(r, panel.key, default_price)
 
 
@@ -244,6 +246,8 @@ async def update_reseller(
     await session.commit()
     default_price = await pricing.get_default_price_per_gb(session)
     panel = await session.get(Panel, r.panel_id)
+    if panel is None:
+        raise HTTPException(409, "Reseller references a missing panel")
     return _to_out(r, panel.key, default_price)
 
 
@@ -290,7 +294,7 @@ async def bump_limits(
     try:
         new_mu, new_mau = await admin_capacity.bump_limits(session, r, amount)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"اعمال روی پنل ناموفق بود: {exc}")
+        raise HTTPException(502, f"اعمال روی پنل ناموفق بود: {exc}") from exc
     return {
         "reseller_id": reseller_id, "amount": amount,
         "max_users": new_mu, "max_active_users": new_mau,
@@ -308,5 +312,5 @@ async def set_can_add_admin(
     try:
         await admin_capacity.set_can_add_admin(session, r, body.enabled)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"اعمال روی پنل ناموفق بود: {exc}")
+        raise HTTPException(502, f"اعمال روی پنل ناموفق بود: {exc}") from exc
     return {"reseller_id": reseller_id, "can_add_admin": body.enabled}

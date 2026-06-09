@@ -19,8 +19,12 @@ from app.api import (
     payments,
     reports,
     resellers,
-    setup as setup_api,
+)
+from app.api import (
     settings as settings_api,
+)
+from app.api import (
+    setup as setup_api,
 )
 from app.core.config import settings
 

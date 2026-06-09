@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -79,7 +80,7 @@ class EnforcementAction(Base):
     dry_run: Mapped[bool] = mapped_column(default=True)
     affected_count: Mapped[int] = mapped_column(Integer, default=0)
     # Snapshot of prior state (user enable flags, prior limits) for exact restore.
-    snapshot: Mapped[object] = mapped_column(JSON, nullable=True)
+    snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
