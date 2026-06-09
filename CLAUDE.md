@@ -119,7 +119,8 @@ touches SQLite — there is no local-run app variant.
 ## Milestone status
 
 - [x] **M54** Audit remediation B07 — database evolution and input contracts
-  (`v1.37.44`). Startup now runs versioned Alembic migrations instead of `create_all` plus
+  (`v1.37.44`; logging preservation hotfix in `v1.37.45`). Startup now runs versioned Alembic
+  migrations instead of `create_all` plus
   ad-hoc `ADD COLUMN`: fresh DBs build from baseline, while existing DBs are schema-validated
   before baseline stamp and serialized across backend/bot with a PostgreSQL advisory lock.
   A follow-up migration adds 23 non-negative financial/usage constraints. Invoice/reseller

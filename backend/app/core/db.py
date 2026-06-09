@@ -53,4 +53,5 @@ def _upgrade_schema() -> None:
     backend_dir = Path(__file__).resolve().parents[2]
     cfg = Config(str(backend_dir / "alembic.ini"))
     cfg.set_main_option("script_location", str(backend_dir / "alembic"))
+    cfg.attributes["configure_logger"] = False
     command.upgrade(cfg, "head")

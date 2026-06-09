@@ -75,6 +75,35 @@ def test_incomplete_existing_schema_refuses_baseline(tmp_path):
     assert "Refusing to baseline an incomplete existing database" in result.stdout
 
 
+def test_programmatic_migration_preserves_application_logging(tmp_path):
+    db = tmp_path / "logging.db"
+    script = """
+import logging
+
+probe = logging.getLogger("app.migration_logging_probe")
+probe.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+probe.addHandler(handler)
+
+from app.core.db import _upgrade_schema
+
+_upgrade_schema()
+assert probe.disabled is False
+assert probe.level == logging.INFO
+assert handler in probe.handlers
+"""
+    env = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{db}"}
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=BACKEND_DIR,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=True,
+    )
+
+
 def test_financial_and_mutable_default_contracts():
     with pytest.raises(ValidationError):
         InvoiceEdit(usage_gb=-1)
