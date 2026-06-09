@@ -117,7 +117,7 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
-- [x] **M47** Audit remediation B00 — trustworthy build baseline (`v1.37.36`).
+- [x] **M47** Audit remediation B00 — trustworthy build baseline (`v1.37.37`).
   Fixed the invoice-list TypeScript inference and MUI `PaletteMode` import; made
   `npm run build` type-check before Vite; switched the frontend Docker build to
   lockfile-based `npm ci`; corrected the Playwright CAPTCHA locator; required an

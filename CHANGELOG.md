@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.37 - 2026-06-09
+
+### Fixed
+
+- Made the Compose validation job self-contained by generating a temporary CI-only
+  `.env` with the required dummy PostgreSQL password.
+
+### Verification
+
+- The preceding `v1.37.36` CI run proved backend and frontend jobs green and exposed
+  the missing Compose interpolation input. This patch corrects that infrastructure-only
+  failure without changing application behavior.
+
 ## 1.37.36 - 2026-06-09
 
 ### Fixed

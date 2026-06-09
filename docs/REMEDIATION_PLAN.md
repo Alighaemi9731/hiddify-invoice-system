@@ -28,7 +28,7 @@ verified backup and a documented rollback point.
 
 ## B00 - Restore a trustworthy build baseline
 
-Priority: P0 prerequisite. Status: DONE in `v1.37.36`.
+Priority: P0 prerequisite. Status: DONE in `v1.37.37`.
 
 - Fix the two current TypeScript errors in `Invoices.tsx` and `theme.ts`.
 - Make the frontend production build run TypeScript checking before Vite.

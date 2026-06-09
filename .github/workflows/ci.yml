@@ -47,4 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n deploy/install.sh deploy/bootstrap.sh deploy/updater.sh get.sh
-      - run: docker compose -f deploy/docker-compose.prod.yml config >/dev/null
+      - name: Validate production Compose
+        run: |
+          printf 'POSTGRES_PASSWORD=ci-only-not-a-secret\n' > .env
+          docker compose --env-file .env -f deploy/docker-compose.prod.yml config >/dev/null
