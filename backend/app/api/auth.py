@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import crypto, loginsec
 from app.core.db import get_session
 from app.core.security import (
+    OWNER_ROLE,
     create_access_token,
     get_current_subject,
     hash_password,
+    validate_new_password,
     verify_password,
 )
 from app.models.app_user import AppUser
@@ -47,12 +49,11 @@ async def _get_user(session: AsyncSession, username: str) -> AppUser | None:
     return res.scalar_one_or_none()
 
 
-MIN_PASSWORD_LEN = 8
-
-
 def _validate_password(pw: str) -> None:
-    if not pw or len(pw) < MIN_PASSWORD_LEN:
-        raise HTTPException(status_code=400, detail=f"رمز عبور باید حداقل {MIN_PASSWORD_LEN} کاراکتر باشد.")
+    try:
+        validate_new_password(pw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _token_for(user: AppUser) -> str:
@@ -85,7 +86,12 @@ async def login(body: LoginRequest, request: Request,
 
     # 3) credentials
     user = await _get_user(session, body.username)
-    if not user or not user.is_active or not verify_password(body.password, user.password_hash):
+    if (
+        not user
+        or not user.is_active
+        or user.role != OWNER_ROLE
+        or not verify_password(body.password, user.password_hash)
+    ):
         remaining = loginsec.record_failure(body.username, ip)
         detail = "نام کاربری یا رمز عبور نادرست است."
         if remaining and remaining <= 2:
@@ -99,7 +105,7 @@ async def login(body: LoginRequest, request: Request,
             # signal the client to ask for the code (without burning an attempt)
             raise HTTPException(status_code=401, detail="کد تأیید دو مرحله‌ای لازم است.",
                                 headers={"X-2FA-Required": "1"})
-        if not loginsec.verify_totp(secret, body.totp_code):
+        if not secret or not loginsec.verify_totp(secret, body.totp_code):
             loginsec.record_failure(body.username, ip)
             raise HTTPException(status_code=401, detail="کد تأیید دو مرحله‌ای نادرست است.")
 
@@ -145,7 +151,7 @@ async def totp_setup(subject: str = Depends(get_current_subject),
     if not user:
         raise HTTPException(404, "User not found")
     secret = loginsec.new_totp_secret()
-    user.totp_secret_enc = crypto.encrypt(secret)  # stored, enabled only after confirm
+    user.totp_pending_secret_enc = crypto.encrypt(secret)
     await session.commit()
     uri = loginsec.totp_uri(secret, user.username)
     return TotpSetupOut(secret=secret, otpauth_uri=uri, qr=loginsec.totp_qr_data_uri(uri))
@@ -155,11 +161,13 @@ async def totp_setup(subject: str = Depends(get_current_subject),
 async def totp_enable(body: TotpEnable, subject: str = Depends(get_current_subject),
                       session: AsyncSession = Depends(get_session)) -> dict:
     user = await _get_user(session, subject)
-    if not user or not user.totp_secret_enc:
+    if not user or not user.totp_pending_secret_enc:
         raise HTTPException(400, "ابتدا راه‌اندازی ۲ مرحله‌ای را شروع کنید.")
-    secret = crypto.decrypt(user.totp_secret_enc)
-    if not loginsec.verify_totp(secret, body.code):
+    secret = crypto.decrypt(user.totp_pending_secret_enc)
+    if not secret or not loginsec.verify_totp(secret, body.code):
         raise HTTPException(400, "کد واردشده نادرست است.")
+    user.totp_secret_enc = user.totp_pending_secret_enc
+    user.totp_pending_secret_enc = None
     user.totp_enabled = True
     await session.commit()
     return {"status": "ok", "totp_enabled": True}
@@ -173,5 +181,6 @@ async def totp_disable(body: TotpDisable, subject: str = Depends(get_current_sub
         raise HTTPException(400, "رمز عبور نادرست است.")
     user.totp_enabled = False
     user.totp_secret_enc = None
+    user.totp_pending_secret_enc = None
     await session.commit()
     return {"status": "ok", "totp_enabled": False}

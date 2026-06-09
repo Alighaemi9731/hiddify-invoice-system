@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.38 - 2026-06-09
+
+### Security
+
+- JWT authentication now fails closed with `503` when live account validation cannot
+  reach the database; a signed token is never trusted by itself.
+- Protected APIs require an active owner account plus matching mandatory `role` and
+  `epoch` claims. Legacy or role-mismatched tokens are rejected.
+- Password and passkey login reject non-owner accounts.
+- New passwords enforce bcrypt's 72-byte UTF-8 limit with a controlled validation error.
+- First-run setup is serialized with an in-process lock and a PostgreSQL row lock so
+  concurrent requests cannot create multiple owners.
+
+### Fixed
+
+- Starting TOTP setup no longer overwrites an active authenticator secret. A replacement
+  secret is stored separately and becomes active only after a valid confirmation code.
+- Disabling TOTP clears both active and pending secrets.
+- Existing databases receive the nullable pending-secret column through the current
+  additive schema synchronization path.
+
+### Verification
+
+- Added regression coverage for DB failure, missing/mismatched JWT claims, inactive and
+  non-owner accounts, bcrypt byte limits, TOTP replacement rollback/confirmation,
+  concurrent setup, and legacy-schema column addition.
+
 ## 1.37.37 - 2026-06-09
 
 ### Fixed

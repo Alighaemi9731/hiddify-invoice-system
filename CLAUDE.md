@@ -117,6 +117,15 @@ restores import via `psql`. Schema evolves on boot via `init_models()` +
 
 ## Milestone status
 
+- [x] **M48** Audit remediation B01 — authentication and account hardening
+  (`v1.37.38`). JWT authorization now fails closed on database errors and requires
+  mandatory owner-role + token-epoch claims matching the active live account.
+  Password/passkey login rejects non-owner accounts; new passwords enforce bcrypt's
+  72-byte UTF-8 ceiling. First-run setup is serialized in-process and by locking the
+  `setup_done` PostgreSQL row. TOTP replacement uses a separately encrypted pending
+  secret, preserving the active authenticator until a valid confirmation code promotes
+  it. The additive schema sync introduces the nullable pending column on existing
+  databases. Regression tests cover every failure mode and setup concurrency.
 - [x] **M47** Audit remediation B00 — trustworthy build baseline (`v1.37.37`).
   Fixed the invoice-list TypeScript inference and MUI `PaletteMode` import; made
   `npm run build` type-check before Vite; switched the frontend Docker build to

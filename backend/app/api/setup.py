@@ -8,6 +8,8 @@ again — only the normal captcha login works.
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,11 +17,13 @@ from fastapi import Depends
 from pydantic import BaseModel
 
 from app.core.db import get_session
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_new_password
 from app.models.app_user import AppUser
+from app.models.setting import Setting
 from app.services import settings_service
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
+_setup_lock = asyncio.Lock()
 
 
 class SetupStatus(BaseModel):
@@ -54,17 +58,30 @@ async def status(session: AsyncSession = Depends(get_session)) -> SetupStatus:
 
 @router.post("")
 async def do_setup(body: SetupRequest, session: AsyncSession = Depends(get_session)) -> dict:
-    if await _is_done(session):
-        raise HTTPException(409, "راه‌اندازی قبلاً انجام شده است.")
-    username = (body.username or "").strip()
-    if len(username) < 3:
-        raise HTTPException(400, "نام کاربری باید حداقل ۳ کاراکتر باشد.")
-    if len(body.password or "") < 8:
-        raise HTTPException(400, "رمز عبور باید حداقل ۸ کاراکتر باشد.")
+    # The process lock protects the current single-worker deployment and SQLite tests.
+    # The row lock also serializes setup across PostgreSQL workers/processes.
+    async with _setup_lock:
+        await session.execute(
+            select(Setting).where(Setting.key == "setup_done").with_for_update()
+        )
+        if await _is_done(session):
+            raise HTTPException(409, "راه‌اندازی قبلاً انجام شده است.")
+        username = (body.username or "").strip()
+        if len(username) < 3:
+            raise HTTPException(400, "نام کاربری باید حداقل ۳ کاراکتر باشد.")
+        try:
+            validate_new_password(body.password)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
-    session.add(AppUser(username=username, password_hash=hash_password(body.password), role="owner"))
-    await settings_service.set_value(session, "setup_done", True)
-    await session.commit()
+        session.add(
+            AppUser(
+                username=username,
+                password_hash=hash_password(body.password),
+                role="owner",
+            )
+        )
+        await settings_service.set_value(session, "setup_done", True)
 
     result: dict = {"setup_done": True, "domain_applied": False}
     if body.domain:

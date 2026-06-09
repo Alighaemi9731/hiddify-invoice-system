@@ -44,7 +44,7 @@ Primary files:
 
 ## B01 - Authentication and account security
 
-Priority: P0. Status: TODO.
+Priority: P0. Status: DONE in `v1.37.38`.
 
 - Make JWT authentication fail closed when the account lookup/database fails.
 - Require `token_epoch` on accepted JWTs and enforce account role/authorization.

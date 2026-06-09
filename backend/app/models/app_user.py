@@ -22,4 +22,7 @@ class AppUser(Base, TimestampMixin):
 
     # Two-factor auth (TOTP / Google Authenticator). Secret is stored encrypted.
     totp_secret_enc: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # A replacement secret remains pending until its first valid code is confirmed.
+    # This prevents starting setup from invalidating an already-active authenticator.
+    totp_pending_secret_enc: Mapped[str | None] = mapped_column(String(255), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(default=False)

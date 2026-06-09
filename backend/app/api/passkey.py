@@ -24,7 +24,7 @@ from webauthn.helpers.structs import (
 from app.api.auth import _client_ip
 from app.core import loginsec, webauthn_store
 from app.core.db import get_session
-from app.core.security import create_access_token, get_current_subject
+from app.core.security import OWNER_ROLE, create_access_token, get_current_subject
 from app.models.app_user import AppUser
 from app.models.webauthn_credential import WebauthnCredential
 from app.schemas.auth import Token
@@ -192,7 +192,7 @@ async def login_complete(
         log.warning("passkey login verification failed", exc_info=True)
         raise HTTPException(401, "ورود با کلید عبور ناموفق بود. دوباره تلاش کنید.")
     user = await session.get(AppUser, cred.user_id)
-    if not user or not user.is_active:
+    if not user or not user.is_active or user.role != OWNER_ROLE:
         raise HTTPException(401, "حساب غیرفعال است.")
     cred.sign_count = ver.new_sign_count
     await session.commit()
