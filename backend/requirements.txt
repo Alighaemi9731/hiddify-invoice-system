@@ -10,7 +10,7 @@ SQLAlchemy>=2.0.30
 greenlet>=3.0          # required by SQLAlchemy async
 asyncpg>=0.29          # PostgreSQL async driver (production / docker)
 aiosqlite>=0.20        # SQLite async driver (quick local runs / tests)
-alembic>=1.13
+alembic>=1.18.4
 
 # Security
 bcrypt>=4.1
