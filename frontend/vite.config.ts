@@ -30,7 +30,7 @@ export default defineConfig({
       output: {
         codeSplitting: {
           groups: [
-            { name: "vendor-charts", test: /node_modules[\\/](echarts|zrender|echarts-for-react)/, priority: 60 },
+            { name: "vendor-charts", test: /node_modules[\\/](echarts|zrender)/, priority: 60 },
             { name: "vendor-react", test: /node_modules[\\/](react|react-dom|react-router|scheduler)/, priority: 40 },
             { name: "vendor-data", test: /node_modules[\\/](@tanstack|axios)/, priority: 30 },
             { name: "vendor-motion", test: /node_modules[\\/]framer-motion/, priority: 20 },

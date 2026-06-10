@@ -30,17 +30,17 @@ export async function login(page: Page): Promise<void> {
   await page.goto("/login");
 
   for (let attempt = 1; attempt <= 8; attempt++) {
-    await page.getByRole("textbox", { name: "نام کاربری" }).fill(user);
-    await page.getByRole("textbox", { name: "رمز عبور" }).fill(pass);
+    await page.getByPlaceholder("نام کاربری").fill(user);
+    await page.getByPlaceholder("رمز عبور").fill(pass);
 
     const buf = await page.getByAltText("تصویر کد امنیتی").screenshot();
     const { data } = await worker.recognize(buf);
     const code = (data.text || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
-    const captchaBox = page.getByRole("textbox", { name: "کد امنیتی تصویر" });
+    const captchaBox = page.getByPlaceholder("کد امنیتی");
     await captchaBox.fill(code);
     // exact:true so we don't also match the «ورود با Face ID / کلید عبور» passkey button
-    await page.getByRole("button", { name: "ورود", exact: true }).click();
+    await page.getByRole("button", { name: "ورود به سامانه", exact: true }).click();
 
     // Success = we navigated off /login (the SPA replaces the route).
     try {

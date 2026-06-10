@@ -8,6 +8,35 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.51 - 2026-06-10
+
+Login redesign and Dashboard production fix.
+
+### Added
+
+- Rebuilt the Login page as a minimal RTL split layout with the invoice-system branding,
+  password visibility control, CAPTCHA, passkey login, and the supplied financial SVG.
+- Added a full-page pale-blue background glow that starts at the right edge and fades
+  through the center while preserving a clean white form area.
+
+### Fixed
+
+- Fixed the remaining production Dashboard `Minified React error #130`. Rolldown's
+  CommonJS interop rendered the `echarts-for-react/lib/core` default import as an object
+  instead of a React component.
+- Replaced `echarts-for-react` with a small native ECharts React adapter that owns chart
+  initialization, option updates, responsive resizing, and disposal directly.
+- Updated Login E2E selectors for the new placeholder-based fields and submit button.
+- Added a build guard that rejects any future `echarts-for-react` runtime in generated
+  JavaScript.
+
+### Verification
+
+- Backend pytest, Ruff, mypy, and dependency checks pass.
+- Frontend audit, typecheck, production build, PWA generation, and bundle checks pass.
+- Playwright rendered all three Dashboard charts from the production bundle with no
+  console or page errors, and verified the final Login layout.
+
 ## 1.37.50 - 2026-06-10
 
 Dashboard chart runtime hotfix.

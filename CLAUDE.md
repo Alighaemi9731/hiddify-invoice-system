@@ -46,7 +46,7 @@ backend/   FastAPI API + APScheduler (sync, invoicing, dunning)
                   pricing, payments, dunning, pdf, settings_service, bootstrap
   app/bot         aiogram v3 Telegram bot (membership gate, link match, delivery, payments)
   app/scheduler   APScheduler jobs
-frontend/  React + Vite + TypeScript SPA (RTL, Persian) — MUI + Recharts
+frontend/  React + Vite + TypeScript SPA (RTL, Persian) — MUI + ECharts
 docs/      ARCHITECTURE.md + Mermaid diagrams
 ```
 
@@ -58,7 +58,7 @@ docs/      ARCHITECTURE.md + Mermaid diagrams
 - **PDF:** reportlab + arabic-reshaper + python-bidi (Persian/RTL). **Dates:** Gregorian for billing periods; Jalali (`jdatetime`) for display.
 - **Payments:** every proof is tied to one explicitly selected invoice and confirmed manually.
   USDT/BSC has an optional BscScan check; TON hashes use explorer links.
-- **Frontend:** React + Vite + TS + MUI (RTL theme, Vazirmatn) + Recharts.
+- **Frontend:** React + Vite + TS + MUI (RTL theme, Vazirmatn) + ECharts.
 
 ## Data model essentials
 
@@ -120,6 +120,14 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M58** Login redesign and Dashboard production fix (`v1.37.51`).
+  Rebuilt Login as a minimal RTL split layout using the supplied financial SVG and a
+  right-to-center pale-blue background glow while preserving CAPTCHA, 2FA, and passkey
+  behavior. Removed `echarts-for-react`: its CommonJS default import became an object in
+  the Rolldown production bundle and caused React error #130. The native ECharts adapter
+  now owns initialization, resize observation, option updates, and disposal. The bundle
+  gate rejects reintroducing the incompatible wrapper, and Playwright verifies all three
+  Dashboard charts with no console/page errors.
 - [x] **M57** Audit remediation B10 — cleanup and documentation (`v1.37.48`).
   Removed dormant enum values (`admin_api`, `sample`, `usdt_hd`, `duplicate`, `skipped`,
   `warned`, `warn`, `zero_limits`) and added an Alembic normalization migration for legacy
