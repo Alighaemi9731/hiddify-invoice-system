@@ -1,12 +1,12 @@
 # Architecture
 
-Hiddify Reseller Management & Invoicing System — Phase 1 (localhost MVP).
+Hiddify Reseller Management & Invoicing System — production architecture.
 
 ## 1. Overview
 
 The system automates what was previously a manual monthly process: read every Hiddify
 panel, work out what each reseller sold, bill them, deliver the invoice on Telegram,
-take payment in USDT (BEP-20), and chase/suspend non-payers.
+collect owner-confirmed payments, and chase/suspend non-payers.
 
 Design principles:
 
@@ -30,7 +30,7 @@ flowchart LR
         ENGINE[Invoice engine<br/>+ pricing Toman→USDT]
         PDF[PDF builder<br/>Persian / RTL]
         DUN[Dunning + enforcement<br/>PanelClient: admin-API adapter]
-        PAY[Payment verifier<br/>BscScan / BEP-20]
+        PAY[Payment workflow<br/>manual review + optional BscScan check]
         API[REST API + JWT auth]
         SCHED[Scheduler<br/>monthly + daily jobs]
     end
@@ -59,9 +59,9 @@ flowchart LR
     DUN -- disable users / zero limits --> P1
     BOT <--> RESELLER
     BOT -- membership check --> CHANNEL
-    RESELLER -- TXID --> BOT
+    RESELLER -- chosen invoice + proof --> BOT
     BOT --> PAY
-    PAY -- verify --> CHAIN
+    PAY -. optional USDT check .-> CHAIN
     PAY -- mark paid + auto-restore --> DUN
 ```
 
@@ -74,7 +74,7 @@ sequenceDiagram
     participant E as Invoice engine
     participant B as Bot
     participant R as Reseller
-    participant V as Payment verifier
+    participant V as Payment review
     participant P as Hiddify panel
 
     S->>SY: sync all panels (start of month)
@@ -84,11 +84,13 @@ sequenceDiagram
     S->>E: generate invoices for previous month
     E->>E: bundle sub-resellers; Σ usage_limit_GB of services created in month (skip 1GB); ×price; →USDT
     E->>B: send invoice
-    B->>R: invoice text (+ wallet address)
+    B->>R: invoice text + exact-invoice payment button
     Note over S,R: if unpaid → D+2 reminder, D+4 reminder, D+5 warning + enforcement (dry-run unless enabled)
-    R->>B: submit TXID
-    B->>V: verify on-chain (dest, amount, confirmations)
-    V-->>B: confirmed
+    R->>B: choose invoice; submit TXID/receipt
+    B->>V: create pending payment for that invoice
+    V->>V: owner reviews manually
+    Note over V: USDT/BSC can optionally be checked through BscScan
+    V-->>B: owner confirms
     V->>P: (if enforced) re-enable users + restore limits
     B->>R: payment confirmed
 ```
@@ -130,7 +132,8 @@ classDiagram
 
 Read path = `BackupJsonClient` (the `/admin/backup/backupfile/` endpoint). Write path =
 `AdminApiClient` (Hiddify Admin REST API, needs the per-panel admin API key). Enforcement
-uses the write path; a future REST read adapter and HD-wallet payment monitor slot in here.
+uses the write path. New read/payment adapters should be introduced only with an implemented
+workflow and migration, not as dormant enum values.
 
 ## 6. Deployment
 
@@ -164,3 +167,7 @@ Repeating scheduler jobs use `IntervalTrigger` with a fixed Tehran-local epoch a
 This preserves true spacing for non-divisor values such as 7 hours or 17 minutes while
 remaining stable across restarts. Monthly invoicing and daily dunning remain calendar cron
 jobs. All schedule settings, including `rate_refresh_hours`, are live-applied.
+
+The active enums intentionally contain only values produced by implemented workflows.
+Migration `3f2a7c91b8e4` normalizes obsolete labels from older installations before the
+application reads them.

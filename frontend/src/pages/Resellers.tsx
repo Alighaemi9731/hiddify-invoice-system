@@ -22,7 +22,7 @@ import { useSort, SortTh } from "../components/sortable";
 import CapacityBar from "../components/CapacityBar";
 import { fmtNum } from "../format";
 
-const ENF_FA: any = { active: ["فعال", "success"], warned: ["اخطار", "warning"], enforced: ["مسدود", "error"] };
+const ENF_FA: any = { active: ["فعال", "success"], enforced: ["مسدود", "error"] };
 
 function enfChip(state: string) {
   const [lbl, color] = ENF_FA[state] || [state, "default"];

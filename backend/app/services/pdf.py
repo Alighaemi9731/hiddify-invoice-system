@@ -28,6 +28,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.services.periods import today as tehran_today
+
 FONT = "Vazir"
 BOLD = "Vazir-Bold"
 FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
@@ -144,8 +146,7 @@ def build_invoice_pdf(
     reg = _font_or_default(FONT)
     bold = _font_or_default(BOLD)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    from app.services.periods import today as _tehran_today
-    issued = issued_at or _tehran_today()  # Tehran date, not UTC, for the «issued» line
+    issued = issued_at or tehran_today()  # Tehran date, not UTC, for the «issued» line
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -153,9 +154,11 @@ def build_invoice_pdf(
         title=f"factor-{period_label}",
     )
 
-    P = lambda t, **k: ParagraphStyle("x", fontName=reg, **k)  # noqa: E731
-    rightMuted = P("rm", fontSize=9, alignment=2, textColor=MUTED, leading=14)
-    val = P("v", fontSize=10, alignment=2, textColor=INK, leading=16)
+    def paragraph_style(**kwargs: Any) -> ParagraphStyle:
+        return ParagraphStyle("x", fontName=reg, **kwargs)
+
+    rightMuted = paragraph_style(fontSize=9, alignment=2, textColor=MUTED, leading=14)
+    val = paragraph_style(fontSize=10, alignment=2, textColor=INK, leading=16)
     cellC = ParagraphStyle("cc", fontName=reg, fontSize=9, alignment=1, textColor=INK, leading=14)
     th = ParagraphStyle("th", fontName=bold, fontSize=9.5, alignment=1, textColor=colors.white, leading=14)
 

@@ -56,7 +56,8 @@ docs/      ARCHITECTURE.md + Mermaid diagrams
 - **DB:** PostgreSQL 16 (prod/docker). `sqlite+aiosqlite` is supported for quick local runs/tests via `DATABASE_URL`.
 - **Bot:** aiogram v3.
 - **PDF:** reportlab + arabic-reshaper + python-bidi (Persian/RTL). **Dates:** Gregorian for billing periods; Jalali (`jdatetime`) for display.
-- **Crypto/payments:** BEP-20 USDT; MVP verifies a submitted TXID via the BscScan API. HD-wallet per-reseller addresses are a deferred drop-in module.
+- **Payments:** every proof is tied to one explicitly selected invoice and confirmed manually.
+  USDT/BSC has an optional BscScan check; TON hashes use explorer links.
 - **Frontend:** React + Vite + TS + MUI (RTL theme, Vazirmatn) + Recharts.
 
 ## Data model essentials
@@ -119,6 +120,15 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M57** Audit remediation B10 — cleanup and documentation (`v1.37.48`).
+  Removed dormant enum values (`admin_api`, `sample`, `usdt_hd`, `duplicate`, `skipped`,
+  `warned`, `warn`, `zero_limits`) and added an Alembic normalization migration for legacy
+  rows. Payment proof submission no longer has a cold/oldest-invoice fallback: if the chosen
+  invoice becomes paid, canceled, deferred, or inaccessible, the proof is rejected and the
+  reseller must select again, so money cannot be attributed to another debt. Removed the
+  one-off deleted-invoice demo and the remaining import/lambda Ruff suppressions. README,
+  architecture, Help, remediation tracking, and release notes now describe the production
+  flow; production coordinates remain only in gitignored local ops notes.
 - [x] **M56** Audit remediation B09 — scheduler, deployment, and supply-chain hardening
   (`v1.37.47`). Repeating scheduler jobs now use true fixed-anchor intervals, including
   non-divisor values, and live scheduling includes `rate_refresh_hours`. Production updates

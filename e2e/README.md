@@ -15,6 +15,7 @@ npx playwright install chromium   # first time only
 export E2E_USER='admin'
 export E2E_PASS='your-password'
 export E2E_BASE_URL='https://invoice-staging.example.com'
+export E2E_ALLOW_REMOTE=1
 
 npm test
 ```
@@ -32,8 +33,8 @@ E2E_BASE_URL=http://127.0.0.1:18080 E2E_USER=staging E2E_PASS='...' npm test
 The staging stack uses separate named volumes, binds only to localhost, disables the
 scheduler, and does not start the Telegram bot.
 
-`E2E_BASE_URL` is mandatory. The runner refuses the production domain unless an
-intentional read-only run also sets `E2E_ALLOW_PRODUCTION=1`.
+`E2E_BASE_URL` is mandatory. The runner refuses every non-local target unless an intentional
+read-only run also sets `E2E_ALLOW_REMOTE=1`; production coordinates never belong in Git.
 
 ## What it checks
 

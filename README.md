@@ -2,8 +2,8 @@
 
 Automated reseller management and monthly invoicing for a VPN business running on
 **Hiddify** panels: sync usage from every panel → compute each reseller's invoice →
-deliver it via a **Telegram bot** → collect **USDT (BEP-20)** → run reminders &
-suspension for non-payers. Owner web panel is **Persian / RTL**.
+deliver it via a **Telegram bot** → collect supported manual/crypto payments → run
+reminders & suspension for non-payers. Owner web panel is **Persian / RTL**.
 
 - Architecture & diagrams: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Working guidance & conventions: [`CLAUDE.md`](CLAUDE.md)
@@ -42,12 +42,13 @@ both Compose stacks.
 ## Using the system
 
 1. **Panels** → add each Hiddify panel (paste its admin link + API key). Hit **همگام‌سازی** (sync) to pull data.
-2. **Dashboard** → **صدور و ارسال ماهانه** generates the previous month's invoices and sends
-   them, or use the **Invoices** tab to generate / preview / send per period (PDF per invoice).
+2. **Invoices** → generate a selected period, review drafts, then send one invoice or the
+   whole period. The scheduler performs the previous-month run automatically.
 3. **Telegram bot**: a reseller `/start`s, joins the required chats, pastes their panel
-   link, then receives invoices and submits a receipt or supported transaction hash.
-4. **Payments** → the owner reviews and confirms submitted payments manually. Transaction
-   hashes link to the appropriate explorer; paid, previously-suspended resellers are restored.
+   link, then selects the exact unpaid invoice before submitting a receipt or transaction hash.
+4. **Payments** → the owner reviews and confirms submitted payments manually. USDT hashes
+   can optionally be checked through BscScan; all hashes link to the appropriate explorer.
+   Paid, previously-suspended resellers are restored when no other due debt remains.
 5. **Dunning/enforcement**: unpaid invoices trigger reminders, a warning, then suspension.
    Setting a **payment deadline** on an invoice restarts that cycle from the new date.
    **Automatic suspension defaults to OFF** — enable it in **Settings** (`enforcement_enabled`)

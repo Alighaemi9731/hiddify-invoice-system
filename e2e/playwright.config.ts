@@ -5,13 +5,11 @@ if (!baseURL) {
   throw new Error("Set E2E_BASE_URL explicitly. E2E tests never default to production.");
 }
 
-const productionURL = "https://invoice.varzesh3.com.de";
-if (
-  baseURL.replace(/\/+$/, "") === productionURL &&
-  process.env.E2E_ALLOW_PRODUCTION !== "1"
-) {
+const target = new URL(baseURL);
+const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+if (!localHosts.has(target.hostname) && process.env.E2E_ALLOW_REMOTE !== "1") {
   throw new Error(
-    "Refusing to run E2E against production. Set E2E_ALLOW_PRODUCTION=1 only for an intentional read-only run.",
+    "Refusing to run E2E against a remote host. Set E2E_ALLOW_REMOTE=1 only for an intentional read-only run.",
   );
 }
 

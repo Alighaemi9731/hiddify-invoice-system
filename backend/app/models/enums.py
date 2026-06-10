@@ -13,8 +13,6 @@ class PanelStatus(str, enum.Enum):
 
 class SyncSource(str, enum.Enum):
     backup_json = "backup_json"  # the panel /admin/backup/backupfile/ endpoint
-    admin_api = "admin_api"      # the Hiddify REST API (future read path)
-    sample = "sample"            # the bundled sample backup fixture
 
 
 class SyncStatus(str, enum.Enum):
@@ -25,7 +23,6 @@ class SyncStatus(str, enum.Enum):
 
 class EnforcementState(str, enum.Enum):
     active = "active"        # normal
-    warned = "warned"        # hard warning sent
     enforced = "enforced"    # users disabled + limits zeroed
 
 
@@ -40,7 +37,6 @@ class InvoiceStatus(str, enum.Enum):
 
 class PaymentMethod(str, enum.Enum):
     usdt_txid = "usdt_txid"      # reseller submits a BEP-20 TXID (owner confirms manually)
-    usdt_hd = "usdt_hd"          # future: per-reseller HD deposit address
     manual = "manual"            # owner records it by hand
     screenshot = "screenshot"    # reseller sends a deposit screenshot (owner confirms)
     ton_txid = "ton_txid"        # reseller submits a TON tx hash (owner confirms manually)
@@ -50,7 +46,6 @@ class PaymentStatus(str, enum.Enum):
     pending = "pending"
     confirmed = "confirmed"
     rejected = "rejected"
-    duplicate = "duplicate"
 
 
 class DeliveryKind(str, enum.Enum):
@@ -68,13 +63,10 @@ class DeliveryStatus(str, enum.Enum):
     failed = "failed"        # Telegram error
     blocked = "blocked"      # reseller blocked the bot
     unmatched = "unmatched"  # reseller never registered / no telegram id
-    skipped = "skipped"
 
 
 class EnforcementActionType(str, enum.Enum):
-    warn = "warn"
     disable_users = "disable_users"
-    zero_limits = "zero_limits"
     restore = "restore"
 
 

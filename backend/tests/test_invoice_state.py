@@ -10,11 +10,13 @@ Covers the central transition guards (pure) plus the money-critical DB behaviour
 import asyncio
 import datetime as dt
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/state.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
 import pytest  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.models import (  # noqa: E402
@@ -240,3 +242,34 @@ def test_revalidate_payable_rejects_stale_invoice(tmp_path):
         assert (await handlers._revalidate_payable(s, owed, {9999})) is None  # not owner's
 
     _run(body, tmp_path, "p4.db")
+
+
+def test_stale_payment_selection_never_falls_back_to_another_invoice(tmp_path):
+    async def body(s):
+        from app.bot import handlers
+
+        r = _reseller(bot_chat_id=123)
+        s.add(r)
+        await s.flush()
+        stale = _invoice(r.id, status=S.paid, label="2026-01")
+        other_due = _invoice(r.id, status=S.sent, label="2026-02")
+        s.add_all([stale, other_due])
+        await s.commit()
+
+        answers = []
+
+        async def answer(text, **_kwargs):
+            answers.append(text)
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=123),
+            answer=answer,
+        )
+        await handlers._handle_txid(
+            message, s, "0x" + "a" * 64, invoice=stale, chain="bsc"
+        )
+        payments = (await s.execute(select(Payment))).scalars().all()
+        assert payments == []
+        assert "دوباره انتخاب کنید" in answers[-1]
+
+    _run(body, tmp_path, "p5.db")

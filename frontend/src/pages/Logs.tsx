@@ -7,10 +7,10 @@ import { getDeliveryLog, getEnforcementActions } from "../api/client";
 import { DataState } from "../components/DataState";
 import { fmtDate } from "../format";
 
-const DELIV_STATUS: any = { sent: ["ارسال‌شده", "success"], failed: ["ناموفق", "error"], blocked: ["مسدود", "error"], unmatched: ["بدون ربات", "warning"], skipped: ["رد‌شده", "default"] };
+const DELIV_STATUS: any = { sent: ["ارسال‌شده", "success"], failed: ["ناموفق", "error"], blocked: ["مسدود", "error"], unmatched: ["بدون ربات", "warning"] };
 const KIND_FA: any = { invoice: "فاکتور", reminder1: "یادآوری ۱", reminder2: "یادآوری ۲", warning: "اخطار", payment_ack: "تأیید پرداخت", generic: "عمومی" };
 const ENF_STATUS: any = { dry_run: ["آزمایشی", "info"], planned: ["برنامه‌ریزی", "default"], done: ["انجام‌شده", "success"], failed: ["ناموفق", "error"], reverted: ["بازگردانده", "warning"] };
-const ACTION_FA: any = { warn: "اخطار", disable_users: "غیرفعال‌سازی کاربران", zero_limits: "صفر کردن سقف", restore: "بازگردانی" };
+const ACTION_FA: any = { disable_users: "مسدودسازی کاربران و سقف‌ها", restore: "بازگردانی" };
 
 export default function Logs() {
   const [tab, setTab] = useState(0);

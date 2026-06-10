@@ -15,6 +15,14 @@ from app.api import resellers as resellers_api
 from app.api import settings as settings_api
 from app.core import crypto
 from app.models import Panel, Reseller
+from app.models.enums import (
+    DeliveryStatus,
+    EnforcementActionType,
+    EnforcementState,
+    PaymentMethod,
+    PaymentStatus,
+    SyncSource,
+)
 from app.schemas.invoice import GenerateRequest, InvoiceDetail, InvoiceEdit
 from app.schemas.reseller import BumpLimitsBody, ResellerUpdate
 from app.schemas.setting import SettingsBulkUpdate
@@ -23,7 +31,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "6a9c7f21d4e0"
+HEAD = "3f2a7c91b8e4"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -59,6 +67,74 @@ def test_existing_compatible_schema_is_stamped_then_upgraded(tmp_path):
     assert "stamped baseline revision" in result.stdout
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (HEAD,)
+    conn.close()
+
+
+def test_obsolete_enum_rows_are_normalized_before_app_load(tmp_path):
+    db = tmp_path / "legacy-enums.db"
+    _alembic(db, "upgrade", "6a9c7f21d4e0")
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        """
+        INSERT INTO panels
+            (id, key, name, host, proxy_path_enc, owner_uuid, enabled, status, source)
+        VALUES (?, ?, '', 'panel.local', 'x', 'owner', 1, 'ok', ?)
+        """,
+        [(1, "p1", "admin_api"), (2, "p2", "sample")],
+    )
+    conn.executemany(
+        """
+        INSERT INTO sync_runs
+            (id, panel_id, source, status, admin_count, user_count, started_at)
+        VALUES (?, 1, ?, 'success', 0, 0, CURRENT_TIMESTAMP)
+        """,
+        [(1, "admin_api"), (2, "sample")],
+    )
+    conn.execute(
+        """
+        INSERT INTO resellers
+            (id, panel_id, admin_uuid, name, mode, is_owner, exclude_from_billing,
+             can_add_admin, enforcement_state)
+        VALUES (1, 1, 'r1', 'R', 'agent', 0, 0, 0, 'warned')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO payments
+            (id, reseller_id, method, status, chain, confirmations, amount_usdt)
+        VALUES (1, 1, 'usdt_hd', 'duplicate', 'bsc', 0, 0)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO delivery_log
+            (id, reseller_id, kind, channel, status, created_at)
+        VALUES (1, 1, 'generic', 'telegram', 'skipped', CURRENT_TIMESTAMP)
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO enforcement_actions
+            (id, reseller_id, action, status, dry_run, affected_count, created_at)
+        VALUES (?, 1, ?, 'done', 0, 0, CURRENT_TIMESTAMP)
+        """,
+        [(1, "warn"), (2, "zero_limits")],
+    )
+    conn.commit()
+    conn.close()
+
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT DISTINCT source FROM panels").fetchall() == [("backup_json",)]
+    assert conn.execute("SELECT DISTINCT source FROM sync_runs").fetchall() == [("backup_json",)]
+    assert conn.execute("SELECT method, status FROM payments").fetchone() == (
+        "usdt_txid", "rejected",
+    )
+    assert conn.execute("SELECT status FROM delivery_log").fetchone() == ("failed",)
+    assert conn.execute("SELECT enforcement_state FROM resellers").fetchone() == ("active",)
+    assert conn.execute("SELECT DISTINCT action FROM enforcement_actions").fetchall() == [
+        ("disable_users",)
+    ]
     conn.close()
 
 
@@ -101,6 +177,19 @@ assert handler in probe.handlers
         stderr=subprocess.STDOUT,
         check=True,
     )
+
+
+def test_active_enum_contract_has_no_unimplemented_branches():
+    assert {item.value for item in SyncSource} == {"backup_json"}
+    assert {item.value for item in PaymentMethod} == {
+        "usdt_txid", "manual", "screenshot", "ton_txid",
+    }
+    assert {item.value for item in PaymentStatus} == {"pending", "confirmed", "rejected"}
+    assert {item.value for item in DeliveryStatus} == {
+        "sent", "failed", "blocked", "unmatched",
+    }
+    assert {item.value for item in EnforcementState} == {"active", "enforced"}
+    assert {item.value for item in EnforcementActionType} == {"disable_users", "restore"}
 
 
 def test_financial_and_mutable_default_contracts():

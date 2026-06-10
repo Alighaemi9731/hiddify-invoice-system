@@ -1601,7 +1601,7 @@ async def on_document(message: Message) -> None:
     async with SessionLocal() as session:
         if not await _is_owner_user(session, message.from_user):
             # A reseller who sent a screenshot as an uncompressed FILE → nudge them to send
-            # it as a photo (which on_photo records as a payment proof).
+            # it as a photo after choosing the invoice in the locked payment flow.
             d = message.document
             fn = (d.file_name or "").lower()
             if (d.mime_type or "").startswith("image/") or fn.endswith((".jpg", ".jpeg", ".png", ".webp")):
@@ -1800,38 +1800,12 @@ async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
     return f"{toman} ({float(invoice.amount_usdt):,.2f} USDT)"
 
 
-async def _oldest_due_invoice(session, resellers: list[Reseller]) -> Invoice | None:
-    """The customer's oldest PAYABLE invoice (owed, not deferred, and NOT already awaiting
-    review) — what a cold-path payment (a TXID/photo sent without picking a button) attaches to.
-
-    Excluding invoices that already have a pending payment is essential: otherwise a customer
-    who paid invoice B while invoice A (older) is still under review would have B's cold-path
-    payment attributed to A and then blocked as a duplicate — silently dropping B's transfer."""
-    ids = [r.id for r in resellers]
-    if not ids:
-        return None
-    today = tehran_today()
-    owed = (
-        await session.execute(
-            select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.asc())
-        )
-    ).scalars().all()
-    pending = await _pending_invoice_ids(session, ids)
-    due = [
-        i for i in owed
-        if not (i.deferred_until and i.deferred_until > today) and i.id not in pending
-    ]
-    return due[0] if due else None
-
-
 async def _revalidate_payable(session, invoice, reseller_ids: set[int]):
     """Re-check a chosen invoice under lock at submission time: it must still belong to the
     caller, still be OWED, and not be deferred to a future date. The invoice could have been
     paid / canceled / reverted / re-deadlined between the button tap and the proof arriving —
     attaching a payment to that stale invoice would mis-settle or mis-attribute the money.
-    Returns the (fresh) invoice if still payable, else None (the caller falls back to the
-    oldest currently-payable invoice)."""
+    Returns the fresh invoice if it is still payable, otherwise None."""
     if invoice is None:
         return None
     fresh = await session.get(Invoice, invoice.id, with_for_update=True)
@@ -1844,7 +1818,14 @@ async def _revalidate_payable(session, invoice, reseller_ids: set[int]):
     return fresh
 
 
-async def _handle_txid(message: Message, session, txid: str, *, invoice=None, chain: str = "bsc") -> None:
+async def _handle_txid(
+    message: Message,
+    session,
+    txid: str,
+    *,
+    invoice: Invoice | None,
+    chain: str = "bsc",
+) -> None:
     """Record a submitted tx hash (USDT/BSC or TON) as a PENDING payment for MANUAL review —
     no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
     confirms/rejects."""
@@ -1884,18 +1865,17 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
             f"دوره: {inv2.period_label if inv2 else '—'} | مبلغ فاکتور: {_invoice_amount_fa(inv2)}\n"
             "برای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
         return
-    # Link to the chosen invoice (from «پرداخت فاکتور») if given; otherwise the oldest payable.
-    # Re-validate the chosen invoice under lock — it may be stale (paid/canceled/reverted/
-    # re-deadlined) since the button was tapped; if so, fall back to the oldest payable one.
+    # Re-validate the exact invoice chosen in «پرداخت فاکتور». Never move a proof to a
+    # different debt if the selection became stale while the customer was paying.
     invoice = await _revalidate_payable(session, invoice, {r.id for r in resellers})
     if invoice is None:
-        invoice = await _oldest_due_invoice(session, resellers)
-    # Never record an unattributed payment (no payable invoice) — that produced stray «—» rows.
-    if invoice is None:
-        await message.answer("فاکتورِ قابل‌پرداختی ندارید.")
+        await message.answer(
+            "این فاکتور دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
+            "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید."
+        )
         return
     # One pending payment per invoice → don't create a duplicate for an invoice under review.
-    if invoice is not None and await _pending_payment_for_invoice(session, invoice.id) is not None:
+    if await _pending_payment_for_invoice(session, invoice.id) is not None:
         await message.answer(
             "برای این فاکتور قبلاً پرداختی ثبت کرده‌اید که در انتظار تأیید است؛ "
             "لطفاً منتظر بررسیِ پشتیبانی بمانید."
@@ -1903,8 +1883,8 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
         return
     method = PaymentMethod.ton_txid if chain == "ton" else PaymentMethod.usdt_txid
     payment = Payment(
-        reseller_id=invoice.reseller_id if invoice else resellers[0].id,
-        invoice_id=invoice.id if invoice else None,
+        reseller_id=invoice.reseller_id,
+        invoice_id=invoice.id,
         method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
     )
     session.add(payment)
@@ -1917,7 +1897,7 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
         f"🔖 شمارهٔ پیگیری: #{payment.id}"
     ))
     name = resellers[0].name
-    period = invoice.period_label if invoice else "—"
+    period = invoice.period_label
     amount = await _invoice_amount_for_chain(session, invoice, chain)
     await owner_notify.notify_owner(
         session, f"💳 پرداخت جدید ({label} TXID) از «{name}» ثبت شد و منتظر تأیید شماست.\n"
@@ -1925,33 +1905,37 @@ async def _handle_txid(message: Message, session, txid: str, *, invoice=None, ch
         f"شناسهٔ پرداخت در پنل: #{payment.id}\nبرای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
 
 
-async def _handle_payment_proof(message: Message, session, *, invoice=None) -> None:
+async def _handle_payment_proof(
+    message: Message, session, *, invoice: Invoice | None
+) -> None:
     """A reseller sent a deposit screenshot as proof of payment. Store it, link it to the
-    chosen invoice (from «پرداخت فاکتور») or their oldest due one as a PENDING payment, and
-    forward it to the owner for manual confirm. The easy path for customers without a TXID."""
+    exact invoice chosen in «پرداخت فاکتور» as a PENDING payment, and forward it to the
+    owner for manual confirmation."""
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
         # Not a registered reseller → can't attribute the payment.
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
-    # Re-validate the chosen invoice under lock (stale since the button tap?) then fall back.
+    # Re-validate the exact chosen invoice. A stale selection must not silently attach this
+    # receipt to another unpaid invoice.
     invoice = await _revalidate_payable(session, invoice, {r.id for r in resellers})
     if invoice is None:
-        invoice = await _oldest_due_invoice(session, resellers)
-    if invoice is None:
-        await message.answer("فاکتورِ قابل‌پرداختی ندارید.")
+        await message.answer(
+            "این فاکتور دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
+            "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید."
+        )
         return
     # One pending payment per invoice — block a duplicate receipt for an invoice already
     # awaiting review (so a customer who sends 2–3 receipts doesn't spawn 2–3 payments).
-    if invoice is not None and await _pending_payment_for_invoice(session, invoice.id) is not None:
+    if await _pending_payment_for_invoice(session, invoice.id) is not None:
         await message.answer(
             "برای این فاکتور قبلاً رسید فرستاده‌اید که در انتظار تأیید است؛ "
             "لطفاً منتظر بررسیِ پشتیبانی بمانید. (نیازی به ارسال دوباره نیست.)"
         )
         return
     payment = Payment(
-        reseller_id=invoice.reseller_id if invoice else resellers[0].id,
-        invoice_id=invoice.id if invoice else None,
+        reseller_id=invoice.reseller_id,
+        invoice_id=invoice.id,
         method=PaymentMethod.screenshot, status=PaymentStatus.pending,
         note="رسید تصویری (در انتظار بررسی مالک)",
     )
@@ -1982,7 +1966,7 @@ async def _handle_payment_proof(message: Message, session, *, invoice=None) -> N
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
     if owner_chat:
         r = resellers[0]
-        period = invoice.period_label if invoice else "—"
+        period = invoice.period_label
         amount = _invoice_amount_fa(invoice)
         caption = rtl(
             f"🧾 رسید پرداخت از «{r.name}»\n"

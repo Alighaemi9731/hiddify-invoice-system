@@ -18,7 +18,7 @@ import { useSort, SortTh } from "../components/sortable";
 import { DataState } from "../components/DataState";
 import { fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 
-const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error", duplicate: "default" };
+const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
 
 export default function Payments() {
   const qc = useQueryClient();

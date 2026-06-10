@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.48 - 2026-06-10
+
+Audit remediation B10 — cleanup and documentation.
+
+### Fixed
+
+- Removed dormant enum values that had no producing workflow and added an Alembic migration
+  that normalizes any legacy rows before the reduced enums are loaded.
+- Removed the obsolete cold-payment fallback. If an invoice changes state while its payment
+  flow is open, the submitted proof is rejected instead of being attached to another debt.
+- Removed the one-off deleted-invoice development script and remaining import-placement and
+  lambda-style Ruff suppressions.
+- Updated Help, README, architecture, remediation tracking, and contributor guidance to match
+  the current manual-confirmation, exact-invoice payment and verified-release workflows.
+
+### Verification
+
+- Backend tests include enum-contract and stale-payment-attribution regressions.
+- Full Ruff, mypy, pytest, Alembic, frontend build/audit, Compose, release-tool and secret
+  tracking gates pass.
+
 ## 1.37.47 - 2026-06-10
 
 Audit remediation B09 — scheduler, deployment, and supply-chain hardening.

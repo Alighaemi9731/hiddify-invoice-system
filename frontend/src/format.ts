@@ -59,13 +59,11 @@ export const PAYMENT_STATUS_FA: Record<string, string> = {
   pending: "در انتظار",
   confirmed: "تأییدشده",
   rejected: "ردشده",
-  duplicate: "تکراری",
 };
 
 export const PAYMENT_METHOD_FA: Record<string, string> = {
   usdt_txid: "USDT (شناسهٔ تراکنش)",
   ton_txid: "تون‌کوین (TON)",
-  usdt_hd: "آدرس اختصاصی",
   manual: "دستی",
   screenshot: "رسید تصویری",
 };

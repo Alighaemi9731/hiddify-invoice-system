@@ -1,14 +1,9 @@
-"""
-BEP-20 USDT payment verification.
+"""Payment confirmation and the optional BEP-20 USDT chain check.
 
-MVP flow: the reseller submits a TXID; we verify on-chain via the BscScan API that
-a USDT (BEP-20) transfer to our wallet, of at least the invoice amount, with enough
-confirmations, exists. On success the invoice is marked paid and (if the reseller was
-enforced) access is auto-restored.
-
-The module is structured so the later upgrade — per-reseller HD-wallet deposit
-addresses + automatic monitoring — can replace the TXID step without touching the
-confirm/restore logic.
+The reseller submits proof for one explicitly selected invoice. The owner makes the final
+confirm/reject decision; for USDT/BSC they may first ask this service to verify destination,
+token contract, amount, and confirmations through BscScan. A confirmed payment marks only its
+linked invoice paid and restores access only when no other due debt remains.
 """
 from __future__ import annotations
 

@@ -32,7 +32,7 @@ async def sync_panel(
     client: PanelClient | None = None,
     source: SyncSource = SyncSource.backup_json,
 ) -> SyncRun:
-    """Sync one panel. If `data` is given, it's used directly (e.g. sample seed)."""
+    """Sync one panel. Tests may inject parsed `data` directly."""
     # Capture the id NOW: session.rollback() in the except block expires every attribute,
     # so reading panel.id afterwards would trigger a sync lazy-load (MissingGreenlet) and
     # mask the real error / abort the whole run.

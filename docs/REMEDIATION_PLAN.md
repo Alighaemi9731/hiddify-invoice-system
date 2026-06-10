@@ -193,7 +193,7 @@ Primary files:
 
 ## B10 - Cleanup and documentation
 
-Priority: P3. Status: TODO.
+Priority: P3. Status: DONE in `v1.37.48`.
 
 - Decide whether unused enum branches are roadmap items or remove them:
   `admin_api`, `sample`, `usdt_hd`, `duplicate`, `skipped`, `warned`,
@@ -202,6 +202,18 @@ Priority: P3. Status: TODO.
 - Fix Ruff findings: ambiguous `l`, import placement, and semicolon statements.
 - Update `CLAUDE.md`, Help, README, architecture, and release notes after each behavior change.
 - Keep local production connection data out of Git.
+
+Resolution:
+
+- Removed all listed unimplemented enum values. A data migration normalizes any legacy rows
+  to the closest active state before the smaller Python enums are loaded.
+- Removed the unreachable cold-payment fallback and the one-off deleted-invoice demo script.
+  A stale payment selection now fails closed instead of attaching proof to another invoice.
+- Removed the remaining import-placement and lambda-style Ruff suppressions; the earlier
+  ambiguous-name and semicolon findings were already gone under the B08 full Ruff gate.
+- Reconciled current behavior across Help, README, architecture, changelog, and `CLAUDE.md`.
+- Production coordinates remain only in gitignored `.claude/OPS.local.md`; tracked-file and
+  ignored-file audits are part of the release gate.
 
 ## Recommended order
 

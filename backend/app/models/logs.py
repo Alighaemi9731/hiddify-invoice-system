@@ -59,7 +59,7 @@ class DeliveryLog(Base):
 
 
 class EnforcementAction(Base):
-    """An enforcement step (warn / disable users / zero limits / restore)."""
+    """A combined suspension or restore attempt."""
 
     __tablename__ = "enforcement_actions"
 

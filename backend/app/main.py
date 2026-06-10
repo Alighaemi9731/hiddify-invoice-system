@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app import __version__
@@ -27,6 +28,7 @@ from app.api import (
     setup as setup_api,
 )
 from app.core.config import settings
+from app.services.invoice_state import InvoiceStateError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -105,11 +107,6 @@ app.add_middleware(
 )
 
 # Illegal invoice state transitions (B03) surface as a clean 400 with a Persian message.
-from fastapi.responses import JSONResponse  # noqa: E402
-
-from app.services.invoice_state import InvoiceStateError  # noqa: E402
-
-
 @app.exception_handler(InvoiceStateError)
 async def _invoice_state_error_handler(_request: Request, exc: InvoiceStateError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
