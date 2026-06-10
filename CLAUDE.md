@@ -120,6 +120,13 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M59** Dashboard information and visualization redesign (`v1.37.52`).
+  Expanded the Dashboard summary with active/healthy panel counts, previous-period sales,
+  current-period invoice count, and distinct debtor count. Reorganized the page into
+  concise operational cards, clean panel sales bars, an invoice-status donut with
+  collection rate, and a responsive top-ten reseller ranking while preserving the
+  existing glass theme. Added a focused backend regression and verified populated
+  desktop/mobile production renders without React, console, or overflow errors.
 - [x] **M58** Login redesign and Dashboard production fix (`v1.37.51`).
   Rebuilt Login as a minimal RTL split layout using the supplied financial SVG and a
   right-to-center pale-blue background glow while preserving CAPTCHA, 2FA, and passkey

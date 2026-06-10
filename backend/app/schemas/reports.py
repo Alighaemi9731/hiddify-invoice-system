@@ -64,14 +64,20 @@ class EnforcementActionRow(BaseModel):
 
 class DashboardSummary(BaseModel):
     period: str
+    previous_period: str
     panels: int
+    active_panels: int
+    healthy_panels: int
     resellers: int
     billable_resellers: int
     registered_resellers: int
     invoices_total: int
+    period_invoices: int
     period_billed_toman: float
+    previous_period_billed_toman: float
     period_paid_toman: float
     outstanding_toman: float
+    outstanding_resellers: int
     status_counts: list[StatusCount]
     sales_by_panel: list[PanelSalesRow]
     top_resellers: list[SalesRow]

@@ -5,7 +5,7 @@ import { ReactNode } from "react";
 export default function StatCard({
   label, value, sub, color = "#6d5efc", icon,
 }: {
-  label: string; value: ReactNode; sub?: string; color?: string; icon?: ReactNode;
+  label: string; value: ReactNode; sub?: ReactNode; color?: string; icon?: ReactNode;
 }) {
   return (
     <Card
@@ -21,22 +21,35 @@ export default function StatCard({
         },
       }}
     >
-      {/* soft tint wash from the accent corner — gives each card a bit of life */}
       <Box sx={{ position: "absolute", inset: 0, background: (t) =>
-        `radial-gradient(120% 120% at 100% 0%, ${alpha(color, t.palette.mode === "dark" ? 0.14 : 0.07)} 0%, transparent 45%)`,
+        `radial-gradient(120% 120% at 100% 0%, ${alpha(color, t.palette.mode === "dark" ? 0.16 : 0.08)} 0%, transparent 48%)`,
         pointerEvents: "none" }} />
-      <Box sx={{ position: "absolute", insetInlineStart: 0, top: 0, bottom: 0, width: 4, bgcolor: color }} />
-      <CardContent sx={{ pl: 3 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-          <Box>
-            <Typography variant="body2" color="text.secondary">{label}</Typography>
-            <Typography variant="h5" sx={{ mt: 0.75, fontWeight: 800, color }}>{value}</Typography>
-            {sub && <Typography variant="caption" color="text.secondary">{sub}</Typography>}
+      <CardContent sx={{ p: { xs: 2, sm: 2.5 }, "&:last-child": { pb: { xs: 2, sm: 2.5 } } }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+              {label}
+            </Typography>
+            <Typography
+              component="div"
+              sx={{
+                mt: 1.4, fontWeight: 850, color: "text.primary", lineHeight: 1.2,
+                fontSize: { xs: "1.35rem", sm: "1.65rem" }, whiteSpace: "nowrap",
+              }}
+            >
+              {value}
+            </Typography>
+            {sub && (
+              <Box sx={{ mt: 1, minHeight: 21, color: "text.secondary", fontSize: 12.5 }}>
+                {sub}
+              </Box>
+            )}
           </Box>
           {icon && (
             <Box sx={{
-              width: 46, height: 46, borderRadius: "14px", display: "grid", placeItems: "center",
-              bgcolor: alpha(color, 0.12), color,
+              width: 42, height: 42, borderRadius: "12px", display: "grid", placeItems: "center",
+              bgcolor: alpha(color, 0.13), color, flexShrink: 0,
+              "& svg": { fontSize: 23 },
             }}>
               {icon}
             </Box>

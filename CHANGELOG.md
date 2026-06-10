@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.52 - 2026-06-10
+
+Dashboard information and visualization redesign.
+
+### Added
+
+- Added active and healthy panel counts, period invoice count, distinct debtor count,
+  previous-period sales, and a real sales comparison to the Dashboard API.
+- Added a focused regression test covering current/previous period totals, panel health,
+  reseller connectivity, outstanding debt, and ranking output.
+
+### Changed
+
+- Reorganized the Dashboard around four concise operational metrics, clean panel sales
+  progress bars, an invoice-status donut with collection rate, and a responsive top-ten
+  reseller ranking.
+- Preserved the existing light/dark glass theme while improving information density,
+  spacing, labels, empty states, and mobile layout.
+- Added typed frontend contracts for the Dashboard response.
+
+### Verification
+
+- All backend tests, Ruff, mypy, and dependency checks pass.
+- Frontend typecheck, production build, PWA generation, and bundle checks pass.
+- Playwright rendered populated desktop and mobile dashboards without React, console,
+  page, or horizontal-overflow errors.
+
 ## 1.37.51 - 2026-06-10
 
 Login redesign and Dashboard production fix.

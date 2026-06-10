@@ -1,6 +1,7 @@
 """Analytics: sales (sortable), sales-by-panel, debts, dashboard summary."""
 from __future__ import annotations
 
+import datetime as dt
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Query
@@ -17,7 +18,7 @@ from app.models import (
     Panel,
     Reseller,
 )
-from app.models.enums import InvoiceStatus
+from app.models.enums import InvoiceStatus, PanelStatus
 from app.schemas.reports import (
     DashboardSummary,
     DebtRow,
@@ -27,7 +28,7 @@ from app.schemas.reports import (
     SalesRow,
     StatusCount,
 )
-from app.services.periods import current_month, parse_period
+from app.services.periods import current_month, month_period, parse_period
 
 router = APIRouter(
     prefix="/api/reports", tags=["reports"], dependencies=[Depends(get_current_subject)]
@@ -251,9 +252,24 @@ async def zero_invoices(
 async def dashboard(
     period: str | None = None, session: AsyncSession = Depends(get_session)
 ) -> DashboardSummary:
-    label = (parse_period(period).label if period else current_month().label)
+    selected_period = parse_period(period) if period else current_month()
+    label = selected_period.label
+    previous_day = selected_period.start - dt.timedelta(days=1)
+    previous_label = month_period(previous_day.year, previous_day.month).label
 
     panels = (await session.execute(select(func.count(Panel.id)))).scalar_one()
+    active_panels = (
+        await session.execute(
+            select(func.count(Panel.id)).where(Panel.enabled.is_(True))
+        )
+    ).scalar_one()
+    healthy_panels = (
+        await session.execute(
+            select(func.count(Panel.id)).where(
+                Panel.enabled.is_(True), Panel.status == PanelStatus.ok
+            )
+        )
+    ).scalar_one()
     # Count only MAIN (top-level) resellers — NOT their sub-resellers — so the dashboard
     # matches the «فهرست» tab and the bot «آمار کلی» exactly (shared reseller_stats logic).
     from app.services.reseller_stats import load_root_stats
@@ -267,6 +283,8 @@ async def dashboard(
     rows = await _period_rows(session, label, None)
     billed_t = sum(float(i.amount_toman) for i, _, _ in rows)
     paid_t = sum(float(i.amount_toman) for i, _, _ in rows if i.status == InvoiceStatus.paid)
+    previous_rows = await _period_rows(session, previous_label, None)
+    previous_billed_t = sum(float(i.amount_toman) for i, _, _ in previous_rows)
 
     status_map: dict[str, int] = defaultdict(int)
     for i, _, _ in rows:
@@ -275,20 +293,28 @@ async def dashboard(
     # outstanding across all periods
     out_rows = (
         await session.execute(
-            select(Invoice.amount_toman).where(Invoice.status.in_(OUTSTANDING))
+            select(Invoice.amount_toman, Invoice.reseller_id).where(
+                Invoice.status.in_(OUTSTANDING)
+            )
         )
     ).all()
-    out_t = sum(float(t) for (t,) in out_rows)
+    out_t = sum(float(t) for t, _reseller_id in out_rows)
+    outstanding_resellers = len({reseller_id for _t, reseller_id in out_rows})
 
     by_panel = await sales_by_panel(label, session)  # type: ignore[arg-type]
     sales_rows = [_sales_row(i, n, k) for i, n, k in rows]
     sales_rows.sort(key=lambda r: r.amount_toman, reverse=True)
 
     return DashboardSummary(
-        period=label, panels=panels, resellers=resellers, billable_resellers=billable,
+        period=label, previous_period=previous_label,
+        panels=panels, active_panels=active_panels, healthy_panels=healthy_panels,
+        resellers=resellers, billable_resellers=billable,
         registered_resellers=registered, invoices_total=invoices_total,
+        period_invoices=len(rows),
         period_billed_toman=billed_t,
+        previous_period_billed_toman=previous_billed_t,
         period_paid_toman=paid_t, outstanding_toman=out_t,
+        outstanding_resellers=outstanding_resellers,
         status_counts=[StatusCount(status=k, count=v) for k, v in status_map.items()],
         sales_by_panel=by_panel, top_resellers=sales_rows[:10],
     )

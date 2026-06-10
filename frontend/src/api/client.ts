@@ -168,8 +168,48 @@ export const openPaymentProof = async (id: number) => {
 };
 
 // ---- reports ----
+export interface DashboardPanelSales {
+  panel_id: number;
+  panel_key: string;
+  invoices: number;
+  usage_gb: number;
+  amount_toman: number;
+}
+
+export interface DashboardSalesRow {
+  invoice_id: number;
+  reseller_id: number;
+  reseller_name: string;
+  panel_key: string;
+  usage_gb: number;
+  amount_toman: number;
+  status: string;
+}
+
+export interface DashboardSummary {
+  period: string;
+  previous_period: string;
+  panels: number;
+  active_panels: number;
+  healthy_panels: number;
+  resellers: number;
+  billable_resellers: number;
+  registered_resellers: number;
+  invoices_total: number;
+  period_invoices: number;
+  period_billed_toman: number;
+  previous_period_billed_toman: number;
+  period_paid_toman: number;
+  outstanding_toman: number;
+  outstanding_resellers: number;
+  status_counts: { status: string; count: number }[];
+  sales_by_panel: DashboardPanelSales[];
+  top_resellers: DashboardSalesRow[];
+}
+
 export const getDashboard = (period?: string) =>
-  api.get("/api/reports/dashboard", { params: { period } }).then((r) => r.data);
+  api.get("/api/reports/dashboard", { params: { period } })
+    .then((r) => r.data as DashboardSummary);
 export const getSales = (params: any = {}) => api.get("/api/reports/sales", { params }).then((r) => r.data);
 export const getDebts = () => api.get("/api/reports/debts").then((r) => r.data);
 export const getZeroInvoices = (period?: string) =>
