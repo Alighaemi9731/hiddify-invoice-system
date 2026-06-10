@@ -25,14 +25,12 @@ export default defineConfig({
     }),
   ],
   build: {
-    chunkSizeWarningLimit: 500,
+    chunkSizeWarningLimit: 600,
     rolldownOptions: {
       output: {
         codeSplitting: {
           groups: [
-            { name: "vendor-zrender", test: /node_modules[\\/]zrender/, priority: 80 },
-            { name: "vendor-chart-react", test: /node_modules[\\/]echarts-for-react/, priority: 70 },
-            { name: "vendor-echarts", test: /node_modules[\\/]echarts/, priority: 60, maxSize: 450_000 },
+            { name: "vendor-charts", test: /node_modules[\\/](echarts|zrender|echarts-for-react)/, priority: 60 },
             { name: "vendor-react", test: /node_modules[\\/](react|react-dom|react-router|scheduler)/, priority: 40 },
             { name: "vendor-data", test: /node_modules[\\/](@tanstack|axios)/, priority: 30 },
             { name: "vendor-motion", test: /node_modules[\\/]framer-motion/, priority: 20 },

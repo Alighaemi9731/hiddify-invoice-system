@@ -2,7 +2,8 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const assetDir = new URL("../dist/assets/", import.meta.url);
-const maxBytes = 500 * 1024;
+const maxKiB = 600;
+const maxBytes = maxKiB * 1024;
 const oversized = [];
 
 for (const name of await readdir(assetDir)) {
@@ -12,8 +13,8 @@ for (const name of await readdir(assetDir)) {
 }
 
 if (oversized.length) {
-  console.error(`Bundle budget exceeded (500 KiB):\n${oversized.join("\n")}`);
+  console.error(`Bundle budget exceeded (${maxKiB} KiB):\n${oversized.join("\n")}`);
   process.exit(1);
 }
 
-console.log("Bundle budget OK: every JavaScript chunk is <= 500 KiB.");
+console.log(`Bundle budget OK: every JavaScript chunk is <= ${maxKiB} KiB.`);

@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.50 - 2026-06-10
+
+Dashboard chart runtime hotfix.
+
+### Fixed
+
+- Fixed the Dashboard route failing with `Class extends value undefined is not a
+  constructor or null` after the white-screen hotfix. The chart libraries
+  (`echarts`, `zrender`, `echarts-for-react`) must stay in one vendor chunk; splitting
+  them across multiple chunks breaks zrender class initialization in the production
+  Rolldown build.
+- Raised the JavaScript chunk budget to 600 KiB to allow the single safe chart vendor
+  chunk while keeping all chunks bounded.
+
+### Verification
+
+- Verified the production build and a Playwright Dashboard smoke test against the built
+  SPA: Dashboard renders, no console/page errors are emitted.
+
 ## 1.37.49 - 2026-06-10
 
 Production frontend white-screen hotfix.
