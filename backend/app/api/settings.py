@@ -13,10 +13,11 @@ router = APIRouter(
     prefix="/api/settings", tags=["settings"], dependencies=[Depends(get_current_subject)]
 )
 
-# Keys whose change must re-program the running scheduler's cron triggers immediately.
+# Keys whose change must re-program the running scheduler's triggers immediately.
 _SCHEDULE_KEYS = {
     "invoice_day_of_month", "invoice_hour", "dunning_hour",
     "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
+    "rate_refresh_hours",
 }
 
 

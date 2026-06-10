@@ -10,10 +10,14 @@ suspension for non-payers. Owner web panel is **Persian / RTL**.
 - Changes and releases: [`CHANGELOG.md`](CHANGELOG.md)
 - Audit remediation tracker: [`docs/REMEDIATION_PLAN.md`](docs/REMEDIATION_PLAN.md)
 
-## Install (one line, on a fresh Ubuntu server)
+## Verified install (fresh Ubuntu server)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh | sudo bash
+tmp="$(mktemp -d)" && cd "$tmp"
+curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download/release-installer.sh
+curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download/release-installer.sh.sha256
+sha256sum -c release-installer.sh.sha256
+sudo bash release-installer.sh
 ```
 
 It asks **nothing**: it installs Docker, builds the whole stack behind Caddy, and
@@ -21,18 +25,19 @@ prints `http://<server-ip>`. Open that address — the **first-run setup wizard*
 for a username, password, and (optionally) a domain. If you enter a domain it fetches
 an SSL certificate automatically and the panel moves to `https://<domain>`.
 
-**Update / re-deploy:** run the exact same command again any time. It always rebuilds
-to the latest release **but keeps your database** — data is never wiped by the
-installer. To erase data and start a fresh panel, use **حساب و پشتیبان → پاک‌سازی کامل
-داده‌ها** inside the panel.
+The bootstrap resolves one release tag, downloads its immutable archive, verifies the
+published SHA-256, and only then runs code as root. Updates from the panel use the same
+verified path. Downloaded releases remain cached for `deploy/rollback.sh`; database
+volumes are never wiped by install/update/rollback.
 
 The stack: `caddy` (reverse proxy + auto-HTTPS), `frontend` (SPA), `backend`
 (FastAPI + scheduler), `bot` (Telegram), `db` (PostgreSQL 16). Everything but the
 secrets you enter in the panel is configured for you. See [`deploy/README.md`](deploy/README.md).
 
-CI runs backend Ruff, mypy and workflow tests, the frontend type/build plus a 500 KiB
-chunk budget, shell syntax, and both production/staging Compose validation. The isolated
-staging stack is documented in [`deploy/README.md`](deploy/README.md#isolated-staging).
+CI installs hash-locked Python dependencies, runs Ruff, mypy and workflow tests, checks
+`pip` consistency, installs frontend packages with `npm ci`, requires a clean production
+dependency audit, enforces the 500 KiB chunk budget, tests release rollback, and validates
+both Compose stacks.
 
 ## Using the system
 

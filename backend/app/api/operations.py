@@ -234,8 +234,8 @@ async def restart_service() -> dict:
 # The backend container is intentionally sandboxed (no Docker socket), so it can't
 # rebuild itself. Instead the panel writes a request flag into the shared data volume
 # and a tiny host-side watcher (systemd unit `hiddify-updater`, installed by
-# deploy/install.sh) runs get.sh — pulling the latest release and rebuilding. The
-# watcher reports progress back into the same volume. These files all live under
+# deploy/install.sh) downloads and verifies an exact GitHub release asset before
+# rebuilding. The watcher reports progress back into the same volume. These files live under
 # /app/data (the `app_data` volume), which the host mounts at the repo's data dir.
 _UPDATE_DIR = os.environ.get("UPDATE_DIR", "/app/data")
 _UPDATE_REQUEST = os.path.join(_UPDATE_DIR, ".update-requested")

@@ -100,11 +100,12 @@ Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D
 
 ## Install & run (single production path — no separate local/dev version)
 
-One command installs AND updates; re-running rebuilds to the latest release but
-**preserves the database** (data is wiped only from the panel's «پاک‌سازی داده‌ها»):
+Install/update downloads an immutable GitHub Release archive plus its SHA-256 and verifies
+it before running as root. The database is preserved; cached releases support rollback:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh | sudo bash
+sudo bash deploy/release-installer.sh
+sudo bash deploy/rollback.sh vX.Y.Z
 ```
 
 It prints `http://<server-ip>`; the first visit shows the one-time **setup wizard**
@@ -113,11 +114,20 @@ It prints `http://<server-ip>`; the first visit shows the one-time **setup wizar
 backend image bundles `postgresql-client` so auto-backups capture a real `pg_dump` and
 restores import via `psql`. Schema evolves on boot through versioned Alembic migrations;
 pre-Alembic databases are validated table/column-by-table/column before the baseline is
-stamped. Running `backend/tests` (pytest, `requirements-dev.txt`) is the only thing that
+stamped. Running `backend/tests` (pytest, `requirements-dev.lock`) is the only thing that
 touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M56** Audit remediation B09 — scheduler, deployment, and supply-chain hardening
+  (`v1.37.47`). Repeating scheduler jobs now use true fixed-anchor intervals, including
+  non-divisor values, and live scheduling includes `rate_refresh_hours`. Production updates
+  download an exact GitHub Release archive, verify SHA-256, retain it for offline rollback,
+  and never pipe mutable `main` code into a root shell. The backend has a database-aware
+  readiness endpoint and Compose health check; every install runs a version/migration smoke
+  script. Python production/dev environments use hash-locked manifests, frontend uses Node
+  22 + Vite 8 with zero audit findings, GitHub Actions are SHA-pinned, Dependabot is enabled,
+  and CI tests release apply/stale cleanup/rollback. Verified with 87 tests plus the full gate.
 - [x] **M55** Audit remediation B08 — build, test, and frontend quality gate
   (`v1.37.46`). Backend CI now runs the repository Ruff baseline plus mypy over all 92 app
   modules; real nullable/typing failures in financial and delivery paths were fixed while

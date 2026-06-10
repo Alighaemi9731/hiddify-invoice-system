@@ -5,11 +5,12 @@
 #  The backend container is sandboxed (no Docker socket), so it cannot rebuild
 #  itself. This tiny watcher runs on the HOST as a systemd service: it polls a
 #  flag file that the panel's «به‌روزرسانی» button writes, and when it appears
-#  runs get.sh (pull latest release + docker compose up --build). Progress is
+#  downloads a pinned release asset, verifies SHA-256, and rebuilds. Progress is
 #  written back to a status file the panel polls.
 #
 #  Installed + enabled automatically by deploy/install.sh. Safe: it only ever
-#  runs the project's own get.sh; it takes no arguments from the request.
+#  runs the project's own verified release installer; it takes no arguments from
+#  the request.
 #
 #  Flag/status files live in the repo's update dir (bind-mounted into the
 #  backend container at /app/data/.update-* — see docker-compose.prod.yml).
@@ -20,7 +21,6 @@ REPO_DIR="${REPO_DIR:-/opt/hiddify-invoice-system}"
 UPDATE_DIR="${UPDATE_DIR:-$REPO_DIR/update}"
 REQUEST="$UPDATE_DIR/.update-requested"
 STATUS="$UPDATE_DIR/.update-status"
-GET_URL="https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh"
 POLL="${POLL:-5}"
 
 mkdir -p "$UPDATE_DIR"
@@ -41,9 +41,10 @@ write_status() {
 run_update() {
   rm -f "$REQUEST"
   write_status "running" "در حال دریافت آخرین نسخه و بازسازی…"
-  # Run the same one-line updater the user would run by hand. It pulls the latest
-  # release tag and rebuilds, preserving the database. Capture the log for diagnosis.
-  if curl -fsSL "$GET_URL" | bash >>"$UPDATE_DIR/update.log" 2>&1; then
+  # Resolve latest once, then download and verify that exact release asset. No mutable
+  # branch script is ever piped into a root shell.
+  if DEST="$REPO_DIR" RELEASE_TAG=latest IN_PANEL_UPDATE=1 \
+    bash "$REPO_DIR/deploy/release-installer.sh" >>"$UPDATE_DIR/update.log" 2>&1; then
     write_status "done" "به‌روزرسانی با موفقیت انجام شد."
   else
     write_status "failed" "به‌روزرسانی ناموفق بود؛ گزارش را در update/update.log ببینید."

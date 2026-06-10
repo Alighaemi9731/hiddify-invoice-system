@@ -142,8 +142,12 @@ WantedBy=multi-user.target
 UNIT
   chmod +x "$REPO_DIR/deploy/updater.sh" 2>/dev/null || true
   systemctl daemon-reload
-  systemctl enable --now hiddify-updater >/dev/null 2>&1 \
-    && systemctl restart hiddify-updater >/dev/null 2>&1 || true
+  if [[ "${IN_PANEL_UPDATE:-0}" == "1" ]] && systemctl is-active --quiet hiddify-updater; then
+    systemctl enable hiddify-updater >/dev/null 2>&1 || true
+  else
+    systemctl enable --now hiddify-updater >/dev/null 2>&1 \
+      && systemctl restart hiddify-updater >/dev/null 2>&1 || true
+  fi
   c "Update watcher active — the panel can now self-update."
 else
   err "systemd not found — the in-panel «به‌روزرسانی» button won't work (update from the terminal instead)."
@@ -151,8 +155,6 @@ fi
 
 # English banner — terminals render LTR, so RTL Persian looks scrambled here.
 VER="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo "")"
-GET_URL="https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh"
-
 # If a domain was configured on a prior install (kept in .env), the panel lives at
 # https://<domain> and the bare IP redirects there — point the user at the domain.
 EXISTING_DOMAIN="$(grep -E '^SERVER_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')"
@@ -170,6 +172,9 @@ else
   LOGIN_NOTE="First run: the page asks for a username, password and domain, then gets SSL automatically."
 fi
 
+c "Running post-deploy smoke checks…"
+bash "$REPO_DIR/deploy/smoke.sh"
+
 cat <<DONE
 
 ────────────────────────────────────────────────────────────
@@ -182,7 +187,8 @@ cat <<DONE
   After login, set your Bot token, USDT wallet and BscScan key under Settings.
 
   Manage from the server (run as root):
-      Update :  curl -fsSL $GET_URL | sudo bash
+      Update :  cd $REPO_DIR && sudo bash deploy/release-installer.sh
+      Rollback:  cd $REPO_DIR && sudo bash deploy/rollback.sh vX.Y.Z
       Logs   :  cd $REPO_DIR && docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f
       Restart:  cd $REPO_DIR && docker compose --env-file .env -f deploy/docker-compose.prod.yml restart
 ────────────────────────────────────────────────────────────

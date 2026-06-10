@@ -25,21 +25,19 @@ export default defineConfig({
     }),
   ],
   build: {
-    rollupOptions: {
+    chunkSizeWarningLimit: 500,
+    rolldownOptions: {
       output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) return undefined;
-          if (id.includes("/zrender/")) return "vendor-zrender";
-          if (id.includes("/echarts-for-react/")) return "vendor-chart-react";
-          if (id.includes("/echarts/")) return "vendor-echarts";
-          if (id.includes("/@mui/") || id.includes("/@emotion/") ||
-              id.includes("/stylis")) return "vendor-ui";
-          if (id.includes("/react/") || id.includes("/react-dom/") ||
-              id.includes("/react-router") || id.includes("/scheduler/"))
-            return "vendor-react";
-          if (id.includes("/@tanstack/") || id.includes("/axios/")) return "vendor-data";
-          if (id.includes("/framer-motion/")) return "vendor-motion";
-          return undefined;
+        codeSplitting: {
+          groups: [
+            { name: "vendor-zrender", test: /node_modules[\\/]zrender/, priority: 80 },
+            { name: "vendor-chart-react", test: /node_modules[\\/]echarts-for-react/, priority: 70 },
+            { name: "vendor-echarts", test: /node_modules[\\/]echarts/, priority: 60, maxSize: 450_000 },
+            { name: "vendor-ui", test: /node_modules[\\/](@mui|@emotion|stylis)/, priority: 50, maxSize: 450_000 },
+            { name: "vendor-react", test: /node_modules[\\/](react|react-dom|react-router|scheduler)/, priority: 40 },
+            { name: "vendor-data", test: /node_modules[\\/](@tanstack|axios)/, priority: 30 },
+            { name: "vendor-motion", test: /node_modules[\\/]framer-motion/, priority: 20 },
+          ],
         },
       },
     },

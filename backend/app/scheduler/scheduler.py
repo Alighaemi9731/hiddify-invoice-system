@@ -17,10 +17,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 log = logging.getLogger("scheduler")
 
-# All cron jobs fire on round hours in the OWNER's local clock (Iran-based business; the
-# frontend already renders times in Asia/Tehran). Iran has no DST, so this is a stable
-# UTC+3:30 — e.g. the every-2h backup fires at 00,02,…,22:00 Tehran. Overridable via the
-# SCHEDULER_TIMEZONE env var if ever deployed elsewhere.
+# Calendar jobs and deterministic interval anchors use the OWNER's local clock. Iran has
+# no DST, so this is a stable UTC+3:30. Overridable for deployments in another timezone.
 SCHEDULER_TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "Asia/Tehran")
 
 _scheduler: AsyncIOScheduler | None = None

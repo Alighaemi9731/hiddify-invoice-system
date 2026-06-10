@@ -123,6 +123,9 @@ def test_financial_and_mutable_default_contracts():
 
 def test_setting_allowlist_types_and_ranges():
     assert settings_service.validate_api_value("invoice_hour", 23) == 23
+    assert settings_service.validate_api_value("sync_interval_hours", 24) == 24
+    assert settings_service.validate_api_value("guard_interval_minutes", 60) == 60
+    assert settings_service.validate_api_value("rate_refresh_hours", 24) == 24
     assert settings_service.validate_api_value("excluded_usage_gb", [0, 1.5]) == [0.0, 1.5]
     for key, value in [
         ("unknown_key", 1),

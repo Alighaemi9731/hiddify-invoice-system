@@ -1,8 +1,8 @@
 # Release and production deploy process
 
-The application deployer installs the highest `v*` Git tag. A production release is
-therefore complete only after the commit, version files, tag, GitHub release, deploy,
-and smoke checks all agree.
+The application deployer installs one exact, checksum-verified GitHub Release archive.
+A production release is complete only after the commit, version files, tag, release
+assets, deploy, and smoke checks all agree.
 
 Local production coordinates belong in `.claude/OPS.local.md`, which is gitignored.
 Never put host IPs, SSH usernames, tokens, passwords, panel URLs, or private keys in
@@ -44,12 +44,19 @@ Create an annotated tag:
 git tag -a v1.37.36 -m "v1.37.36 - concise release title"
 ```
 
-## 4. Push and create the GitHub release
+## 4. Push and create verified release assets
 
 ```bash
 git push origin main
 git push origin v1.37.36
-gh release create v1.37.36 --title "v1.37.36 - concise title" --generate-notes
+bash deploy/package-release.sh v1.37.36
+gh release create v1.37.36 --draft --title "v1.37.36 - concise title" --generate-notes
+gh release upload v1.37.36 \
+  dist-release/invoice-system-v1.37.36.tar.gz \
+  dist-release/invoice-system-v1.37.36.tar.gz.sha256 \
+  dist-release/release-installer.sh \
+  dist-release/release-installer.sh.sha256
+gh release edit v1.37.36 --draft=false
 ```
 
 `gh auth status` must succeed first. If GitHub CLI authentication is unavailable,
@@ -66,15 +73,18 @@ release. Do not silently skip the GitHub release.
 
 ## 6. Deploy
 
-The current installer deploys the highest release tag:
+Download and verify the exact release bootstrap, then pin the deployment tag:
 
 ```bash
-ssh <production-host> \
-  'curl -fsSL https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh | bash'
+curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/download/v1.37.36/release-installer.sh
+curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/download/v1.37.36/release-installer.sh.sha256
+sha256sum -c release-installer.sh.sha256
+sudo RELEASE_TAG=v1.37.36 bash release-installer.sh
 ```
 
-Longer term, B09 replaces this mutable root-download path with a pinned,
-checksum-verified release artifact.
+The installer caches the verified archive under
+`/opt/hiddify-invoice-system/update/releases`. `deploy/install.sh` automatically runs
+the database-aware post-deploy smoke script and fails if readiness/version checks fail.
 
 ## 7. Smoke check
 
@@ -82,7 +92,7 @@ Verify all of the following before declaring success:
 
 ```bash
 cat /opt/hiddify-invoice-system/VERSION
-git -C /opt/hiddify-invoice-system rev-parse --short HEAD
+cat /opt/hiddify-invoice-system/.deployed-release
 cd /opt/hiddify-invoice-system
 docker compose --env-file .env -f deploy/docker-compose.prod.yml ps
 docker compose --env-file .env -f deploy/docker-compose.prod.yml logs \
@@ -100,11 +110,10 @@ Also check:
 
 ## 8. Rollback
 
-Do not use destructive Git reset. Deploy the recorded prior tag explicitly:
+Do not use destructive Git reset. Roll back to the verified prior archive without network:
 
 ```bash
-ssh <production-host> \
-  'curl -fsSL https://raw.githubusercontent.com/Alighaemi9731/hiddify-invoice-system/main/get.sh | BRANCH=v1.37.35 bash'
+sudo /opt/hiddify-invoice-system/deploy/rollback.sh v1.37.35
 ```
 
 If the release changed the database schema, follow that release's migration rollback

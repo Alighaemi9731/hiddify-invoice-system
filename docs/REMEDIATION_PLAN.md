@@ -12,15 +12,19 @@ Status values: `TODO`, `IN PROGRESS`, `DONE`, `DEFERRED`.
 ```bash
 cd backend
 .venv/bin/pytest -q
-.venv/bin/ruff check app tests --select F
+.venv/bin/ruff check app tests alembic
+.venv/bin/mypy app
+.venv/bin/pip check
 
 cd ../frontend
-npx tsc --noEmit
+npm ci
+npm audit
 npm run build
 
 cd ..
-bash -n deploy/install.sh deploy/bootstrap.sh deploy/updater.sh get.sh
-docker compose -f deploy/docker-compose.prod.yml config >/dev/null
+bash -n deploy/*.sh get.sh
+bash deploy/test-release-tools.sh
+docker compose --env-file .env -f deploy/docker-compose.prod.yml config >/dev/null
 ```
 
 Do not release if any command fails. Production deploy also requires a fresh,
@@ -174,7 +178,7 @@ Primary files:
 
 ## B09 - Scheduler, deployment, and supply-chain hardening
 
-Priority: P2. Status: TODO.
+Priority: P2. Status: DONE in `v1.37.47`.
 
 - Replace misleading `*/N` schedules with true intervals or restrict values to divisors.
 - Live-apply `rate_refresh_hours` consistently with other schedule settings.

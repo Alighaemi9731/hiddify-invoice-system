@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.47 - 2026-06-10
+
+Audit remediation B09 — scheduler, deployment, and supply-chain hardening.
+
+### Fixed
+
+- Replaced repeating `*/N` cron expressions with fixed-anchor interval triggers, preserving
+  true spacing for values such as 7 hours or 17 minutes without restart starvation.
+  `rate_refresh_hours` now live-applies like every other schedule setting.
+- Replaced the root-level mutable `main/get.sh` update path with exact GitHub Release
+  archives verified by SHA-256. Applied archives are cached and tracked-file manifests remove
+  stale release files safely.
+- Added a tested offline rollback command and release packaging/verification tooling.
+- Made `/health` database-aware and added a backend Compose health check. Caddy now waits for
+  API/database readiness, and every production install runs a post-deploy version, container,
+  health, and migration smoke check.
+- Added hash-locked Python production/development manifests and made Docker/CI install with
+  `--require-hashes`. Frontend moved to Node 22 and Vite 8; `npm audit` is clean.
+- Pinned GitHub Actions and container base images by digest/commit SHA and added weekly
+  Dependabot coverage.
+
+### Verification
+
+- Backend gate: 87 tests, Ruff, mypy, `pip check`, fresh lockfile installation, and Alembic.
+- Frontend type/build and bundle budget pass with zero npm audit vulnerabilities.
+- Release tooling test applies two versions, removes a stale file, and rolls back offline.
+
 ## 1.37.46 - 2026-06-09
 
 Audit remediation B08 — build, test, and frontend quality gate.

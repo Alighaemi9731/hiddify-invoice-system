@@ -9,16 +9,20 @@ One domain serves everything (`/api/*` → backend, the rest → SPA).
 - A **domain** (or subdomain) whose **A record points to the server's IP**.
 - Ports **80** and **443** open to the internet (Caddy needs them for SSL).
 
-## One-line install
-On the server (as root), from the project folder:
+## Verified release install
+Download the release bootstrap and checksum before granting root:
 
 ```bash
-sudo bash deploy/install.sh
+tmp="$(mktemp -d)" && cd "$tmp"
+curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download/release-installer.sh
+curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download/release-installer.sh.sha256
+sha256sum -c release-installer.sh.sha256
+sudo bash release-installer.sh
 ```
 
 It will:
 1. detect the OS and install Docker (+ compose plugin) if missing,
-2. ask for your **domain**, **SSL email**, and **admin password**,
+2. verify and apply one exact release archive,
 3. generate a secure `.env` (random `SECRET_KEY` + DB password),
 4. build and start the stack, and obtain the **HTTPS certificate automatically**.
 
@@ -42,7 +46,8 @@ When it finishes, open `https://<your-domain>` and log in.
 docker compose --env-file .env -f deploy/docker-compose.prod.yml logs -f          # tail logs
 docker compose --env-file .env -f deploy/docker-compose.prod.yml restart          # restart all
 docker compose --env-file .env -f deploy/docker-compose.prod.yml down             # stop
-git pull && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build   # update
+sudo bash deploy/release-installer.sh                                               # verified update
+sudo bash deploy/rollback.sh v1.37.46                                               # cached rollback
 ```
 
 ## Backups
@@ -62,9 +67,10 @@ The hardened backup/restore work is tracked in `docs/REMEDIATION_PLAN.md` B02.
 
 ## Release and deploy
 
-The updater deploys the highest `v*` tag, not an arbitrary untagged `main` commit.
-Use [`docs/RELEASE_PROCESS.md`](../docs/RELEASE_PROCESS.md) for the required test,
-version, tag, GitHub release, backup, deploy, smoke-check, and rollback sequence.
+The updater resolves the latest GitHub Release once, downloads that exact tarball and
+SHA-256 file, verifies it, then applies it. `deploy/smoke.sh` checks containers, the
+database-aware health endpoint, API version, and migration revision. Verified archives
+are retained under `update/releases` for offline rollback.
 
 ## Isolated staging
 

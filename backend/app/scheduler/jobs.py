@@ -2,16 +2,17 @@
 
 Each job opens its own session and never lets an exception escape (which would stop
 the scheduler). All timings are owner-configurable from the panel (Settings → زمان‌بندی),
-read by `load_config` and turned into fixed wall-clock cron triggers in `register` — see
-the module-level note there on why cron (not interval) is used.
+read by `load_config` and registered with deterministic wall-clock anchors.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionLocal
@@ -40,9 +41,9 @@ class ScheduleConfig:
     invoice_hour: int = 9      # monthly invoice: hour (0–23)
     dunning_hour: int = 10     # daily reminders/enforcement: hour (0–23)
     sync_hours: int = 6        # panel sync: every N hours (1–24)
-    guard_minutes: int = 10    # channel/group guard: every N minutes (1–59)
+    guard_minutes: int = 10    # channel/group guard: every N minutes (1–60)
     backup_hours: int = 2      # auto-backup: every N hours (1–24)
-    rate_hours: int = 1        # live USDT→Toman rate refresh: every N hours (1–23)
+    rate_hours: int = 1        # live USDT→Toman rate refresh: every N hours (1–24)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -65,14 +66,10 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
         invoice_hour=_clamp(s.get("invoice_hour"), 0, 23, 9),
         dunning_hour=_clamp(s.get("dunning_hour"), 0, 23, 10),
-        # The "every N hours/minutes" steps go into a cron field, so N must stay within that
-        # field's range: hour 0–23 (so max step 23 — `*/24` is INVALID and throws), minute
-        # 0–59 (max step 59). Capping here is what keeps register() from ever building a bad
-        # trigger.
-        sync_hours=_clamp(s.get("sync_interval_hours"), 1, 23, 6),
-        guard_minutes=_clamp(s.get("guard_interval_minutes"), 1, 59, 10),
-        backup_hours=_clamp(s.get("backup_interval_hours"), 1, 23, 2),
-        rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 23, 1),
+        sync_hours=_clamp(s.get("sync_interval_hours"), 1, 24, 6),
+        guard_minutes=_clamp(s.get("guard_interval_minutes"), 1, 60, 10),
+        backup_hours=_clamp(s.get("backup_interval_hours"), 1, 24, 2),
+        rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 24, 1),
     )
 
 
@@ -198,13 +195,15 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
     scheduler — `replace_existing=True` updates each trigger in place, so this doubles as the
     live "apply settings" path. Falls back to defaults if no config is given.
 
-    ALL jobs use fixed wall-clock (cron) triggers, NOT `interval`. An interval job's countdown
-    is anchored to process start and APScheduler's in-memory store resets it on every restart,
-    so frequent redeploys (each shorter than the interval) starve it — that's why the 2h
-    auto-backup never fired. Cron fires at the same absolute clock times regardless of when we
-    last deployed. Times are in the scheduler's timezone (Asia/Tehran — see get_scheduler)."""
+    Monthly invoicing and dunning use cron because they are calendar events. Repeating
+    jobs use interval triggers with a fixed epoch anchor. The fixed anchor is important:
+    APScheduler computes the next future boundary after a restart instead of starting a
+    fresh countdown, while values such as 7 hours or 17 minutes retain their true spacing
+    across day/hour boundaries. Times use the scheduler timezone."""
     cfg = cfg or ScheduleConfig()
     tz = sched.timezone
+    interval_anchor = datetime(2000, 1, 1, 0, 0, tzinfo=tz)
+    rate_anchor = datetime(2000, 1, 1, 0, 5, tzinfo=tz)
 
     # Build + validate ALL triggers BEFORE mutating the jobstore. add_job(..., "cron", ...)
     # constructs the trigger internally, so a bad field would throw mid-loop and leave the
@@ -212,9 +211,8 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
     # Constructing the CronTrigger objects up front makes registration all-or-nothing.
     #   • Monthly invoice: day N of each month at HH:00 (bill prev month + deliver)
     #   • Daily dunning at HH:00 (reminders + enforcement)
-    #   • Channel/group guard every N minutes on the :00 boundary
-    #   • Panel sync every N hours on the hour
-    #   • Auto-backup to the owner's Telegram every N hours on the hour
+    #   • Channel/group guard every N minutes from a fixed midnight anchor
+    #   • Panel sync and auto-backup every N hours from the same fixed anchor
     # The 4th value is misfire_grace_time (seconds): how late a fire may run if the scheduler
     # was busy/down at the exact moment. APScheduler's DEFAULT is 1s, which silently SKIPS a
     # job whose tick the loop missed by a second — fatal for the once-a-month invoicing. Give
@@ -225,21 +223,21 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         ("daily_dunning", daily_dunning_job,
          CronTrigger(hour=cfg.dunning_hour, minute=0, timezone=tz), 6 * 3600),
         ("channel_guard", channel_guard_job,
-         CronTrigger(minute=f"*/{cfg.guard_minutes}", timezone=tz), 300),
+         IntervalTrigger(minutes=cfg.guard_minutes, start_date=interval_anchor, timezone=tz), 300),
         ("periodic_sync", periodic_sync_job,
-         CronTrigger(hour=f"*/{cfg.sync_hours}", minute=0, timezone=tz), 1800),
+         IntervalTrigger(hours=cfg.sync_hours, start_date=interval_anchor, timezone=tz), 1800),
         ("backup", backup_job,
-         CronTrigger(hour=f"*/{cfg.backup_hours}", minute=0, timezone=tz), 3600),
+         IntervalTrigger(hours=cfg.backup_hours, start_date=interval_anchor, timezone=tz), 3600),
         # Live USDT→Toman rate refresh, a few minutes past the hour so it doesn't collide
         # with the on-the-hour jobs above.
         ("rate_refresh", rate_refresh_job,
-         CronTrigger(hour=f"*/{cfg.rate_hours}", minute=5, timezone=tz), 3600),
+         IntervalTrigger(hours=cfg.rate_hours, start_date=rate_anchor, timezone=tz), 3600),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,
                       coalesce=True, misfire_grace_time=grace)
     log.info(
-        "Registered 6 cron jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
+        "Registered 6 jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
         "sync every %dh, guard every %dm, backup every %dh, rate every %dh.",
         sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
         cfg.sync_hours, cfg.guard_minutes, cfg.backup_hours, cfg.rate_hours,

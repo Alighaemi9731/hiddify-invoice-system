@@ -152,10 +152,9 @@ DEFS: list[SettingDef] = [
     # reset-abuse is many GB, so it's always billed.
     SettingDef("overage_tolerance_gb", 0.5, False, "pricing"),
     # Scheduler timings — ALL automated jobs. Every value here actually drives the
-    # APScheduler cron triggers (see app.scheduler.jobs.load_config). Hour/day values fire
-    # at that fixed clock time in the owner's timezone (Asia/Tehran); the "every N hours/
-    # minutes" values fire on round boundaries (00,0N,…). Values that evenly divide 24h /
-    # 60min give perfectly even spacing.
+    # APScheduler triggers (see app.scheduler.jobs.load_config). Hour/day values fire at
+    # that fixed clock time in the owner's timezone (Asia/Tehran); repeating values use
+    # deterministic interval anchors and therefore keep true N-hour/N-minute spacing.
     SettingDef("invoice_day_of_month", 1, False, "schedule"),   # monthly invoice: day (1=run on the 1st for prev month)
     SettingDef("invoice_hour", 9, False, "schedule"),            # monthly invoice: hour
     SettingDef("dunning_hour", 10, False, "schedule"),           # daily reminders/enforcement: hour
@@ -209,14 +208,14 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "default_price_per_gb": (0, None),
     "toman_per_usdt": (0, None),
     "rate_max_age_hours": (0, 24 * 365),
-    "rate_refresh_hours": (1, 23),
+    "rate_refresh_hours": (1, 24),
     "min_sale_toman": (0, None),
     "invoice_day_of_month": (1, 28),
     "invoice_hour": (0, 23),
     "dunning_hour": (0, 23),
-    "sync_interval_hours": (1, 23),
-    "guard_interval_minutes": (1, 59),
-    "backup_interval_hours": (1, 23),
+    "sync_interval_hours": (1, 24),
+    "guard_interval_minutes": (1, 60),
+    "backup_interval_hours": (1, 24),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),
     "warning_day": (0, 365),
