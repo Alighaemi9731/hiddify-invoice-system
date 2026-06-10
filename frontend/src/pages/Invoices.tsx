@@ -4,15 +4,15 @@ import {
   IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, Tooltip, Typography, Divider, Tabs, Tab, TablePagination,
 } from "@mui/material";
-import SendIcon from "@mui/icons-material/Send";
-import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import UndoIcon from "@mui/icons-material/Undo";
-import EditIcon from "@mui/icons-material/Edit";
-import VisibilityIcon from "@mui/icons-material/Visibility";
-import ScheduleIcon from "@mui/icons-material/Schedule";
-import AutorenewIcon from "@mui/icons-material/Autorenew";
-import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import SendIcon from "@mui/icons-material/esm/Send";
+import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
+import CheckCircleIcon from "@mui/icons-material/esm/CheckCircle";
+import UndoIcon from "@mui/icons-material/esm/Undo";
+import EditIcon from "@mui/icons-material/esm/Edit";
+import VisibilityIcon from "@mui/icons-material/esm/Visibility";
+import ScheduleIcon from "@mui/icons-material/esm/Schedule";
+import AutorenewIcon from "@mui/icons-material/esm/Autorenew";
+import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,

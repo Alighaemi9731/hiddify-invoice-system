@@ -3,16 +3,16 @@ import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, Divider, Chip,
   LinearProgress,
 } from "@mui/material";
-import LockResetIcon from "@mui/icons-material/LockReset";
-import CloudDownloadIcon from "@mui/icons-material/CloudDownload";
-import TelegramIcon from "@mui/icons-material/Telegram";
-import RestoreIcon from "@mui/icons-material/Restore";
-import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
-import ShieldIcon from "@mui/icons-material/Shield";
-import FingerprintIcon from "@mui/icons-material/Fingerprint";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import LanguageIcon from "@mui/icons-material/Language";
-import SystemUpdateAltIcon from "@mui/icons-material/SystemUpdateAlt";
+import LockResetIcon from "@mui/icons-material/esm/LockReset";
+import CloudDownloadIcon from "@mui/icons-material/esm/CloudDownload";
+import TelegramIcon from "@mui/icons-material/esm/Telegram";
+import RestoreIcon from "@mui/icons-material/esm/Restore";
+import DeleteForeverIcon from "@mui/icons-material/esm/DeleteForever";
+import ShieldIcon from "@mui/icons-material/esm/Shield";
+import FingerprintIcon from "@mui/icons-material/esm/Fingerprint";
+import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
+import LanguageIcon from "@mui/icons-material/esm/Language";
+import SystemUpdateAltIcon from "@mui/icons-material/esm/SystemUpdateAlt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   updateAccount, downloadBackup, sendBackupToTelegram, restoreBackup, setToken, wipeData,
@@ -20,7 +20,7 @@ import {
   getInfo, updateSystem, getUpdateStatus, pingInfo,
   passkeyList, passkeyRegisterBegin, passkeyRegisterComplete, passkeyDelete,
 } from "../api/client";
-import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
 import { startRegistration } from "@simplewebauthn/browser";
 import { useToast, errMsg } from "../components/Toast";
 

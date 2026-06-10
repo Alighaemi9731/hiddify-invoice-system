@@ -5,13 +5,13 @@ import {
   TableCell, TableHead, TableRow, TextField, Tooltip, TablePagination, Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import EditIcon from "@mui/icons-material/Edit";
-import BlockIcon from "@mui/icons-material/Block";
-import RestartAltIcon from "@mui/icons-material/RestartAlt";
-import AddIcon from "@mui/icons-material/Add";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
-import KeyboardArrowLeftIcon from "@mui/icons-material/KeyboardArrowLeft";
-import SubdirectoryArrowLeftIcon from "@mui/icons-material/SubdirectoryArrowLeft";
+import EditIcon from "@mui/icons-material/esm/Edit";
+import BlockIcon from "@mui/icons-material/esm/Block";
+import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
+import AddIcon from "@mui/icons-material/esm/Add";
+import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
+import KeyboardArrowLeftIcon from "@mui/icons-material/esm/KeyboardArrowLeft";
+import SubdirectoryArrowLeftIcon from "@mui/icons-material/esm/SubdirectoryArrowLeft";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listResellers, getResellerTree, listPanels, updateReseller, enforceReseller, restoreReseller,

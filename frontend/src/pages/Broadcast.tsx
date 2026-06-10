@@ -2,8 +2,8 @@ import { useState } from "react";
 import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem,
 } from "@mui/material";
-import CampaignIcon from "@mui/icons-material/Campaign";
-import CleaningServicesIcon from "@mui/icons-material/CleaningServices";
+import CampaignIcon from "@mui/icons-material/esm/Campaign";
+import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { broadcastMessage, runChannelGuard, listPanels } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";

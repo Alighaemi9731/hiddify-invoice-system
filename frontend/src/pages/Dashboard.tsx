@@ -3,10 +3,10 @@ import {
   Grid, Box, Card, CardContent, Typography, Stack, Alert, Button,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
-import DnsIcon from "@mui/icons-material/Dns";
-import GroupIcon from "@mui/icons-material/Group";
-import TrendingUpIcon from "@mui/icons-material/TrendingUp";
-import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import DnsIcon from "@mui/icons-material/esm/Dns";
+import GroupIcon from "@mui/icons-material/esm/Group";
+import TrendingUpIcon from "@mui/icons-material/esm/TrendingUp";
+import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import { useQuery } from "@tanstack/react-query";
 import { getDashboard } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";

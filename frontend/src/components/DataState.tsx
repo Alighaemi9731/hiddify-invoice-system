@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Alert, Box, Button, Card, Skeleton, Stack } from "@mui/material";
-import RefreshIcon from "@mui/icons-material/Refresh";
+import RefreshIcon from "@mui/icons-material/esm/Refresh";
 
 /**
  * Wraps a data view (usually a table) with consistent loading + error states. While the

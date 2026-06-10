@@ -4,11 +4,11 @@ import {
   IconButton, MenuItem, Stack, Table, TableBody, TableCell,
   TableHead, TableRow, TextField, Tooltip, Typography, Link,
 } from "@mui/material";
-import VerifiedIcon from "@mui/icons-material/Verified";
-import CheckIcon from "@mui/icons-material/Check";
-import CloseIcon from "@mui/icons-material/Close";
-import ImageIcon from "@mui/icons-material/Image";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import VerifiedIcon from "@mui/icons-material/esm/Verified";
+import CheckIcon from "@mui/icons-material/esm/Check";
+import CloseIcon from "@mui/icons-material/esm/Close";
+import ImageIcon from "@mui/icons-material/esm/Image";
+import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listPayments, verifyPayment, confirmPayment, rejectPayment, deletePayment, openPaymentProof,

@@ -4,10 +4,10 @@ import {
   IconButton, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField,
   Tooltip, Switch, FormControlLabel, Typography,
 } from "@mui/material";
-import SyncIcon from "@mui/icons-material/Sync";
-import EditIcon from "@mui/icons-material/Edit";
-import DeleteIcon from "@mui/icons-material/Delete";
-import WifiTetheringIcon from "@mui/icons-material/WifiTethering";
+import SyncIcon from "@mui/icons-material/esm/Sync";
+import EditIcon from "@mui/icons-material/esm/Edit";
+import DeleteIcon from "@mui/icons-material/esm/Delete";
+import WifiTetheringIcon from "@mui/icons-material/esm/WifiTethering";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listPanels, createPanel, updatePanel, deletePanel, syncPanel, syncAllPanels, testPanel,

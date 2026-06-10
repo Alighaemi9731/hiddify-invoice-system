@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   Box, Button, Card, CardContent, TextField, Typography, Alert, Stack, CircularProgress, Link,
 } from "@mui/material";
-import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
+import RocketLaunchIcon from "@mui/icons-material/esm/RocketLaunch";
 import { doSetup } from "../api/client";
 
 export default function Setup({ onDone }: { onDone: () => void }) {

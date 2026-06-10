@@ -33,7 +33,6 @@ export default defineConfig({
             { name: "vendor-zrender", test: /node_modules[\\/]zrender/, priority: 80 },
             { name: "vendor-chart-react", test: /node_modules[\\/]echarts-for-react/, priority: 70 },
             { name: "vendor-echarts", test: /node_modules[\\/]echarts/, priority: 60, maxSize: 450_000 },
-            { name: "vendor-ui", test: /node_modules[\\/](@mui|@emotion|stylis)/, priority: 50, maxSize: 450_000 },
             { name: "vendor-react", test: /node_modules[\\/](react|react-dom|react-router|scheduler)/, priority: 40 },
             { name: "vendor-data", test: /node_modules[\\/](@tanstack|axios)/, priority: 30 },
             { name: "vendor-motion", test: /node_modules[\\/]framer-motion/, priority: 20 },

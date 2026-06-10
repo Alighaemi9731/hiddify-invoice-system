@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import {
   Box, Button, Card, CardContent, TextField, Typography, Alert, Stack, IconButton, Tooltip, Divider,
 } from "@mui/material";
-import RefreshIcon from "@mui/icons-material/Refresh";
-import FingerprintIcon from "@mui/icons-material/Fingerprint";
+import RefreshIcon from "@mui/icons-material/esm/Refresh";
+import FingerprintIcon from "@mui/icons-material/esm/Fingerprint";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { useAuth } from "../auth/AuthContext";
 import { getCaptcha, login, passkeyLoginBegin, passkeyLoginComplete } from "../api/client";

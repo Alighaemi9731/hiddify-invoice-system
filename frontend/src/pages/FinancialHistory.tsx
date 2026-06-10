@@ -3,7 +3,7 @@ import {
   Box, Button, Card, Chip, Stack, Table, TableBody, TableCell, TableHead,
   TableRow, TextField, Typography, MenuItem,
 } from "@mui/material";
-import DownloadIcon from "@mui/icons-material/Download";
+import DownloadIcon from "@mui/icons-material/esm/Download";
 import { useQuery } from "@tanstack/react-query";
 import { getFinancialHistory } from "../api/client";
 import PeriodPicker from "../components/PeriodPicker";

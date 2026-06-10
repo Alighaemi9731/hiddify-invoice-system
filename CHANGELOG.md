@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.49 - 2026-06-10
+
+Production frontend white-screen hotfix.
+
+### Fixed
+
+- Fixed the admin panel loading as a blank white page after `v1.37.48`. The production
+  build was splitting MUI/Emotion into unsafe vendor chunks and loading CommonJS icon
+  wrappers through Rolldown, causing frontend runtime crashes before React mounted.
+- MUI icons now import from the package's ESM build, and the manual `vendor-ui` split was
+  removed so MUI/Emotion initialize consistently.
+
+### Verification
+
+- Reproduced the blank page locally from the `v1.37.48` production build.
+- Verified the fixed production build with Playwright: `#root` renders the login form and
+  no console/page errors are emitted.
+
 ## 1.37.48 - 2026-06-10
 
 Audit remediation B10 — cleanup and documentation.

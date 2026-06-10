@@ -1,6 +1,6 @@
 import { Component, ReactNode } from "react";
 import { Box, Button, Typography, Paper } from "@mui/material";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import ErrorOutlineIcon from "@mui/icons-material/esm/ErrorOutline";
 
 type Props = { children: ReactNode };
 type State = { error: Error | null };
