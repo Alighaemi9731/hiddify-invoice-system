@@ -35,7 +35,7 @@ tzdata>=2024.1
 # Invoice PDF (Persian/RTL) — same toolchain as the legacy system
 reportlab>=4.1
 arabic-reshaper>=3.0
-python-bidi>=0.4.2,<0.5
+python-bidi>=0.6.10,<0.7
 
 # Jalali (Persian) calendar for display
 jdatetime>=5.0
