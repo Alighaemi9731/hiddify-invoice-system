@@ -27,6 +27,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
 import AccountTreeIcon from "@mui/icons-material/esm/AccountTree";
@@ -137,6 +138,7 @@ function EnforcementStatus({ state }: { state: string }) {
 
 export default function Resellers() {
   const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const qc = useQueryClient();
   const { node: toastNode, show } = useToast();
   const [tab, setTab] = useState(0);
@@ -169,10 +171,6 @@ export default function Resellers() {
     }),
     enabled: tab === 1,
   });
-
-  useEffect(() => {
-    if (tab === 1) setExpanded(new Set(tree.map((item) => item.id)));
-  }, [tab, tree]);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["resellers"] });
@@ -241,16 +239,24 @@ export default function Resellers() {
 
   const { sorted, key, dir, toggle } = useSort(data, "name", "asc");
   const rows = sorted.slice(page * 25, page * 25 + 25);
-  const visibleTreeRows = useMemo(
-    () => flattenVisible(tree, expanded),
-    [tree, expanded],
+  const pagedTree = useMemo(
+    () => tree.slice(page * 25, page * 25 + 25),
+    [tree, page],
   );
-  const allBranchIds = useMemo(() => branchIds(tree), [tree]);
+  const visibleTreeRows = useMemo(
+    () => flattenVisible(pagedTree, expanded),
+    [pagedTree, expanded],
+  );
+  const allBranchIds = useMemo(() => branchIds(pagedTree), [pagedTree]);
   const billableCount = data.filter((item) => !item.exclude_from_billing).length;
   const exemptCount = data.length - billableCount;
   const treeCount = countTree(tree);
   const currentCount = tab === 0 ? data.length : treeCount;
   const loading = tab === 0 ? listLoading : treeLoading;
+
+  useEffect(() => {
+    if (tab === 1) setExpanded(new Set(pagedTree.map((item) => item.id)));
+  }, [tab, pagedTree]);
 
   const changeTab = (_event: unknown, value: number) => {
     setTab(value);
@@ -487,7 +493,8 @@ export default function Resellers() {
           </Stack>
         ) : (
           <>
-            <TableContainer sx={{ display: { xs: "none", md: "block" } }}>
+            {!isMobile && (
+            <TableContainer>
               <Table size="small" sx={{ minWidth: 1080 }}>
                 <TableHead>
                   <TableRow>
@@ -538,8 +545,10 @@ export default function Resellers() {
                 </TableBody>
               </Table>
             </TableContainer>
+            )}
 
-            <Stack spacing={1.2} sx={{ display: { xs: "flex", md: "none" }, p: 1.5 }}>
+            {isMobile && (
+            <Stack spacing={1.2} sx={{ p: 1.5 }}>
               {(tab === 0
                 ? rows.map((reseller) => ({ reseller, depth: 0 }))
                 : visibleTreeRows.map(({ node: reseller, depth }) => ({ reseller, depth }))
@@ -561,11 +570,12 @@ export default function Resellers() {
                 </Typography>
               )}
             </Stack>
+            )}
 
-            {tab === 0 && data.length > 0 && (
+            {(tab === 0 ? data.length : tree.length) > 0 && (
               <TablePagination
                 component="div"
-                count={data.length}
+                count={tab === 0 ? data.length : tree.length}
                 page={page}
                 rowsPerPage={25}
                 rowsPerPageOptions={[25]}
@@ -778,7 +788,7 @@ function ResellerIdentity({
             ? `${fmtNum(treeRow.descendant_count)} زیرمجموعه`
             : depth > 0
               ? `زیرمجموعه سطح ${fmtNum(depth)}`
-              : reseller.admin_uuid}
+              : "نماینده اصلی"}
         </Typography>
       </Box>
     </Box>

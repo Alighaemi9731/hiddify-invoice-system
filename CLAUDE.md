@@ -120,6 +120,10 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M61** Reseller hierarchy production follow-up (`v1.37.54`).
+  Paginated the tree by root reseller so large production datasets render only 25 branches
+  and their visible descendants at once. Removed admin UUIDs from visible rows/cards while
+  preserving UUID matching in the backend search contract.
 - [x] **M60** Reseller list and hierarchy redesign (`v1.37.53`).
   Rebuilt the Resellers page around a clean result header, integrated search/panel
   filters, segmented main-list/tree controls, compact status columns, and dedicated

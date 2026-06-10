@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.54 - 2026-06-10
+
+Reseller hierarchy production follow-up.
+
+### Changed
+
+- Paginated the hierarchy by main reseller, rendering at most 25 root branches and their
+  visible descendants per page instead of mounting the entire production tree at once.
+- Removed admin UUIDs from visible reseller rows and mobile cards while preserving
+  name-or-UUID search behavior in the API and search field.
+
+### Verification
+
+- Verified UUID search against production data without exposing the UUID in the UI.
+- Frontend typecheck, production build, dependency audit, and populated hierarchy renders
+  pass without React, console, page, or horizontal-overflow errors.
+
 ## 1.37.53 - 2026-06-10
 
 Reseller list and hierarchy redesign.
