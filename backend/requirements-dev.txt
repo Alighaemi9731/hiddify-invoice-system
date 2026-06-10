@@ -3,5 +3,5 @@ pytest>=8.2
 pytest-asyncio>=0.23
 ruff==0.15.16
 mypy==1.19.1
-types-qrcode>=8.2
+types-qrcode>=8.2.0.20260518
 types-reportlab>=4.4
