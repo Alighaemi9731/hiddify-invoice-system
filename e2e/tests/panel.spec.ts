@@ -43,6 +43,17 @@ test("debts table has no USDT column", async ({ page }) => {
   await expect(page.getByRole("columnheader", { name: "USDT" })).toHaveCount(0);
 });
 
+test("resellers page switches between the main list and hierarchy", async ({ page }) => {
+  await page.goto("/resellers");
+  await expect(page.getByRole("heading", { name: "نمایندگان" }).last()).toBeVisible();
+  await expect(page.getByRole("tab", { name: /فهرست اصلی/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("tab", { name: /درخت زیرمجموعه‌ها/ }).click();
+  await expect(page.getByText(/شاخه اصلی/)).toBeVisible();
+});
+
 test("sidebar shows the app version", async ({ page }) => {
   await page.goto("/");
   // The version pinned in VERSION is rendered in the sidebar footer (e.g. v1.37.8).

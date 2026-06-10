@@ -1,301 +1,927 @@
-import { useState } from "react";
+import { MouseEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
-  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, MenuItem, Stack, Switch, FormControlLabel, Tab, Tabs, Table, TableBody,
-  TableCell, TableHead, TableRow, TextField, Tooltip, TablePagination, Typography,
+  Box,
+  Button,
+  Card,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  IconButton,
+  InputAdornment,
+  MenuItem,
+  Skeleton,
+  Stack,
+  Switch,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TablePagination,
+  TableRow,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
-import EditIcon from "@mui/icons-material/esm/Edit";
-import BlockIcon from "@mui/icons-material/esm/Block";
-import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
+import { alpha, useTheme } from "@mui/material/styles";
+import AccountTreeIcon from "@mui/icons-material/esm/AccountTree";
 import AddIcon from "@mui/icons-material/esm/Add";
+import BlockIcon from "@mui/icons-material/esm/Block";
+import CheckCircleOutlineIcon from "@mui/icons-material/esm/CheckCircleOutline";
+import EditIcon from "@mui/icons-material/esm/Edit";
+import FormatListBulletedIcon from "@mui/icons-material/esm/FormatListBulleted";
 import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
 import KeyboardArrowLeftIcon from "@mui/icons-material/esm/KeyboardArrowLeft";
-import SubdirectoryArrowLeftIcon from "@mui/icons-material/esm/SubdirectoryArrowLeft";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
+import SearchIcon from "@mui/icons-material/esm/Search";
+import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listResellers, getResellerTree, listPanels, updateReseller, enforceReseller, restoreReseller,
-  bumpResellerLimits, setResellerCanAddAdmin,
+  bumpResellerLimits,
+  enforceReseller,
+  getResellerTree,
+  listPanels,
+  listResellers,
+  ResellerRow,
+  ResellerTreeRow,
+  restoreReseller,
+  setResellerCanAddAdmin,
+  updateReseller,
 } from "../api/client";
-import { useToast, errMsg } from "../components/Toast";
-import { useSort, SortTh } from "../components/sortable";
 import CapacityBar from "../components/CapacityBar";
+import { SortTh, useSort } from "../components/sortable";
+import { errMsg, useToast } from "../components/Toast";
 import { fmtNum } from "../format";
 
-const ENF_FA: any = { active: ["فعال", "success"], enforced: ["مسدود", "error"] };
+type VisibleTreeRow = { node: ResellerTreeRow; depth: number };
 
-function enfChip(state: string) {
-  const [lbl, color] = ENF_FA[state] || [state, "default"];
-  return <Chip size="small" color={color as any} label={lbl} />;
+const countTree = (nodes: ResellerTreeRow[]): number =>
+  nodes.reduce((total, node) => total + 1 + countTree(node.children || []), 0);
+
+const branchIds = (nodes: ResellerTreeRow[]): number[] =>
+  nodes.flatMap((node) => [
+    ...(node.children?.length ? [node.id] : []),
+    ...branchIds(node.children || []),
+  ]);
+
+function flattenVisible(
+  nodes: ResellerTreeRow[],
+  expanded: Set<number>,
+  depth = 0,
+): VisibleTreeRow[] {
+  const rows: VisibleTreeRow[] = [];
+  for (const node of nodes) {
+    rows.push({ node, depth });
+    if (expanded.has(node.id) && node.children?.length) {
+      rows.push(...flattenVisible(node.children, expanded, depth + 1));
+    }
+  }
+  return rows;
+}
+
+function StatusPill({
+  children,
+  color,
+  muted = false,
+}: {
+  children: ReactNode;
+  color: string;
+  muted?: boolean;
+}) {
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.7,
+        px: 1.1,
+        py: 0.55,
+        borderRadius: 99,
+        color: muted ? "text.secondary" : color,
+        bgcolor: (theme) => alpha(color, muted ? 0.05 : theme.palette.mode === "dark" ? 0.16 : 0.09),
+        border: "1px solid",
+        borderColor: (theme) => alpha(color, muted ? 0.12 : theme.palette.mode === "dark" ? 0.34 : 0.22),
+        fontSize: 12,
+        fontWeight: 750,
+        lineHeight: 1,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "currentColor" }} />
+      {children}
+    </Box>
+  );
+}
+
+function ConnectionStatus({ connected }: { connected: boolean }) {
+  return connected ? (
+    <StatusPill color="#10b981">متصل</StatusPill>
+  ) : (
+    <StatusPill color="#94a3b8" muted>متصل نیست</StatusPill>
+  );
+}
+
+function EnforcementStatus({ state }: { state: string }) {
+  return state === "enforced" ? (
+    <StatusPill color="#f43f5e">مسدود</StatusPill>
+  ) : (
+    <StatusPill color="#10b981">فعال</StatusPill>
+  );
 }
 
 export default function Resellers() {
+  const theme = useTheme();
   const qc = useQueryClient();
-  const { node, show } = useToast();
+  const { node: toastNode, show } = useToast();
   const [tab, setTab] = useState(0);
-  const [panelId, setPanelId] = useState<string>("");
+  const [panelId, setPanelId] = useState("");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
-  const [form, setForm] = useState<any>(null);
-  const [bumpRow, setBumpRow] = useState<any>(null);
+  const [form, setForm] = useState<ResellerRow | null>(null);
+  const [bumpRow, setBumpRow] = useState<ResellerRow | null>(null);
   const [bumpAmount, setBumpAmount] = useState(100);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
-  const { data: panels = [] } = useQuery({ queryKey: ["panels"], queryFn: listPanels });
-  // List view shows only MAIN (top-level) resellers — sub-resellers live in the tree tab.
-  const { data = [] } = useQuery({
-    queryKey: ["resellers", panelId, q],
-    queryFn: () => listResellers({ panel_id: panelId || undefined, q: q || undefined, top_level_only: true, limit: 2000 }),
+  const { data: panels = [] } = useQuery({
+    queryKey: ["panels"],
+    queryFn: listPanels,
   });
-  const billableCount = data.filter((r: any) => !r.exclude_from_billing).length;
-  const exemptCount = data.filter((r: any) => r.exclude_from_billing).length;
-  const { data: tree = [] } = useQuery({
+  const { data = [], isLoading: listLoading } = useQuery({
+    queryKey: ["resellers", panelId, q],
+    queryFn: () => listResellers({
+      panel_id: panelId || undefined,
+      q: q || undefined,
+      top_level_only: true,
+      limit: 2000,
+    }),
+  });
+  const { data: tree = [], isLoading: treeLoading } = useQuery({
     queryKey: ["reseller-tree", panelId, q],
-    queryFn: () => getResellerTree({ panel_id: panelId || undefined, q: q || undefined }),
+    queryFn: () => getResellerTree({
+      panel_id: panelId || undefined,
+      q: q || undefined,
+    }),
     enabled: tab === 1,
   });
+
+  useEffect(() => {
+    if (tab === 1) setExpanded(new Set(tree.map((item) => item.id)));
+  }, [tab, tree]);
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["resellers"] });
     qc.invalidateQueries({ queryKey: ["reseller-tree"] });
   };
 
   const save = useMutation({
-    mutationFn: () => updateReseller(form.id, {
-      price_per_gb: form.price_per_gb ? Number(form.price_per_gb) : null,
-      // Empty = "use the global default"; an explicit 0 = "no minimum-sale floor". Treating
-      // 0 as falsy here used to silently revert it to the default, so distinguish "" from 0.
-      min_sale_toman:
-        form.min_sale_toman === "" || form.min_sale_toman == null
-          ? null
-          : Number(form.min_sale_toman),
-      exclude_from_billing: form.exclude_from_billing,
-    }),
-    onSuccess: () => { show("ذخیره شد"); setForm(null); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    mutationFn: () => {
+      if (!form) throw new Error("نماینده‌ای انتخاب نشده است");
+      return updateReseller(form.id, {
+        price_per_gb: form.price_per_gb ? Number(form.price_per_gb) : null,
+        min_sale_toman:
+          form.min_sale_toman === ("" as any) || form.min_sale_toman == null
+            ? null
+            : Number(form.min_sale_toman),
+        exclude_from_billing: form.exclude_from_billing,
+      });
+    },
+    onSuccess: () => {
+      show("ذخیره شد");
+      setForm(null);
+      refresh();
+    },
+    onError: (error) => show(errMsg(error), "error"),
   });
   const enforce = useMutation({
     mutationFn: (id: number) => enforceReseller(id),
-    onSuccess: (r) => { show(r.dry_run ? `حالت آزمایشی: ${r.affected_users} کاربر` : `مسدود شد: ${r.affected_users} کاربر`, r.dry_run ? "info" : "success"); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    onSuccess: (result) => {
+      show(
+        result.dry_run
+          ? `حالت آزمایشی: ${result.affected_users} کاربر`
+          : `مسدود شد: ${result.affected_users} کاربر`,
+        result.dry_run ? "info" : "success",
+      );
+      refresh();
+    },
+    onError: (error) => show(errMsg(error), "error"),
   });
   const restore = useMutation({
     mutationFn: (id: number) => restoreReseller(id),
-    onSuccess: (r) => { show(`بازگردانی: ${r.status}`); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    onSuccess: (result) => {
+      show(`بازگردانی: ${result.status}`);
+      refresh();
+    },
+    onError: (error) => show(errMsg(error), "error"),
   });
   const bump = useMutation({
-    mutationFn: ({ id, amount }: { id: number; amount: number }) => bumpResellerLimits(id, amount),
-    onSuccess: (r) => { show(`ظرفیت افزایش یافت → سقف کاربران: ${r.max_users}`); setBumpRow(null); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    mutationFn: ({ id, amount }: { id: number; amount: number }) =>
+      bumpResellerLimits(id, amount),
+    onSuccess: (result) => {
+      show(`ظرفیت افزایش یافت → سقف کاربران: ${result.max_users}`);
+      setBumpRow(null);
+      refresh();
+    },
+    onError: (error) => show(errMsg(error), "error"),
   });
   const canAdd = useMutation({
-    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) => setResellerCanAddAdmin(id, enabled),
-    onSuccess: (r) => { show(r.can_add_admin ? "ساخت زیرمجموعه فعال شد" : "ساخت زیرمجموعه غیرفعال شد"); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      setResellerCanAddAdmin(id, enabled),
+    onSuccess: (result) => {
+      show(result.can_add_admin ? "ساخت زیرمجموعه فعال شد" : "ساخت زیرمجموعه غیرفعال شد");
+      refresh();
+    },
+    onError: (error) => show(errMsg(error), "error"),
   });
 
   const { sorted, key, dir, toggle } = useSort(data, "name", "asc");
   const rows = sorted.slice(page * 25, page * 25 + 25);
+  const visibleTreeRows = useMemo(
+    () => flattenVisible(tree, expanded),
+    [tree, expanded],
+  );
+  const allBranchIds = useMemo(() => branchIds(tree), [tree]);
+  const billableCount = data.filter((item) => !item.exclude_from_billing).length;
+  const exemptCount = data.length - billableCount;
+  const treeCount = countTree(tree);
+  const currentCount = tab === 0 ? data.length : treeCount;
+  const loading = tab === 0 ? listLoading : treeLoading;
 
-  const actions = (r: any) => (
-    <>
-      <Tooltip title="ویرایش"><IconButton size="small" onClick={() => setForm({ ...r })}><EditIcon fontSize="small" /></IconButton></Tooltip>
-      <Tooltip title="افزایش ظرفیت کاربران"><IconButton size="small" color="primary" onClick={() => { setBumpAmount(100); setBumpRow(r); }}><AddIcon fontSize="small" /></IconButton></Tooltip>
-      {r.enforcement_state === "enforced" ? (
-        <Tooltip title="بازگردانی"><IconButton size="small" color="success" onClick={() => restore.mutate(r.id)}><RestartAltIcon fontSize="small" /></IconButton></Tooltip>
+  const changeTab = (_event: unknown, value: number) => {
+    setTab(value);
+    setPage(0);
+  };
+  const toggleBranch = (id: number) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const actionButtons = (reseller: ResellerRow) => (
+    <Stack direction="row" spacing={0.2} justifyContent="flex-end">
+      <Tooltip title="ویرایش">
+        <IconButton size="small" onClick={() => setForm({ ...reseller })}>
+          <EditIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title="افزایش ظرفیت کاربران">
+        <IconButton
+          size="small"
+          color="primary"
+          onClick={() => {
+            setBumpAmount(100);
+            setBumpRow(reseller);
+          }}
+        >
+          <AddIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      {reseller.enforcement_state === "enforced" ? (
+        <Tooltip title="بازگردانی">
+          <IconButton
+            size="small"
+            color="success"
+            disabled={restore.isPending}
+            onClick={() => restore.mutate(reseller.id)}
+          >
+            <RestartAltIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       ) : (
-        <Tooltip title="مسدودسازی"><IconButton size="small" color="error" onClick={() => confirm("مسدودسازی این نماینده؟ (در حالت آزمایشی فقط ثبت می‌شود)") && enforce.mutate(r.id)}><BlockIcon fontSize="small" /></IconButton></Tooltip>
+        <Tooltip title="مسدودسازی">
+          <IconButton
+            size="small"
+            color="error"
+            disabled={enforce.isPending}
+            onClick={() => {
+              if (confirm("مسدودسازی این نماینده؟ (در حالت آزمایشی فقط ثبت می‌شود)")) {
+                enforce.mutate(reseller.id);
+              }
+            }}
+          >
+            <BlockIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       )}
-    </>
+    </Stack>
   );
 
-  // The "can create sub-admins" toggle (writes to the panel immediately).
-  const canAddSwitch = (r: any) => (
-    <Tooltip title={r.can_add_admin ? "اجازهٔ ساخت زیرمجموعه دارد — برای خاموش‌کردن بزنید" : "بدون اجازهٔ ساخت زیرمجموعه — برای روشن‌کردن بزنید"}>
-      <Switch size="small" checked={!!r.can_add_admin} disabled={canAdd.isPending}
-        onChange={(e) => canAdd.mutate({ id: r.id, enabled: e.target.checked })} />
+  const canAddSwitch = (reseller: ResellerRow) => (
+    <Tooltip
+      title={reseller.can_add_admin
+        ? "اجازهٔ ساخت زیرمجموعه دارد"
+        : "اجازهٔ ساخت زیرمجموعه ندارد"}
+    >
+      <Stack direction="row" alignItems="center" spacing={0.5}>
+        <Switch
+          size="small"
+          checked={!!reseller.can_add_admin}
+          disabled={canAdd.isPending}
+          onChange={(event) =>
+            canAdd.mutate({ id: reseller.id, enabled: event.target.checked })}
+        />
+        <Typography variant="caption" color="text.secondary">
+          {reseller.can_add_admin ? "فعال" : "غیرفعال"}
+        </Typography>
+      </Stack>
     </Tooltip>
   );
 
   return (
     <Box>
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }}>
-        <TextField select size="small" label="پنل" value={panelId} sx={{ minWidth: 160 }}
-          onChange={(e) => { setPanelId(e.target.value); setPage(0); }}>
-          <MenuItem value="">همه پنل‌ها</MenuItem>
-          {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}</MenuItem>)}
-        </TextField>
-        <TextField size="small" label="جستجوی نام" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} />
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        alignItems={{ xs: "stretch", sm: "flex-end" }}
+        justifyContent="space-between"
+        spacing={2}
+        sx={{ mb: 2.5 }}
+      >
+        <Box>
+          <Typography variant="h5">نمایندگان</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.45 }}>
+            {fmtNum(currentCount)} نماینده در نمای فعلی
+          </Typography>
+        </Box>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2}>
+          <TextField
+            size="small"
+            placeholder="جستجوی نام یا شناسه نماینده..."
+            value={q}
+            onChange={(event) => {
+              setQ(event.target.value);
+              setPage(0);
+            }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+            sx={{ width: { xs: "100%", sm: 280 } }}
+          />
+          <TextField
+            select
+            size="small"
+            value={panelId}
+            SelectProps={{
+              displayEmpty: true,
+              renderValue: (value) => {
+                if (!value) return "همهٔ پنل‌ها";
+                return panels.find((panel: any) => String(panel.id) === String(value))?.key || value;
+              },
+            }}
+            onChange={(event) => {
+              setPanelId(event.target.value);
+              setPage(0);
+            }}
+            sx={{ minWidth: { xs: "100%", sm: 155 } }}
+          >
+            <MenuItem value="">همهٔ پنل‌ها</MenuItem>
+            {panels.map((panel: any) => (
+              <MenuItem key={panel.id} value={panel.id}>{panel.key}</MenuItem>
+            ))}
+          </TextField>
+        </Stack>
       </Stack>
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="فهرست (نماینده‌های اصلی)" />
-        <Tab label="ساختار درختی (نماینده و زیرمجموعه‌ها)" />
-      </Tabs>
+      <Stack
+        direction={{ xs: "column", md: "row" }}
+        justifyContent="space-between"
+        alignItems={{ xs: "stretch", md: "center" }}
+        spacing={1.5}
+        sx={{ mb: 2 }}
+      >
+        <Box
+          sx={{
+            p: 0.45,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 2.5,
+            bgcolor: alpha(theme.palette.background.paper, 0.46),
+            alignSelf: { xs: "stretch", md: "flex-start" },
+          }}
+        >
+          <Tabs
+            value={tab}
+            onChange={changeTab}
+            variant="fullWidth"
+            sx={{
+              minHeight: 38,
+              "& .MuiTabs-indicator": { display: "none" },
+              "& .MuiTab-root": {
+                minHeight: 38,
+                px: 2,
+                py: 0.7,
+                borderRadius: 2,
+                color: "text.secondary",
+              },
+              "& .Mui-selected": {
+                color: "text.primary !important",
+                bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.17 : 0.1),
+                boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.1)}`,
+              },
+            }}
+          >
+            <Tab icon={<FormatListBulletedIcon />} iconPosition="start" label="فهرست اصلی" />
+            <Tab icon={<AccountTreeIcon />} iconPosition="start" label="درخت زیرمجموعه‌ها" />
+          </Tabs>
+        </Box>
 
-      {tab === 0 ? (
-        <Card>
-          <Box sx={{ p: 2, pb: 0 }}>
-            <Typography variant="body2" color="text.secondary">
-              {fmtNum(billableCount)} نمایندهٔ اصلی
-              {exemptCount ? <>{" "}(<Box component="span" sx={{ color: "warning.main" }}>{fmtNum(exemptCount)} معاف از فاکتور</Box>)</> : ""}
-              {" "}— زیرمجموعه‌ها در تب «ساختار درختی» نمایش داده می‌شوند.
-            </Typography>
-          </Box>
-          <Table size="small" className="resp-table">
-            <TableHead>
-              <TableRow>
-                <SortTh id="name" label="نام" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="can_add_admin" label="ساخت زیرمجموعه" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="registered" label="ربات" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="enforcement_state" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
-                <SortTh id="exclude_from_billing" label="محاسبه" sortKey={key} dir={dir} onSort={toggle} />
-                <TableCell align="left">عملیات</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((r: any) => (
-                <TableRow key={r.id} hover>
-                  <TableCell>{r.name}</TableCell>
-                  <TableCell>{r.panel_key}</TableCell>
-                  <TableCell>{fmtNum(r.effective_price_per_gb)}{r.price_per_gb ? "" : " (پیش‌فرض)"}</TableCell>
-                  <TableCell><CapacityBar used={r.users_count} max={r.panel_max_users} /></TableCell>
-                  <TableCell>{canAddSwitch(r)}</TableCell>
-                  <TableCell>{r.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}</TableCell>
-                  <TableCell>{enfChip(r.enforcement_state)}</TableCell>
-                  <TableCell>{r.exclude_from_billing ? <Chip size="small" color="warning" label="معاف" /> : "✓"}</TableCell>
-                  <TableCell align="left">{actions(r)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <TablePagination component="div" count={data.length} page={page} rowsPerPage={25}
-            rowsPerPageOptions={[25]} onPageChange={(_, p) => setPage(p)} labelDisplayedRows={({ from, to, count }) => `${from}–${to} از ${count}`} />
-        </Card>
-      ) : (
-        <Card>
-          <Box sx={{ p: 2, pb: 0 }}>
-            <Typography variant="body2" color="text.secondary">
-              {fmtNum(tree.length)} نمایندهٔ اصلی — زیرمجموعه‌ها داخل هر نماینده نمایش داده می‌شوند.
-            </Typography>
-          </Box>
-          <Table size="small" className="resp-table">
-            <TableHead>
-              <TableRow>
-                <TableCell>نماینده</TableCell>
-                <TableCell>پنل</TableCell>
-                <TableCell>قیمت/گیگ</TableCell>
-                <TableCell>پُری ظرفیت</TableCell>
-                <TableCell>ساخت زیرمجموعه</TableCell>
-                <TableCell>ربات</TableCell>
-                <TableCell>وضعیت</TableCell>
-                <TableCell align="left">عملیات</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {tree.map((r: any) => (
-                <TreeRow key={r.id} node={r} depth={0} actions={actions} canAddSwitch={canAddSwitch} />
-              ))}
-              {tree.length === 0 && (
-                <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>داده‌ای نیست</TableCell></TableRow>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          {tab === 0 ? (
+            <>
+              <Chip
+                size="small"
+                icon={<CheckCircleOutlineIcon />}
+                label={`${fmtNum(billableCount)} مشمول فاکتور`}
+                color="success"
+                variant="outlined"
+              />
+              {exemptCount > 0 && (
+                <Chip
+                  size="small"
+                  icon={<WarningAmberIcon />}
+                  label={`${fmtNum(exemptCount)} معاف`}
+                  color="warning"
+                  variant="outlined"
+                />
               )}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
+            </>
+          ) : (
+            <>
+              <Typography variant="caption" color="text.secondary">
+                {fmtNum(tree.length)} شاخه اصلی · {fmtNum(treeCount - tree.length)} زیرمجموعه
+              </Typography>
+              {tree.length > 0 && (
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() => {
+                    if (expanded.size) setExpanded(new Set());
+                    else setExpanded(new Set(allBranchIds));
+                  }}
+                >
+                  {expanded.size ? "بستن همه" : "باز کردن شاخه‌ها"}
+                </Button>
+              )}
+            </>
+          )}
+        </Stack>
+      </Stack>
+
+      <Card sx={{ overflow: "hidden" }}>
+        {loading ? (
+          <Stack spacing={1} sx={{ p: 2 }}>
+            {[0, 1, 2, 3, 4].map((item) => (
+              <Skeleton key={item} variant="rounded" height={66} />
+            ))}
+          </Stack>
+        ) : (
+          <>
+            <TableContainer sx={{ display: { xs: "none", md: "block" } }}>
+              <Table size="small" sx={{ minWidth: 1080 }}>
+                <TableHead>
+                  <TableRow>
+                    {tab === 0 ? (
+                      <SortTh id="name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
+                    ) : (
+                      <TableCell>نماینده</TableCell>
+                    )}
+                    <TableCell>پنل</TableCell>
+                    <TableCell>قیمت/گیگ</TableCell>
+                    <TableCell sx={{ minWidth: 145 }}>پُری ظرفیت</TableCell>
+                    <TableCell>زیرمجموعه</TableCell>
+                    <TableCell>ربات</TableCell>
+                    <TableCell>وضعیت</TableCell>
+                    <TableCell>فاکتور</TableCell>
+                    <TableCell align="left">عملیات</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {tab === 0
+                    ? rows.map((reseller) => (
+                      <ResellerTableRow
+                        key={reseller.id}
+                        reseller={reseller}
+                        actions={actionButtons}
+                        canAddSwitch={canAddSwitch}
+                      />
+                    ))
+                    : visibleTreeRows.map(({ node: reseller, depth }) => (
+                      <ResellerTableRow
+                        key={reseller.id}
+                        reseller={reseller}
+                        depth={depth}
+                        tree
+                        expanded={expanded.has(reseller.id)}
+                        onToggle={() => toggleBranch(reseller.id)}
+                        actions={actionButtons}
+                        canAddSwitch={canAddSwitch}
+                      />
+                    ))}
+                  {currentCount === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={9} align="center" sx={{ py: 7, color: "text.secondary" }}>
+                        نماینده‌ای با این فیلتر پیدا نشد.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+
+            <Stack spacing={1.2} sx={{ display: { xs: "flex", md: "none" }, p: 1.5 }}>
+              {(tab === 0
+                ? rows.map((reseller) => ({ reseller, depth: 0 }))
+                : visibleTreeRows.map(({ node: reseller, depth }) => ({ reseller, depth }))
+              ).map(({ reseller, depth }) => (
+                <ResellerMobileCard
+                  key={reseller.id}
+                  reseller={reseller}
+                  depth={depth}
+                  tree={tab === 1}
+                  expanded={expanded.has(reseller.id)}
+                  onToggle={() => toggleBranch(reseller.id)}
+                  actions={actionButtons}
+                  canAddSwitch={canAddSwitch}
+                />
+              ))}
+              {currentCount === 0 && (
+                <Typography align="center" color="text.secondary" variant="body2" sx={{ py: 5 }}>
+                  نماینده‌ای با این فیلتر پیدا نشد.
+                </Typography>
+              )}
+            </Stack>
+
+            {tab === 0 && data.length > 0 && (
+              <TablePagination
+                component="div"
+                count={data.length}
+                page={page}
+                rowsPerPage={25}
+                rowsPerPageOptions={[25]}
+                onPageChange={(_event, nextPage) => setPage(nextPage)}
+                labelDisplayedRows={({ from, to, count }) =>
+                  `${fmtNum(from)}–${fmtNum(to)} از ${fmtNum(count)}`}
+              />
+            )}
+          </>
+        )}
+      </Card>
 
       <Dialog open={!!form} onClose={() => setForm(null)} fullWidth maxWidth="xs">
         <DialogTitle>ویرایش نماینده {form?.name}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField label="قیمت هر گیگ (تومان) — خالی = پیش‌فرض" type="number" value={form?.price_per_gb ?? ""}
-              onChange={(e) => setForm({ ...form, price_per_gb: e.target.value })} />
-            <TextField label="حداقل فروش (تومان) — خالی = پیش‌فرض، ۰ = بدون حداقل" type="number" value={form?.min_sale_toman ?? ""}
-              onChange={(e) => setForm({ ...form, min_sale_toman: e.target.value })}
-              helperText="برای کل مجموعهٔ این نماینده (خودش + زیرمجموعه‌ها) اعمال می‌شود" />
-            <FormControlLabel control={<Switch checked={!!form?.exclude_from_billing}
-              onChange={(e) => setForm({ ...form, exclude_from_billing: e.target.checked })} />} label="معاف از صدور فاکتور" />
+            <TextField
+              label="قیمت هر گیگ (تومان) — خالی = پیش‌فرض"
+              type="number"
+              value={form?.price_per_gb ?? ""}
+              onChange={(event) => setForm(form ? {
+                ...form,
+                price_per_gb: event.target.value as any,
+              } : null)}
+            />
+            <TextField
+              label="حداقل فروش (تومان) — خالی = پیش‌فرض، ۰ = بدون حداقل"
+              type="number"
+              value={form?.min_sale_toman ?? ""}
+              onChange={(event) => setForm(form ? {
+                ...form,
+                min_sale_toman: event.target.value as any,
+              } : null)}
+              helperText="برای کل مجموعهٔ این نماینده (خودش + زیرمجموعه‌ها) اعمال می‌شود"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!form?.exclude_from_billing}
+                  onChange={(event) => setForm(form ? {
+                    ...form,
+                    exclude_from_billing: event.target.checked,
+                  } : null)}
+                />
+              }
+              label="معاف از صدور فاکتور"
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setForm(null)}>انصراف</Button>
-          <Button variant="contained" onClick={() => save.mutate()}>ذخیره</Button>
+          <Button variant="contained" disabled={save.isPending} onClick={() => save.mutate()}>
+            ذخیره
+          </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!bumpRow} onClose={() => setBumpRow(null)} fullWidth maxWidth="xs">
-        {bumpRow && (<>
-          <DialogTitle>افزایش ظرفیت — {bumpRow.name}</DialogTitle>
-          <DialogContent>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              این مقدار به هر دو سقفِ «تعداد کاربران» و «کاربران فعال» این نماینده روی پنل اضافه می‌شود.
-              {bumpRow.panel_max_users != null && (
-                <> سقف فعلی: {fmtNum(bumpRow.panel_max_users)} (ساخته: {fmtNum(bumpRow.users_count)}).</>
-              )}
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-              {[50, 100, 200, 500].map((n) => (
-                <Button key={n} size="small" variant={bumpAmount === n ? "contained" : "outlined"}
-                  onClick={() => setBumpAmount(n)}>+{n}</Button>
-              ))}
-            </Stack>
-            <TextField type="number" label="مقدار افزایش" fullWidth value={bumpAmount}
-              onChange={(e) => setBumpAmount(Math.max(1, Number(e.target.value) || 0))} />
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setBumpRow(null)}>انصراف</Button>
-            <Button variant="contained" disabled={bump.isPending || bumpAmount < 1}
-              onClick={() => bump.mutate({ id: bumpRow.id, amount: bumpAmount })}>
-              افزودن +{bumpAmount}
-            </Button>
-          </DialogActions>
-        </>)}
+        {bumpRow && (
+          <>
+            <DialogTitle>افزایش ظرفیت — {bumpRow.name}</DialogTitle>
+            <DialogContent>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                این مقدار به هر دو سقف «تعداد کاربران» و «کاربران فعال» این نماینده روی پنل اضافه می‌شود.
+                {bumpRow.panel_max_users != null && (
+                  <> سقف فعلی: {fmtNum(bumpRow.panel_max_users)} (ساخته: {fmtNum(bumpRow.users_count)}).</>
+                )}
+              </Typography>
+              <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                {[50, 100, 200, 500].map((amount) => (
+                  <Button
+                    key={amount}
+                    size="small"
+                    variant={bumpAmount === amount ? "contained" : "outlined"}
+                    onClick={() => setBumpAmount(amount)}
+                  >
+                    +{fmtNum(amount)}
+                  </Button>
+                ))}
+              </Stack>
+              <TextField
+                type="number"
+                label="مقدار افزایش"
+                fullWidth
+                value={bumpAmount}
+                onChange={(event) =>
+                  setBumpAmount(Math.max(1, Number(event.target.value) || 0))}
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setBumpRow(null)}>انصراف</Button>
+              <Button
+                variant="contained"
+                disabled={bump.isPending || bumpAmount < 1}
+                onClick={() => bump.mutate({ id: bumpRow.id, amount: bumpAmount })}
+              >
+                افزودن +{fmtNum(bumpAmount)}
+              </Button>
+            </DialogActions>
+          </>
+        )}
       </Dialog>
-      {node}
+      {toastNode}
     </Box>
   );
 }
 
-function TreeRow({ node, depth, actions, canAddSwitch }: { node: any; depth: number; actions: (r: any) => any; canAddSwitch: (r: any) => any }) {
-  const [open, setOpen] = useState(depth === 0);
-  const hasKids = (node.children?.length || 0) > 0;
+function ResellerIdentity({
+  reseller,
+  depth = 0,
+  tree = false,
+  expanded = false,
+  onToggle,
+}: {
+  reseller: ResellerRow | ResellerTreeRow;
+  depth?: number;
+  tree?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
+}) {
+  const treeRow = reseller as ResellerTreeRow;
+  const hasChildren = tree && (treeRow.children?.length || 0) > 0;
+
   return (
-    <>
-      <TableRow hover sx={depth > 0 ? { bgcolor: (t) => alpha(t.palette.primary.main, 0.03) } : undefined}>
-        <TableCell>
-          <Box sx={{ display: "flex", alignItems: "center", pr: depth * 3 }}>
-            {hasKids ? (
-              <IconButton size="small" onClick={() => setOpen((o) => !o)} sx={{ ml: 0.5 }}>
-                {open ? <KeyboardArrowDownIcon fontSize="small" /> : <KeyboardArrowLeftIcon fontSize="small" />}
-              </IconButton>
-            ) : (
-              depth > 0 && <SubdirectoryArrowLeftIcon fontSize="small" sx={{ color: "text.disabled", ml: 0.5 }} />
-            )}
-            <Box>
-              <Typography variant="body2" sx={{ fontWeight: depth === 0 ? 700 : 400 }}>
-                {node.name}
-              </Typography>
-              {hasKids && (
-                <Typography variant="caption" color="text.secondary">
-                  {fmtNum(node.descendant_count)} زیرمجموعه
-                </Typography>
-              )}
-            </Box>
-          </Box>
-        </TableCell>
-        <TableCell>{node.panel_key}</TableCell>
-        <TableCell>{fmtNum(node.effective_price_per_gb)}</TableCell>
-        <TableCell><CapacityBar used={node.users_count} max={node.panel_max_users} /></TableCell>
-        <TableCell>{canAddSwitch(node)}</TableCell>
-        <TableCell>{node.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}</TableCell>
-        <TableCell>{enfChip(node.enforcement_state)}</TableCell>
-        <TableCell align="left">{actions(node)}</TableCell>
-      </TableRow>
-      {hasKids && open && node.children.map((c: any) => (
-        <TreeRow key={c.id} node={c} depth={depth + 1} actions={actions} canAddSwitch={canAddSwitch} />
-      ))}
-    </>
+    <Box
+      sx={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        minHeight: 43,
+        ps: tree ? depth * 3.1 : 0,
+      }}
+    >
+      {tree && depth > 0 && (
+        <>
+          <Box
+            sx={{
+              position: "absolute",
+              insetInlineStart: (depth - 1) * 24 + 10,
+              top: -15,
+              bottom: "50%",
+              width: 18,
+              borderInlineStart: "1px solid",
+              borderBottom: "1px solid",
+              borderColor: "divider",
+              borderEndStartRadius: 8,
+            }}
+          />
+          <Box
+            sx={{
+              position: "absolute",
+              insetInlineStart: (depth - 1) * 24 + 10,
+              top: "50%",
+              bottom: -16,
+              borderInlineStart: "1px solid",
+              borderColor: "divider",
+            }}
+          />
+        </>
+      )}
+      {tree && (
+        <Box sx={{ width: 34, flexShrink: 0, display: "grid", placeItems: "center" }}>
+          {hasChildren ? (
+            <IconButton
+              size="small"
+              aria-label={expanded ? "بستن زیرمجموعه‌ها" : "باز کردن زیرمجموعه‌ها"}
+              onClick={(event: MouseEvent) => {
+                event.stopPropagation();
+                onToggle?.();
+              }}
+              sx={{
+                width: 28,
+                height: 28,
+                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.09),
+              }}
+            >
+              {expanded
+                ? <KeyboardArrowDownIcon fontSize="small" />
+                : <KeyboardArrowLeftIcon fontSize="small" />}
+            </IconButton>
+          ) : (
+            <Box
+              sx={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                bgcolor: depth === 0 ? "primary.main" : "text.disabled",
+              }}
+            />
+          )}
+        </Box>
+      )}
+      <Box sx={{ minWidth: 0 }}>
+        <Stack direction="row" alignItems="center" spacing={0.8}>
+          <Typography
+            variant="body2"
+            noWrap
+            sx={{ fontWeight: depth === 0 ? 800 : 600, maxWidth: 220 }}
+          >
+            {reseller.name || "بدون نام"}
+          </Typography>
+          {treeRow.cycle_detected && (
+            <Tooltip title="ساختار والد/فرزند این شاخه ناسالم است">
+              <WarningAmberIcon color="warning" sx={{ fontSize: 17 }} />
+            </Tooltip>
+          )}
+        </Stack>
+        <Typography variant="caption" color="text.secondary" noWrap>
+          {hasChildren
+            ? `${fmtNum(treeRow.descendant_count)} زیرمجموعه`
+            : depth > 0
+              ? `زیرمجموعه سطح ${fmtNum(depth)}`
+              : reseller.admin_uuid}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+function ResellerTableRow({
+  reseller,
+  depth = 0,
+  tree = false,
+  expanded,
+  onToggle,
+  actions,
+  canAddSwitch,
+}: {
+  reseller: ResellerRow | ResellerTreeRow;
+  depth?: number;
+  tree?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
+  actions: (reseller: ResellerRow) => ReactNode;
+  canAddSwitch: (reseller: ResellerRow) => ReactNode;
+}) {
+  return (
+    <TableRow
+      hover
+      sx={{
+        bgcolor: (theme) => tree && depth === 0
+          ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.08 : 0.035)
+          : tree && depth > 0
+            ? alpha(theme.palette.background.paper, 0.22)
+            : undefined,
+        "& td": { py: 1.05 },
+      }}
+    >
+      <TableCell sx={{ minWidth: 260 }}>
+        <ResellerIdentity
+          reseller={reseller}
+          depth={depth}
+          tree={tree}
+          expanded={expanded}
+          onToggle={onToggle}
+        />
+      </TableCell>
+      <TableCell>
+        <Chip size="small" label={reseller.panel_key} variant="outlined" />
+      </TableCell>
+      <TableCell>
+        <Typography variant="body2" sx={{ fontWeight: 750, whiteSpace: "nowrap" }}>
+          {fmtNum(reseller.effective_price_per_gb)}
+          <Typography component="span" variant="caption" color="text.secondary"> تومان</Typography>
+        </Typography>
+        {!reseller.price_per_gb && (
+          <Typography variant="caption" color="text.secondary">پیش‌فرض</Typography>
+        )}
+      </TableCell>
+      <TableCell>
+        <CapacityBar used={reseller.users_count} max={reseller.panel_max_users} />
+      </TableCell>
+      <TableCell>{canAddSwitch(reseller)}</TableCell>
+      <TableCell><ConnectionStatus connected={reseller.registered} /></TableCell>
+      <TableCell><EnforcementStatus state={reseller.enforcement_state} /></TableCell>
+      <TableCell>
+        {reseller.exclude_from_billing
+          ? <Chip size="small" color="warning" variant="outlined" label="معاف" />
+          : <Chip size="small" color="success" variant="outlined" label="محاسبه می‌شود" />}
+      </TableCell>
+      <TableCell align="left">{actions(reseller)}</TableCell>
+    </TableRow>
+  );
+}
+
+function ResellerMobileCard({
+  reseller,
+  depth,
+  tree,
+  expanded,
+  onToggle,
+  actions,
+  canAddSwitch,
+}: {
+  reseller: ResellerRow | ResellerTreeRow;
+  depth: number;
+  tree: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  actions: (reseller: ResellerRow) => ReactNode;
+  canAddSwitch: (reseller: ResellerRow) => ReactNode;
+}) {
+  return (
+    <Box
+      sx={{
+        p: 1.5,
+        ms: tree ? Math.min(depth * 1.5, 4) : 0,
+        borderRadius: 3,
+        border: "1px solid",
+        borderColor: "divider",
+        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.48),
+        borderInlineStartWidth: tree && depth > 0 ? 3 : 1,
+        borderInlineStartColor: tree && depth > 0 ? "primary.main" : "divider",
+      }}
+    >
+      <ResellerIdentity
+        reseller={reseller}
+        depth={depth}
+        tree={tree}
+        expanded={expanded}
+        onToggle={onToggle}
+      />
+      <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap sx={{ mt: 1.2 }}>
+        <Chip size="small" label={reseller.panel_key} variant="outlined" />
+        <ConnectionStatus connected={reseller.registered} />
+        <EnforcementStatus state={reseller.enforcement_state} />
+        {reseller.exclude_from_billing && (
+          <Chip size="small" color="warning" variant="outlined" label="معاف از فاکتور" />
+        )}
+      </Stack>
+      <Box
+        sx={{
+          mt: 1.5,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 1.5,
+          alignItems: "center",
+        }}
+      >
+        <Box>
+          <Typography variant="caption" color="text.secondary">قیمت هر گیگ</Typography>
+          <Typography variant="body2" sx={{ fontWeight: 750 }}>
+            {fmtNum(reseller.effective_price_per_gb)} تومان
+          </Typography>
+        </Box>
+        <CapacityBar used={reseller.users_count} max={reseller.panel_max_users} />
+      </Box>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        sx={{ mt: 1.2, pt: 1.1, borderTop: 1, borderColor: "divider" }}
+      >
+        {canAddSwitch(reseller)}
+        {actions(reseller)}
+      </Stack>
+    </Box>
   );
 }

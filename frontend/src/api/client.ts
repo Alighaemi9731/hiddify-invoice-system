@@ -94,10 +94,44 @@ export const syncAllPanels = () => api.post("/api/panels/sync-all").then((r) => 
 export const testPanel = (id: number) => api.post(`/api/panels/${id}/test`).then((r) => r.data);
 
 // ---- resellers ----
+export interface ResellerRow {
+  id: number;
+  panel_id: number;
+  panel_key: string;
+  admin_uuid: string;
+  name: string;
+  parent_admin_uuid: string | null;
+  mode: string;
+  is_owner: boolean;
+  comment: string | null;
+  exclude_from_billing: boolean;
+  price_per_gb: number | null;
+  effective_price_per_gb: number;
+  min_sale_toman: number | null;
+  bot_chat_id: number | null;
+  panel_telegram_id: number | null;
+  link_tag: string | null;
+  registered: boolean;
+  enforcement_state: string;
+  panel_max_users: number | null;
+  panel_max_active_users: number | null;
+  can_add_admin: boolean;
+  users_count: number;
+  active_users_count: number;
+  capacity_pct: number;
+  last_seen_at: string | null;
+}
+
+export interface ResellerTreeRow extends ResellerRow {
+  children: ResellerTreeRow[];
+  descendant_count: number;
+  cycle_detected: boolean;
+}
+
 export const listResellers = (params: any = {}) =>
-  api.get("/api/resellers", { params }).then((r) => r.data);
+  api.get("/api/resellers", { params }).then((r) => r.data as ResellerRow[]);
 export const getResellerTree = (params: any = {}) =>
-  api.get("/api/resellers/tree", { params }).then((r) => r.data);
+  api.get("/api/resellers/tree", { params }).then((r) => r.data as ResellerTreeRow[]);
 export const updateReseller = (id: number, b: any) =>
   api.patch(`/api/resellers/${id}`, b).then((r) => r.data);
 export const enforceReseller = (id: number, dry_run?: boolean) =>

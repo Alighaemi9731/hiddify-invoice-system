@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.53 - 2026-06-10
+
+Reseller list and hierarchy redesign.
+
+### Changed
+
+- Reorganized the Resellers page with a concise heading and current-result count,
+  integrated name/UUID search, panel filtering, and segmented main-list/tree views.
+- Rebuilt the main reseller table with compact panel, price, capacity, sub-reseller
+  permission, bot connection, enforcement, billing, and action states.
+- Replaced the old indented tree table with collapsible branches, visible hierarchy
+  connectors, depth labels, descendant counts, cycle warnings, and expand/collapse controls.
+- Added dedicated responsive reseller cards for mobile instead of relying on a collapsed
+  desktop table.
+- Preserved all existing edit, capacity, billing exclusion, sub-admin permission,
+  enforcement, and restore operations. No manual “add reseller” action was introduced.
+
+### Verification
+
+- All backend tests, Ruff, mypy, and dependency checks pass.
+- Frontend typecheck, production build, PWA generation, bundle checks, and dependency
+  audit pass.
+- Populated desktop list/tree and mobile tree renders have no React, console, page, or
+  horizontal-overflow errors.
+- Added a read-only Playwright scenario for switching between the two reseller views.
+
 ## 1.37.52 - 2026-06-10
 
 Dashboard information and visualization redesign.

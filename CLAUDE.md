@@ -120,6 +120,13 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M60** Reseller list and hierarchy redesign (`v1.37.53`).
+  Rebuilt the Resellers page around a clean result header, integrated search/panel
+  filters, segmented main-list/tree controls, compact status columns, and dedicated
+  responsive mobile cards. The hierarchy now uses collapsible branches, visible
+  parent/child connectors, depth and descendant labels, cycle warnings, and global
+  expand/collapse controls while preserving every existing management operation.
+  Added typed reseller API contracts and a read-only Playwright view-switch check.
 - [x] **M59** Dashboard information and visualization redesign (`v1.37.52`).
   Expanded the Dashboard summary with active/healthy panel counts, previous-period sales,
   current-period invoice count, and distinct debtor count. Reorganized the page into
