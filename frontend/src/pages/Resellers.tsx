@@ -55,7 +55,7 @@ import {
   updateReseller,
 } from "../api/client";
 import CapacityBar from "../components/CapacityBar";
-import { SortTh, useSort } from "../components/sortable";
+import { Dir, SortTh, useSort } from "../components/sortable";
 import { errMsg, useToast } from "../components/Toast";
 import { fmtNum } from "../format";
 
@@ -83,6 +83,36 @@ function flattenVisible(
     }
   }
   return rows;
+}
+
+function compareRows(a: ResellerRow, b: ResellerRow, key: string, dir: Dir) {
+  const av = (a as any)[key];
+  const bv = (b as any)[key];
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+
+  let result: number;
+  if (typeof av === "number" && typeof bv === "number") result = av - bv;
+  else if (typeof av === "boolean" && typeof bv === "boolean") {
+    result = Number(av) - Number(bv);
+  } else {
+    result = String(av).localeCompare(String(bv), "fa");
+  }
+  return dir === "asc" ? result : -result;
+}
+
+function sortTree(
+  nodes: ResellerTreeRow[],
+  key: string,
+  dir: Dir,
+): ResellerTreeRow[] {
+  return [...nodes]
+    .sort((a, b) => compareRows(a, b, key, dir))
+    .map((node) => ({
+      ...node,
+      children: sortTree(node.children || [], key, dir),
+    }));
 }
 
 function StatusPill({
@@ -239,9 +269,13 @@ export default function Resellers() {
 
   const { sorted, key, dir, toggle } = useSort(data, "name", "asc");
   const rows = sorted.slice(page * 25, page * 25 + 25);
+  const sortedTree = useMemo(
+    () => sortTree(tree, key, dir),
+    [tree, key, dir],
+  );
   const pagedTree = useMemo(
-    () => tree.slice(page * 25, page * 25 + 25),
-    [tree, page],
+    () => sortedTree.slice(page * 25, page * 25 + 25),
+    [sortedTree, page],
   );
   const visibleTreeRows = useMemo(
     () => flattenVisible(pagedTree, expanded),
@@ -262,7 +296,7 @@ export default function Resellers() {
     setTab(value);
     setPage(0);
   };
-  const sortList = (column: string) => {
+  const sortRows = (column: string) => {
     toggle(column);
     setPage(0);
   };
@@ -502,32 +536,14 @@ export default function Resellers() {
               <Table size="small" sx={{ minWidth: 1080 }}>
                 <TableHead>
                   <TableRow>
-                    {tab === 0 ? (
-                      <SortTh id="name" label="نماینده" sortKey={key} dir={dir} onSort={sortList} />
-                    ) : (
-                      <TableCell>نماینده</TableCell>
-                    )}
-                    {tab === 0 ? (
-                      <>
-                        <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={sortList} />
-                        <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={key} dir={dir} onSort={sortList} />
-                        <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={sortList} />
-                        <SortTh id="can_add_admin" label="زیرمجموعه" sortKey={key} dir={dir} onSort={sortList} />
-                        <SortTh id="registered" label="ربات" sortKey={key} dir={dir} onSort={sortList} />
-                        <SortTh id="enforcement_state" label="وضعیت" sortKey={key} dir={dir} onSort={sortList} />
-                        <SortTh id="exclude_from_billing" label="فاکتور" sortKey={key} dir={dir} onSort={sortList} />
-                      </>
-                    ) : (
-                      <>
-                        <TableCell>پنل</TableCell>
-                        <TableCell>قیمت/گیگ</TableCell>
-                        <TableCell sx={{ minWidth: 145 }}>پُری ظرفیت</TableCell>
-                        <TableCell>زیرمجموعه</TableCell>
-                        <TableCell>ربات</TableCell>
-                        <TableCell>وضعیت</TableCell>
-                        <TableCell>فاکتور</TableCell>
-                      </>
-                    )}
+                    <SortTh id="name" label="نماینده" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="can_add_admin" label="زیرمجموعه" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="registered" label="ربات" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="enforcement_state" label="وضعیت" sortKey={key} dir={dir} onSort={sortRows} />
+                    <SortTh id="exclude_from_billing" label="فاکتور" sortKey={key} dir={dir} onSort={sortRows} />
                     <TableCell align="left">عملیات</TableCell>
                   </TableRow>
                 </TableHead>

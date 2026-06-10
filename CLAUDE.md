@@ -120,6 +120,10 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M63** Reseller hierarchy sorting (`v1.37.56`).
+  - Enabled all operational sort columns in the hierarchy tab.
+  - Sorts roots and each sibling group recursively while preserving parent-child grouping.
+  - Extended the Playwright sorting guard to both reseller views.
 - [x] **M62** Reseller list sorting restoration (`v1.37.55`).
   Restored sort controls for every meaningful operational column in the main reseller
   list and reset pagination on sort changes. The hierarchy remains relationship-ordered.

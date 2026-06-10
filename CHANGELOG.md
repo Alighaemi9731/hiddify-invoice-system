@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.56 - 2026-06-10
+
+Reseller hierarchy sorting.
+
+### Fixed
+
+- Enabled all eight operational sort headers in the reseller hierarchy view.
+- Sorted root resellers and each sibling group recursively so descendants remain attached
+  to their parents instead of flattening or corrupting the hierarchy.
+- Reset root pagination whenever the sort column or direction changes.
+
+### Verification
+
+- All backend, frontend, dependency, release-tool, and diff checks pass.
+- A browser regression verifies sortable headers in both reseller views, and a populated
+  hierarchy check confirms sorting changes sibling order without separating descendants.
+
 ## 1.37.55 - 2026-06-10
 
 Reseller list sorting restoration.

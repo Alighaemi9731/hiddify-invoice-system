@@ -54,9 +54,9 @@ test("resellers page switches between the main list and hierarchy", async ({ pag
   await expect(page.getByText(/شاخه اصلی/)).toBeVisible();
 });
 
-test("reseller list keeps all operational columns sortable", async ({ page }) => {
+test("both reseller views keep all operational columns sortable", async ({ page }) => {
   await page.goto("/resellers");
-  for (const column of [
+  const columns = [
     "نماینده",
     "پنل",
     "قیمت/گیگ",
@@ -65,10 +65,14 @@ test("reseller list keeps all operational columns sortable", async ({ page }) =>
     "ربات",
     "وضعیت",
     "فاکتور",
-  ]) {
-    await expect(
-      page.getByRole("columnheader", { name: column }).getByRole("button"),
-    ).toBeVisible();
+  ];
+  for (const tab of ["فهرست اصلی", "درخت زیرمجموعه‌ها"]) {
+    await page.getByRole("tab", { name: new RegExp(tab) }).click();
+    for (const column of columns) {
+      await expect(
+        page.getByRole("columnheader", { name: column }).getByRole("button"),
+      ).toBeVisible();
+    }
   }
 });
 
