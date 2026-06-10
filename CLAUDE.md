@@ -120,6 +120,10 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M62** Reseller list sorting restoration (`v1.37.55`).
+  Restored sort controls for every meaningful operational column in the main reseller
+  list and reset pagination on sort changes. The hierarchy remains relationship-ordered.
+  Added a Playwright guard covering all sortable reseller headers.
 - [x] **M61** Reseller hierarchy production follow-up (`v1.37.54`).
   Paginated the tree by root reseller so large production datasets render only 25 branches
   and their visible descendants at once. Removed admin UUIDs from visible rows/cards while

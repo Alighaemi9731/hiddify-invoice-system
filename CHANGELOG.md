@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.55 - 2026-06-10
+
+Reseller list sorting restoration.
+
+### Fixed
+
+- Restored sortable headers for panel, price per GB, capacity fill, sub-reseller
+  permission, bot connection, enforcement status, and billing inclusion in the main
+  reseller list.
+- Reset pagination to the first page whenever the sort column or direction changes.
+- Kept hierarchy rows in parent/child order because global sorting would break the tree.
+
+### Verification
+
+- Frontend typecheck, production build, dependency audit, and bundle checks pass.
+- A browser regression verifies all eight operational headers are sortable and clicking
+  the panel header changes the actual row order.
+
 ## 1.37.54 - 2026-06-10
 
 Reseller hierarchy production follow-up.

@@ -54,6 +54,24 @@ test("resellers page switches between the main list and hierarchy", async ({ pag
   await expect(page.getByText(/شاخه اصلی/)).toBeVisible();
 });
 
+test("reseller list keeps all operational columns sortable", async ({ page }) => {
+  await page.goto("/resellers");
+  for (const column of [
+    "نماینده",
+    "پنل",
+    "قیمت/گیگ",
+    "پُری ظرفیت",
+    "زیرمجموعه",
+    "ربات",
+    "وضعیت",
+    "فاکتور",
+  ]) {
+    await expect(
+      page.getByRole("columnheader", { name: column }).getByRole("button"),
+    ).toBeVisible();
+  }
+});
+
 test("sidebar shows the app version", async ({ page }) => {
   await page.goto("/");
   // The version pinned in VERSION is rendered in the sidebar footer (e.g. v1.37.8).

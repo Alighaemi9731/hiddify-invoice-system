@@ -262,6 +262,10 @@ export default function Resellers() {
     setTab(value);
     setPage(0);
   };
+  const sortList = (column: string) => {
+    toggle(column);
+    setPage(0);
+  };
   const toggleBranch = (id: number) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -499,17 +503,31 @@ export default function Resellers() {
                 <TableHead>
                   <TableRow>
                     {tab === 0 ? (
-                      <SortTh id="name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
+                      <SortTh id="name" label="نماینده" sortKey={key} dir={dir} onSort={sortList} />
                     ) : (
                       <TableCell>نماینده</TableCell>
                     )}
-                    <TableCell>پنل</TableCell>
-                    <TableCell>قیمت/گیگ</TableCell>
-                    <TableCell sx={{ minWidth: 145 }}>پُری ظرفیت</TableCell>
-                    <TableCell>زیرمجموعه</TableCell>
-                    <TableCell>ربات</TableCell>
-                    <TableCell>وضعیت</TableCell>
-                    <TableCell>فاکتور</TableCell>
+                    {tab === 0 ? (
+                      <>
+                        <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={sortList} />
+                        <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={key} dir={dir} onSort={sortList} />
+                        <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={key} dir={dir} onSort={sortList} />
+                        <SortTh id="can_add_admin" label="زیرمجموعه" sortKey={key} dir={dir} onSort={sortList} />
+                        <SortTh id="registered" label="ربات" sortKey={key} dir={dir} onSort={sortList} />
+                        <SortTh id="enforcement_state" label="وضعیت" sortKey={key} dir={dir} onSort={sortList} />
+                        <SortTh id="exclude_from_billing" label="فاکتور" sortKey={key} dir={dir} onSort={sortList} />
+                      </>
+                    ) : (
+                      <>
+                        <TableCell>پنل</TableCell>
+                        <TableCell>قیمت/گیگ</TableCell>
+                        <TableCell sx={{ minWidth: 145 }}>پُری ظرفیت</TableCell>
+                        <TableCell>زیرمجموعه</TableCell>
+                        <TableCell>ربات</TableCell>
+                        <TableCell>وضعیت</TableCell>
+                        <TableCell>فاکتور</TableCell>
+                      </>
+                    )}
                     <TableCell align="left">عملیات</TableCell>
                   </TableRow>
                 </TableHead>
