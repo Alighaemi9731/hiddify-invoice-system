@@ -176,6 +176,7 @@ DEFS: list[SettingDef] = [
     SettingDef("enforcement_worker_interval_minutes", 5, False, "dunning"),
     SettingDef("enforcement_action_batch_limit", 1, False, "dunning"),
     SettingDef("enforcement_user_chunk_size", 100, False, "dunning"),
+    SettingDef("enforcement_admin_chunk_size", 10, False, "dunning"),
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
     # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
     # so a stale, never-reviewed proof can't shield a debt forever. Default 7.
@@ -228,6 +229,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "enforcement_worker_interval_minutes": (1, 60),
     "enforcement_action_batch_limit": (1, 20),
     "enforcement_user_chunk_size": (1, 500),
+    "enforcement_admin_chunk_size": (1, 50),
     "pending_payment_hold_days": (1, 365),
     "kick_grace_minutes": (0, 24 * 60),
     "min_confirmations": (0, 10_000),

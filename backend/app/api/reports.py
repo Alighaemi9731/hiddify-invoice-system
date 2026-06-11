@@ -178,8 +178,10 @@ async def enforcement_actions(
         return {
             "phase": p.get("phase"),
             "users_done": len(p.get("users_done") or []),
+            "users_missing": len(p.get("users_missing") or []),
             "users_failed": len(p.get("users_failed") or {}),
             "admins_done": len(p.get("admins_done") or []),
+            "admins_missing": len(p.get("admins_missing") or []),
             "admins_failed": len(p.get("admins_failed") or {}),
         }
 

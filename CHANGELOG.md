@@ -8,6 +8,36 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.59 - 2026-06-12
+
+Queued, resumable enforcement restore.
+
+### Changed
+
+- Payment confirmation, invoice defer, panel restore, and bot restore now enqueue a
+  durable restore action instead of holding the request until every panel write finishes.
+- Restore runs in two safe phases: admin limits top-down in bounded batches, then users
+  through Hiddify's native bulk Enable action.
+- Added `enforcement_admin_chunk_size` (default 10). Manual suspension now also uses the
+  durable queue.
+
+### Fixed
+
+- Paying or deferring during a partial suspension cancels that suspension and restores
+  only users and limits that were actually changed.
+- Queue workers re-check current debt before continuing an invoice-linked suspension.
+- Restore progress survives restarts, retries transient failures up to five times, records
+  missing users, and clears saved limits for the full reseller subtree.
+
+### Verification
+
+- Confirmed from Hiddify-Panel source that user bulk actions perform one SQL update and one
+  `quick_apply_users`; admin limits have no bulk endpoint and use bounded PATCH batches.
+- Live test-panel cycle: 2 users and limits 100/100 changed to disabled and 0/0, then
+  returned to enabled and 100/100 with final reseller state `active`.
+- Backend tests, Ruff, Mypy, frontend build/bundle budget, deploy-script syntax, and
+  whitespace checks pass.
+
 ## 1.37.58 - 2026-06-11
 
 Native Hiddify bulk enforcement.

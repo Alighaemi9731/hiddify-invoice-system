@@ -262,6 +262,7 @@ async def enforce(
     return {
         "reseller_id": reseller_id, "status": action.status.value,
         "dry_run": action.dry_run, "affected_users": action.affected_count,
+        "queued": action.status.value in ("planned", "partial"),
         "error": action.error,
     }
 
@@ -271,11 +272,12 @@ async def restore(reseller_id: int, session: AsyncSession = Depends(get_session)
     r = await session.get(Reseller, reseller_id)
     if not r:
         raise HTTPException(404, "Reseller not found")
-    action = await enforcement.restore_reseller(session, r)
+    action = await enforcement.queue_restore(session, r, reason="panel")
     if action is None:
         return {"reseller_id": reseller_id, "status": "not_enforced"}
     return {
         "reseller_id": reseller_id, "status": action.status.value,
+        "queued": action.status.value in ("planned", "partial"),
         "restored_users": action.affected_count, "error": action.error,
     }
 

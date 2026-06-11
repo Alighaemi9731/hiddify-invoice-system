@@ -71,7 +71,12 @@ async def _maybe_restore(
     try:
         from app.services import enforcement
 
-        await enforcement.restore_reseller(session, reseller)
+        await enforcement.queue_restore(
+            session,
+            reseller,
+            require_no_due=True,
+            reason="payment",
+        )
     except Exception:  # noqa: BLE001 — enforcement module/credentials may be absent
         log.info("restore skipped/failed for reseller %s", reseller.id)
 

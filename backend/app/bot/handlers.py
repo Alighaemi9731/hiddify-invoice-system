@@ -687,20 +687,22 @@ async def cb_sub_enforce(cb: CallbackQuery) -> None:
         if not sub or not await _owns_sub(s, cb.from_user.id, sub):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        await cb.message.answer(f"⏳ در حال مسدودسازی «{sub.name}»...")
+        await cb.message.answer(f"⏳ مسدودسازی «{sub.name}» در صف قرار می‌گیرد...")
         from app.services import enforcement
 
         # Reseller-initiated manual action → force the real write (dry_run=False),
         # independent of the global automatic-dunning enforcement switch.
         action = await enforcement.enforce_reseller(s, sub, dry_run=False)
-        if action.status == EnforcementActionStatus.done:
+        if action.status in (
+            EnforcementActionStatus.planned,
+            EnforcementActionStatus.partial,
+        ):
             msg = (
-                f"⛔️ «{sub.name}» مسدود شد: {action.affected_count} کاربر غیرفعال و "
-                f"سقف کاربران (max users / max active users) صفر شد."
+                f"⏳ مسدودسازی «{sub.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
             )
-            if action.error:  # some users couldn't be disabled (logged for the owner)
-                msg += "\n⚠️ برخی کاربران غیرفعال نشدند؛ دوباره تلاش کنید یا گزارش را ببینید."
             await cb.message.answer(msg)
+        elif action.status == EnforcementActionStatus.done:
+            await cb.message.answer(f"⛔️ «{sub.name}» از قبل مسدود است.")
         else:
             await cb.message.answer(
                 "❌ مسدودسازی ناموفق بود. مطمئن شوید کلید API پنل در تنظیمات ثبت شده است.\n"
@@ -717,17 +719,21 @@ async def cb_sub_restore(cb: CallbackQuery) -> None:
         if not sub or not await _owns_sub(s, cb.from_user.id, sub):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        await cb.message.answer(f"⏳ در حال آزادسازی «{sub.name}»...")
+        await cb.message.answer(f"⏳ آزادسازی «{sub.name}» در صف قرار می‌گیرد...")
         from app.services import enforcement
 
-        action = await enforcement.restore_reseller(s, sub)
+        action = await enforcement.queue_restore(s, sub, reason="bot")
         if action is None:
             await cb.message.answer("این زیرمجموعه مسدود نیست.")
-        elif action.status == EnforcementActionStatus.done:
+        elif action.status in (
+            EnforcementActionStatus.planned,
+            EnforcementActionStatus.partial,
+        ):
             await cb.message.answer(
-                f"✅ «{sub.name}» آزاد شد: {action.affected_count} کاربر دوباره فعال و "
-                f"سقف‌ها به حالت قبل برگشت."
+                f"⏳ آزادسازی «{sub.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
             )
+        elif action.status == EnforcementActionStatus.done:
+            await cb.message.answer(f"✅ «{sub.name}» از قبل آزاد شده است.")
         else:
             await cb.message.answer(f"❌ آزادسازی ناموفق بود.\n{action.error or ''}")
     await cb.answer()

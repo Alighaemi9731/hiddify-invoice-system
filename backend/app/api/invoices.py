@@ -310,7 +310,12 @@ async def defer_invoice(
                 try:
                     from app.services import enforcement
 
-                    await enforcement.restore_reseller(session, reseller)
+                    await enforcement.queue_restore(
+                        session,
+                        reseller,
+                        require_no_due=True,
+                        reason="defer",
+                    )
                     inv.status = InvoiceStatus.sent
                 except Exception:  # noqa: BLE001 — API creds may be absent; deadline still set
                     pass

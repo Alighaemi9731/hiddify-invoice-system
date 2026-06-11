@@ -83,7 +83,7 @@ For each reseller **and its descendant sub-resellers** (bundle via `parent_admin
 
 ## Dunning & enforcement (real Admin-API actions; auto-suspend OFF by default)
 
-Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D+4** reminder, **D+5** hard warning + **enforcement** — via Hiddify's management endpoints: disable the reseller's + sub-resellers' end-users and set the reseller's `max_active_users`/`max_users` to 0 (snapshot prior values first). Hiddify's public v2 API only supports single-user PATCH and invokes `quick_apply_users` for every call, so user enable/disable uses Hiddify's own authenticated Flask-Admin bulk action (`/admin/user/action/`) instead: one SQL update, one server-side core update loop, and one `quick_apply_users` per bounded batch. The day-count anchors on `sent_at`, UNLESS a **payment deadline** (`deferred_until`) is set on the invoice — then the whole cycle **restarts from the deadline date** (paused until then; the defer endpoint clears prior reminder marks and restores an already-suspended reseller for the new window). `enforcement_enabled` defaults **False** (dry-run logs intended actions). When live enforcement is enabled, dunning creates durable queued actions instead of doing large panel-write batches inline. The `enforcement_queue` scheduler job processes those actions in bounded, resumable chunks (`enforcement_action_batch_limit`, `enforcement_user_chunk_size`, `enforcement_worker_interval_minutes`), records JSON progress in `enforcement_actions.snapshot`, and resumes partial work after restarts. New installs default to 100 users per batch. On **confirmed payment**, auto-restore the snapshot through the same bulk path.
+Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D+4** reminder, **D+5** hard warning + **enforcement** — via Hiddify's management endpoints: disable the reseller's + sub-resellers' end-users and set the reseller's `max_active_users`/`max_users` to 0 (snapshot prior values first). Hiddify's public v2 API only supports single-user PATCH and invokes `quick_apply_users` for every call, so user enable/disable uses Hiddify's own authenticated Flask-Admin bulk action (`/admin/user/action/`) instead: one SQL update, one server-side core update loop, and one `quick_apply_users` per bounded batch. The day-count anchors on `sent_at`, UNLESS a **payment deadline** (`deferred_until`) is set on the invoice — then the whole cycle **restarts from the deadline date** and queues restore for an already-suspended reseller. `enforcement_enabled` defaults **False** (dry-run logs intended actions). Live suspension and restore are both durable queue actions; API and bot requests only plan work. The `enforcement_queue` scheduler job processes actions in bounded, resumable chunks (`enforcement_action_batch_limit`, `enforcement_user_chunk_size`, `enforcement_admin_chunk_size`, `enforcement_worker_interval_minutes`) and records JSON progress in `enforcement_actions.snapshot`. Restore is limits-first/top-down, then native bulk user Enable. A payment/defer cancels any partial suspension and restores only work already applied; every invoice-linked suspension re-checks current debt before its next write.
 
 ## Security conventions
 
@@ -120,6 +120,11 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M66** Queued and resumable restore (`v1.37.59`).
+  Moved payment, defer, panel, and bot restore off request paths into the durable queue.
+  Restore applies exact admin limits top-down in bounded chunks, then enables users through
+  Hiddify's native bulk action. Added stale-debt checks, partial-disable cancellation,
+  bounded retries, restart-safe progress, missing-user handling, and full-subtree cleanup.
 - [x] **M65** Native Hiddify bulk enforcement (`v1.37.58`).
   Replaced per-user REST PATCHes with Hiddify's native authenticated bulk action for
   queued/manual enforcement and payment restore. Added UUID-to-ID discovery, resumable

@@ -48,7 +48,8 @@ both Compose stacks.
    link, then selects the exact unpaid invoice before submitting a receipt or transaction hash.
 4. **Payments** → the owner reviews and confirms submitted payments manually. USDT hashes
    can optionally be checked through BscScan; all hashes link to the appropriate explorer.
-   Paid, previously-suspended resellers are restored when no other due debt remains.
+   Paid, previously-suspended resellers are restored through the durable worker queue when
+   no other due debt remains, so payment requests do not wait for panel writes.
 5. **Dunning/enforcement**: unpaid invoices trigger reminders, a warning, then suspension.
    Setting a **payment deadline** on an invoice restarts that cycle from the new date.
    **Automatic suspension defaults to OFF** — enable it in **Settings** (`enforcement_enabled`)

@@ -63,7 +63,7 @@ def _invoice(reseller_id, *, label, status=InvoiceStatus.sent, sent_days_ago=3):
     )
 
 
-# --------------------------- partial restore stays enforced (retryable)
+# --------------------------- queued partial restore stays enforced (retryable)
 def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
     from app.services import enforcement, settings_service
 
@@ -98,16 +98,34 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
-        # First restore: u2 fails → must stay ENFORCED (retryable), snapshot kept.
+        # Queueing returns immediately; worker restores one user per pass.
         res = await enforcement.restore_reseller(s, r)
-        assert res.status == EnforcementActionStatus.failed
+        assert res.status == EnforcementActionStatus.planned
+        first = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=1, admin_chunk_size=1
+        )
+        assert first["partial"] == 1
+        assert first["restored_users"] == 1
         assert r.enforcement_state == EnforcementState.enforced
         assert r.max_users_snapshot == 100  # snapshot NOT cleared (needed for retry)
 
-        # Retry with everything succeeding → now fully restored.
+        # u2 fails but stays queued and retryable.
+        second = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=1, admin_chunk_size=1
+        )
+        assert second["partial"] == 1
+        await s.refresh(res)
+        assert res.status == EnforcementActionStatus.partial
+        assert r.enforcement_state == EnforcementState.enforced
+
+        # Next worker pass succeeds and completes the same durable action.
         fail_uuid["u"] = "none"
-        res2 = await enforcement.restore_reseller(s, r)
-        assert res2.status == EnforcementActionStatus.done
+        third = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=1, admin_chunk_size=1
+        )
+        assert third["done"] == 1
+        await s.refresh(res)
+        assert res.status == EnforcementActionStatus.done
         assert r.enforcement_state == EnforcementState.active
         assert r.max_users_snapshot is None
 
@@ -219,9 +237,13 @@ def test_enforcement_queue_processes_in_resumable_chunks(tmp_path, monkeypatch):
         for i in range(3):
             s.add(EndUserSnapshot(panel_id=1, user_uuid=f"u{i}", name=f"u{i}",
                                   added_by_uuid="A", enable=True))
+        invoice = _invoice(r.id, label="2026-03", sent_days_ago=5)
+        s.add(invoice)
         await s.commit()
 
-        action = await enforcement.queue_enforcement(s, r, invoice_id=77, dry_run=False)
+        action = await enforcement.queue_enforcement(
+            s, r, invoice_id=invoice.id, dry_run=False
+        )
         assert action.status == EnforcementActionStatus.planned
 
         calls: list[tuple[str, str | int]] = []
@@ -268,6 +290,204 @@ def test_enforcement_queue_processes_in_resumable_chunks(tmp_path, monkeypatch):
         assert ("limits", "A") in calls
 
     _run(body, tmp_path, "queue_chunks.db")
+
+
+def test_restore_cancels_partial_disable_and_only_undoes_completed_work(
+    tmp_path, monkeypatch
+):
+    from app.services import enforcement, settings_service
+
+    async def body(s):
+        await settings_service.set_value(s, "enforcement_enabled", True)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(
+            panel_id=1,
+            admin_uuid="A",
+            name="R",
+            panel_max_users=10,
+            panel_max_active_users=10,
+            enforcement_state=EnforcementState.active,
+        )
+        s.add(r)
+        await s.flush()
+        for i in range(3):
+            s.add(
+                EndUserSnapshot(
+                    panel_id=1,
+                    user_uuid=f"u{i}",
+                    name=f"u{i}",
+                    added_by_uuid="A",
+                    enable=True,
+                )
+            )
+        invoice = _invoice(r.id, label="2026-04", sent_days_ago=5)
+        s.add(invoice)
+        await s.commit()
+
+        calls: list[tuple[bool, tuple[int, ...]]] = []
+
+        async def fake_user_ids(self, panel):
+            return {"u0": 10, "u1": 11, "u2": 12}
+
+        async def fake_bulk(self, panel, user_ids, enabled):
+            calls.append((enabled, tuple(user_ids)))
+
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(
+            enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk
+        )
+
+        disable = await enforcement.queue_enforcement(
+            s, r, invoice_id=invoice.id, dry_run=False
+        )
+        await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=2
+        )
+        await s.refresh(disable)
+        assert disable.status == EnforcementActionStatus.partial
+        assert calls == [(False, (10, 11))]
+
+        # Payment/defer asks for restore while disable is only partially complete.
+        invoice.status = InvoiceStatus.paid
+        restore = await enforcement.queue_restore(
+            s, r, require_no_due=True, reason="payment"
+        )
+        assert restore is not None
+        await s.refresh(disable)
+        assert disable.status == EnforcementActionStatus.reverted
+
+        result = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=100, admin_chunk_size=10
+        )
+        assert result["done"] == 1
+        await s.refresh(r)
+        assert r.enforcement_state == EnforcementState.active
+        # Only the two users actually disabled by the first worker pass are restored.
+        assert calls[-1] == (True, (10, 11))
+        assert 12 not in calls[-1][1]
+
+    _run(body, tmp_path, "cancel_partial.db")
+
+
+def test_restore_limits_are_top_down_and_chunked(tmp_path, monkeypatch):
+    from app.services import enforcement
+
+    async def body(s):
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        root = Reseller(
+            panel_id=1,
+            admin_uuid="A",
+            name="Root",
+            enforcement_state=EnforcementState.enforced,
+            max_users_snapshot=100,
+            max_active_users_snapshot=90,
+        )
+        child = Reseller(
+            panel_id=1,
+            admin_uuid="B",
+            parent_admin_uuid="A",
+            name="Child",
+            enforcement_state=EnforcementState.active,
+            max_users_snapshot=50,
+            max_active_users_snapshot=40,
+        )
+        s.add_all([root, child])
+        await s.flush()
+        source = EnforcementAction(
+            reseller_id=root.id,
+            action=EnforcementActionType.disable_users,
+            dry_run=False,
+            status=EnforcementActionStatus.done,
+            snapshot={
+                "admins": ["A", "B"],
+                "limits": {
+                    "A": {"max_users": 100, "max_active_users": 90},
+                    "B": {"max_users": 50, "max_active_users": 40},
+                },
+                "users": {},
+            },
+        )
+        s.add(source)
+        await s.commit()
+
+        calls: list[tuple[str, int, int]] = []
+
+        async def fake_limits(self, panel, admin_uuid, mu, mau, api_key=None):
+            calls.append((admin_uuid, mu, mau))
+
+        monkeypatch.setattr(
+            enforcement.AdminApiClient, "set_admin_limits", fake_limits
+        )
+
+        restore = await enforcement.queue_restore(s, root, reason="test")
+        assert restore is not None
+        first = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=100, admin_chunk_size=1
+        )
+        assert first["partial"] == 1
+        assert calls == [("A", 100, 90)]
+
+        second = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=100, admin_chunk_size=1
+        )
+        assert second["done"] == 1
+        assert calls == [("A", 100, 90), ("B", 50, 40)]
+        await s.refresh(root)
+        await s.refresh(child)
+        assert root.enforcement_state == EnforcementState.active
+        assert root.max_users_snapshot is None
+        assert child.max_users_snapshot is None
+
+    _run(body, tmp_path, "restore_admin_order.db")
+
+
+def test_enforcement_never_zeros_limits_without_a_restore_snapshot(
+    tmp_path, monkeypatch
+):
+    from app.services import enforcement, settings_service
+
+    async def body(s):
+        await settings_service.set_value(s, "enforcement_enabled", True)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(
+            panel_id=1,
+            admin_uuid="A",
+            name="R",
+            panel_max_users=None,
+            panel_max_active_users=None,
+            enforcement_state=EnforcementState.active,
+        )
+        s.add(r)
+        await s.commit()
+
+        writes: list[tuple[int, int]] = []
+
+        async def fake_get_limits(self, panel, admin_uuid, api_key=None):
+            return (None, None)
+
+        async def fake_set_limits(
+            self, panel, admin_uuid, mu, mau, api_key=None
+        ):
+            writes.append((mu, mau))
+
+        monkeypatch.setattr(
+            enforcement.AdminApiClient, "get_admin_limits", fake_get_limits
+        )
+        monkeypatch.setattr(
+            enforcement.AdminApiClient, "set_admin_limits", fake_set_limits
+        )
+
+        action = await enforcement.queue_enforcement(s, r, dry_run=False)
+        result = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=100
+        )
+        await s.refresh(action)
+        assert result["partial"] == 1
+        assert action.status == EnforcementActionStatus.partial
+        assert writes == []
+        assert r.enforcement_state == EnforcementState.active
+
+    _run(body, tmp_path, "unknown_limits.db")
 
 
 # --------------------------- gb_cap flag armed only after delivery

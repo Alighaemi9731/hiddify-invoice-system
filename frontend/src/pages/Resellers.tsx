@@ -232,8 +232,10 @@ export default function Resellers() {
       show(
         result.dry_run
           ? `حالت آزمایشی: ${result.affected_users} کاربر`
-          : `مسدود شد: ${result.affected_users} کاربر`,
-        result.dry_run ? "info" : "success",
+          : result.queued
+            ? "مسدودسازی در صف ثبت شد"
+            : "این نماینده از قبل مسدود است",
+        result.dry_run || result.queued ? "info" : "success",
       );
       refresh();
     },
@@ -242,7 +244,14 @@ export default function Resellers() {
   const restore = useMutation({
     mutationFn: (id: number) => restoreReseller(id),
     onSuccess: (result) => {
-      show(`بازگردانی: ${result.status}`);
+      show(
+        result.queued
+          ? "آزادسازی در صف ثبت شد"
+          : result.status === "not_enforced"
+            ? "این نماینده مسدود نیست"
+            : `بازگردانی: ${result.status}`,
+        result.queued ? "info" : "success",
+      );
       refresh();
     },
     onError: (error) => show(errMsg(error), "error"),
