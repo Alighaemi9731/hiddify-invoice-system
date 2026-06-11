@@ -36,6 +36,7 @@ from app.services import (
     channel_guard,
     delivery,
     dunning,
+    enforcement,
     invoicing,
 )
 from app.services import (
@@ -84,6 +85,12 @@ class BroadcastBody(BaseModel):
 @router.post("/dunning/run")
 async def run_dunning(session: AsyncSession = Depends(get_session)) -> dict:
     return await dunning.run_dunning(session)
+
+
+@router.post("/enforcement-queue/run")
+async def run_enforcement_queue(session: AsyncSession = Depends(get_session)) -> dict:
+    """Process a bounded slice of the queued live enforcement work."""
+    return await enforcement.process_enforcement_queue(session)
 
 
 @router.post("/refresh-rate")

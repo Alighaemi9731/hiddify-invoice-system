@@ -20,6 +20,7 @@ def test_clamp_ranges_and_bad_values():
 
 def test_live_reschedule_includes_rate_refresh():
     assert "rate_refresh_hours" in _SCHEDULE_KEYS
+    assert "enforcement_worker_interval_minutes" in _SCHEDULE_KEYS
 
 
 def _jobs(cfg):
@@ -36,10 +37,12 @@ def test_register_uses_configured_timings():
     t = _triggers(ScheduleConfig(
         invoice_day=2, invoice_hour=7, dunning_hour=8,
         sync_hours=4, guard_minutes=15, backup_hours=3,
+        enforcement_minutes=11,
     ))
     assert "day='2'" in t["monthly_invoicing"] and "hour='7'" in t["monthly_invoicing"]
     assert "hour='8'" in t["daily_dunning"]
     assert t["channel_guard"] == "interval[0:15:00]"
+    assert t["enforcement_queue"] == "interval[0:11:00]"
     assert t["periodic_sync"] == "interval[4:00:00]"
     assert t["backup"] == "interval[3:00:00]"
 
@@ -49,8 +52,9 @@ def test_register_defaults_when_no_config():
     assert t["backup"] == "interval[2:00:00]"
     assert t["periodic_sync"] == "interval[6:00:00]"
     assert t["channel_guard"] == "interval[0:10:00]"
+    assert t["enforcement_queue"] == "interval[0:05:00]"
     assert t["rate_refresh"] == "interval[1:00:00]"
-    assert len(t) == 6
+    assert len(t) == 7
 
 
 def test_non_divisor_interval_keeps_true_spacing_across_boundaries():
@@ -60,6 +64,7 @@ def test_non_divisor_interval_keeps_true_spacing_across_boundaries():
         "periodic_sync": 7 * 3600,
         "backup": 23 * 3600,
         "channel_guard": 17 * 60,
+        "enforcement_queue": 5 * 60,
     }.items():
         trigger = jobs[job_id].trigger
         assert isinstance(trigger, IntervalTrigger)
@@ -70,8 +75,12 @@ def test_non_divisor_interval_keeps_true_spacing_across_boundaries():
 
 
 def test_full_day_and_hour_boundaries_are_valid():
-    t = _triggers(ScheduleConfig(sync_hours=24, backup_hours=24, guard_minutes=60, rate_hours=24))
+    t = _triggers(ScheduleConfig(
+        sync_hours=24, backup_hours=24, guard_minutes=60,
+        rate_hours=24, enforcement_minutes=60,
+    ))
     assert t["periodic_sync"] == "interval[1 day, 0:00:00]"
     assert t["backup"] == "interval[1 day, 0:00:00]"
     assert t["channel_guard"] == "interval[1:00:00]"
+    assert t["enforcement_queue"] == "interval[1:00:00]"
     assert t["rate_refresh"] == "interval[1 day, 0:00:00]"

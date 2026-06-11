@@ -72,6 +72,8 @@ class EnforcementActionType(str, enum.Enum):
 
 class EnforcementActionStatus(str, enum.Enum):
     planned = "planned"
+    running = "running"
+    partial = "partial"
     dry_run = "dry_run"      # logged only; no live writes
     done = "done"
     failed = "failed"

@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.57 - 2026-06-11
+
+Queued enforcement worker for high-volume dunning.
+
+### Changed
+
+- Dunning no longer performs live suspension writes inline. When enforcement is enabled,
+  unpaid invoices now create durable queued enforcement actions and return quickly.
+- Added a scheduled enforcement worker that processes queued actions in bounded,
+  resumable chunks, disabling users first and then zeroing reseller/admin limits.
+- Added runtime settings for worker interval, queued action batch size, and user chunk size.
+- Exposed queue progress in enforcement reports/logs and added an operations endpoint for
+  manually running one worker pass.
+
+### Fixed
+
+- A prior dry-run enforcement record no longer blocks the first real live enforcement queue
+  item after enforcement is enabled.
+
+### Verification
+
+- Full backend pytest, backend lint/typecheck, frontend typecheck/build, dependency audit,
+  and diff whitespace checks pass.
+- Local test panel verified a live queued enforcement from planned to partial chunks and
+  final enforced state without running the full action inline.
+
 ## 1.37.56 - 2026-06-10
 
 Reseller hierarchy sorting.

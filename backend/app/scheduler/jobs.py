@@ -21,6 +21,7 @@ from app.services import (
     channel_guard,
     delivery,
     dunning,
+    enforcement,
     invoicing,
     owner_notify,
     rates,
@@ -44,6 +45,7 @@ class ScheduleConfig:
     guard_minutes: int = 10    # channel/group guard: every N minutes (1–60)
     backup_hours: int = 2      # auto-backup: every N hours (1–24)
     rate_hours: int = 1        # live USDT→Toman rate refresh: every N hours (1–24)
+    enforcement_minutes: int = 5  # queued live enforcement worker cadence (1–60)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -60,7 +62,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
     s = await settings_service.get_many(session, [
         "invoice_day_of_month", "invoice_hour", "dunning_hour",
         "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
-        "rate_refresh_hours",
+        "rate_refresh_hours", "enforcement_worker_interval_minutes",
     ])
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
@@ -70,6 +72,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         guard_minutes=_clamp(s.get("guard_interval_minutes"), 1, 60, 10),
         backup_hours=_clamp(s.get("backup_interval_hours"), 1, 24, 2),
         rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 24, 1),
+        enforcement_minutes=_clamp(s.get("enforcement_worker_interval_minutes"), 1, 60, 5),
     )
 
 
@@ -106,7 +109,10 @@ async def daily_dunning_job() -> None:
         async with SessionLocal() as session:
             res = await dunning.run_dunning(session)
             # Only ping the owner when something actionable happened.
-            acted = res["reminder1"] + res["reminder2"] + res["warning"] + res["enforced"] + res["enforced_dry"]
+            acted = (
+                res["reminder1"] + res["reminder2"] + res["warning"]
+                + res["enforced"] + res["enforced_dry"] + res.get("enforcement_queued", 0)
+            )
             if acted:
                 # Show DELIVERED counts with ATTEMPTED in parentheses, so a reminder that was
                 # tried but didn't reach the reseller (blocked/unmatched/Telegram error) is
@@ -122,6 +128,8 @@ async def daily_dunning_job() -> None:
                 ]
                 if res["enforced"]:
                     lines.append(f"• مسدودسازی واقعی: {res['enforced']}")
+                if res.get("enforcement_queued"):
+                    lines.append(f"• مسدودسازی در صف اجرا: {res['enforcement_queued']}")
                 if res["enforced_dry"]:
                     lines.append(f"• مسدودسازی (حالت آزمایشی): {res['enforced_dry']}")
                 enforced = res.get("enforced_resellers") or []
@@ -131,6 +139,16 @@ async def daily_dunning_job() -> None:
                 await owner_notify.notify_owner(session, "\n".join(lines), html=bool(enforced))
     except Exception:  # noqa: BLE001
         log.exception("daily_dunning_job failed")
+
+
+async def enforcement_queue_job() -> None:
+    try:
+        async with SessionLocal() as session:
+            res = await enforcement.process_enforcement_queue(session)
+            if res.get("picked"):
+                log.info("Enforcement queue worker: %s", res)
+    except Exception:  # noqa: BLE001
+        log.exception("enforcement_queue_job failed")
 
 
 async def periodic_sync_job() -> None:
@@ -224,6 +242,8 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
          CronTrigger(hour=cfg.dunning_hour, minute=0, timezone=tz), 6 * 3600),
         ("channel_guard", channel_guard_job,
          IntervalTrigger(minutes=cfg.guard_minutes, start_date=interval_anchor, timezone=tz), 300),
+        ("enforcement_queue", enforcement_queue_job,
+         IntervalTrigger(minutes=cfg.enforcement_minutes, start_date=interval_anchor, timezone=tz), 300),
         ("periodic_sync", periodic_sync_job,
          IntervalTrigger(hours=cfg.sync_hours, start_date=interval_anchor, timezone=tz), 1800),
         ("backup", backup_job,
@@ -238,7 +258,7 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
                       coalesce=True, misfire_grace_time=grace)
     log.info(
         "Registered 6 jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
-        "sync every %dh, guard every %dm, backup every %dh, rate every %dh.",
+        "sync every %dh, guard every %dm, enforcement every %dm, backup every %dh, rate every %dh.",
         sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
-        cfg.sync_hours, cfg.guard_minutes, cfg.backup_hours, cfg.rate_hours,
+        cfg.sync_hours, cfg.guard_minutes, cfg.enforcement_minutes, cfg.backup_hours, cfg.rate_hours,
     )

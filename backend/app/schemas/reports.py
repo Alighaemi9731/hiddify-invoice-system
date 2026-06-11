@@ -59,6 +59,7 @@ class EnforcementActionRow(BaseModel):
     dry_run: bool
     affected_count: int
     error: str | None
+    progress: dict | None = None
     created_at: dt.datetime | None
 
 

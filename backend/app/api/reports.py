@@ -171,11 +171,24 @@ async def enforcement_actions(
         .limit(limit)
     )
     rows = (await session.execute(q)).all()
+    def _progress(a: EnforcementAction) -> dict | None:
+        p = (a.snapshot or {}).get("progress") if a.snapshot else None
+        if not isinstance(p, dict):
+            return None
+        return {
+            "phase": p.get("phase"),
+            "users_done": len(p.get("users_done") or []),
+            "users_failed": len(p.get("users_failed") or {}),
+            "admins_done": len(p.get("admins_done") or []),
+            "admins_failed": len(p.get("admins_failed") or {}),
+        }
+
     return [
         EnforcementActionRow(
             id=a.id, reseller_id=a.reseller_id, reseller_name=name, invoice_id=a.invoice_id,
             action=a.action.value, status=a.status.value, dry_run=a.dry_run,
-            affected_count=a.affected_count, error=a.error, created_at=a.created_at,
+            affected_count=a.affected_count, error=a.error, progress=_progress(a),
+            created_at=a.created_at,
         )
         for a, name in rows
     ]

@@ -15,9 +15,11 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/enf.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.models import (  # noqa: E402
+    EndUserSnapshot,
     EnforcementAction,
     Invoice,
     Panel,
@@ -135,6 +137,127 @@ def test_pending_hold_is_per_invoice_and_expires(tmp_path):
         assert res["reminder1_sent"] == 0          # but not delivered (unmatched)
 
     _run(body, tmp_path, "dun.db")
+
+
+def test_dunning_queues_live_enforcement_instead_of_blocking(tmp_path):
+    from app.services import dunning, settings_service
+
+    async def body(s):
+        now = dt.datetime.now(dt.timezone.utc)
+        await settings_service.set_value(s, "enforcement_enabled", True)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(panel_id=1, admin_uuid="A", name="R", bot_chat_id=123,
+                     enforcement_state=EnforcementState.active)
+        s.add(r)
+        await s.flush()
+        s.add(_invoice(r.id, label="2026-03", sent_days_ago=5))
+        s.add(EndUserSnapshot(panel_id=1, user_uuid="u1", name="u1", added_by_uuid="A",
+                              enable=True))
+        await s.commit()
+
+        res = await dunning.run_dunning(s, now=now)
+        assert res["warning"] == 1
+        assert res["enforcement_queued"] == 1
+        assert res["enforced"] == 0
+        await s.refresh(r)
+        assert r.enforcement_state == EnforcementState.active
+        action = (await s.execute(select(EnforcementAction))).scalar_one()
+        assert action.status == EnforcementActionStatus.planned
+        assert action.dry_run is False
+        assert action.affected_count == 1
+
+    _run(body, tmp_path, "queue.db")
+
+
+def test_live_queue_is_not_blocked_by_prior_dry_run(tmp_path):
+    from app.services import enforcement, settings_service
+
+    async def body(s):
+        await settings_service.set_value(s, "enforcement_enabled", True)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(panel_id=1, admin_uuid="A", name="R",
+                     enforcement_state=EnforcementState.active)
+        s.add(r)
+        await s.flush()
+        s.add(EndUserSnapshot(panel_id=1, user_uuid="u1", name="u1", added_by_uuid="A",
+                              enable=True))
+        await s.commit()
+
+        dry = await enforcement.queue_enforcement(s, r, invoice_id=88, dry_run=True)
+        live = await enforcement.queue_enforcement(s, r, invoice_id=88, dry_run=False)
+        same_live = await enforcement.queue_enforcement(s, r, invoice_id=88, dry_run=False)
+
+        assert dry.status == EnforcementActionStatus.dry_run
+        assert dry.dry_run is True
+        assert live.id != dry.id
+        assert live.status == EnforcementActionStatus.planned
+        assert live.dry_run is False
+        assert same_live.id == live.id
+
+        actions = (await s.execute(
+            select(EnforcementAction).where(EnforcementAction.invoice_id == 88)
+        )).scalars().all()
+        assert len(actions) == 2
+
+    _run(body, tmp_path, "queue_after_dry.db")
+
+
+def test_enforcement_queue_processes_in_resumable_chunks(tmp_path, monkeypatch):
+    from app.services import enforcement, settings_service
+
+    async def body(s):
+        await settings_service.set_value(s, "enforcement_enabled", True)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(panel_id=1, admin_uuid="A", name="R", panel_max_users=10,
+                     panel_max_active_users=10, enforcement_state=EnforcementState.active)
+        s.add(r)
+        await s.flush()
+        for i in range(3):
+            s.add(EndUserSnapshot(panel_id=1, user_uuid=f"u{i}", name=f"u{i}",
+                                  added_by_uuid="A", enable=True))
+        await s.commit()
+
+        action = await enforcement.queue_enforcement(s, r, invoice_id=77, dry_run=False)
+        assert action.status == EnforcementActionStatus.planned
+
+        calls: list[tuple[str, str | int]] = []
+
+        async def fake_user(self, panel, user_uuid, enabled, api_key=None):
+            calls.append(("user", user_uuid))
+
+        async def fake_get_limits(self, panel, admin_uuid, api_key=None):
+            calls.append(("get_limits", admin_uuid))
+            return (10, 10)
+
+        async def fake_limits(self, panel, admin_uuid, mu, mau, api_key=None):
+            calls.append(("limits", admin_uuid))
+
+        monkeypatch.setattr(enforcement.AdminApiClient, "set_user_enabled", fake_user)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
+        monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_limits)
+
+        res1 = await enforcement.process_enforcement_queue(s, action_limit=1, user_chunk_size=2)
+        assert res1["partial"] == 1
+        await s.refresh(action)
+        assert action.status == EnforcementActionStatus.partial
+        assert action.affected_count == 2
+
+        res2 = await enforcement.process_enforcement_queue(s, action_limit=1, user_chunk_size=2)
+        assert res2["partial"] == 1
+        await s.refresh(action)
+        assert action.affected_count == 3
+        assert r.enforcement_state == EnforcementState.active
+
+        res3 = await enforcement.process_enforcement_queue(s, action_limit=1, user_chunk_size=2)
+        assert res3["done"] == 1
+        await s.refresh(action)
+        await s.refresh(r)
+        assert action.status == EnforcementActionStatus.done
+        assert action.affected_count == 3
+        assert r.enforcement_state == EnforcementState.enforced
+        assert ("limits", "A") in calls
+
+    _run(body, tmp_path, "queue_chunks.db")
 
 
 # --------------------------- gb_cap flag armed only after delivery

@@ -13,6 +13,7 @@ from collections import defaultdict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import EndUserSnapshot, EnforcementAction, Panel, Reseller
 from app.models.enums import (
@@ -25,6 +26,13 @@ from app.services.invoice_engine import build_children_map, collect_descendants
 from app.services.panel_client.admin_api import AdminApiClient
 
 log = logging.getLogger("enforcement")
+
+_LIVE_QUEUE_STATUSES = (
+    EnforcementActionStatus.planned,
+    EnforcementActionStatus.running,
+    EnforcementActionStatus.partial,
+    EnforcementActionStatus.done,
+)
 
 
 async def _bundle(session: AsyncSession, reseller: Reseller) -> list[Reseller]:
@@ -75,6 +83,324 @@ async def _enabled_users(session: AsyncSession, panel_id: int, admin_uuids: set[
         )
     ).scalars().all()
     return list(rows)
+
+
+def _progress(snapshot: dict | None) -> dict:
+    if snapshot is None:
+        snapshot = {}
+    progress = snapshot.setdefault("progress", {})
+    progress.setdefault("users_done", [])
+    progress.setdefault("users_failed", {})
+    progress.setdefault("admins_done", [])
+    progress.setdefault("admins_failed", {})
+    progress.setdefault("captured_limits", {})
+    progress.setdefault("phase", "users")
+    return progress
+
+
+async def _queued_snapshot(session: AsyncSession, reseller: Reseller) -> dict:
+    """Build a DB-local work snapshot without writing to the panel.
+
+    It captures the exact bundle and enabled users at planning time. Live limit values are
+    still re-read right before zeroing each admin, because sync data can be stale.
+    """
+    panel = await session.get(Panel, reseller.panel_id)
+    if panel is None:
+        raise ValueError("panel not found for reseller")
+    descendants = await _bundle(session, reseller)
+    admin_uuids = {d.admin_uuid for d in descendants}
+    users = await _enabled_users(session, panel.id, admin_uuids)
+    snapshot = {
+        "limits": {
+            d.admin_uuid: {
+                "max_users": d.panel_max_users,
+                "max_active_users": d.panel_max_active_users,
+            }
+            for d in descendants
+        },
+        "admins": [d.admin_uuid for d in descendants],
+        "users": {u.user_uuid: (u.added_by_uuid or "") for u in users},
+    }
+    _progress(snapshot)
+    return snapshot
+
+
+async def queue_enforcement(
+    session: AsyncSession,
+    reseller: Reseller,
+    *,
+    invoice_id: int | None = None,
+    dry_run: bool | None = None,
+) -> EnforcementAction:
+    """Plan an enforcement action without doing panel writes.
+
+    Dry-run actions are finalized immediately. Live actions are durable queue items that the
+    enforcement worker processes in small, resumable chunks.
+    """
+    enabled = await settings_service.get(session, "enforcement_enabled", False)
+    is_dry = (not enabled) if dry_run is None else dry_run
+
+    if invoice_id is not None:
+        criteria = [
+            EnforcementAction.invoice_id == invoice_id,
+            EnforcementAction.action == EnforcementActionType.disable_users,
+        ]
+        if not is_dry:
+            # A previous dry-run is only an audit record. It must not block the first
+            # real queued enforcement after the operator enables enforcement.
+            criteria.append(EnforcementAction.dry_run.is_(False))
+        existing = (
+            await session.execute(
+                select(EnforcementAction)
+                .where(*criteria)
+                .order_by(EnforcementAction.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+    if not is_dry and reseller.enforcement_state == EnforcementState.enforced:
+        prior = (
+            await session.execute(
+                select(EnforcementAction)
+                .where(
+                    EnforcementAction.reseller_id == reseller.id,
+                    EnforcementAction.action == EnforcementActionType.disable_users,
+                    EnforcementAction.status == EnforcementActionStatus.done,
+                )
+                .order_by(EnforcementAction.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior is not None:
+            return prior
+
+    snapshot = await _queued_snapshot(session, reseller)
+    action = EnforcementAction(
+        reseller_id=reseller.id,
+        invoice_id=invoice_id,
+        action=EnforcementActionType.disable_users,
+        dry_run=is_dry,
+        affected_count=len(snapshot.get("users") or {}),
+        snapshot=snapshot,
+        status=EnforcementActionStatus.dry_run if is_dry else EnforcementActionStatus.planned,
+    )
+    session.add(action)
+    await session.commit()
+    if is_dry:
+        log.info(
+            "[dry-run] queued enforcement intent for reseller %s: %d users, %d admins",
+            reseller.name, len(snapshot.get("users") or {}), len(snapshot.get("admins") or []),
+        )
+    return action
+
+
+async def _process_enforcement_action(
+    session: AsyncSession,
+    action: EnforcementAction,
+    *,
+    user_chunk_size: int,
+) -> dict:
+    """Process one queued live enforcement action.
+
+    The function commits after each chunk, so a restart or timeout resumes from
+    `snapshot.progress` instead of repeating the whole bundle.
+    """
+    if action.dry_run or action.action != EnforcementActionType.disable_users:
+        return {"skipped": 1}
+    if action.status == EnforcementActionStatus.done:
+        return {"done": 1}
+
+    reseller = await session.get(Reseller, action.reseller_id)
+    if reseller is None:
+        action.status = EnforcementActionStatus.failed
+        action.error = "reseller not found"
+        await session.commit()
+        return {"failed": 1}
+    if reseller.enforcement_state == EnforcementState.enforced:
+        action.status = EnforcementActionStatus.done
+        await session.commit()
+        return {"done": 1}
+
+    panel = await session.get(Panel, reseller.panel_id)
+    if panel is None:
+        action.status = EnforcementActionStatus.failed
+        action.error = "panel not found"
+        await session.commit()
+        return {"failed": 1}
+
+    snapshot = action.snapshot or await _queued_snapshot(session, reseller)
+    progress = _progress(snapshot)
+    users_map: dict[str, str] = dict(snapshot.get("users") or {})
+    done_users = set(progress.get("users_done") or [])
+    failed_users: dict[str, str] = dict(progress.get("users_failed") or {})
+    client = AdminApiClient()
+    action.status = EnforcementActionStatus.partial
+    action.snapshot = snapshot
+    flag_modified(action, "snapshot")
+    await session.commit()
+
+    remaining_users = [uuid for uuid in users_map if uuid not in done_users and uuid not in failed_users]
+    patched = 0
+    rows = {}
+    if remaining_users:
+        chunk = remaining_users[:max(1, user_chunk_size)]
+        rows = {
+            r.user_uuid: r for r in (
+                await session.execute(
+                    select(EndUserSnapshot).where(
+                        EndUserSnapshot.panel_id == panel.id,
+                        EndUserSnapshot.user_uuid.in_(chunk),
+                    )
+                )
+            ).scalars().all()
+        }
+        for uuid in chunk:
+            try:
+                await _set_user_enabled_uuid(client, panel, uuid, users_map.get(uuid) or None, False)
+                if uuid in rows:
+                    rows[uuid].enable = False
+                done_users.add(uuid)
+                patched += 1
+            except Exception as exc:  # noqa: BLE001
+                failed_users[uuid] = str(exc)[:300]
+        progress["users_done"] = sorted(done_users)
+        progress["users_failed"] = failed_users
+        progress["phase"] = "users" if len(done_users) + len(failed_users) < len(users_map) else "limits"
+        action.status = EnforcementActionStatus.partial
+        action.affected_count = len(done_users)
+        action.snapshot = snapshot
+        flag_modified(action, "snapshot")
+        await session.commit()
+        return {"patched_users": patched, "failed_users": len(failed_users), "partial": 1}
+
+    # User phase complete. Zero admin limits bottom-up, one admin per worker tick. This keeps
+    # large hierarchies resumable and avoids one long request storm against a panel.
+    descendants = await _bundle(session, reseller)
+    by_uuid = {d.admin_uuid: d for d in descendants}
+    admin_order = list(reversed(snapshot.get("admins") or [d.admin_uuid for d in descendants]))
+    done_admins = set(progress.get("admins_done") or [])
+    failed_admins: dict[str, str] = dict(progress.get("admins_failed") or {})
+    captured_limits: dict[str, dict] = dict(progress.get("captured_limits") or {})
+    for admin_uuid in admin_order:
+        if admin_uuid in done_admins or admin_uuid in failed_admins:
+            continue
+        admin = by_uuid.get(admin_uuid)
+        if admin is None:
+            failed_admins[admin_uuid] = "admin row not found"
+            break
+        try:
+            real_mu, real_mau = await client.get_admin_limits(
+                panel, admin.admin_uuid, api_key=admin.parent_admin_uuid
+            )
+        except Exception:  # noqa: BLE001
+            real_mu = real_mau = None
+        if real_mu is None:
+            real_mu = admin.panel_max_users
+        if real_mau is None:
+            real_mau = admin.panel_max_active_users
+        if not real_mu and admin.max_users_snapshot:
+            real_mu = admin.max_users_snapshot
+        if not real_mau and admin.max_active_users_snapshot:
+            real_mau = admin.max_active_users_snapshot
+        admin.max_users_snapshot = real_mu
+        admin.max_active_users_snapshot = real_mau
+        captured_limits[admin_uuid] = {"max_users": real_mu, "max_active_users": real_mau}
+        try:
+            await _set_admin_limits(client, panel, admin, 0, 0)
+            done_admins.add(admin_uuid)
+        except Exception as exc:  # noqa: BLE001
+            failed_admins[admin_uuid] = str(exc)[:300]
+        break
+
+    progress["admins_done"] = sorted(done_admins)
+    progress["admins_failed"] = failed_admins
+    progress["captured_limits"] = captured_limits
+    action.snapshot = {**snapshot, "limits": captured_limits or snapshot.get("limits", {})}
+    flag_modified(action, "snapshot")
+    if len(done_admins) + len(failed_admins) < len(admin_order):
+        action.status = EnforcementActionStatus.partial
+        action.affected_count = len(done_users)
+        await session.commit()
+        return {"patched_admins": 1 if done_admins else 0, "partial": 1}
+
+    if len(done_users) == 0 and reseller.admin_uuid not in done_admins:
+        action.status = EnforcementActionStatus.failed
+        action.error = "enforcement did nothing"
+        await session.commit()
+        return {"failed": 1}
+
+    action.affected_count = len(done_users)
+    if failed_users or failed_admins:
+        action.status = EnforcementActionStatus.failed
+        action.error = (
+            f"{len(failed_users)} user failure(s), {len(failed_admins)} admin failure(s)"
+        )[:1000]
+        await session.commit()
+        return {"failed": 1}
+
+    reseller.enforcement_state = EnforcementState.enforced
+    action.status = EnforcementActionStatus.done
+    action.error = None
+    progress["phase"] = "done"
+    action.snapshot = snapshot
+    flag_modified(action, "snapshot")
+    if action.invoice_id:
+        from app.models import Invoice
+        from app.models.enums import InvoiceStatus
+
+        inv = await session.get(Invoice, action.invoice_id)
+        if inv is not None:
+            inv.status = InvoiceStatus.enforced
+    await session.commit()
+    log.info("Queued enforcement done for reseller %s: %d users", reseller.name, len(done_users))
+    return {"done": 1, "patched_users": 0}
+
+
+async def process_enforcement_queue(
+    session: AsyncSession,
+    *,
+    action_limit: int | None = None,
+    user_chunk_size: int | None = None,
+) -> dict:
+    cfg = await settings_service.get_many(
+        session, ["enforcement_action_batch_limit", "enforcement_user_chunk_size"]
+    )
+    limit = max(1, int(action_limit or cfg.get("enforcement_action_batch_limit") or 1))
+    chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 50))
+    actions = (
+        await session.execute(
+            select(EnforcementAction)
+            .where(
+                EnforcementAction.action == EnforcementActionType.disable_users,
+                EnforcementAction.dry_run.is_(False),
+                EnforcementAction.status.in_([
+                    EnforcementActionStatus.planned,
+                    EnforcementActionStatus.partial,
+                ]),
+            )
+            .order_by(EnforcementAction.created_at, EnforcementAction.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+    ).scalars().all()
+    result = {
+        "picked": len(actions),
+        "done": 0,
+        "partial": 0,
+        "failed": 0,
+        "patched_users": 0,
+        "failed_users": 0,
+        "patched_admins": 0,
+        "skipped": 0,
+    }
+    for action in actions:
+        step = await _process_enforcement_action(session, action, user_chunk_size=chunk)
+        for key in result:
+            if key != "picked":
+                result[key] += int(step.get(key, 0) or 0)
+    return result
 
 
 async def enforce_reseller(

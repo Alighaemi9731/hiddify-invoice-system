@@ -17,6 +17,7 @@ from app.core import crypto
 from app.models import Panel, Reseller
 from app.models.enums import (
     DeliveryStatus,
+    EnforcementActionStatus,
     EnforcementActionType,
     EnforcementState,
     PaymentMethod,
@@ -190,6 +191,9 @@ def test_active_enum_contract_has_no_unimplemented_branches():
     }
     assert {item.value for item in EnforcementState} == {"active", "enforced"}
     assert {item.value for item in EnforcementActionType} == {"disable_users", "restore"}
+    assert {item.value for item in EnforcementActionStatus} == {
+        "planned", "running", "partial", "dry_run", "done", "failed", "reverted",
+    }
 
 
 def test_financial_and_mutable_default_contracts():

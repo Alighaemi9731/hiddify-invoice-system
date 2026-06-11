@@ -126,7 +126,8 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
 
     counts = {"reminder1": 0, "reminder2": 0, "warning": 0,
               "reminder1_sent": 0, "reminder2_sent": 0, "warning_sent": 0,
-              "enforced": 0, "enforced_dry": 0, "deferred": 0, "on_hold": 0}
+              "enforced": 0, "enforced_dry": 0, "enforcement_queued": 0,
+              "deferred": 0, "on_hold": 0}
     enforced_links: list[str] = []  # clickable owner-facing links of enforced resellers
     bot: Bot | None = await build_bot(session)
     try:
@@ -203,16 +204,13 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                     ).first()
                     if already:
                         continue
-                action = await enforcement.enforce_reseller(session, reseller, invoice_id=inv.id)
+                action = await enforcement.queue_enforcement(session, reseller, invoice_id=inv.id)
                 if action.dry_run:
                     counts["enforced_dry"] += 1
-                else:
-                    inv.status = InvoiceStatus.enforced
-                    await session.commit()
+                elif action.status.value == "done":
                     counts["enforced"] += 1
-                    from app.services.owner_notify import user_link
-
-                    enforced_links.append(user_link(reseller))
+                else:
+                    counts["enforcement_queued"] += 1
     finally:
         if bot is not None:
             await bot.session.close()
