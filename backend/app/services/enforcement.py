@@ -9,7 +9,6 @@ makes no panel writes. Set it True to perform live writes (needs panel admin API
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,21 +43,6 @@ async def _bundle(session: AsyncSession, reseller: Reseller) -> list[Reseller]:
     return collect_descendants(reseller, children)
 
 
-async def _set_user_enabled_uuid(
-    client: AdminApiClient, panel, user_uuid: str, creator: str | None, enabled: bool
-) -> None:
-    """Enable/disable a user, authenticating AS its creating admin (added_by_uuid) so the
-    panel's has_permission passes even when the configured key isn't the super-admin.
-    Falls back to the panel's configured key."""
-    if creator:
-        try:
-            await client.set_user_enabled(panel, user_uuid, enabled, api_key=creator)
-            return
-        except Exception:  # noqa: BLE001 — fall back to the panel/owner key
-            pass
-    await client.set_user_enabled(panel, user_uuid, enabled)
-
-
 async def _set_admin_limits(client: AdminApiClient, panel, admin: Reseller, mu: int, mau: int) -> None:
     """Set an admin's limits, authenticating AS that admin's PARENT (has_permission for an
     AdminUser passes when parent_admin_id == the acting account). Falls back to panel key."""
@@ -70,6 +54,43 @@ async def _set_admin_limits(client: AdminApiClient, panel, admin: Reseller, mu: 
         except Exception:  # noqa: BLE001
             pass
     await client.set_admin_limits(panel, admin.admin_uuid, mu, mau)
+
+
+async def _bulk_set_user_uuids(
+    client: AdminApiClient,
+    panel,
+    user_uuids: list[str],
+    enabled: bool,
+    *,
+    batch_size: int,
+    missing_ok: bool,
+) -> tuple[set[str], list[str]]:
+    """Apply Hiddify's native bulk user action in bounded batches."""
+    if not user_uuids:
+        return set(), []
+    user_ids = await client.get_user_ids(panel)
+    completed: set[str] = set()
+    errors: list[str] = []
+    available = [uuid for uuid in user_uuids if uuid in user_ids]
+    missing = [uuid for uuid in user_uuids if uuid not in user_ids]
+    if missing_ok:
+        completed.update(missing)
+    else:
+        errors.extend(f"user {uuid[-6:]}: not found on panel" for uuid in missing)
+    size = max(1, batch_size)
+    for offset in range(0, len(available), size):
+        chunk = available[offset:offset + size]
+        try:
+            await client.bulk_set_users_enabled(
+                panel, [user_ids[uuid] for uuid in chunk], enabled
+            )
+            completed.update(chunk)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(
+                f"bulk users {offset + 1}-{offset + len(chunk)}: {str(exc)[:300]}"
+            )
+            break
+    return completed, errors
 
 
 async def _enabled_users(session: AsyncSession, panel_id: int, admin_uuids: set[str]) -> list[EndUserSnapshot]:
@@ -91,6 +112,7 @@ def _progress(snapshot: dict | None) -> dict:
     progress = snapshot.setdefault("progress", {})
     progress.setdefault("users_done", [])
     progress.setdefault("users_failed", {})
+    progress.setdefault("users_missing", [])
     progress.setdefault("admins_done", [])
     progress.setdefault("admins_failed", {})
     progress.setdefault("captured_limits", {})
@@ -245,6 +267,38 @@ async def _process_enforcement_action(
     patched = 0
     rows = {}
     if remaining_users:
+        panel_user_ids: dict[str, int] = {
+            str(uuid): int(user_id)
+            for uuid, user_id in (snapshot.get("panel_user_ids") or {}).items()
+        }
+        if any(uuid not in panel_user_ids for uuid in remaining_users):
+            try:
+                current_user_ids = await client.get_user_ids(panel)
+                panel_user_ids.update(
+                    {
+                        uuid: current_user_ids[uuid]
+                        for uuid in users_map
+                        if uuid in current_user_ids
+                    }
+                )
+                snapshot["panel_user_ids"] = panel_user_ids
+            except Exception as exc:  # noqa: BLE001
+                action.status = EnforcementActionStatus.partial
+                action.error = f"bulk user id lookup failed: {str(exc)[:900]}"
+                action.snapshot = snapshot
+                flag_modified(action, "snapshot")
+                await session.commit()
+                return {"failed": 1, "partial": 1}
+
+        missing_users = set(progress.get("users_missing") or [])
+        for uuid in remaining_users:
+            if uuid not in panel_user_ids:
+                # The local sync snapshot can contain a user deleted from Hiddify after
+                # planning. There is nothing left to disable, so record and skip it.
+                missing_users.add(uuid)
+                done_users.add(uuid)
+        progress["users_missing"] = sorted(missing_users)
+        remaining_users = [uuid for uuid in remaining_users if uuid in panel_user_ids]
         chunk = remaining_users[:max(1, user_chunk_size)]
         rows = {
             r.user_uuid: r for r in (
@@ -256,15 +310,29 @@ async def _process_enforcement_action(
                 )
             ).scalars().all()
         }
-        for uuid in chunk:
+        if chunk:
             try:
-                await _set_user_enabled_uuid(client, panel, uuid, users_map.get(uuid) or None, False)
-                if uuid in rows:
-                    rows[uuid].enable = False
-                done_users.add(uuid)
-                patched += 1
+                await client.bulk_set_users_enabled(
+                    panel, [panel_user_ids[uuid] for uuid in chunk], False
+                )
+                for uuid in chunk:
+                    if uuid in rows:
+                        rows[uuid].enable = False
+                    done_users.add(uuid)
+                    patched += 1
+                action.error = None
             except Exception as exc:  # noqa: BLE001
-                failed_users[uuid] = str(exc)[:300]
+                # Keep every UUID pending. The next scheduler pass retries this same batch;
+                # never fall back to per-user PATCHes and accidentally overload the panel.
+                action.status = EnforcementActionStatus.partial
+                action.error = f"bulk disable failed: {str(exc)[:900]}"
+                action.snapshot = snapshot
+                flag_modified(action, "snapshot")
+                await session.commit()
+                return {"failed": 1, "partial": 1}
+        for uuid in missing_users:
+            if uuid in rows:
+                rows[uuid].enable = False
         progress["users_done"] = sorted(done_users)
         progress["users_failed"] = failed_users
         progress["phase"] = "users" if len(done_users) + len(failed_users) < len(users_map) else "limits"
@@ -368,7 +436,7 @@ async def process_enforcement_queue(
         session, ["enforcement_action_batch_limit", "enforcement_user_chunk_size"]
     )
     limit = max(1, int(action_limit or cfg.get("enforcement_action_batch_limit") or 1))
-    chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 50))
+    chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 100))
     actions = (
         await session.execute(
             select(EnforcementAction)
@@ -483,28 +551,33 @@ async def enforce_reseller(
 
     client = AdminApiClient()
     errors: list[str] = []
-    users_by_admin: dict[str, list] = defaultdict(list)
+    batch_size = int(
+        await settings_service.get(session, "enforcement_user_chunk_size", 100) or 100
+    )
+    try:
+        disabled_uuids, user_errors = await _bulk_set_user_uuids(
+            client,
+            panel,
+            [u.user_uuid for u in users],
+            False,
+            batch_size=batch_size,
+            missing_ok=True,
+        )
+        errors.extend(user_errors)
+    except Exception as exc:  # noqa: BLE001
+        disabled_uuids = set()
+        errors.append(f"bulk user lookup: {str(exc)[:300]}")
     for u in users:
-        users_by_admin[u.added_by_uuid or ""].append(u)
+        if u.user_uuid in disabled_uuids:
+            u.enable = False
 
     # Walk the tree BOTTOM-UP (deepest sub-resellers before their parent — `descendants`
-    # is breadth-first from the root, so reversed() yields children before parents). For
-    # each admin: (1) disable ITS users, then (2) zero ITS limits. Doing users-before-
-    # limits per node means a node is never capped while we still need to edit its users,
-    # and processing children first means a parent's cap can't interfere with a child.
-    # Users are edited AS their creator and limits AS the admin's parent, so the panel's
-    # permission check passes even when the configured key isn't the super-admin.
-    disabled = 0
+    # is breadth-first from the root, so reversed() yields children before parents). Users
+    # were disabled above through Hiddify's native bulk action before any limit is zeroed.
+    disabled = len(disabled_uuids)
     root_ok = False
     captured_limits: dict[str, dict] = {}
     for d in reversed(descendants):
-        for u in users_by_admin.get(d.admin_uuid, []):
-            try:
-                await _set_user_enabled_uuid(client, panel, u.user_uuid, u.added_by_uuid, False)
-                u.enable = False
-                disabled += 1
-            except Exception as ue:  # noqa: BLE001
-                errors.append(f"user {(u.name or u.user_uuid)[:16]}: {str(ue)[:90]}")
         # Read the admin's REAL current limits from the API (the backup sync may not
         # carry max_users), so restore puts back the true values — not a stale 0/None.
         try:
@@ -613,8 +686,7 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
         log.warning("Restore failed for reseller %s: %s", reseller.name, restore.error)
         return restore
 
-    # Now re-enable users (caps are lifted), each as its creating admin.
-    re_enabled = 0
+    # Now re-enable users in bounded native Hiddify batches (caps are lifted).
     rows = {}
     if users_map:
         rows = {
@@ -627,14 +699,26 @@ async def restore_reseller(session: AsyncSession, reseller: Reseller) -> Enforce
                 )
             ).scalars().all()
         }
-    for uuid, creator in users_map.items():
-        try:
-            await _set_user_enabled_uuid(client, panel, uuid, creator or None, True)
-            if uuid in rows:
-                rows[uuid].enable = True
-            re_enabled += 1
-        except Exception as ue:  # noqa: BLE001
-            errors.append(f"user {uuid[-6:]}: {str(ue)[:90]}")
+    batch_size = int(
+        await settings_service.get(session, "enforcement_user_chunk_size", 100) or 100
+    )
+    try:
+        re_enabled_uuids, user_errors = await _bulk_set_user_uuids(
+            client,
+            panel,
+            list(users_map),
+            True,
+            batch_size=batch_size,
+            missing_ok=False,
+        )
+        errors.extend(user_errors)
+    except Exception as exc:  # noqa: BLE001
+        re_enabled_uuids = set()
+        errors.append(f"bulk user lookup: {str(exc)[:300]}")
+    for uuid in re_enabled_uuids:
+        if uuid in rows:
+            rows[uuid].enable = True
+    re_enabled = len(re_enabled_uuids)
 
     # Only declare the reseller restored when EVERY required user re-enable succeeded. A
     # partial restore must stay `enforced` so the next trigger (payment confirm, manual

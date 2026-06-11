@@ -65,9 +65,10 @@ def _invoice(reseller_id, *, label, status=InvoiceStatus.sent, sent_days_ago=3):
 
 # --------------------------- partial restore stays enforced (retryable)
 def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
-    from app.services import enforcement
+    from app.services import enforcement, settings_service
 
     async def body(s):
+        await settings_service.set_value(s, "enforcement_user_chunk_size", 1)
         s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="o"))
         r = Reseller(panel_id=1, admin_uuid="A", name="R",
                      enforcement_state=EnforcementState.enforced, max_users_snapshot=100)
@@ -86,13 +87,16 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         async def fake_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        async def fake_user(self, panel, user_uuid, enabled, api_key=None):
-            if user_uuid == fail_uuid["u"]:
+        async def fake_user_ids(self, panel):
+            return {"u1": 1, "u2": 2}
+
+        async def fake_bulk(self, panel, user_ids, enabled):
+            if 2 in user_ids and fail_uuid["u"] == "u2":
                 raise RuntimeError("panel rejected")
-            return None
 
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_limits)
-        monkeypatch.setattr(enforcement.AdminApiClient, "set_user_enabled", fake_user)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
         # First restore: u2 fails → must stay ENFORCED (retryable), snapshot kept.
         res = await enforcement.restore_reseller(s, r)
@@ -222,8 +226,11 @@ def test_enforcement_queue_processes_in_resumable_chunks(tmp_path, monkeypatch):
 
         calls: list[tuple[str, str | int]] = []
 
-        async def fake_user(self, panel, user_uuid, enabled, api_key=None):
-            calls.append(("user", user_uuid))
+        async def fake_user_ids(self, panel):
+            return {"u0": 10, "u1": 11, "u2": 12}
+
+        async def fake_bulk(self, panel, user_ids, enabled):
+            calls.append(("bulk", tuple(user_ids)))
 
         async def fake_get_limits(self, panel, admin_uuid, api_key=None):
             calls.append(("get_limits", admin_uuid))
@@ -232,7 +239,8 @@ def test_enforcement_queue_processes_in_resumable_chunks(tmp_path, monkeypatch):
         async def fake_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             calls.append(("limits", admin_uuid))
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "set_user_enabled", fake_user)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_limits)
 
@@ -241,12 +249,14 @@ def test_enforcement_queue_processes_in_resumable_chunks(tmp_path, monkeypatch):
         await s.refresh(action)
         assert action.status == EnforcementActionStatus.partial
         assert action.affected_count == 2
+        assert ("bulk", (10, 11)) in calls
 
         res2 = await enforcement.process_enforcement_queue(s, action_limit=1, user_chunk_size=2)
         assert res2["partial"] == 1
         await s.refresh(action)
         assert action.affected_count == 3
         assert r.enforcement_state == EnforcementState.active
+        assert ("bulk", (12,)) in calls
 
         res3 = await enforcement.process_enforcement_queue(s, action_limit=1, user_chunk_size=2)
         assert res3["done"] == 1

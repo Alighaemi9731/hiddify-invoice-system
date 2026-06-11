@@ -8,6 +8,38 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.58 - 2026-06-11
+
+Native Hiddify bulk enforcement.
+
+### Changed
+
+- Replaced one REST PATCH per end user with Hiddify's native Flask-Admin bulk
+  Enable/Disable action. Each enforcement chunk now performs one bulk POST and triggers
+  Hiddify's `quick_apply_users` only once for the whole batch.
+- Added Hiddify user UUID-to-internal-ID discovery and persisted only the relevant mapping
+  in the resumable enforcement snapshot.
+- Manual enforcement, queued enforcement, and payment restore now share the same bounded
+  bulk-user path. They never silently fall back to the high-load per-user PATCH path.
+- New installations default to 100 users per enforcement batch; existing runtime values
+  remain configurable and unchanged.
+
+### Verification
+
+- Inspected the official Hiddify-Manager/Hiddify-Panel source and confirmed that the
+  public v2 REST API only supports single-user PATCH while the panel UI exposes a native
+  multi-row action at `/admin/user/action/`.
+- Live test-panel batches of 5 and 100 users succeeded; the 100-user batch completed in
+  about 11 seconds with one POST.
+- Drained the complete test queue: 2,105 existing users were verified disabled, one
+  snapshot user had already been deleted from Hiddify, and all 21 affected admins were
+  verified with zero user limits.
+- Confirmed a manual payment through the real payment service and verified bulk restore
+  end to end: the invoice became paid, the reseller became active, its limits returned to
+  100/100, and all 56 snapshotted users were enabled again.
+- Full backend tests, adapter regressions, lint/typecheck, frontend build, and whitespace
+  checks pass.
+
 ## 1.37.57 - 2026-06-11
 
 Queued enforcement worker for high-volume dunning.

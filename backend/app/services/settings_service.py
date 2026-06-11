@@ -175,7 +175,7 @@ DEFS: list[SettingDef] = [
     # processes a small, resumable slice at a time so large panels never block a scheduler tick.
     SettingDef("enforcement_worker_interval_minutes", 5, False, "dunning"),
     SettingDef("enforcement_action_batch_limit", 1, False, "dunning"),
-    SettingDef("enforcement_user_chunk_size", 50, False, "dunning"),
+    SettingDef("enforcement_user_chunk_size", 100, False, "dunning"),
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
     # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
     # so a stale, never-reviewed proof can't shield a debt forever. Default 7.

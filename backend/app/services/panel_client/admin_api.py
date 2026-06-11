@@ -10,7 +10,9 @@ Auth header: Hiddify-API-Key: <admin_api_key (the admin uuid)>
 """
 from __future__ import annotations
 
+import html
 import logging
+import re
 
 import httpx
 
@@ -54,6 +56,75 @@ class AdminApiClient(PanelClient):
             # rarely enough to diagnose why a disable was rejected).
             if resp.status_code >= 400:
                 raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
+
+    async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
+        """Return Hiddify's internal numeric id for every visible user.
+
+        The REST API exposes the ids but only supports single-user PATCH. The numeric ids
+        are required by Hiddify's own Flask-Admin bulk action endpoint.
+        """
+        url = f"{panel.admin_api_base}/user/"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, headers=self._headers(panel))
+            resp.raise_for_status()
+            data = resp.json()
+        if not isinstance(data, list):
+            raise RuntimeError("Hiddify user list returned a non-list response")
+        result: dict[str, int] = {}
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            uuid = row.get("uuid")
+            user_id = row.get("id")
+            if uuid and isinstance(user_id, int):
+                result[str(uuid)] = user_id
+        return result
+
+    async def bulk_set_users_enabled(  # noqa: ANN001
+        self, panel, user_ids: list[int], enabled: bool
+    ) -> None:
+        """Use Hiddify's native Flask-Admin bulk Enable/Disable action.
+
+        Hiddify has no bulk endpoint in its public v2 REST API. Its own user-list UI does
+        provide a bulk action that updates all selected rows in one SQL statement, updates
+        the core clients server-side, and invokes quick_apply_users only once per batch.
+        """
+        if not user_ids:
+            return
+        list_url = f"{panel.proxy_base}/admin/user/"
+        action_url = f"{panel.proxy_base}/admin/user/action/"
+        headers = self._headers(panel)
+        headers["User-Agent"] = "invoice-system-bulk-enforcement/1"
+        async with httpx.AsyncClient(
+            timeout=max(self.timeout, 300.0),
+            follow_redirects=False,
+            headers=headers,
+        ) as client:
+            page = await client.get(list_url)
+            if page.status_code >= 400:
+                raise RuntimeError(
+                    f"Hiddify bulk user page {page.status_code}: {page.text[:300]}"
+                )
+            match = re.search(
+                r'name=["\']csrf_token["\'][^>]*value=["\']([^"\']+)["\']',
+                page.text,
+            )
+            if match is None:
+                raise RuntimeError("Hiddify bulk user action has no CSRF token")
+            csrf_token = html.unescape(match.group(1))
+            response = await client.post(
+                action_url,
+                data={
+                    "csrf_token": csrf_token,
+                    "url": list_url,
+                    "action": "enable" if enabled else "disable",
+                    "rowid": [str(user_id) for user_id in user_ids],
+                },
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"Hiddify bulk user action {response.status_code}: {response.text[:300]}"
+                )
 
     async def get_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None
