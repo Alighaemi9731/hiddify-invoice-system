@@ -893,6 +893,23 @@ async def _process_restore_action(
     for descendant in descendants:
         descendant.max_users_snapshot = None
         descendant.max_active_users_snapshot = None
+    # `enforced` means the unpaid invoice currently has panel access suspended. Once the
+    # restore is fully complete, any still-unpaid enforced invoice is overdue again. Paid
+    # invoices and deferred invoices have already moved to `paid` / `sent` before queueing
+    # restore and are intentionally left unchanged.
+    from app.models import Invoice
+    from app.models.enums import InvoiceStatus
+
+    enforced_invoices = (
+        await session.execute(
+            select(Invoice).where(
+                Invoice.reseller_id == reseller.id,
+                Invoice.status == InvoiceStatus.enforced,
+            )
+        )
+    ).scalars().all()
+    for invoice in enforced_invoices:
+        invoice.status = InvoiceStatus.overdue
     source_id = snapshot.get("source_action_id")
     if source_id:
         source = await session.get(EnforcementAction, int(source_id))

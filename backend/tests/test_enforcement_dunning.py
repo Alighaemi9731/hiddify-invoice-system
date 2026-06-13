@@ -395,6 +395,7 @@ def test_restore_limits_are_top_down_and_chunked(tmp_path, monkeypatch):
         await s.flush()
         source = EnforcementAction(
             reseller_id=root.id,
+            invoice_id=None,
             action=EnforcementActionType.disable_users,
             dry_run=False,
             status=EnforcementActionStatus.done,
@@ -439,6 +440,65 @@ def test_restore_limits_are_top_down_and_chunked(tmp_path, monkeypatch):
         assert child.max_users_snapshot is None
 
     _run(body, tmp_path, "restore_admin_order.db")
+
+
+def test_completed_restore_moves_enforced_invoice_back_to_overdue(
+    tmp_path, monkeypatch
+):
+    from app.services import enforcement
+
+    async def body(s):
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(
+            panel_id=1,
+            admin_uuid="A",
+            name="R",
+            enforcement_state=EnforcementState.enforced,
+            max_users_snapshot=100,
+            max_active_users_snapshot=100,
+        )
+        s.add(r)
+        await s.flush()
+        invoice = _invoice(
+            r.id, label="2026-05", status=InvoiceStatus.enforced, sent_days_ago=8
+        )
+        s.add(invoice)
+        await s.flush()
+        s.add(
+            EnforcementAction(
+                reseller_id=r.id,
+                invoice_id=invoice.id,
+                action=EnforcementActionType.disable_users,
+                dry_run=False,
+                status=EnforcementActionStatus.done,
+                snapshot={
+                    "admins": ["A"],
+                    "limits": {"A": {"max_users": 100, "max_active_users": 100}},
+                    "users": {},
+                },
+            )
+        )
+        await s.commit()
+
+        async def fake_limits(self, panel, admin_uuid, mu, mau, api_key=None):
+            return None
+
+        monkeypatch.setattr(
+            enforcement.AdminApiClient, "set_admin_limits", fake_limits
+        )
+
+        restore = await enforcement.queue_restore(s, r, reason="panel")
+        assert restore is not None
+        result = await enforcement.process_enforcement_queue(
+            s, action_limit=1, user_chunk_size=100, admin_chunk_size=10
+        )
+        assert result["done"] == 1
+        await s.refresh(invoice)
+        await s.refresh(r)
+        assert invoice.status == InvoiceStatus.overdue
+        assert r.enforcement_state == EnforcementState.active
+
+    _run(body, tmp_path, "restore_invoice_status.db")
 
 
 def test_enforcement_never_zeros_limits_without_a_restore_snapshot(

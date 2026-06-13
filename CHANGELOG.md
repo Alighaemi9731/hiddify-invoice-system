@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.60 - 2026-06-14
+
+CAPTCHA contrast improvement and enforcement restore invoice status fix.
+
+### Changed
+
+- CAPTCHA image uses darker text with stroke rendering, lighter background, and reduced
+  noise so characters are clearly legible without weakening bot resistance.
+- Login page CAPTCHA container CSS forces full-opacity rendering regardless of the
+  browser's forced-color or dark-mode filter.
+
+### Fixed
+
+- After a full enforcement restore completes, any invoice still in `enforced` status is
+  now moved back to `overdue` so the dunning cycle can resume reminders normally.
+
 ## 1.37.59 - 2026-06-12
 
 Queued, resumable enforcement restore.

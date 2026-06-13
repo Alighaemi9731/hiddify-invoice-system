@@ -1,5 +1,9 @@
 """Regression tests for the audit fixes (pure, no DB/network)."""
+import base64
 import datetime as dt
+import io
+
+from PIL import Image
 
 from app.core import loginsec
 
@@ -22,6 +26,16 @@ def test_loginsec_global_backstop_across_ips():
     for i in range(loginsec.GLOBAL_MAX_ATTEMPTS):
         loginsec.record_failure("admin", f"10.0.0.{i}")
     assert loginsec.is_locked("admin", "9.9.9.9") > 0  # brand-new IP is locked by the global cap
+
+
+def test_captcha_has_high_contrast_dark_text():
+    _cid, uri = loginsec.new_captcha()
+    image = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1]))).convert("RGB")
+    pixels = list(image.get_flattened_data())
+    dark = sum(1 for r, g, b in pixels if r + g + b < 210)
+    light = sum(1 for r, g, b in pixels if r + g + b > 690)
+    assert dark > 500
+    assert light > len(pixels) // 2
 
 
 def test_crypto_mask_reveals_nothing():

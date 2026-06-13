@@ -138,21 +138,22 @@ def _render_png(code: str) -> str:
     from PIL import Image, ImageDraw
 
     w, h = 180, 60
-    img = Image.new("RGB", (w, h), (240, 243, 250))
+    img = Image.new("RGB", (w, h), (247, 249, 252))
     d = ImageDraw.Draw(img)
     # speckle noise
-    for _ in range(420):
+    for _ in range(280):
         d.point((secrets.randbelow(w), secrets.randbelow(h)),
-                fill=(secrets.randbelow(200) + 30,) * 3)
-    for _ in range(5):  # a few distractor lines
+                fill=(secrets.randbelow(135) + 105,) * 3)
+    for _ in range(4):  # a few distractor lines
         d.line((secrets.randbelow(w), secrets.randbelow(h),
                 secrets.randbelow(w), secrets.randbelow(h)),
-               fill=(150, 160, 180), width=1)
+               fill=(170, 181, 198), width=1)
     font = _captcha_font(34)
     x = 18
     for ch in code:
         y = 8 + secrets.randbelow(8)
-        d.text((x, y), ch, font=font, fill=(31, 59, 115))
+        d.text((x, y), ch, font=font, fill=(8, 35, 72), stroke_width=1,
+               stroke_fill=(8, 35, 72))
         x += 30
     buf = io.BytesIO()
     img.save(buf, format="PNG")

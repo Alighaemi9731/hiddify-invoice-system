@@ -252,12 +252,19 @@ export default function Login() {
                     overflow: "hidden",
                     border: "1px solid #d6d9df",
                     borderRadius: "14px",
-                    backgroundColor: "#f7f9fb",
+                    backgroundColor: "#f7f9fc",
+                    colorScheme: "light",
+                    forcedColorAdjust: "none",
+                    isolation: "isolate",
                     "& img": {
                       display: "block",
                       width: "100%",
                       height: "100%",
                       objectFit: "contain",
+                      opacity: 1,
+                      filter: "none !important",
+                      mixBlendMode: "normal",
+                      forcedColorAdjust: "none",
                     },
                   }}
                 >
