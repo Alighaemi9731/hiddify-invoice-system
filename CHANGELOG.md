@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.61 - 2026-06-14
+
+Panel owner UUID migration fix.
+
+### Fixed
+
+- When a Hiddify panel backup is restored on a new server (changing the super-admin UUID),
+  the next panel sync now deletes the stale owner reseller row instead of leaving an orphan
+  `is_owner=True` entry in the database. The new owner row is created and all sub-resellers'
+  `parent_admin_uuid` is updated automatically from the backup data.
+
 ## 1.37.60 - 2026-06-14
 
 CAPTCHA contrast improvement and enforcement restore invoice status fix.

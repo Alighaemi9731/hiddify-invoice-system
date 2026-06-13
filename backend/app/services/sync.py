@@ -93,7 +93,9 @@ async def _upsert_resellers(
             await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
         ).scalars()
     }
+    seen_uuids: set[str] = set()
     for a in data.admins:
+        seen_uuids.add(a.uuid)
         r = existing.get(a.uuid)
         if r is None:
             r = Reseller(
@@ -112,6 +114,13 @@ async def _upsert_resellers(
         r.panel_max_active_users = a.max_active_users
         r.can_add_admin = a.can_add_admin
         r.last_seen_at = now
+
+    # If the panel's owner UUID changed (e.g. restored backup on a new server), the old
+    # owner row is no longer in data.admins.  Delete it — owner rows are never billed and
+    # have no invoices/payments/enforcement actions, so there is nothing to orphan.
+    for uuid, r in existing.items():
+        if r.is_owner and uuid not in seen_uuids:
+            await session.delete(r)
 
 
 async def _upsert_users(
