@@ -10,13 +10,17 @@ so the panel count and the bot count always agree. Sub-resellers are NOT counted
 """
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Reseller
+from app.models import Panel, Reseller
+from app.models.enums import PanelStatus
+
+_PRESENCE_SKEW = dt.timedelta(seconds=2)
 
 
 def top_level_roots(resellers: Iterable[Reseller]) -> list[Reseller]:
@@ -46,8 +50,22 @@ class RootStats:
 
 
 async def load_root_stats(session: AsyncSession, panel_id: int | None = None) -> RootStats:
-    """Compute top-level reseller counts (optionally for one panel)."""
-    q = select(Reseller)
+    """Compute top-level reseller counts (optionally for one panel).
+
+    Only counts resellers currently present on their panel — removed admins (those whose
+    last_seen_at predates the panel's latest successful sync) are excluded from all stats."""
+    q = (
+        select(Reseller)
+        .join(Panel, Reseller.panel_id == Panel.id)
+        .where(
+            or_(
+                Panel.status != PanelStatus.ok,
+                Panel.last_synced_at.is_(None),
+                Reseller.last_seen_at.is_(None),
+                Reseller.last_seen_at >= Panel.last_synced_at - _PRESENCE_SKEW,
+            )
+        )
+    )
     if panel_id is not None:
         q = q.where(Reseller.panel_id == panel_id)
     roots = top_level_roots((await session.execute(q)).scalars().all())

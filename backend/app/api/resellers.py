@@ -1,6 +1,8 @@
 """Resellers: list (with panel), detail, edit price / billing exclusion."""
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import EndUserSnapshot, Panel, Reseller
+from app.models.enums import PanelStatus
 from app.schemas.reseller import (
     BumpLimitsBody,
     CanAddAdminBody,
@@ -15,6 +18,22 @@ from app.schemas.reseller import (
     ResellerUpdate,
 )
 from app.services import admin_capacity, enforcement, pricing
+
+# Resellers removed from Hiddify keep their DB row for billing history but must not
+# appear in the UI.  This filter, applied to queries that JOIN Panel, keeps only
+# resellers seen in the panel's latest successful sync (or when we have no good sync yet).
+_PRESENCE_SKEW = dt.timedelta(seconds=2)
+
+
+def _present_filter():
+    """SQLAlchemy WHERE clause: reseller is still present on the panel."""
+    return or_(
+        Panel.status != PanelStatus.ok,
+        Panel.last_synced_at.is_(None),
+        Reseller.last_seen_at.is_(None),
+        Reseller.last_seen_at >= Panel.last_synced_at - _PRESENCE_SKEW,
+    )
+
 
 router = APIRouter(
     prefix="/api/resellers", tags=["resellers"], dependencies=[Depends(get_current_subject)]
@@ -89,13 +108,13 @@ async def list_resellers(
     if top_level_only:
         from app.services.reseller_stats import top_level_roots
 
-        base = select(Reseller)
+        base = select(Reseller).join(Panel, Reseller.panel_id == Panel.id).where(_present_filter())
         if panel_id is not None:
             base = base.where(Reseller.panel_id == panel_id)
         all_res = (await session.execute(base)).scalars().all()
         root_keys = {(r.panel_id, r.admin_uuid) for r in top_level_roots(all_res)}
 
-    query = select(Reseller, Panel.key).join(Panel, Reseller.panel_id == Panel.id)
+    query = select(Reseller, Panel.key).join(Panel, Reseller.panel_id == Panel.id).where(_present_filter())
     if panel_id is not None:
         query = query.where(Reseller.panel_id == panel_id)
     if not include_owners:
@@ -125,7 +144,11 @@ async def reseller_tree(
     Lets the panel show who belongs to whom (a sub-reseller appears inside its
     parent admin's group)."""
     default_price = await pricing.get_default_price_per_gb(session)
-    query = select(Reseller, Panel.key).join(Panel, Reseller.panel_id == Panel.id)
+    query = (
+        select(Reseller, Panel.key)
+        .join(Panel, Reseller.panel_id == Panel.id)
+        .where(_present_filter())
+    )
     if panel_id is not None:
         query = query.where(Reseller.panel_id == panel_id)
     rows = (await session.execute(query)).all()

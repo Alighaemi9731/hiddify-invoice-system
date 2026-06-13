@@ -1,10 +1,11 @@
 """Panels: CRUD + sync (owner-only)."""
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
@@ -24,17 +25,27 @@ from app.services.panel_client import BackupJsonClient
 
 log = logging.getLogger("api.panels")
 
+_PRESENCE_SKEW = dt.timedelta(seconds=2)
+
 router = APIRouter(
     prefix="/api/panels", tags=["panels"], dependencies=[Depends(get_current_subject)]
 )
 
 
 async def _to_out(session: AsyncSession, panel: Panel) -> PanelOut:
-    resellers_count = (
-        await session.execute(
-            select(func.count(Reseller.id)).where(Reseller.panel_id == panel.id)
+    # Count only non-owner resellers that are still present on the panel (seen in the
+    # latest successful sync).  Resellers removed from Hiddify keep their DB row for
+    # billing history but must not inflate the UI count.
+    count_q = select(func.count(Reseller.id)).where(
+        Reseller.panel_id == panel.id,
+        Reseller.is_owner.is_(False),
+    )
+    if panel.status == PanelStatus.ok and panel.last_synced_at is not None:
+        cutoff = panel.last_synced_at - _PRESENCE_SKEW
+        count_q = count_q.where(
+            or_(Reseller.last_seen_at.is_(None), Reseller.last_seen_at >= cutoff)
         )
-    ).scalar_one()
+    resellers_count = (await session.execute(count_q)).scalar_one()
     users_count = (
         await session.execute(
             select(func.count(EndUserSnapshot.id)).where(

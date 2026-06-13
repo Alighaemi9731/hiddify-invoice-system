@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.62 - 2026-06-14
+
+Hide removed resellers from UI counts and lists.
+
+### Changed
+
+- Resellers deleted from a Hiddify panel (absent from the latest successful sync) are no
+  longer shown in the reseller list, hierarchy tree, or any admin count. Their DB rows
+  are kept for billing history but are invisible in the UI.
+- The panel card's reseller count now correctly excludes both the owner row and removed
+  admins — it reflects exactly the live admins on the Hiddify panel.
+- Dashboard and bot stats (`آمار کلی`) count only active (present) top-level resellers.
+
 ## 1.37.61 - 2026-06-14
 
 Panel owner UUID migration fix.
