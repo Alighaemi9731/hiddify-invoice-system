@@ -8,6 +8,15 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.66 - 2026-06-14
+
+### Fixed
+
+- Favicon/tab icon regenerated from the new Apple-blue SVG — browser tab now shows
+  the blue icon instead of the old purple one.
+- Resellers page: removed "نماینده اصلی" / "X زیرمجموعه" / "زیرمجموعه سطح X"
+  sub-labels under each reseller name in both the flat list and the tree view.
+
 ## 1.37.65 - 2026-06-14
 
 Apple-theme UI overhaul: liquid glass, unified pill controls, blue accent.

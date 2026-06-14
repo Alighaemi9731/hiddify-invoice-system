@@ -798,13 +798,6 @@ function ResellerIdentity({
             </Tooltip>
           )}
         </Stack>
-        <Typography variant="caption" color="text.secondary" noWrap>
-          {hasChildren
-            ? `${fmtNum(treeRow.descendant_count)} زیرمجموعه`
-            : depth > 0
-              ? `زیرمجموعه سطح ${fmtNum(depth)}`
-              : "نماینده اصلی"}
-        </Typography>
       </Box>
     </Box>
   );
