@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.67 - 2026-06-14
+
+### Fixed
+
+- **Favicon stayed purple after update** — the browser caches favicons by filename
+  almost indefinitely, so the old purple icon persisted even though the files were
+  already blue. Added a `?v=2` cache-bust to the favicon/apple-touch/manifest icon
+  URLs so browsers fetch the new blue icon.
+- **`theme-color` was still purple** (`#6d5efc`) in `index.html` and
+  `site.webmanifest` — tinted the browser/PWA chrome purple. Changed to Apple blue
+  (`#0071e3`); manifest `background_color` set to `#000000`.
+
 ## 1.37.66 - 2026-06-14
 
 ### Fixed
