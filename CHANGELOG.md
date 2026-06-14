@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.63 - 2026-06-14
+
+Optimal enforcement: parallel admin limits + full chunk loop in one worker tick.
+
+### Changed
+
+- **Admin limit patching is now parallel**: all admins in a suspension or restore are
+  patched concurrently via `asyncio.gather` with a configurable semaphore
+  (`enforcement_admin_chunk_size`, default 10 concurrent). Previously each admin
+  required a separate worker tick, so 20 sub-admins took 20 ticks × the worker interval.
+- **All user chunks complete in one worker invocation**: the worker loops over every
+  remaining chunk in a single call rather than returning after each chunk. Progress is
+  committed after each successful chunk so a crash resumes from exactly the last
+  committed point. A *failed* chunk still returns partial, deferring the retry to the
+  next worker tick — the retry logic and `_MAX_RETRIES` guard are unchanged.
+- **Default `enforcement_user_chunk_size` raised from 100 to 500**: fewer
+  `quick_apply_users` calls per enforcement reduces load on the Hiddify panel.
+- `enforcement_admin_chunk_size` now controls parallel concurrency (semaphore size)
+  rather than a per-tick batch count.
+- Tests updated to reflect one-tick completion; the partial-restore safety invariant
+  (reseller stays `enforced` until all users are re-enabled) is preserved and tested.
+
 ## 1.37.62 - 2026-06-14
 
 Hide removed resellers from UI counts and lists.
