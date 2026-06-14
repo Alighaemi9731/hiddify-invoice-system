@@ -607,6 +607,27 @@ async def queue_restore(
     return restore
 
 
+async def _notify_owner_failed(session: AsyncSession, action: EnforcementAction) -> None:
+    """Best-effort: tell the owner a queued suspension/restore failed after its retries, so a
+    stuck action (bad API key, panel unreachable) doesn't silently leave debt uncollected or a
+    paid reseller suspended. Never raises into the worker."""
+    try:
+        from app.services import owner_notify
+
+        reseller = await session.get(Reseller, action.reseller_id)
+        who = owner_notify.user_link(reseller) if reseller else f"#{action.reseller_id}"
+        kind = "بازگردانی" if action.action == EnforcementActionType.restore else "مسدودسازی"
+        await owner_notify.notify_owner(
+            session,
+            f"⛔️ {kind} خودکار برای نماینده {who} پس از چند تلاش ناموفق ماند و متوقف شد.\n"
+            f"خطا: {(action.error or '—')[:300]}\n"
+            f"لطفاً اتصال/کلید API پنل را بررسی کنید و در صورت نیاز دستی اقدام کنید.",
+            html=bool(reseller),
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("owner failure notification failed for action %s", action.id, exc_info=True)
+
+
 # ── worker actions ───────────────────────────────────────────────────────────
 
 async def _process_enforcement_action(
@@ -968,6 +989,10 @@ async def process_enforcement_queue(
                 user_chunk_size=chunk,
                 admin_parallelism=para,
             )
+        # A hard failure (exhausted retries) is no longer silent: ping the owner so a stuck
+        # suspension/restore is visible instead of leaving debt uncollected.
+        if step.get("failed"):
+            await _notify_owner_failed(session, action)
         for key in result:
             if key != "picked":
                 result[key] += int(step.get(key, 0) or 0)

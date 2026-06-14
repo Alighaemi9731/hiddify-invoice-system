@@ -6,8 +6,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 ## Unreleased
 
+No changes yet.
+
+## 1.37.68 - 2026-06-15
+
 ### Added
 
+- **Owner alert on a stuck enforcement.** If a queued suspension/restore fails after its
+  retries (e.g. a wrong panel API key), the owner is now notified on Telegram instead of it
+  being only logged — so debt is never silently left uncollected nor a paid reseller left
+  suspended.
 - **Automatic log retention** so the database can't bloat over time. A new daily
   maintenance job (`daily_maintenance`, 04:30 local) prunes the three append-only
   log/audit tables — `sync_runs`, `delivery_log`, and terminal `enforcement_actions`
@@ -34,6 +42,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 - **Guard against billing an incomplete month.** Generating invoices for the current or a
   future month (the period isn't over yet) now asks for confirmation, since the normal action
   is to issue the previous, completed month.
+
+### Changed
+
+- **Settings «متفرقه» eliminated.** Seven tuning settings that previously fell into the
+  catch-all section with raw English keys now have proper Persian labels + help in their right
+  category: log retention, online-rate max age, and the five enforcement/pending-hold knobs.
+- **Help page completed/updated** for the newest features: log retention & auto-deletion,
+  backup contents (DB + settings + key) / optional passphrase / atomic restore + auto-restart /
+  what's not in the backup, the stuck-enforcement owner alert, the incomplete-month guard, and
+  the interim-equals-final note.
+- Removed the obsolete `e2e/` Playwright scaffolding (not part of CI).
 
 ## 1.37.67 - 2026-06-14
 
