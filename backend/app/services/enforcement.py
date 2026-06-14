@@ -12,7 +12,9 @@ import asyncio
 import logging
 from copy import deepcopy
 
-from sqlalchemy import case, select
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import case, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -732,6 +734,9 @@ async def _process_enforcement_action(
     action.error = None
     progress["phase"] = "done"
     action.affected_count = len(done_users - missing_users)
+    # panel_user_ids is only a retry cache; strip it from the stored snapshot so the row
+    # doesn't hold ~100 KB of integer-ID mappings that have no audit value after completion.
+    snapshot.pop("panel_user_ids", None)
     action.snapshot = snapshot
     flag_modified(action, "snapshot")
 
@@ -879,6 +884,7 @@ async def _process_restore_action(
     action.error = None
     progress["phase"] = "done"
     action.affected_count = len(done_users - missing_users)
+    snapshot.pop("panel_user_ids", None)
     action.snapshot = snapshot
     flag_modified(action, "snapshot")
     await session.commit()
@@ -916,6 +922,21 @@ async def process_enforcement_queue(
     limit = max(1, int(action_limit or cfg.get("enforcement_action_batch_limit") or 1))
     chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 500))
     para = max(1, int(admin_chunk_size or cfg.get("enforcement_admin_chunk_size") or 10))
+
+    # Prune terminal enforcement_action rows older than 30 days to keep the table lean.
+    # Rows still hold full user-UUID lists; after 30 days they have no operational value.
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
+    await session.execute(
+        delete(EnforcementAction)
+        .where(
+            EnforcementAction.status.in_(
+                [EnforcementActionStatus.done, EnforcementActionStatus.reverted]
+            ),
+            EnforcementAction.created_at < cutoff,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
 
     actions = (
         await session.execute(

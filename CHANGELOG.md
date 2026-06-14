@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.64 - 2026-06-14
+
+Enforcement chunk-size fix, snapshot trimming, and old-row pruning.
+
+### Fixed
+
+- **Chunk size was always 100, not 500**: `settings_service.py` had the default for
+  `enforcement_user_chunk_size` at 100, so the `or 500` fallback in `enforcement.py`
+  never fired. The DB default is now 500, and a migration bumps existing installs from
+  100 → 500 (only if the value was still at the old default).
+
+### Changed
+
+- **Snapshot trimmed on completion**: `panel_user_ids` (UUID→Hiddify-ID mapping cached
+  for retry) is removed from the snapshot JSON when an action reaches `done`. This is a
+  pure performance cache with no audit value; removing it saves ~100 KB per completed row.
+- **Automatic pruning of old rows**: at the start of each enforcement worker tick, rows
+  with status `done` or `reverted` that are older than 30 days are deleted. This keeps
+  the `enforcement_actions` table from growing unbounded while preserving a month of
+  audit history.
+
 ## 1.37.63 - 2026-06-14
 
 Optimal enforcement: parallel admin limits + full chunk loop in one worker tick.
