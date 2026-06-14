@@ -122,7 +122,15 @@ export default function Invoices() {
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <Box sx={{ flexGrow: 1 }} />
-        <Button variant="outlined" onClick={() => gen.mutate()} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
+        <Button variant="outlined" onClick={() => {
+          // Guard against billing an incomplete month: the normal action is to issue the
+          // PREVIOUS (completed) month. Generating the current/future month would invoice only
+          // the services created so far — confirm before proceeding.
+          if (period >= currentPeriod() && !confirm(
+            `دورهٔ ${period} هنوز تمام نشده؛ فاکتورِ این دوره ناقص می‌شود (فقط سرویس‌های ثبت‌شده تا امروز). معمولاً باید دورهٔ ماهِ گذشته را صادر کنید. ادامه می‌دهید؟`
+          )) return;
+          gen.mutate();
+        }} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
         <Button variant="outlined" color="warning" onClick={() => {
           if (confirm(`همهٔ پیش‌نویس‌های دوره ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده می‌مانند)`)) discard.mutate();
         }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>

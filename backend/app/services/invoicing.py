@@ -8,7 +8,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass, field
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -29,6 +29,24 @@ log = logging.getLogger("invoicing")
 # Allow for sub-second clock/reload skew when comparing a reseller's last_seen_at to the
 # panel's last_synced_at (both stamped from the same value during a sync).
 _PRESENCE_SKEW = dt.timedelta(seconds=2)
+
+# Serializes all invoice generation/recompute so two concurrent runs (the monthly scheduler
+# job overlapping a manual «صدور فاکتورهای دوره», or a double-click) can never race on the
+# same (reseller, period): the unique constraint already blocks duplicates, but without this
+# the loser would abort with an IntegrityError (rolling back the whole run) or interleave
+# invoice-line writes. Adjacent to the Alembic migration lock key.
+_BILLING_LOCK_KEY = 734_137_044
+
+
+async def _serialize_billing(session: AsyncSession) -> None:
+    """Take a transaction-level advisory lock (auto-released on commit/rollback) so only one
+    billing run proceeds at a time; others wait, then see the committed invoices. No-op on
+    SQLite (tests / single-writer)."""
+    bind = session.get_bind()
+    if getattr(bind.dialect, "name", "") == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:k)"), {"k": _BILLING_LOCK_KEY}
+        )
 
 
 def _panel_billable(panel: Panel) -> tuple[bool, str]:
@@ -97,6 +115,9 @@ async def generate_invoices(
         except Exception:  # noqa: BLE001
             import logging
             logging.getLogger("invoicing").warning("pre-billing TON rate refresh failed", exc_info=True)
+
+    # Serialize against any other concurrent generation/recompute before reading + writing.
+    await _serialize_billing(session)
 
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
@@ -256,6 +277,10 @@ async def recompute_invoice(
             raise ValueError("invoice or panel disappeared during recompute")
         panel = refreshed_panel
         invoice = refreshed_invoice
+
+    # Serialize against concurrent generation/recompute (after the optional sync's own commit,
+    # so the lock is held through this recompute's single final commit).
+    await _serialize_billing(session)
 
     period = Period(invoice.period_start, invoice.period_end)
     default_price = await pricing.get_default_price_per_gb(session)

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Panel, Reseller
-from app.services import pricing
+from app.services import metering, pricing
 from app.services.invoice_engine import (
     BundleResult,
     build_children_map,
@@ -138,6 +138,25 @@ def _billable_gb_for_period(
     return round(gb, 2), cnt
 
 
+async def _billable_gb_with_metering(
+    session: AsyncSession,
+    panel_id: int,
+    uuids: set[str],
+    users,
+    period: Period,
+    free_threshold: float,
+    excluded: set[int],
+    panel_synced_at: dt.datetime | None,
+) -> tuple[float, int]:
+    """Base billable GB (snapshot rule) PLUS the abuse-metered extra (overage + renew-by-edit)
+    for `uuids` in `period`. This is EXACTLY what `generate_invoices` bills for that subtree, so
+    the bot's interim («علی‌الحساب»), sub-reseller report, and GB-cap numbers match the
+    end-of-month invoice instead of under-reporting whenever there is metered abuse."""
+    base_gb, cnt = _billable_gb_for_period(users, period, free_threshold, excluded, panel_synced_at)
+    extra = await metering.bundle_extra(session, panel_id, uuids, period.label, free_threshold)
+    return round(base_gb + float(extra.get("gb", 0) or 0), 3), cnt + len(extra.get("lines", []))
+
+
 async def node_report(session: AsyncSession, reseller: Reseller, *, months: int = 3) -> dict:
     descendants = await node_descendants(session, reseller)
     uuids = {d.admin_uuid for d in descendants}
@@ -158,7 +177,9 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
 
     by_month: list[MonthSummary] = []
     for p in _last_months(months):
-        gb, cnt = _billable_gb_for_period(users, p, free_threshold, excluded, psa)
+        gb, cnt = await _billable_gb_with_metering(
+            session, reseller.panel_id, uuids, users, p, free_threshold, excluded, psa
+        )
         by_month.append({
             "label": p.label,
             "gb": gb,
@@ -226,9 +247,13 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
             )
         ).scalars().all()
 
-    # Own users: exactly this reseller's admin_uuid (NOT descendants).
+    # Own users: exactly this reseller's admin_uuid (NOT descendants). Includes the metered
+    # abuse extra so the interim matches the real invoice.
     own_users = await _users_for({reseller.admin_uuid})
-    own_gb, own_cnt = _billable_gb_for_period(own_users, period, free_threshold, excluded, psa)
+    own_gb, own_cnt = await _billable_gb_with_metering(
+        session, reseller.panel_id, {reseller.admin_uuid}, own_users,
+        period, free_threshold, excluded, psa,
+    )
 
     # Each direct sub-reseller, counted as its whole subtree (so no user is double-counted).
     subs_out: list[dict] = []
@@ -236,7 +261,10 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
         subtree = collect_descendants(child, children)
         sub_uuids = {d.admin_uuid for d in subtree}
         sub_users = await _users_for(sub_uuids)
-        sgb, scnt = _billable_gb_for_period(sub_users, period, free_threshold, excluded, psa)
+        sgb, scnt = await _billable_gb_with_metering(
+            session, reseller.panel_id, sub_uuids, sub_users,
+            period, free_threshold, excluded, psa,
+        )
         if scnt == 0 and sgb == 0:
             continue  # skip sub-resellers with no sales this period (keeps the report tidy)
         subs_out.append({
@@ -277,5 +305,7 @@ async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> floa
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     psa = await _panel_synced_at(session, reseller.panel_id)
-    gb, _ = _billable_gb_for_period(users, current_month(), free_threshold, excluded, psa)
+    gb, _ = await _billable_gb_with_metering(
+        session, reseller.panel_id, uuids, users, current_month(), free_threshold, excluded, psa
+    )
     return gb

@@ -20,6 +20,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 - **`docs/DATABASE.md`** — a complete schema reference (every table, when rows are
   written, growth/retention, and the meaning of each column).
 
+### Fixed (invoice correctness audit)
+
+- **Interim («علی‌الحساب») now matches the real invoice.** The bot's interim breakdown,
+  sub-reseller report, and GB-cap math previously summed only the snapshot quota rule and
+  omitted the abuse-metered extra (overage + renew-by-edit) that the end-of-month invoice
+  adds — so they under-reported whenever a reseller renewed by edit or reset usage. They now
+  include the same metered extra, so the interim equals the final invoice for the period.
+- **Concurrent invoice generation is serialized.** `generate_invoices` / `recompute_invoice`
+  now take a Postgres transaction-level advisory lock, so the monthly scheduler run, a manual
+  «صدور فاکتورهای دوره», and double-clicks can't race on the same `(reseller, period)`
+  (previously the loser could abort the whole run with an integrity error). No-op on SQLite.
+- **Guard against billing an incomplete month.** Generating invoices for the current or a
+  future month (the period isn't over yet) now asks for confirmation, since the normal action
+  is to issue the previous, completed month.
+
 ## 1.37.67 - 2026-06-14
 
 ### Fixed
