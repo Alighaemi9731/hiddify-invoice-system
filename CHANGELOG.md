@@ -6,7 +6,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- **Automatic log retention** so the database can't bloat over time. A new daily
+  maintenance job (`daily_maintenance`, 04:30 local) prunes the three append-only
+  log/audit tables — `sync_runs`, `delivery_log`, and terminal `enforcement_actions`
+  (suspension/restore rows with their large JSON snapshots) — older than
+  `log_retention_days` (Settings → زمان‌بندی, default **90**, min 7; `0` disables).
+  It never touches the financial ledger or invoices, and preserves operationally-live
+  rows: an owed invoice's reminder logs (dunning de-dup) and in-flight enforcement
+  queue work are kept regardless of age. Replaces the previous enforcement-only
+  30-day prune that ran on the queue worker (and never cleared dry-run rows).
+- **`docs/DATABASE.md`** — a complete schema reference (every table, when rows are
+  written, growth/retention, and the meaning of each column).
 
 ## 1.37.67 - 2026-06-14
 

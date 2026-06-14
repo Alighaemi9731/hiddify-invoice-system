@@ -11,9 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -922,21 +921,8 @@ async def process_enforcement_queue(
     chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 500))
     para = max(1, int(admin_chunk_size or cfg.get("enforcement_admin_chunk_size") or 10))
 
-    # Prune terminal enforcement_action rows older than 30 days to keep the table lean.
-    # Rows still hold full user-UUID lists; after 30 days they have no operational value.
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
-    await session.execute(
-        delete(EnforcementAction)
-        .where(
-            EnforcementAction.status.in_(
-                [EnforcementActionStatus.done, EnforcementActionStatus.reverted]
-            ),
-            EnforcementAction.created_at < cutoff,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    await session.commit()
-
+    # Retention of terminal enforcement_action rows (incl. their large JSON snapshots) is
+    # handled centrally by the daily maintenance job — see app.services.maintenance.
     actions = (
         await session.execute(
             select(EnforcementAction)

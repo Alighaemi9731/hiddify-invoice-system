@@ -162,6 +162,11 @@ DEFS: list[SettingDef] = [
     SettingDef("guard_interval_minutes", 10, False, "schedule"), # channel/group guard: every N minutes
     SettingDef("backup_enabled", True, False, "schedule"),       # auto-backup on/off
     SettingDef("backup_interval_hours", 2, False, "schedule"),   # auto-backup: every N hours
+    # Log retention: the daily maintenance job deletes sync_runs, delivery_log, and
+    # terminal enforcement_actions older than this many days (keeps the DB lean). Live
+    # rows — an owed invoice's reminder logs, in-flight enforcement queue work — are never
+    # pruned. Default 90 days; minimum 7. Does NOT touch the financial ledger or invoices.
+    SettingDef("log_retention_days", 90, False, "schedule"),
     # Optional passphrase: when set, every backup archive is encrypted (PBKDF2→Fernet) and
     # restore requires the same passphrase. Keep it somewhere safe OUTSIDE the system.
     SettingDef("backup_passphrase", "", True, "schedule"),
@@ -222,6 +227,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "sync_interval_hours": (1, 24),
     "guard_interval_minutes": (1, 60),
     "backup_interval_hours": (1, 24),
+    "log_retention_days": (7, 3650),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),
     "warning_day": (0, 365),

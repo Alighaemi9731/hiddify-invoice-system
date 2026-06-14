@@ -23,6 +23,7 @@ from app.services import (
     dunning,
     enforcement,
     invoicing,
+    maintenance,
     owner_notify,
     rates,
     settings_service,
@@ -195,6 +196,15 @@ async def backup_job() -> None:
             log.exception("backup_job failure notification failed")
 
 
+async def daily_maintenance_job() -> None:
+    """Daily retention sweep of the append-only log/audit tables (keeps the DB lean)."""
+    try:
+        async with SessionLocal() as session:
+            await maintenance.prune_old_logs(session)
+    except Exception:  # noqa: BLE001
+        log.exception("daily_maintenance_job failed")
+
+
 async def rate_refresh_job() -> None:
     """Refresh the live USDT→Toman rate (auto mode) and the TON→Toman rate (when TON payment
     is enabled). Both are independent and best-effort."""
@@ -240,6 +250,10 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
          CronTrigger(day=cfg.invoice_day, hour=cfg.invoice_hour, minute=0, timezone=tz), 12 * 3600),
         ("daily_dunning", daily_dunning_job,
          CronTrigger(hour=cfg.dunning_hour, minute=0, timezone=tz), 6 * 3600),
+        # Daily log-retention sweep at a fixed quiet hour (04:30 local). Deletes aged
+        # sync_runs / delivery_log / terminal enforcement_actions; never the ledger.
+        ("daily_maintenance", daily_maintenance_job,
+         CronTrigger(hour=4, minute=30, timezone=tz), 6 * 3600),
         ("channel_guard", channel_guard_job,
          IntervalTrigger(minutes=cfg.guard_minutes, start_date=interval_anchor, timezone=tz), 300),
         ("enforcement_queue", enforcement_queue_job,
@@ -257,8 +271,9 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         sched.add_job(func, trigger, id=job_id, replace_existing=True,
                       coalesce=True, misfire_grace_time=grace)
     log.info(
-        "Registered 6 jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
-        "sync every %dh, guard every %dm, enforcement every %dm, backup every %dh, rate every %dh.",
-        sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
+        "Registered %d jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
+        "maintenance 04:30, sync every %dh, guard every %dm, enforcement every %dm, "
+        "backup every %dh, rate every %dh.",
+        len(specs), sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
         cfg.sync_hours, cfg.guard_minutes, cfg.enforcement_minutes, cfg.backup_hours, cfg.rate_hours,
     )
