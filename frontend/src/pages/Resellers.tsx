@@ -15,7 +15,6 @@ import {
   Skeleton,
   Stack,
   Switch,
-  Tab,
   Table,
   TableBody,
   TableCell,
@@ -23,7 +22,6 @@ import {
   TableHead,
   TablePagination,
   TableRow,
-  Tabs,
   TextField,
   Tooltip,
   Typography,
@@ -55,6 +53,7 @@ import {
   updateReseller,
 } from "../api/client";
 import CapacityBar from "../components/CapacityBar";
+import SegmentedTabs from "../components/SegmentedTabs";
 import { Dir, SortTh, useSort } from "../components/sortable";
 import { errMsg, useToast } from "../components/Toast";
 import { fmtNum } from "../format";
@@ -406,7 +405,7 @@ export default function Resellers() {
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2}>
           <TextField
             size="small"
-            placeholder="جستجوی نام یا شناسه نماینده..."
+            placeholder="جستجوی نام یا شناسه..."
             value={q}
             onChange={(event) => {
               setQ(event.target.value);
@@ -453,41 +452,14 @@ export default function Resellers() {
         spacing={1.5}
         sx={{ mb: 2 }}
       >
-        <Box
-          sx={{
-            p: 0.45,
-            border: 1,
-            borderColor: "divider",
-            borderRadius: 2.5,
-            bgcolor: alpha(theme.palette.background.paper, 0.46),
-            alignSelf: { xs: "stretch", md: "flex-start" },
-          }}
-        >
-          <Tabs
-            value={tab}
-            onChange={changeTab}
-            variant="fullWidth"
-            sx={{
-              minHeight: 38,
-              "& .MuiTabs-indicator": { display: "none" },
-              "& .MuiTab-root": {
-                minHeight: 38,
-                px: 2,
-                py: 0.7,
-                borderRadius: 2,
-                color: "text.secondary",
-              },
-              "& .Mui-selected": {
-                color: "text.primary !important",
-                bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.17 : 0.1),
-                boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.1)}`,
-              },
-            }}
-          >
-            <Tab icon={<FormatListBulletedIcon />} iconPosition="start" label="فهرست اصلی" />
-            <Tab icon={<AccountTreeIcon />} iconPosition="start" label="درخت زیرمجموعه‌ها" />
-          </Tabs>
-        </Box>
+        <SegmentedTabs
+          value={tab}
+          onChange={(v) => changeTab(null as any, v)}
+          tabs={[
+            { label: "فهرست اصلی", icon: <FormatListBulletedIcon fontSize="small" /> },
+            { label: "درخت زیرمجموعه‌ها", icon: <AccountTreeIcon fontSize="small" /> },
+          ]}
+        />
 
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {tab === 0 ? (

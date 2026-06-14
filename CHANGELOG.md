@@ -8,6 +8,41 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.65 - 2026-06-14
+
+Apple-theme UI overhaul: liquid glass, unified pill controls, blue accent.
+
+### Changed
+
+- **Apple design system**: primary accent changed to Apple blue (`#0071e3` light /
+  `#2997ff` dark); background `#f5f5f7` light / `#000000` dark; text `#1d1d1f` /
+  `#f5f5f7`; Apple system success/error/warning colours throughout.
+- **Liquid glass**: two-tier glass system — content surfaces at 7–36% opacity with
+  `blur(40px) saturate(180%)`; floating overlays (dialogs, menus) at 78–84% opacity
+  matching Apple nav-bar values extracted from apple.com. Dark mode removes the white
+  inner gradient from `glassBgImage` eliminating the "foggy" tint on pure-black.
+- **Unified pill controls**: `MuiOutlinedInput`, `MuiSelect`, `SegmentedTabs`
+  container and tabs all set to `borderRadius: 50px` — same pill language as buttons
+  (`980`) and chips. Multiline textareas keep `14px` for correct proportions.
+- **Background**: replaced multi-colour ambient blobs with a single brand-accent glow
+  from the top + dot grid. Dot grid later removed; single radial glow remains.
+- **Double-glass fix**: `MuiTableContainer` override removed glass surface — the
+  wrapping `Card` already provides it; double application caused the brownish fog on
+  the Resellers table in dark mode.
+- **Hardcoded purples removed**: `StatCard` default, `Layout` nav/logo gradient,
+  `Dashboard` stat card and rank colours, `Login` icon — all updated to Apple blue /
+  Apple system palette.
+- **New logo**: `favicon.svg` and `icon-square.svg` redesigned — invoice document +
+  blue checkmark badge on Apple-blue gradient with top gloss reflection.
+- **Search placeholders**: colon and hash-tag prefixes removed; all search fields use
+  clean `جستجوی X...` pattern with `SearchIcon` adornment.
+- **SegmentedTabs**: new shared `SegmentedTabs` component used on Invoices, Logs,
+  Resellers; replaces ad-hoc tab implementations for consistency.
+- **Select/dropdown**: replaced `TextField select` with `Select displayEmpty renderValue`
+  across Invoices, Payments, FinancialHistory, Broadcast — eliminates floating labels.
+- **Panels page**: removed incorrect "(حداکثر ۱۰)" text.
+- **AccountBackup**: split into three cards, placeholder text shortened to fit.
+
 ## 1.37.64 - 2026-06-14
 
 Enforcement chunk-size fix, snapshot trimming, and old-row pruning.

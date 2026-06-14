@@ -124,7 +124,7 @@ export default function Panels() {
       <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between"
         alignItems={{ xs: "stretch", sm: "center" }} spacing={1.5} sx={{ mb: 2 }}>
         <Typography variant="body2" color="text.secondary">
-          پنل‌های هیدیفای متصل (حداکثر ۱۰)
+          پنل‌های هیدیفای متصل
         </Typography>
         <Stack direction="row" spacing={1}>
           <Button variant="outlined" startIcon={<SyncIcon />} disabled={doSyncAll.isPending}

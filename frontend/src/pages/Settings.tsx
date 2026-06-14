@@ -376,7 +376,11 @@ export default function Settings() {
     const advOpen = !!showAdvanced[sec.id];
 
     return (
-      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
+      <Paper variant="outlined" sx={{
+        p: { xs: 2, sm: 3 },
+        backdropFilter: "blur(28px) saturate(200%) brightness(1.02)",
+        WebkitBackdropFilter: "blur(28px) saturate(200%) brightness(1.02)",
+      }}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
           {sec.icon}
           <Typography variant="h6" sx={{ fontWeight: 700 }}>{sec.title}</Typography>
@@ -479,7 +483,7 @@ export default function Settings() {
       </Stack>
 
       <Box sx={{ display: "flex", flexDirection: compact ? "column" : "row", gap: 2, alignItems: "flex-start" }}>
-        <Paper variant="outlined" sx={{ flexShrink: 0, width: compact ? "100%" : 240, position: compact ? "static" : "sticky", top: 80, overflow: "hidden" }}>
+        <Paper variant="outlined" sx={{ flexShrink: 0, width: compact ? "100%" : 240, position: compact ? "static" : "sticky", top: 80, overflow: "hidden", backdropFilter: "blur(28px) saturate(200%) brightness(1.02)", WebkitBackdropFilter: "blur(28px) saturate(200%) brightness(1.02)" }}>
           <Tabs
             orientation={compact ? "horizontal" : "vertical"}
             variant={compact ? "scrollable" : "standard"}

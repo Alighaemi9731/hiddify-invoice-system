@@ -27,16 +27,7 @@ const passkeySupported =
 const fieldSx = {
   "& .MuiOutlinedInput-root": {
     height: 58,
-    color: "#172033",
     borderRadius: "14px",
-    backgroundColor: "#fff",
-    transition: "box-shadow .2s ease, border-color .2s ease",
-    "& fieldset": { borderColor: "#d6d9df", borderWidth: 1 },
-    "&:hover fieldset": { borderColor: "#aeb5c1" },
-    "&.Mui-focused": {
-      boxShadow: "0 0 0 3px rgba(12, 52, 82, .08)",
-    },
-    "&.Mui-focused fieldset": { borderColor: "#526275", borderWidth: 1 },
   },
   "& input": {
     px: 2,
@@ -136,18 +127,8 @@ export default function Login() {
         gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "46% 54%" },
         overflow: "hidden",
         position: "relative",
-        backgroundColor: "#fff",
-        "&::before": {
-          content: '""',
-          display: { xs: "none", md: "block" },
-          position: "absolute",
-          inset: 0,
-          background: [
-            "radial-gradient(ellipse 94% 145% at 100% 50%, rgba(184, 217, 255, .82) 0%, rgba(211, 232, 255, .64) 48%, rgba(239, 247, 255, .28) 76%, rgba(255, 255, 255, 0) 100%)",
-            "linear-gradient(90deg, rgba(255, 255, 255, 0) 34%, rgba(242, 248, 255, .28) 48%, rgba(224, 239, 255, .58) 70%, rgba(198, 225, 255, .78) 100%)",
-          ].join(", "),
-          pointerEvents: "none",
-        },
+        // Let the ambient body background show through — the glass card floats on it.
+        backgroundColor: "background.default",
       }}
     >
       <Box
@@ -160,18 +141,54 @@ export default function Login() {
           justifyContent: "center",
           px: { xs: 2.5, sm: 6, md: 5 },
           py: { xs: 4, sm: 6 },
-          backgroundColor: "transparent",
           position: "relative",
           zIndex: 2,
           minWidth: 0,
         }}
       >
-        <Box dir="rtl" sx={{ width: "100%", maxWidth: 600, minWidth: 0 }}>
+        {/* Glass card that floats on the ambient background */}
+        <Box
+          dir="rtl"
+          sx={{
+            width: "100%",
+            maxWidth: 520,
+            minWidth: 0,
+            borderRadius: "24px",
+            backdropFilter: "blur(48px) saturate(220%) brightness(1.04)",
+            WebkitBackdropFilter: "blur(48px) saturate(220%) brightness(1.04)",
+            backgroundColor: (t) =>
+              t.palette.mode === "dark" ? "rgba(11,13,25,0.55)" : "rgba(255,255,255,0.62)",
+            backgroundImage: (t) =>
+              t.palette.mode === "dark"
+                ? "linear-gradient(175deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,.01) 40%,rgba(0,0,0,.06) 100%)"
+                : "linear-gradient(175deg,rgba(255,255,255,.52) 0%,rgba(255,255,255,.07) 42%,rgba(0,0,0,.02) 100%)",
+            border: (t) =>
+              t.palette.mode === "dark"
+                ? "1px solid rgba(255,255,255,.12)"
+                : "1px solid rgba(255,255,255,.82)",
+            boxShadow: (t) =>
+              t.palette.mode === "dark"
+                ? [
+                    "0 32px 80px -24px rgba(0,0,0,.88)",
+                    "inset 0 1.5px 0 rgba(255,255,255,.22)",
+                    "inset 0 -1px 0 rgba(0,0,0,.18)",
+                    "0 0 0 0.5px rgba(255,255,255,.07)",
+                  ].join(", ")
+                : [
+                    "0 32px 80px -24px rgba(30,40,100,.26)",
+                    "inset 0 1.5px 0 rgba(255,255,255,.98)",
+                    "inset 0 -1px 0 rgba(0,0,0,.04)",
+                    "0 0 0 0.5px rgba(200,210,255,.35)",
+                  ].join(", "),
+            p: { xs: 3, sm: 4.5 },
+            animation: "glassIn .55s cubic-bezier(.22,1,.36,1) both",
+          }}
+        >
           <Typography
             component="h1"
             style={{ textAlign: "right" }}
             sx={{
-              color: "#151b25",
+              color: "text.primary",
               fontSize: { xs: 23, sm: 25 },
               fontWeight: 800,
               mb: { xs: 3.5, sm: 5 },
@@ -224,7 +241,7 @@ export default function Login() {
                       aria-label={showPassword ? "پنهان کردن رمز عبور" : "نمایش رمز عبور"}
                       onClick={() => setShowPassword((value) => !value)}
                       edge="end"
-                      sx={{ color: "#647083" }}
+                      sx={{ color: "text.secondary" }}
                     >
                       {showPassword ? <VisibilityOutlinedIcon /> : <VisibilityOffOutlinedIcon />}
                     </IconButton>
@@ -250,9 +267,12 @@ export default function Login() {
                     display: "grid",
                     placeItems: "center",
                     overflow: "hidden",
-                    border: "1px solid #d6d9df",
+                    border: (t) => `1px solid ${t.palette.mode === "dark" ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.80)"}`,
                     borderRadius: "14px",
-                    backgroundColor: "#f7f9fc",
+                    backdropFilter: "blur(16px) saturate(180%)",
+                    WebkitBackdropFilter: "blur(16px) saturate(180%)",
+                    backgroundColor: "rgba(255,255,255,0.92)",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,.96)",
                     colorScheme: "light",
                     forcedColorAdjust: "none",
                     isolation: "isolate",
@@ -278,10 +298,15 @@ export default function Login() {
                       width: 48,
                       height: 58,
                       flex: "0 0 auto",
-                      border: "1px solid #d6d9df",
+                      border: (t) => `1px solid ${t.palette.mode === "dark" ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.72)"}`,
                       borderRadius: "14px",
-                      color: "#48566a",
-                      "&:hover": { bgcolor: "#f4f7fa" },
+                      backdropFilter: "blur(12px) saturate(160%)",
+                      WebkitBackdropFilter: "blur(12px) saturate(160%)",
+                      backgroundColor: (t) => t.palette.mode === "dark" ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.42)",
+                      color: "text.secondary",
+                      "&:hover": {
+                        backgroundColor: (t) => t.palette.mode === "dark" ? "rgba(255,255,255,.08)" : "rgba(255,255,255,.70)",
+                      },
                     }}
                   >
                     <RefreshIcon />
@@ -312,15 +337,8 @@ export default function Login() {
                   minHeight: 54,
                   mt: "10px !important",
                   borderRadius: "14px",
-                  bgcolor: "#05263d",
-                  color: "#fff",
                   fontSize: 15.5,
-                  fontWeight: 500,
-                  boxShadow: "none",
-                  "&:hover": {
-                    bgcolor: "#0a354f",
-                    boxShadow: "0 8px 20px rgba(5,38,61,.16)",
-                  },
+                  fontWeight: 700,
                 }}
               >
                 {busy ? "در حال ورود..." : "ورود به سامانه"}
@@ -329,30 +347,17 @@ export default function Login() {
 
             {passkeySupported && (
               <>
-                <Divider
-                  sx={{
-                    my: 2.25,
-                    color: "#9aa1ab",
-                    fontSize: 11.5,
-                    "&::before, &::after": { borderColor: "#e3e5e9" },
-                  }}
-                >
+                <Divider sx={{ my: 2.25, fontSize: 11.5, color: "text.secondary" }}>
                   یا
                 </Divider>
                 <Button
                   fullWidth
                   size="large"
-                  variant="text"
+                  variant="outlined"
                   startIcon={<FingerprintIcon />}
                   onClick={loginWithPasskey}
                   disabled={busy}
-                  sx={{
-                    minHeight: 46,
-                    borderRadius: "12px",
-                    color: "#0a3049",
-                    fontSize: 14,
-                    "&:hover": { bgcolor: "#f2f6f9" },
-                  }}
+                  sx={{ minHeight: 46, borderRadius: "12px", fontSize: 14 }}
                 >
                   ورود با Face ID / کلید عبور
                 </Button>
@@ -361,8 +366,8 @@ export default function Login() {
           </form>
 
           <Stack direction="row" spacing={.7} alignItems="center" justifyContent="center" sx={{ mt: 3.5 }}>
-            <LockRoundedIcon sx={{ fontSize: 14, color: "#a2a8b1" }} />
-            <Typography sx={{ color: "#969da7", fontSize: 11.5 }}>
+            <LockRoundedIcon sx={{ fontSize: 14, color: "text.secondary" }} />
+            <Typography sx={{ color: "text.secondary", fontSize: 11.5 }}>
               ورود امن و رمزگذاری‌شده
             </Typography>
           </Stack>
@@ -399,13 +404,14 @@ export default function Login() {
               placeItems: "center",
               borderRadius: "10px",
               color: "#fff",
-              bgcolor: "#082b43",
+              background: "linear-gradient(145deg, #5ab5ff 0%, #0071e3 100%)",
+              boxShadow: "0 6px 18px -6px rgba(0,113,227,.55), inset 0 1.5px 0 rgba(255,255,255,.40)",
               transform: "rotate(-4deg)",
             }}
           >
             <ReceiptLongRoundedIcon sx={{ fontSize: 23 }} />
           </Box>
-          <Typography sx={{ color: "#092b43", fontSize: 19, fontWeight: 850 }}>
+          <Typography sx={{ color: "text.primary", fontSize: 19, fontWeight: 850 }}>
             سامانه فاکتور
           </Typography>
         </Stack>

@@ -280,7 +280,7 @@ export default function Help() {
 
   return (
     <Box>
-      <Card sx={{ mb: 2, bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.06), border: "none" }}>
+      <Card sx={{ mb: 2, backgroundImage: (t) => `linear-gradient(135deg,${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.28 : 0.09)} 0%,transparent 70%)`, border: "none" }}>
         <CardContent>
           <Stack direction="row" spacing={1.5} alignItems="center">
             <HelpOutlineIcon color="primary" sx={{ fontSize: 36 }} />

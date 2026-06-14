@@ -259,7 +259,7 @@ export default function AccountBackup() {
               </Typography>
               <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
                 <img src={setup.qr} alt="کد QR تأیید دو مرحله‌ای" width={170} height={170}
-                  style={{ border: "1px solid #e5e7eb", borderRadius: 8 }} />
+                  style={{ border: "1px solid rgba(120,130,170,0.28)", borderRadius: 8 }} />
                 <Box>
                   <Typography variant="caption" color="text.secondary">کلید دستی:</Typography>
                   <Typography dir="ltr" sx={{ fontFamily: "monospace", wordBreak: "break-all", mb: 2 }}>{setup.secret}</Typography>
@@ -318,41 +318,65 @@ export default function AccountBackup() {
         </Card>
       )}
 
+      {/* Backup */}
       <Card>
         <CardContent>
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
             <CloudDownloadIcon color="primary" />
-            <Typography variant="h6">پشتیبان‌گیری و بازیابی</Typography>
+            <Typography variant="h6">پشتیبان‌گیری</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            هر ۲ ساعت یک پشتیبان کامل (دیتابیس + تنظیمات) به‌صورت خودکار به پی‌وی تلگرام شما
-            ارسال می‌شود. می‌توانید همین حالا هم پشتیبان بگیرید یا یک فایل پشتیبان را برای
-            بازیابی بارگذاری کنید.
+            هر ۲ ساعت یک پشتیبان کامل (دیتابیس + تنظیمات) به‌صورت خودکار به پی‌وی تلگرام
+            ارسال می‌شود. می‌توانید همین حالا هم پشتیبان بگیرید.
           </Typography>
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
             <Button variant="outlined" startIcon={<CloudDownloadIcon />}
               onClick={() => downloadBackup()}>دانلود پشتیبان</Button>
             <Button variant="outlined" startIcon={<TelegramIcon />}
               disabled={sendTg.isPending} onClick={() => sendTg.mutate()}>ارسال به تلگرام</Button>
           </Stack>
-          <Divider sx={{ my: 2 }} />
+        </CardContent>
+      </Card>
+
+      {/* Restore */}
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+            <RestoreIcon color="warning" />
+            <Typography variant="h6">بازیابی از فایل پشتیبان</Typography>
+          </Stack>
           <Alert severity="warning" sx={{ mb: 2 }}>
-            بازیابی، دیتابیس فعلی را با فایل پشتیبان جایگزین می‌کند. اگر در حین بازیابی خطایی رخ دهد،
-            دیتابیس فعلی بدون تغییر می‌ماند. پس از بازیابیِ موفق، سرویس‌ها به‌صورت خودکار ری‌استارت می‌شوند.
+            بازیابی، دیتابیس فعلی را با فایل پشتیبان جایگزین می‌کند. اگر خطایی رخ دهد، دیتابیس
+            فعلی بدون تغییر می‌ماند. پس از بازیابیِ موفق سرویس‌ها خودکار ری‌استارت می‌شوند.
           </Alert>
-          <TextField label="گذرواژهٔ پشتیبان (فقط اگر پشتیبان رمزگذاری‌شده باشد)" type="password"
-            value={restorePass} onChange={(e) => setRestorePass(e.target.value)}
-            sx={{ mb: 2, maxWidth: 420, display: "block" }} inputProps={{ dir: "ltr" }} />
+          <TextField
+            placeholder="گذرواژه (در صورت رمزگذاری)"
+            type="password"
+            size="small"
+            value={restorePass}
+            onChange={(e) => setRestorePass(e.target.value)}
+            fullWidth sx={{ mb: 2 }}
+            inputProps={{ dir: "ltr" }}
+          />
           <input ref={fileRef} type="file" accept=".zip" hidden
             onChange={(e) => { const f = e.target.files?.[0]; if (f) restore.mutate(f); e.currentTarget.value = ""; }} />
           <Button variant="contained" color="warning" startIcon={<RestoreIcon />}
             disabled={restore.isPending} onClick={() => fileRef.current?.click()}>
-            بارگذاری فایل پشتیبان و بازیابی
+            بارگذاری فایل و بازیابی
           </Button>
-          <Divider sx={{ my: 2 }} />
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            اگر لازم شد سرویس را یک‌بار راه‌اندازی مجدد کنید، از این دکمه استفاده کنید — نیازی به
-            ترمینال سرور نیست. (بازیابی به‌صورت خودکار این کار را انجام می‌دهد.)
+        </CardContent>
+      </Card>
+
+      {/* Restart */}
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+            <RestartAltIcon color="primary" />
+            <Typography variant="h6">راه‌اندازی مجدد سرویس</Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            اگر لازم شد سرویس را یک‌بار راه‌اندازی مجدد کنید — نیازی به ترمینال سرور نیست.
+            بازیابی به‌صورت خودکار این کار را انجام می‌دهد.
           </Typography>
           <Button variant="outlined" startIcon={<RestartAltIcon />} disabled={restart.isPending}
             onClick={() => { if (confirm("سرویس یک‌بار راه‌اندازی مجدد شود؟")) restart.mutate(); }}>

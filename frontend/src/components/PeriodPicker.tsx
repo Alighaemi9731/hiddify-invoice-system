@@ -1,4 +1,5 @@
-import { MenuItem, Stack, TextField } from "@mui/material";
+import { Select, MenuItem, Stack } from "@mui/material";
+import { SelectChangeEvent } from "@mui/material/Select";
 
 // Billing periods are GREGORIAN months (the value is "YYYY-MM"). Short English month
 // names look cleaner than localized ones; the number keeps them unambiguous.
@@ -7,8 +8,6 @@ const MONTHS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// Years offered: a window around the current year (newest first) so any past period and
-// the next one are reachable.
 function yearOptions(): number[] {
   const now = new Date().getFullYear();
   const start = Math.min(2023, now - 1);
@@ -19,55 +18,75 @@ function yearOptions(): number[] {
 }
 
 type Props = {
-  value: string;                 // "YYYY-MM", or "" when allowEmpty
+  value: string;
   onChange: (v: string) => void;
-  label?: string;                // label for the year field
-  allowEmpty?: boolean;          // adds an "all" option that clears to ""
+  label?: string;
+  allowEmpty?: boolean;
 };
 
-/**
- * Two compact dropdowns (year + month) instead of a native month input, so changing the
- * year is obvious. Emits a "YYYY-MM" string (or "" if allowEmpty and a field is cleared).
- */
-export default function PeriodPicker({ value, onChange, label = "دوره", allowEmpty = false }: Props) {
+const selectSx = {
+  "& .MuiOutlinedInput-notchedOutline": { borderRadius: "inherit" },
+  "& .MuiSelect-select": { py: "7px !important" },
+};
+
+export default function PeriodPicker({ value, onChange, allowEmpty = false }: Props) {
   const [yStr, mStr] = (value || "").split("-");
-  const year = yStr ? Number(yStr) : "";
-  const month = mStr ? Number(mStr) : "";
+  const year  = yStr ? Number(yStr) : ("" as const);
+  const month = mStr ? Number(mStr) : ("" as const);
 
   const emit = (y: number | "", m: number | "") => {
-    if (y === "" || m === "") { onChange(""); return; }   // only reachable when allowEmpty
+    if (y === "" || m === "") { onChange(""); return; }
     onChange(`${y}-${String(m).padStart(2, "0")}`);
   };
 
   const years = yearOptions();
   if (year !== "" && !years.includes(year as number)) years.unshift(year as number);
 
+  const handleYear = (e: SelectChangeEvent<number | "">) => {
+    const v = e.target.value;
+    if (v === "") { emit("", ""); return; }
+    emit(Number(v), month !== "" ? month : new Date().getMonth() + 1);
+  };
+
+  const handleMonth = (e: SelectChangeEvent<number | "">) => {
+    const v = e.target.value;
+    if (v === "") { emit("", ""); return; }
+    emit(year !== "" ? year : new Date().getFullYear(), Number(v));
+  };
+
   return (
     <Stack direction="row" spacing={1}>
-      <TextField
-        select size="small" label={label} value={year}
-        sx={{ width: 96 }}
-        onChange={(e) => emit(
-          e.target.value === "" ? "" : Number(e.target.value),
-          e.target.value === "" ? "" : (month || new Date().getMonth() + 1),
-        )}
+      <Select<number | "">
+        size="small"
+        value={year}
+        displayEmpty
+        onChange={handleYear}
+        renderValue={(v) => v !== "" ? String(v) : "سال"}
+        sx={{ minWidth: 88, ...selectSx }}
       >
         {allowEmpty && <MenuItem value="">همه</MenuItem>}
         {years.map((y) => <MenuItem key={y} value={y}>{y}</MenuItem>)}
-      </TextField>
-      <TextField
-        select size="small" label="ماه" value={month}
-        sx={{ width: 110 }}
-        onChange={(e) => emit(
-          e.target.value === "" ? "" : (year || new Date().getFullYear()),
-          e.target.value === "" ? "" : Number(e.target.value),
-        )}
+      </Select>
+
+      <Select<number | "">
+        size="small"
+        value={month}
+        displayEmpty
+        onChange={handleMonth}
+        renderValue={(v) =>
+          v !== ""
+            ? `${String(Number(v)).padStart(2, "0")} · ${MONTHS[Number(v) - 1]}`
+            : "ماه"
+        }
+        sx={{ minWidth: 108, ...selectSx }}
       >
         {allowEmpty && <MenuItem value="">همه</MenuItem>}
         {MONTHS.map((name, i) => (
-          <MenuItem key={i + 1} value={i + 1}>{`${String(i + 1).padStart(2, "0")} · ${name}`}</MenuItem>
+          <MenuItem key={i + 1} value={i + 1}>
+            {`${String(i + 1).padStart(2, "0")} · ${name}`}
+          </MenuItem>
         ))}
-      </TextField>
+      </Select>
     </Stack>
   );
 }

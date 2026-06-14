@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, Tooltip, Typography, Divider, Tabs, Tab, TablePagination,
+  IconButton, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow,
+  TextField, Tooltip, Typography, Divider, TablePagination,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/esm/Send";
 import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
@@ -13,6 +13,9 @@ import VisibilityIcon from "@mui/icons-material/esm/Visibility";
 import ScheduleIcon from "@mui/icons-material/esm/Schedule";
 import AutorenewIcon from "@mui/icons-material/esm/Autorenew";
 import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
+import ReceiptLongIcon from "@mui/icons-material/esm/ReceiptLong";
+import PersonOffIcon from "@mui/icons-material/esm/PersonOff";
+import SegmentedTabs from "../components/SegmentedTabs";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
@@ -107,10 +110,17 @@ export default function Invoices() {
     <Box>
       <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }} alignItems="center">
         <PeriodPicker value={period} onChange={setPeriod} />
-        <TextField select size="small" label="وضعیت" value={status} sx={{ minWidth: 140 }} onChange={(e) => setStatus(e.target.value)}>
-          <MenuItem value="">همه</MenuItem>
+        <Select
+          size="small"
+          value={status}
+          displayEmpty
+          onChange={(e) => setStatus(e.target.value)}
+          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همه وضعیت‌ها"}
+          sx={{ minWidth: 148, "& .MuiSelect-select": { py: "7px !important" } }}
+        >
+          <MenuItem value="">همه وضعیت‌ها</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
-        </TextField>
+        </Select>
         <Box sx={{ flexGrow: 1 }} />
         <Button variant="outlined" onClick={() => gen.mutate()} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
         <Button variant="outlined" color="warning" onClick={() => {
@@ -123,10 +133,16 @@ export default function Invoices() {
           }}>ارسال همه پیش‌نویس‌ها</Button>
       </Stack>
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="فاکتورها" />
-        <Tab label="نمایندگان با فاکتور صفر" />
-      </Tabs>
+      <Box sx={{ mb: 2 }}>
+        <SegmentedTabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { label: "فاکتورها", icon: <ReceiptLongIcon fontSize="small" /> },
+            { label: "نمایندگان با فاکتور صفر", icon: <PersonOffIcon fontSize="small" /> },
+          ]}
+        />
+      </Box>
 
       {tab === 1 ? (
         <Card>

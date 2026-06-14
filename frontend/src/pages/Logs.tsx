@@ -1,10 +1,13 @@
 import { useState } from "react";
 import {
-  Box, Card, Chip, Tab, Tabs, Table, TableBody, TableCell, TableHead, TableRow,
+  Box, Card, Chip, Table, TableBody, TableCell, TableHead, TableRow,
 } from "@mui/material";
+import ForumIcon from "@mui/icons-material/esm/Forum";
+import BlockIcon from "@mui/icons-material/esm/Block";
 import { useQuery } from "@tanstack/react-query";
 import { getDeliveryLog, getEnforcementActions } from "../api/client";
 import { DataState } from "../components/DataState";
+import SegmentedTabs from "../components/SegmentedTabs";
 import { fmtDate } from "../format";
 
 const DELIV_STATUS: any = { sent: ["ارسال‌شده", "success"], failed: ["ناموفق", "error"], blocked: ["مسدود", "error"], unmatched: ["بدون ربات", "warning"] };
@@ -29,10 +32,16 @@ export default function Logs() {
 
   return (
     <Box>
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="گزارش ارسال پیام‌ها" />
-        <Tab label="گزارش مسدودسازی" />
-      </Tabs>
+      <Box sx={{ mb: 2 }}>
+        <SegmentedTabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { label: "گزارش ارسال پیام‌ها", icon: <ForumIcon fontSize="small" /> },
+            { label: "گزارش مسدودسازی", icon: <BlockIcon fontSize="small" /> },
+          ]}
+        />
+      </Box>
 
       {tab === 0 && (
         <DataState isLoading={dq.isLoading} isError={dq.isError} onRetry={dq.refetch}>

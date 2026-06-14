@@ -30,7 +30,7 @@ import { fmtGb, fmtNum, fmtToman, INVOICE_STATUS_FA } from "../format";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 const FONT = "Vazirmatn, sans-serif";
-const RANK_COLORS = ["#35cbb7", "#60a5fa", "#f7a928", "#a78bfa", "#f472b6"];
+const RANK_COLORS = ["#0071e3", "#30d158", "#ff9500", "#32ade6", "#bf5af2"];
 const STATUS_COLORS: Record<string, string> = {
   paid: "#34d399",
   sent: "#60a5fa",
@@ -144,8 +144,8 @@ export default function Dashboard() {
   const maxResellerSales = Math.max(...topResellers.map((item) => item.amount_toman), 1);
 
   const tooltip = {
-    backgroundColor: isDark ? "#1e293b" : "#fff",
-    borderColor: isDark ? "#334155" : "#e2e8f0",
+    backgroundColor: isDark ? "rgba(14,16,32,0.88)" : "rgba(255,255,255,0.88)",
+    borderColor: isDark ? "rgba(255,255,255,0.14)" : "rgba(200,210,255,0.55)",
     textStyle: { color: isDark ? "#e2e8f0" : "#334155", fontFamily: FONT },
   };
   const statusOption = {
@@ -249,7 +249,7 @@ export default function Dashboard() {
                     {fmtNum(data.active_panels)} فعال · {fmtNum(data.healthy_panels)} سالم
                   </MetricDetail>
                 ),
-                color: "#6d5efc",
+                color: "#0071e3",
                 icon: <DnsIcon />,
               },
               {

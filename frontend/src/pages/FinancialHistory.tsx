@@ -1,9 +1,10 @@
 import { useState } from "react";
 import {
-  Box, Button, Card, Chip, Stack, Table, TableBody, TableCell, TableHead,
-  TableRow, TextField, Typography, MenuItem,
+  Box, Button, Card, Chip, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead,
+  TableRow, TextField, Typography,
 } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/esm/Download";
+import SearchIcon from "@mui/icons-material/esm/Search";
 import { useQuery } from "@tanstack/react-query";
 import { getFinancialHistory } from "../api/client";
 import PeriodPicker from "../components/PeriodPicker";
@@ -51,13 +52,20 @@ export default function FinancialHistory() {
         این سوابق حتی پس از «پاک‌سازی داده‌ها» یا حذف پنل/نماینده باقی می‌مانند.
       </Typography>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }} alignItems="center">
-        <PeriodPicker value={period} onChange={setPeriod} label="دوره (خالی = همه)" allowEmpty />
-        <TextField size="small" label="جستجوی نماینده" value={q} onChange={(e) => setQ(e.target.value)} />
-        <TextField select size="small" label="وضعیت" value={status} sx={{ minWidth: 140 }}
-          onChange={(e) => setStatus(e.target.value)}>
-          <MenuItem value="">همه</MenuItem>
+        <PeriodPicker value={period} onChange={setPeriod} allowEmpty />
+        <TextField size="small" value={q} placeholder="جستجوی نماینده..." onChange={(e) => setQ(e.target.value)}
+          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
+        <Select
+          size="small"
+          value={status}
+          displayEmpty
+          onChange={(e) => setStatus(e.target.value)}
+          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همه وضعیت‌ها"}
+          sx={{ minWidth: 148, "& .MuiSelect-select": { py: "7px !important" } }}
+        >
+          <MenuItem value="">همه وضعیت‌ها</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
-        </TextField>
+        </Select>
         <Box sx={{ flexGrow: 1 }} />
         <Typography variant="body2" color="text.secondary">
           {fmtNum(data.length)} سطر — جمع {fmtToman(total)} — پرداخت‌شده {fmtToman(paid)}

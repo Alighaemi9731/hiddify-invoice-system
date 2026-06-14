@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem,
+  Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem, Select,
 } from "@mui/material";
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
@@ -55,18 +55,30 @@ export default function Broadcast() {
             پیام به گروهِ انتخاب‌شده از نماینده‌های ثبت‌شده در ربات ارسال می‌شود.
           </Typography>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }}>
-            <TextField select label="گیرندگان" value={audience} sx={{ minWidth: 220 }}
-              onChange={(e) => setAudience(e.target.value)}>
+            <Select
+              size="small"
+              value={audience}
+              onChange={(e) => setAudience(e.target.value)}
+              renderValue={(v) => ({ all: "همه نمایندگان", debtors: "فقط بدهکاران", zero_sale: "فروش صفر این ماه", panel: "نمایندگان یک پنل" })[v] ?? v}
+              sx={{ minWidth: 220, "& .MuiSelect-select": { py: "7px !important" } }}
+            >
               <MenuItem value="all">همه نمایندگان</MenuItem>
               <MenuItem value="debtors">فقط بدهکاران</MenuItem>
               <MenuItem value="zero_sale">فروش صفر این ماه</MenuItem>
               <MenuItem value="panel">نمایندگان یک پنل</MenuItem>
-            </TextField>
+            </Select>
             {audience === "panel" && (
-              <TextField select label="پنل" value={panelId} sx={{ minWidth: 160 }}
-                onChange={(e) => setPanelId(e.target.value)}>
+              <Select
+                size="small"
+                value={panelId}
+                displayEmpty
+                onChange={(e) => setPanelId(e.target.value)}
+                renderValue={(v) => v ? (panels.find((p: any) => String(p.id) === String(v) as any)?.key ?? v) : "انتخاب پنل"}
+                sx={{ minWidth: 160, "& .MuiSelect-select": { py: "7px !important" } }}
+              >
+                <MenuItem value="" disabled>انتخاب پنل</MenuItem>
                 {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}</MenuItem>)}
-              </TextField>
+              </Select>
             )}
           </Stack>
           <TextField
