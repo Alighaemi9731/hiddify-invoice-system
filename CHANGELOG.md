@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.72 - 2026-06-16
+
+### Changed
+
+- **Live rates moved off the Dashboard and onto the Invoices page**, now showing BOTH the
+  Tether (USDT) and TON applied rates with a refresh button that updates both live.
+- **Configurable rate source** — a new «منبعِ نرخِ آنلاین» setting (Wallex / Tetherland);
+  default is now **Wallex** for USDT (the other is the fallback). TON is Wallex-only.
+- **TON gets its own manual/auto toggle** (`ton_rate_mode`) and a manual TON rate
+  (`ton_toman_manual`), mirroring the USDT setting — and the TON online rate now follows it
+  everywhere it's shown (invoice/payment displays). Settings shows a live TON-rate chip too.
+
 ## 1.37.71 - 2026-06-15
 
 ### Added

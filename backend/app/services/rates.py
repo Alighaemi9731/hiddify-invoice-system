@@ -40,31 +40,38 @@ def _pos_int(value) -> int | None:
         return None
 
 
-async def fetch_usdt_toman() -> int | None:
-    """Fetch the current USDT price in **Toman** from Tetherland (fallback Wallex). Returns None
-    on any failure (network, parse, non-positive) — the caller keeps the previous value."""
+async def _wallex_usdt(client: httpx.AsyncClient) -> int | None:
+    # Wallex: result.symbols.USDTTMN.stats.bidPrice (Toman).
+    r = await client.get(_WALLEX)
+    r.raise_for_status()
+    symbols = ((r.json().get("result") or {}).get("symbols") or {})
+    stats = (symbols.get("USDTTMN") or {}).get("stats") or {}
+    return _pos_int(stats.get("bidPrice"))
+
+
+async def _tetherland_usdt(client: httpx.AsyncClient) -> int | None:
+    # Tetherland: data.currencies.USDT.price is already in Toman.
+    r = await client.get(_TETHERLAND)
+    r.raise_for_status()
+    usdt = (((r.json().get("data") or {}).get("currencies") or {}).get("USDT") or {})
+    return _pos_int(usdt.get("price"))
+
+
+async def fetch_usdt_toman(source: str = "wallex") -> int | None:
+    """Fetch the current USDT price in **Toman** from the configured `source` (wallex|tetherland),
+    falling back to the other source. Returns None on any failure — the caller keeps the previous
+    value. Both sources quote USDT in Toman directly."""
+    order = ["tetherland", "wallex"] if str(source).lower() == "tetherland" else ["wallex", "tetherland"]
+    fetchers = {"wallex": _wallex_usdt, "tetherland": _tetherland_usdt}
     async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "invoice-system/1"}) as client:
-        # Primary: Tetherland — data.currencies.USDT.price is already in Toman.
-        try:
-            r = await client.get(_TETHERLAND)
-            r.raise_for_status()
-            usdt = (((r.json().get("data") or {}).get("currencies") or {}).get("USDT") or {})
-            rate = _pos_int(usdt.get("price"))
-            if rate:
-                return rate
-        except Exception:  # noqa: BLE001 — fall through to Wallex
-            log.info("tetherland rate fetch failed, trying wallex", exc_info=True)
-        # Fallback: Wallex — result.symbols.USDTTMN.stats.bidPrice (Toman).
-        try:
-            r = await client.get(_WALLEX)
-            r.raise_for_status()
-            symbols = ((r.json().get("result") or {}).get("symbols") or {})
-            stats = (symbols.get("USDTTMN") or {}).get("stats") or {}
-            rate = _pos_int(stats.get("bidPrice"))
-            if rate:
-                return rate
-        except Exception:  # noqa: BLE001
-            log.warning("failed to fetch USDT→Toman rate (tetherland + wallex)", exc_info=True)
+        for name in order:
+            try:
+                rate = await fetchers[name](client)
+                if rate:
+                    return rate
+            except Exception:  # noqa: BLE001 — try the next source
+                log.info("%s USDT rate fetch failed, trying next source", name, exc_info=True)
+    log.warning("failed to fetch USDT→Toman rate from all sources")
     return None
 
 
@@ -79,7 +86,8 @@ async def refresh_auto_rate(session: AsyncSession) -> int | None:
     """Fetch the live rate and cache it in settings (`toman_per_usdt_auto` + timestamp), but
     only if it's plausible. Returns the accepted rate, or None on failure / implausible value
     (the cached value is left untouched, so billing keeps the last good rate)."""
-    rate = await fetch_usdt_toman()
+    source = str(await settings_service.get(session, "rate_source", "wallex") or "wallex")
+    rate = await fetch_usdt_toman(source)
     if not rate or rate < _ABS_MIN or rate > _ABS_MAX:
         if rate:
             log.warning("fetched rate %s outside absolute band — ignored", rate)
@@ -136,8 +144,16 @@ async def refresh_ton_rate(session: AsyncSession) -> int | None:
 
 
 async def get_ton_toman(session: AsyncSession) -> int:
-    """Last cached TON→Toman rate (0 if never fetched / unavailable)."""
-    return _pos_int(await settings_service.get(session, "ton_toman_auto", 0)) or 0
+    """The TON→Toman rate to actually use (no network I/O), mirroring the USDT manual/auto split:
+    `manual` → the owner-set `ton_toman_manual`; `auto` → the last cached live rate, falling back
+    to the manual rate when the live one is missing. 0 if nothing usable."""
+    cfg = await settings_service.get_many(
+        session, ["ton_rate_mode", "ton_toman_manual", "ton_toman_auto"]
+    )
+    manual = _pos_int(cfg.get("ton_toman_manual")) or 0
+    if str(cfg.get("ton_rate_mode") or "auto").lower() == "manual":
+        return manual
+    return (_pos_int(cfg.get("ton_toman_auto")) or 0) or manual
 
 
 def _rate_is_fresh(stamp: str | None, max_age_hours: float) -> bool:

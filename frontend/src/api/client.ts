@@ -198,11 +198,15 @@ export const refreshRate = () => api.post("/api/ops/refresh-rate").then((r) => r
 
 export interface RatesInfo {
   mode: "auto" | "manual";
+  source: "wallex" | "tetherland";
   effective: number;
   usdt_auto: number;
   usdt_auto_at: string;
   usdt_manual: number;
+  ton_mode: "auto" | "manual";
+  ton_effective: number;
   ton_auto: number;
+  ton_manual: number;
   ton_enabled: boolean;
   stale: boolean;
 }

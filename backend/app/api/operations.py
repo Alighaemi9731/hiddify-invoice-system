@@ -97,16 +97,19 @@ async def run_enforcement_queue(session: AsyncSession = Depends(get_session)) ->
 async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
     """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display.
     Also refreshes the TON→Toman rate when TON payment is enabled."""
-    from app.services import rates, settings_service
+    from app.services import rates
 
-    rate = await rates.refresh_auto_rate(session)
-    if await settings_service.get(session, "pay_ton_enabled", False):
-        await rates.refresh_ton_rate(session)
-    if rate is None:
+    usdt = await rates.refresh_auto_rate(session)
+    ton = await rates.refresh_ton_rate(session)
+    if usdt is None and ton is None:
         raise HTTPException(
             502, "دریافت نرخ آنلاین ناموفق بود؛ بعداً دوباره تلاش کنید یا نرخ را دستی تنظیم کنید."
         )
-    return {"rate": rate, "effective": await rates.get_effective_rate(session)}
+    return {
+        "rate": usdt, "ton": ton,
+        "effective": await rates.get_effective_rate(session),
+        "ton_effective": await rates.get_ton_toman(session),
+    }
 
 
 @router.get("/rates")
@@ -117,8 +120,9 @@ async def get_rates(session: AsyncSession = Depends(get_session)) -> dict:
 
     cfg = await settings_service.get_many(
         session,
-        ["rate_mode", "toman_per_usdt", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
-         "ton_toman_auto", "rate_max_age_hours", "pay_ton_enabled"],
+        ["rate_mode", "rate_source", "toman_per_usdt", "toman_per_usdt_auto",
+         "toman_per_usdt_auto_at", "ton_rate_mode", "ton_toman_auto", "ton_toman_manual",
+         "rate_max_age_hours", "pay_ton_enabled"],
     )
 
     def _int(v) -> int:
@@ -133,11 +137,15 @@ async def get_rates(session: AsyncSession = Depends(get_session)) -> dict:
     fresh = rates._rate_is_fresh(cfg.get("toman_per_usdt_auto_at"), max_age)  # noqa: SLF001
     return {
         "mode": mode,
+        "source": str(cfg.get("rate_source") or "wallex").lower(),
         "effective": await rates.get_effective_rate(session),
         "usdt_auto": usdt_auto,
         "usdt_auto_at": cfg.get("toman_per_usdt_auto_at") or "",
         "usdt_manual": _int(cfg.get("toman_per_usdt")),
+        "ton_mode": str(cfg.get("ton_rate_mode") or "auto").lower(),
+        "ton_effective": await rates.get_ton_toman(session),
         "ton_auto": _int(cfg.get("ton_toman_auto")),
+        "ton_manual": _int(cfg.get("ton_toman_manual")),
         "ton_enabled": bool(cfg.get("pay_ton_enabled")),
         "stale": bool(mode == "auto" and usdt_auto > 0 and not fresh),
     }

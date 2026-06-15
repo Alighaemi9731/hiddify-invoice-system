@@ -130,7 +130,13 @@ DEFS: list[SettingDef] = [
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
-    SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto (live from Tetherland/Wallex)
+    SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto (live)
+    # Where the live USDT (and TON) rate is read from: wallex | tetherland. TON exists only on
+    # Wallex, so TON always uses Wallex; this picks the USDT source (the other is the fallback).
+    SettingDef("rate_source", "wallex", False, "pricing"),
+    # TON (Toncoin) rate, mirroring the USDT manual/auto split.
+    SettingDef("ton_rate_mode", "auto", False, "pricing"),   # manual | auto (live from Wallex)
+    SettingDef("ton_toman_manual", 0, False, "pricing"),     # manual TON→Toman rate / fallback
     # Last live USDT→Toman rate fetched from Tetherland/Wallex + when (read-only status, auto-updated).
     SettingDef("toman_per_usdt_auto", 0, False, "pricing"),
     SettingDef("toman_per_usdt_auto_at", "", False, "pricing"),
@@ -224,6 +230,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "rate_max_age_hours": (0, 24 * 365),
     "rate_refresh_hours": (1, 24),
     "min_sale_toman": (0, None),
+    "ton_toman_manual": (0, None),
     "invoice_day_of_month": (1, 28),
     "invoice_hour": (0, 23),
     "dunning_hour": (0, 23),
@@ -311,8 +318,10 @@ def validate_api_value(key: str, value: Any) -> Any:
         raise ValueError(f"{key} must be a string")
     if len(value) > _STRING_MAX:
         raise ValueError(f"{key} is too long")
-    if key == "rate_mode" and value not in {"manual", "auto"}:
-        raise ValueError("rate_mode must be 'manual' or 'auto'")
+    if key in ("rate_mode", "ton_rate_mode") and value not in {"manual", "auto"}:
+        raise ValueError(f"{key} must be 'manual' or 'auto'")
+    if key == "rate_source" and value not in {"wallex", "tetherland"}:
+        raise ValueError("rate_source must be 'wallex' or 'tetherland'")
     return value
 
 

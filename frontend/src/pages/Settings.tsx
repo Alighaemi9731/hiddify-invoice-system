@@ -146,13 +146,24 @@ const SECTIONS: Section[] = [
       {
         fields: [
           { key: "default_price_per_gb", label: "قیمت پیش‌فرض هر گیگ (تومان)", help: "اگر برای نماینده‌ای قیمت اختصاصی ثبت نشده باشد، این اعمال می‌شود.", type: "number", min: 0 },
-          { key: "rate_mode", label: "حالت نرخ تبدیل تومان→USDT", type: "select",
-            help: "«خودکار» نرخ تتر به تومان را آنلاین می‌خواند (تترلند/والکس)؛ «دستی» از نرخ پایین استفاده می‌کند.",
+          { key: "rate_mode", label: "حالت نرخ تتر (USDT→تومان)", type: "select",
+            help: "«خودکار» نرخ تتر را آنلاین می‌خواند؛ «دستی» از نرخ پایین استفاده می‌کند.",
             options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار (آنلاین)" }] },
-          { key: "toman_per_usdt", label: "نرخ تبدیل دستی (تومان به ازای هر USDT)", type: "number", min: 0,
+          { key: "rate_source", label: "منبعِ نرخِ آنلاین", type: "select",
+            help: "نرخ تتر از کدام صرافی خوانده شود (منبعِ دیگر به‌عنوان فالبک). تون فقط از والکس خوانده می‌شود.",
+            options: [{ value: "wallex", label: "والکس" }, { value: "tetherland", label: "تترلند" }],
+            when: (v) => v("rate_mode") === "auto" },
+          { key: "toman_per_usdt", label: "نرخ تترِ دستی (تومان به ازای هر USDT)", type: "number", min: 0,
             help: "در حالت «دستی» این نرخ استفاده می‌شود؛ در حالت «خودکار» اگر دریافت آنلاین ناموفق بود، همین مقدار جایگزین می‌شود." },
           { key: "rate_max_age_hours", label: "کهنگی مجاز نرخ آنلاین (ساعت)", type: "number", min: 0, max: 8760, advanced: true,
             help: "در حالت «خودکار»، اگر آخرین نرخ آنلاین قدیمی‌تر از این مقدار باشد، موقع صدور فاکتور به نرخ دستی برمی‌گردد. ۰ = غیرفعال. پیش‌فرض ۴۸.", when: (v) => v("rate_mode") === "auto" },
+          { key: "ton_rate_mode", label: "حالت نرخ تون (TON→تومان)", type: "select",
+            help: "مثل تتر: «خودکار» نرخ تون را آنلاین از والکس می‌خواند؛ «دستی» از نرخ پایین استفاده می‌کند.",
+            options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار (آنلاین)" }],
+            when: (v) => !!v("pay_ton_enabled") },
+          { key: "ton_toman_manual", label: "نرخ تونِ دستی (تومان به ازای هر TON)", type: "number", min: 0,
+            help: "در حالت دستیِ تون این نرخ استفاده می‌شود؛ در حالت خودکار به‌عنوان فالبک.",
+            when: (v) => !!v("pay_ton_enabled") },
           { key: "free_under_gb", label: "آستانهٔ کانفیگ رایگان (گیگ)", help: "کانفیگ‌هایی با حجم کوچک‌تر یا مساوی این مقدار، تستی و رایگان حساب می‌شوند (مثلاً ۱ → هم ۰٫۵ و هم ۱ گیگ رایگان، ۱٫۵ به بالا محاسبه می‌شود).", type: "number", min: 0 },
           { key: "min_sale_toman", label: "حداقل فروش هر نماینده (تومان)", help: "۰ = غیرفعال. اگر مبلغ فاکتور از این کمتر شد، همین مبلغ لحاظ می‌شود.", type: "number", min: 0 },
           { key: "metering_enabled", label: "متر مصرف ضد سوءاستفاده", help: "محاسبهٔ مصرف فراتر از سهمیه (ترفند ریست روزانه) و تمدید با ویرایش." },
@@ -433,6 +444,12 @@ export default function Settings() {
                 <Typography variant="caption" color="text.secondary" dir="ltr">
                   {String(byKey["toman_per_usdt_auto_at"].value).replace("T", " ").slice(0, 16)} UTC
                 </Typography>
+              )}
+              {!!getVal("pay_ton_enabled") && (
+                Number(byKey["ton_toman_auto"]?.value) > 0
+                  ? <Chip color={getVal("ton_rate_mode") === "auto" ? "success" : "default"} size="small"
+                      label={`نرخ آنلاین تون: ${Number(byKey["ton_toman_auto"].value).toLocaleString("fa-IR")} تومان`} />
+                  : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین تون هنوز دریافت نشده" />
               )}
               <Button size="small" variant="outlined" disabled={refreshRateM.isPending} onClick={() => refreshRateM.mutate()}>
                 به‌روزرسانی نرخ
