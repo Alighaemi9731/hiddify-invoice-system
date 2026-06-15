@@ -47,6 +47,7 @@ class ScheduleConfig:
     backup_hours: int = 2      # auto-backup: every N hours (1–24)
     rate_hours: int = 1        # live USDT→Toman rate refresh: every N hours (1–24)
     enforcement_minutes: int = 5  # queued live enforcement worker cadence (1–60)
+    digest_hour: int = 9       # daily owner digest: hour (0–23)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -63,7 +64,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
     s = await settings_service.get_many(session, [
         "invoice_day_of_month", "invoice_hour", "dunning_hour",
         "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
-        "rate_refresh_hours", "enforcement_worker_interval_minutes",
+        "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
     ])
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
@@ -74,6 +75,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         backup_hours=_clamp(s.get("backup_interval_hours"), 1, 24, 2),
         rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 24, 1),
         enforcement_minutes=_clamp(s.get("enforcement_worker_interval_minutes"), 1, 60, 5),
+        digest_hour=_clamp(s.get("daily_digest_hour"), 0, 23, 9),
     )
 
 
@@ -196,6 +198,20 @@ async def backup_job() -> None:
             log.exception("backup_job failure notification failed")
 
 
+async def daily_digest_job() -> None:
+    """Send the owner a concise daily summary (KPIs + health) to their Telegram PV."""
+    try:
+        async with SessionLocal() as session:
+            from app.services import owner_report
+
+            if not await owner_report.digest_enabled(session):
+                return
+            text = await owner_report.daily_digest(session)
+            await owner_notify.notify_owner(session, text)
+    except Exception:  # noqa: BLE001
+        log.exception("daily_digest_job failed")
+
+
 async def daily_maintenance_job() -> None:
     """Daily retention sweep of the append-only log/audit tables (keeps the DB lean)."""
     try:
@@ -254,6 +270,9 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         # sync_runs / delivery_log / terminal enforcement_actions; never the ledger.
         ("daily_maintenance", daily_maintenance_job,
          CronTrigger(hour=4, minute=30, timezone=tz), 6 * 3600),
+        # Daily owner digest (KPIs + health) to the owner's Telegram PV at the configured hour.
+        ("daily_digest", daily_digest_job,
+         CronTrigger(hour=cfg.digest_hour, minute=30, timezone=tz), 6 * 3600),
         ("channel_guard", channel_guard_job,
          IntervalTrigger(minutes=cfg.guard_minutes, start_date=interval_anchor, timezone=tz), 300),
         ("enforcement_queue", enforcement_queue_job,

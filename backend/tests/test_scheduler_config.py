@@ -55,7 +55,8 @@ def test_register_defaults_when_no_config():
     assert t["enforcement_queue"] == "interval[0:05:00]"
     assert t["rate_refresh"] == "interval[1:00:00]"
     assert "hour='4'" in t["daily_maintenance"] and "minute='30'" in t["daily_maintenance"]
-    assert len(t) == 8
+    assert "hour='9'" in t["daily_digest"]
+    assert len(t) == 9
 
 
 def test_non_divisor_interval_keeps_true_spacing_across_boundaries():

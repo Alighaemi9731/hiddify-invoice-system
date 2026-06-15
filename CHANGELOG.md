@@ -6,13 +6,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 ## Unreleased
 
-### Added
+No changes yet.
 
-- **Telegram column in the Resellers main list** — a new «تلگرام» column (before «پنل») shows a
-  clickable Telegram icon for each registered main reseller that opens their private chat
-  (`t.me/<username>` when known, else `tg://user?id=`), so the owner can message a reseller in
-  one tap. Also shown on the mobile reseller cards. The reseller API now returns the
-  Telegram `username`.
+## 1.37.69 - 2026-06-15
+
+### Added — admin bot overhaul (a real management tool from your phone)
+
+- **Professional period-aware stats** (`/stats`): a KPI dashboard with a «این ماه / ماه قبل /
+  دو ماه قبل» switch — total billed (vs last month), collected + collection-rate %, period
+  outstanding, invoice/paid/debtor counts, billed services, and total debt — plus a **per-panel
+  breakdown** with each panel's sales, invoice count, and sync health.
+- **System health** (`/health`): panel sync status, in-flight enforcement queue, failed actions,
+  pending payments, and last-backup time at a glance.
+- **Pending-payment review from the bot** (`/payments`): list pending payments, tap one to see
+  the receipt image + details, and **approve/reject** right there — the reseller is notified
+  automatically. No need to open the web panel.
+- **Reseller search + card + quick actions**: send a name → the reseller's card (panel, this
+  month's sales, debt, capacity, status) with one-tap **suspend/restore, capacity bump
+  (+100/200/500), recent invoices, and a direct Telegram chat** link.
+- **Daily digest to the owner** (`daily_digest_*` settings, default 09:00 Tehran): a once-a-day
+  summary of this month's KPIs, today's confirmed payments, total debt, and any health warnings.
+- **Telegram column in the Resellers main list** — a clickable Telegram icon (before «پنل»)
+  opens each registered main reseller's private chat in one tap (also on mobile cards). The
+  reseller API now returns the Telegram `username`.
+
+All numbers come from the new `owner_report` service (shared by the bot + digest) and match
+the web panel; no data-model change.
 
 ## 1.37.68 - 2026-06-15
 

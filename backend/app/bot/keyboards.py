@@ -98,13 +98,74 @@ def owner_menu_keyboard() -> InlineKeyboardMarkup:
     # the web panel to avoid accidental taps.
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📊 آمار کلی", callback_data="owner:stats"),
+            [InlineKeyboardButton(text="📊 آمار", callback_data="owner:stats"),
+             InlineKeyboardButton(text="🩺 سلامت سامانه", callback_data="owner:health")],
+            [InlineKeyboardButton(text="💳 پرداخت‌های در انتظار", callback_data="owner:payments"),
              InlineKeyboardButton(text="💰 بدهکاران", callback_data="owner:debtors")],
-            [InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast"),
-             InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync")],
-            [InlineKeyboardButton(text="🗄 پشتیبان‌گیری اکنون", callback_data="owner:backup")],
+            [InlineKeyboardButton(text="🔎 جستجوی نماینده", callback_data="owner:search"),
+             InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast")],
+            [InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync"),
+             InlineKeyboardButton(text="🗄 پشتیبان‌گیری اکنون", callback_data="owner:backup")],
         ]
     )
+
+
+def owner_stats_keyboard(active_label: str, periods: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Period switch for the stats view + a per-panel breakdown button. `periods` is a list of
+    (label, caption); the active one is marked. data: ostat:<label> / opanel:<label>."""
+    row = [
+        InlineKeyboardButton(
+            text=("• " + cap + " •") if label == active_label else cap,
+            callback_data=f"ostat:{label}",
+        )
+        for label, cap in periods
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        row,
+        [InlineKeyboardButton(text="🖥 تفکیکِ پنل", callback_data=f"opanel:{active_label}")],
+    ])
+
+
+def owner_pending_payments_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """One button per pending payment (id, caption). data: opv:<payment_id>."""
+    rows = [[InlineKeyboardButton(text=cap, callback_data=f"opv:{pid}")] for pid, cap in items]
+    return InlineKeyboardMarkup(inline_keyboard=rows or [[
+        InlineKeyboardButton(text="—", callback_data="noop")]])
+
+
+def owner_payment_detail_keyboard(payment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ تأیید", callback_data=f"opok:{payment_id}"),
+        InlineKeyboardButton(text="❌ رد", callback_data=f"opno:{payment_id}"),
+    ], [InlineKeyboardButton(text="« پرداخت‌های در انتظار", callback_data="owner:payments")]])
+
+
+def owner_reseller_results_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Search results: one button per matched reseller. data: orc:<reseller_id>."""
+    rows = [[InlineKeyboardButton(text=cap, callback_data=f"orc:{rid}")] for rid, cap in items]
+    return InlineKeyboardMarkup(inline_keyboard=rows or [[
+        InlineKeyboardButton(text="—", callback_data="noop")]])
+
+
+def owner_reseller_card_keyboard(
+    reseller_id: int, *, enforced: bool, tg_href: str | None
+) -> InlineKeyboardMarkup:
+    """Quick actions on a reseller from the bot: suspend/restore, bump capacity, invoices, PV."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if enforced:
+        rows.append([InlineKeyboardButton(text="🔓 آزادسازی", callback_data=f"ores:{reseller_id}")])
+    else:
+        rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی", callback_data=f"oenf:{reseller_id}")])
+    rows.append([
+        InlineKeyboardButton(text="➕۱۰۰", callback_data=f"obump:{reseller_id}:100"),
+        InlineKeyboardButton(text="➕۲۰۰", callback_data=f"obump:{reseller_id}:200"),
+        InlineKeyboardButton(text="➕۵۰۰", callback_data=f"obump:{reseller_id}:500"),
+    ])
+    last = [InlineKeyboardButton(text="🧾 فاکتورها", callback_data=f"orcinv:{reseller_id}")]
+    if tg_href:
+        last.append(InlineKeyboardButton(text="💬 گفتگو", url=tg_href))
+    rows.append(last)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def my_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:

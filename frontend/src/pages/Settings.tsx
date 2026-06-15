@@ -180,6 +180,10 @@ const SECTIONS: Section[] = [
           { key: "rate_refresh_hours", label: "به‌روزرسانی نرخ آنلاین: هر چند ساعت", type: "number", min: 1, max: 24, when: (v) => v("rate_mode") === "auto" },
           { key: "log_retention_days", label: "نگه‌داری گزارش‌ها (روز)", type: "number", min: 7, max: 3650,
             help: "گزارش‌های قدیمی‌تر از این مدت (همگام‌سازی، ارسال پیام، و سوابق پایان‌یافتهٔ مسدودسازی) هر شبانه‌روز خودکار حذف می‌شوند تا دیتابیس سبک بماند. تاریخچهٔ مالی و فاکتورها هرگز حذف نمی‌شوند. پیش‌فرض ۹۰." },
+          { key: "daily_digest_enabled", label: "خلاصهٔ روزانه به تلگرام مالک",
+            help: "هر روز یک پیامِ جمع‌بندی (آمار + سلامتِ سامانه) به پی‌وی شما می‌فرستد." },
+          { key: "daily_digest_hour", label: "ساعتِ خلاصهٔ روزانه", type: "number", min: 0, max: 23,
+            help: "به وقتِ ایران. پیش‌فرض ۹ صبح.", when: (v) => !!v("daily_digest_enabled") },
         ],
       },
       {

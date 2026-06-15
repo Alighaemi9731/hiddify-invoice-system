@@ -12,7 +12,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.bot import keyboards, texts
 from app.bot.matching import normalize_host, normalize_path, parse_link
@@ -56,6 +56,12 @@ class SubCapState(StatesGroup):
 class PayState(StatesGroup):
     """A reseller chose ONE invoice to pay and is now sending its TXID / receipt photo
     (the chosen invoice id is held in FSM data as `pay_invoice_id`)."""
+
+    waiting = State()
+
+
+class OwnerSearchState(StatesGroup):
+    """The owner is typing a reseller name/uuid to look up (admin-bot search)."""
 
     waiting = State()
 
@@ -1013,6 +1019,12 @@ async def _dispatch_owner(action: str, answer, session) -> None:
     so the slash-command list and the inline menu always do the exact same thing."""
     if action == "stats":
         await _owner_stats(answer, session)
+    elif action == "health":
+        from app.services import owner_report
+
+        await answer(owner_report.render_health(await owner_report.health(session)))
+    elif action == "payments":
+        await _owner_pending_payments(answer, session)
     elif action == "debtors":
         await _owner_debtors(answer, session)
     elif action == "broadcast":
@@ -1059,7 +1071,311 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
         if not await _is_owner_user(s, cb.from_user):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
+        if action == "search":
+            await state.set_state(OwnerSearchState.waiting)
+            await cb.message.answer("🔎 نام یا شناسهٔ نماینده را بفرستید (برای لغو: /cancel).")
+            await cb.answer()
+            return
         await _dispatch_owner(action, cb.message.answer, s)
+    await cb.answer()
+
+
+# ── admin-bot: period stats switch + per-panel breakdown ─────────────────────
+@router.callback_query(F.data.startswith("ostat:"))
+async def cb_owner_stats_period(cb: CallbackQuery) -> None:
+    label = cb.data.split(":", 1)[1]
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await _owner_stats(cb.message.answer, s, label)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("opanel:"))
+async def cb_owner_per_panel(cb: CallbackQuery) -> None:
+    label = cb.data.split(":", 1)[1]
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import owner_report
+
+        rows = await owner_report.per_panel(s, label)
+        await cb.message.answer(owner_report.render_per_panel(label, rows))
+    await cb.answer()
+
+
+# ── admin-bot: pending-payment review (proof + confirm/reject) ───────────────
+@router.callback_query(F.data.startswith("opv:"))
+async def cb_owner_payment_view(cb: CallbackQuery, bot: Bot) -> None:
+    pid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        pay = await s.get(Payment, pid)
+        if pay is None or pay.status != PaymentStatus.pending:
+            await cb.message.answer("این پرداخت دیگر در انتظار نیست (شاید قبلاً رسیدگی شده).")
+            await cb.answer()
+            return
+        reseller = await s.get(Reseller, pay.reseller_id)
+        inv = await s.get(Invoice, pay.invoice_id) if pay.invoice_id else None
+        amt = f"{float(pay.amount_toman or 0):,.0f} تومان" if pay.amount_toman else "—"
+        method_fa = {"usdt_txid": "USDT", "ton_txid": "TON", "screenshot": "رسید", "manual": "دستی"}
+        lines = [
+            f"💳 پرداخت #{pay.id}",
+            _iso(f"نماینده: {reseller.name if reseller else '—'}"),
+            f"روش: {method_fa.get(pay.method.value, pay.method.value)} | مبلغ: {amt}",
+            f"فاکتور: دورهٔ {inv.period_label}" if inv else "فاکتور: —",
+        ]
+        if pay.txid:
+            lines.append(_iso(f"TXID: {pay.txid}"))
+        kb = keyboards.owner_payment_detail_keyboard(pay.id)
+        # If there's a proof image, send it with the detail as caption; else just the text.
+        proof = pay.proof_path
+        if proof and os.path.exists(proof):
+            from aiogram.types import FSInputFile
+
+            await cb.message.answer_photo(
+                FSInputFile(proof), caption="\n".join(lines), reply_markup=kb
+            )
+        else:
+            await cb.message.answer("\n".join(lines), reply_markup=kb)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("opok:"))
+async def cb_owner_payment_confirm(cb: CallbackQuery) -> None:
+    pid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import payments
+
+        try:
+            res = await payments.confirm_manually(s, pid)
+        except Exception as exc:  # noqa: BLE001
+            await cb.message.answer(f"❌ تأیید ناموفق بود: {exc}")
+            await cb.answer()
+            return
+        await cb.message.answer(
+            "✅ پرداخت تأیید شد و به نماینده اطلاع داده شد."
+            if res.paid else f"⚠️ {res.message_fa}"
+        )
+    await cb.answer("تأیید شد")
+
+
+@router.callback_query(F.data.startswith("opno:"))
+async def cb_owner_payment_reject(cb: CallbackQuery) -> None:
+    pid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import payments
+
+        try:
+            await payments.reject_payment(s, pid)
+        except Exception as exc:  # noqa: BLE001
+            await cb.message.answer(f"❌ رد ناموفق بود: {exc}")
+            await cb.answer()
+            return
+        await cb.message.answer("❌ پرداخت رد شد و به نماینده اطلاع داده شد.")
+    await cb.answer("رد شد")
+
+
+# ── admin-bot: reseller search → card → quick actions ────────────────────────
+@router.message(OwnerSearchState.waiting)
+async def on_owner_search(message: Message, state: FSMContext) -> None:
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, message.from_user):
+            await state.clear()
+            return
+        await state.clear()
+        q = (message.text or "").strip()
+        if len(q) < 2:
+            await message.answer("حداقل ۲ نویسه بفرستید.")
+            return
+        rows = (
+            await s.execute(
+                select(Reseller)
+                .where(
+                    Reseller.is_owner.is_(False),
+                    or_(Reseller.name.ilike(f"%{q}%"), Reseller.admin_uuid.ilike(f"%{q}%")),
+                )
+                .order_by(Reseller.name)
+                .limit(20)
+            )
+        ).scalars().all()
+        if not rows:
+            await message.answer("نماینده‌ای پیدا نشد.")
+            return
+        if len(rows) == 1:
+            await _send_reseller_card(message.answer, s, rows[0].id)
+            return
+        items = [(r.id, f"{(r.name or '—')[:24]}") for r in rows]
+        await message.answer(
+            f"🔎 {len(rows)} نتیجه — یکی را انتخاب کنید:",
+            reply_markup=keyboards.owner_reseller_results_keyboard(items),
+        )
+
+
+@router.callback_query(F.data.startswith("orc:"))
+async def cb_owner_reseller_card(cb: CallbackQuery) -> None:
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await _send_reseller_card(cb.message.answer, s, rid)
+    await cb.answer()
+
+
+async def _send_reseller_card(answer, session, reseller_id: int) -> None:
+    from app.services import owner_report, pricing, reseller_report
+    from app.services.periods import current_month
+
+    r = await session.get(Reseller, reseller_id)
+    if r is None:
+        await answer("نماینده پیدا نشد.")
+        return
+    panel = await session.get(Panel, r.panel_id)
+    label = current_month().label
+    # Current-month sales for this node (own + subs), matching the real invoice.
+    gb = await reseller_report.current_billable_gb(session, r)
+    price = int(r.price_per_gb or await pricing.get_default_price_per_gb(session))
+    # Outstanding debt for this reseller.
+    owed = float(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Invoice.amount_toman), 0)).where(
+                    Invoice.reseller_id == r.id, Invoice.status.in_(_OWED)
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    cap = (r.panel_max_users or 0)
+    enforced = r.enforcement_state == EnforcementState.enforced
+    username = None
+    if r.bot_chat_id:
+        bu = (
+            await session.execute(select(BotUser).where(BotUser.telegram_id == r.bot_chat_id))
+        ).scalar_one_or_none()
+        username = bu.username if bu else None
+    tg_href = (
+        f"https://t.me/{username}" if username
+        else (f"tg://user?id={r.bot_chat_id}" if r.bot_chat_id else None)
+    )
+    lines = [
+        f"👤 {_iso(r.name or '—')}",
+        _iso(f"پنل: {panel.key if panel else '—'}"),
+        f"وضعیت: {'⛔️ مسدود' if enforced else '✅ فعال'} | "
+        f"{'متصل به ربات' if r.bot_chat_id else 'بدون ربات'}",
+        f"فروشِ ماهِ جاری ({label}): {gb:g} گیگ ≈ {owner_report._toman(gb * price)} ت",
+        f"بدهیِ معوق: {owner_report._toman(owed)} ت",
+        f"سقفِ کاربر: {cap or '—'}",
+    ]
+    await answer(
+        "\n".join(lines),
+        reply_markup=keyboards.owner_reseller_card_keyboard(
+            r.id, enforced=enforced, tg_href=tg_href
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("oenf:"))
+async def cb_owner_enforce(cb: CallbackQuery) -> None:
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import enforcement
+
+        r = await s.get(Reseller, rid)
+        if r is None:
+            await cb.answer("نماینده پیدا نشد.", show_alert=True)
+            return
+        await enforcement.enforce_reseller(s, r, dry_run=False)
+        await cb.message.answer(f"⏳ مسدودسازی «{r.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود.")
+    await cb.answer("در صف ثبت شد")
+
+
+@router.callback_query(F.data.startswith("ores:"))
+async def cb_owner_restore(cb: CallbackQuery) -> None:
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import enforcement
+
+        r = await s.get(Reseller, rid)
+        if r is None:
+            await cb.answer("نماینده پیدا نشد.", show_alert=True)
+            return
+        action = await enforcement.queue_restore(s, r, reason="bot-owner")
+        await cb.message.answer(
+            "این نماینده مسدود نیست." if action is None
+            else f"⏳ آزادسازی «{r.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
+        )
+    await cb.answer("در صف ثبت شد")
+
+
+@router.callback_query(F.data.startswith("obump:"))
+async def cb_owner_bump(cb: CallbackQuery) -> None:
+    _, rid_s, amount_s = cb.data.split(":")
+    rid, amount = int(rid_s), int(amount_s)
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import admin_capacity
+
+        r = await s.get(Reseller, rid)
+        if r is None:
+            await cb.answer("نماینده پیدا نشد.", show_alert=True)
+            return
+        try:
+            new_mu, _new_mau = await admin_capacity.bump_limits(s, r, amount)
+        except Exception as exc:  # noqa: BLE001
+            await cb.message.answer(f"❌ افزایش ظرفیت ناموفق بود: {exc}")
+            await cb.answer()
+            return
+        await cb.message.answer(f"✅ ظرفیت «{r.name}» {amount}+ شد (سقف جدید: {new_mu}).")
+    await cb.answer("انجام شد")
+
+
+@router.callback_query(F.data.startswith("orcinv:"))
+async def cb_owner_reseller_invoices(cb: CallbackQuery) -> None:
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        rows = (
+            await s.execute(
+                select(Invoice.period_label, Invoice.amount_toman, Invoice.status)
+                .where(Invoice.reseller_id == rid)
+                .order_by(Invoice.period_start.desc())
+                .limit(12)
+            )
+        ).all()
+        if not rows:
+            await cb.message.answer("فاکتوری برای این نماینده ثبت نشده است.")
+            await cb.answer()
+            return
+        status_fa = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
+                     "overdue": "معوق", "enforced": "مسدود", "canceled": "لغو"}
+        lines = ["🧾 فاکتورهای اخیر:"]
+        for period, toman, status in rows:
+            lines.append(
+                f"‏• {period}: {float(toman or 0):,.0f} ت — {status_fa.get(status.value, status.value)}"
+            )
+        await cb.message.answer("\n".join(lines))
     await cb.answer()
 
 
@@ -1067,7 +1383,8 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
 # `/broadcast` is handled by its own dedicated command handler above (it also accepts inline
 # text), so it's intentionally not duplicated here.
 _OWNER_CMD_ACTION = {
-    "stats": "stats", "debtors": "debtors", "sync": "sync", "backup": "backup",
+    "stats": "stats", "health": "health", "payments": "payments",
+    "debtors": "debtors", "sync": "sync", "backup": "backup",
 }
 
 
@@ -1082,58 +1399,56 @@ async def cmd_owner_action(message: Message, command: CommandObject) -> None:
         await _dispatch_owner(action, message.answer, s)
 
 
-async def _owner_stats(answer, session) -> None:
-    from app.services.periods import current_month
-    from app.services.reseller_stats import load_root_stats
+async def _owner_stats(answer, session, label: str | None = None) -> None:
+    """Period KPI dashboard with a month switch + a per-panel breakdown button."""
+    from app.services import owner_report
 
-    panels = (await session.execute(select(func.count(Panel.id)))).scalar_one()
-    # Count only MAIN (top-level) resellers that are billable — not their sub-resellers,
-    # not the exempt ones — and how many of those are connected to the bot.
-    stats = await load_root_stats(session)
-    label = current_month().label
-    sent_rows = (
-        await session.execute(
-            select(Invoice.amount_toman).where(
-                Invoice.period_label == label,
-                Invoice.status.in_((InvoiceStatus.sent, InvoiceStatus.overdue,
-                                    InvoiceStatus.enforced, InvoiceStatus.paid)),
-            )
-        )
-    ).scalars().all()
-    owed_rows = (
-        await session.execute(select(Invoice.amount_toman).where(Invoice.status.in_(_OWED)))
-    ).scalars().all()
-    exempt_note = f" + {stats.exempt} معاف" if stats.exempt else ""
+    label = label or owner_report.current_period_label()
+    stats = await owner_report.period_stats(session, label)
     await answer(
-        f"📊 آمار کلی\n"
-        f"پنل‌ها: {panels}\n"
-        f"نمایندگان اصلی: {stats.billable} ({stats.connected} متصل به ربات){exempt_note}\n"
-        f"فروش دورهٔ جاری ({label}): {sum(float(x) for x in sent_rows):,.0f} تومان\n"
-        f"بدهی معوق: {sum(float(x) for x in owed_rows):,.0f} تومان"
+        owner_report.render_period_stats(stats),
+        reply_markup=keyboards.owner_stats_keyboard(label, owner_report.period_choices()),
     )
 
 
 async def _owner_debtors(answer, session) -> None:
-    rows = (
-        await session.execute(
-            select(Reseller.name, func.sum(Invoice.amount_toman))
-            .join(Reseller, Invoice.reseller_id == Reseller.id)
-            .where(Invoice.status.in_(_OWED))
-            .group_by(Reseller.id, Reseller.name)
-            .order_by(func.sum(Invoice.amount_toman).desc())
-            .limit(10)
-        )
-    ).all()
+    from app.services import owner_report
+
+    rows = await owner_report.top_debtors(session, limit=10)
     if not rows:
         await answer("بدهکاری وجود ندارد.")
         return
     # Each row starts with a right-to-left mark (‏) so a line that begins with an
-    # English reseller name still renders right-aligned in Telegram (otherwise the first
-    # Latin character flips the whole line to LTR and it reads garbled).
-    lines = ["💰 بدهکاران برتر:\n"]
-    for i, (name, total) in enumerate(rows, 1):
-        lines.append(f"‏{i}. {_iso(name)}: {float(total):,.0f} تومان")
+    # English reseller name still renders right-aligned in Telegram, and links to the card.
+    lines = ["💰 بدهکاران برتر — برای کارت/اقدام روی «🔎 جستجوی نماینده» بزنید:\n"]
+    for i, d in enumerate(rows, 1):
+        lines.append(f"‏{i}. {_iso(d.name)}: {float(d.total):,.0f} تومان")
     await answer("\n".join(lines))
+
+
+async def _owner_pending_payments(answer, session) -> None:
+    """List PENDING payments as buttons → tap to see proof + confirm/reject."""
+    rows = (
+        await session.execute(
+            select(Payment.id, Reseller.name, Payment.amount_toman, Payment.method, Invoice.period_label)
+            .join(Reseller, Payment.reseller_id == Reseller.id)
+            .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
+            .where(Payment.status == PaymentStatus.pending)
+            .order_by(Payment.created_at)
+            .limit(30)
+        )
+    ).all()
+    if not rows:
+        await answer("✅ پرداختِ در انتظارِ تأییدی وجود ندارد.")
+        return
+    items: list[tuple[int, str]] = []
+    for pid, name, toman, method, period in rows:
+        amt = f"{float(toman or 0):,.0f}ت" if toman else "—"
+        items.append((pid, f"#{pid} · {(name or '—')[:18]} · {amt} · {period or '—'}"))
+    await answer(
+        f"💳 {len(rows)} پرداختِ در انتظارِ تأیید:",
+        reply_markup=keyboards.owner_pending_payments_keyboard(items),
+    )
 
 
 # --------------------------- shared reseller views ---------------------------

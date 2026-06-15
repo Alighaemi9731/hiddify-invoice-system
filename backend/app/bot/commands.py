@@ -44,7 +44,9 @@ RESELLER_COMMANDS = [
 # Mirrors the owner inline menu (owner_menu_keyboard).
 OWNER_COMMANDS = [
     BotCommand(command="menu", description="🏠 منوی مدیریت"),
-    BotCommand(command="stats", description="📊 آمار کلی"),
+    BotCommand(command="stats", description="📊 آمار دوره"),
+    BotCommand(command="health", description="🩺 سلامت سامانه"),
+    BotCommand(command="payments", description="💳 پرداخت‌های در انتظار"),
     BotCommand(command="debtors", description="💰 بدهکاران"),
     BotCommand(command="broadcast", description="📢 پیام همگانی"),
     BotCommand(command="sync", description="🔄 همگام‌سازی پنل‌ها"),
