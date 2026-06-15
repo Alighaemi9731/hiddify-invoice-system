@@ -20,6 +20,7 @@ class ResellerOut(BaseModel):
     effective_price_per_gb: int
     min_sale_toman: int | None
     bot_chat_id: int | None
+    username: str | None = None   # Telegram @username (when known) → deep-link to the admin's PV
     panel_telegram_id: int | None
     link_tag: str | None
     registered: bool

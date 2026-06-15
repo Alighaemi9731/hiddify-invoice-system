@@ -6,7 +6,13 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- **Telegram column in the Resellers main list** — a new «تلگرام» column (before «پنل») shows a
+  clickable Telegram icon for each registered main reseller that opens their private chat
+  (`t.me/<username>` when known, else `tg://user?id=`), so the owner can message a reseller in
+  one tap. Also shown on the mobile reseller cards. The reseller API now returns the
+  Telegram `username`.
 
 ## 1.37.68 - 2026-06-15
 

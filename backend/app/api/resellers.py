@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import EndUserSnapshot, Panel, Reseller
+from app.models import BotUser, EndUserSnapshot, Panel, Reseller
 from app.models.enums import PanelStatus
 from app.schemas.reseller import (
     BumpLimitsBody,
@@ -43,6 +43,7 @@ router = APIRouter(
 def _to_out(
     r: Reseller, panel_key: str, default_price: int,
     counts: dict[tuple[int, str], tuple[int, int]] | None = None,
+    usernames: dict[int, str] | None = None,
 ) -> ResellerOut:
     total, active = (counts or {}).get((r.panel_id, r.admin_uuid), (0, 0))
     # Fill % of the admin's user quota — what the capacity column sorts by. No limit → 0
@@ -55,6 +56,7 @@ def _to_out(
         price_per_gb=r.price_per_gb, effective_price_per_gb=(r.price_per_gb or default_price),
         min_sale_toman=r.min_sale_toman,
         bot_chat_id=r.bot_chat_id, panel_telegram_id=r.panel_telegram_id, link_tag=r.link_tag,
+        username=(usernames or {}).get(r.bot_chat_id) if r.bot_chat_id else None,
         registered=r.bot_chat_id is not None, enforcement_state=r.enforcement_state.value,
         panel_max_users=r.panel_max_users, panel_max_active_users=r.panel_max_active_users,
         can_add_admin=r.can_add_admin,
@@ -130,7 +132,21 @@ async def list_resellers(
     if root_keys is not None:
         rows = [(r, key) for r, key in rows if (r.panel_id, r.admin_uuid) in root_keys]
     counts = await _usage_counts(session, panel_id)
-    return [_to_out(r, key, default_price, counts) for r, key in rows]
+    # Telegram @usernames for the registered resellers in this page → clickable PV deep-link.
+    chat_ids = [r.bot_chat_id for r, _ in rows if r.bot_chat_id]
+    usernames: dict[int, str] = {}
+    if chat_ids:
+        usernames = {
+            tid: uname
+            for tid, uname in (
+                await session.execute(
+                    select(BotUser.telegram_id, BotUser.username).where(
+                        BotUser.telegram_id.in_(chat_ids), BotUser.username.is_not(None)
+                    )
+                )
+            ).all()
+        }
+    return [_to_out(r, key, default_price, counts, usernames) for r, key in rows]
 
 
 @router.get("/tree")

@@ -109,6 +109,7 @@ export interface ResellerRow {
   effective_price_per_gb: number;
   min_sale_toman: number | null;
   bot_chat_id: number | null;
+  username: string | null;
   panel_telegram_id: number | null;
   link_tag: string | null;
   registered: boolean;
