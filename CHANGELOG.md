@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.71 - 2026-06-15
+
+### Added
+
+- **Live exchange-rate display.** A «نرخِ زنده» card on the Dashboard shows the current
+  USDT→Toman (and TON→Toman when TON payment is on) rate with the last-update time, an
+  auto/manual/stale badge, and a refresh button. The Invoices header also shows a compact
+  «نرخ اعمالی» chip — the exact rate invoice generation will apply. Backed by a new read-only
+  `GET /api/ops/rates` (no network I/O — reads the cached values). Rates come from Tetherland
+  (USDT, primary) / Wallex (USDT fallback + TON), refreshed hourly, on demand, and before
+  billing.
+
 ## 1.37.70 - 2026-06-15
 
 Whole-codebase review fixes (no behavior change to the core money/enforcement logic — the

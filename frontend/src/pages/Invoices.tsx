@@ -26,6 +26,7 @@ import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
+import LiveRate from "../components/LiveRate";
 import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
@@ -122,6 +123,7 @@ export default function Invoices() {
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <Box sx={{ flexGrow: 1 }} />
+        <LiveRate compact />
         <Button variant="outlined" onClick={() => {
           // Guard against billing an incomplete month: the normal action is to issue the
           // PREVIOUS (completed) month. Generating the current/future month would invoice only

@@ -195,6 +195,19 @@ export const confirmPayment = (id: number) =>
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);
 export const deletePayment = (id: number) => api.delete(`/api/payments/${id}`).then((r) => r.data);
 export const refreshRate = () => api.post("/api/ops/refresh-rate").then((r) => r.data);
+
+export interface RatesInfo {
+  mode: "auto" | "manual";
+  effective: number;
+  usdt_auto: number;
+  usdt_auto_at: string;
+  usdt_manual: number;
+  ton_auto: number;
+  ton_enabled: boolean;
+  stale: boolean;
+}
+export const getRates = (): Promise<RatesInfo> =>
+  api.get("/api/ops/rates").then((r) => r.data);
 // Fetch the deposit screenshot (authenticated) as a blob and open it in a new tab.
 export const openPaymentProof = async (id: number) => {
   const r = await api.get(`/api/payments/${id}/proof`, { responseType: "blob" });

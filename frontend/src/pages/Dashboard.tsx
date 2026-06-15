@@ -24,6 +24,7 @@ import { motion } from "framer-motion";
 import { getDashboard } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
+import LiveRate from "../components/LiveRate";
 import EChart from "../components/EChart";
 import { CountUp, Reveal } from "../components/motion";
 import { fmtGb, fmtNum, fmtToman, INVOICE_STATUS_FA } from "../format";
@@ -285,6 +286,12 @@ export default function Dashboard() {
                 </motion.div>
               </Grid>
             ))}
+          </Grid>
+
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12} sm={6} lg={4}>
+              <LiveRate />
+            </Grid>
           </Grid>
 
           <Reveal delay={0.3}>

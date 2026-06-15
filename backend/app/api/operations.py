@@ -109,6 +109,40 @@ async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
     return {"rate": rate, "effective": await rates.get_effective_rate(session)}
 
 
+@router.get("/rates")
+async def get_rates(session: AsyncSession = Depends(get_session)) -> dict:
+    """Live exchange rates for display (read-only, NO network I/O — reads the cached values).
+    `effective` is exactly what invoice generation will apply."""
+    from app.services import rates, settings_service
+
+    cfg = await settings_service.get_many(
+        session,
+        ["rate_mode", "toman_per_usdt", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
+         "ton_toman_auto", "rate_max_age_hours", "pay_ton_enabled"],
+    )
+
+    def _int(v) -> int:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
+    mode = str(cfg.get("rate_mode") or "manual").lower()
+    usdt_auto = _int(cfg.get("toman_per_usdt_auto"))
+    max_age = _int(cfg.get("rate_max_age_hours")) or 48
+    fresh = rates._rate_is_fresh(cfg.get("toman_per_usdt_auto_at"), max_age)  # noqa: SLF001
+    return {
+        "mode": mode,
+        "effective": await rates.get_effective_rate(session),
+        "usdt_auto": usdt_auto,
+        "usdt_auto_at": cfg.get("toman_per_usdt_auto_at") or "",
+        "usdt_manual": _int(cfg.get("toman_per_usdt")),
+        "ton_auto": _int(cfg.get("ton_toman_auto")),
+        "ton_enabled": bool(cfg.get("pay_ton_enabled")),
+        "stale": bool(mode == "auto" and usdt_auto > 0 and not fresh),
+    }
+
+
 @router.post("/run-monthly")
 async def run_monthly(
     period: str | None = None,
