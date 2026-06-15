@@ -43,7 +43,7 @@ def decrypt(ciphertext: str | None) -> str | None:
         return None
 
 
-def mask(secret: str | None, visible: int = 0) -> str:
+def mask(secret: str | None) -> str:
     """Mask a secret for display/logging. Reveals NOTHING — not even the last few chars or
     the real length — so reading the settings API leaks no information about a stored secret.
     Returns a fixed run of bullets for any non-empty value, "" for empty (the API's separate

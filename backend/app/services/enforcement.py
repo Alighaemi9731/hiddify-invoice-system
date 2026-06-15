@@ -1012,10 +1012,3 @@ async def enforce_reseller(
     return await queue_enforcement(
         session, reseller, invoice_id=invoice_id, dry_run=dry_run
     )
-
-
-async def restore_reseller(
-    session: AsyncSession, reseller: Reseller
-) -> EnforcementAction | None:
-    """Compatibility wrapper: restore is always durable and asynchronous."""
-    return await queue_restore(session, reseller)

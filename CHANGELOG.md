@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.70 - 2026-06-15
+
+Whole-codebase review fixes (no behavior change to the core money/enforcement logic — the
+review confirmed those are correct).
+
+### Fixed
+
+- **Daily dunning report now lists the newly-enforced resellers.** `enforced_links` was built
+  and returned but never populated (dead since enforcement became queued), so the "click to
+  message" list was always empty. It's now appended whenever a real suspension is queued/done.
+- **Payment deadline check uses Tehran time.** `_reseller_has_other_due` compared
+  `deferred_until` against UTC `date.today()` while enforcement/dunning use Tehran — a
+  near-midnight edge. Now uses the shared Tehran-local date.
+
+### Changed (dead-code cleanup)
+
+- Removed the unused `enforcement.restore_reseller` wrapper (callers use `queue_restore`).
+- Slimmed `build_invoice_pdf` to its real (volume-only) parameters — dropped 10 long-ignored
+  money/wallet args and the now-dead amount computations at the call sites.
+- Removed dead frontend exports `CHART_COLORS` and `fmtCompact`, an unused `Divider` import,
+  and the unused `visible` parameter on `crypto.mask`.
+
 ## 1.37.69 - 2026-06-15
 
 ### Added — admin bot overhaul (a real management tool from your phone)

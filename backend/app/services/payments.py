@@ -40,7 +40,9 @@ async def _reseller_has_other_due(
     """True if the reseller still has another OWED, non-deferred invoice. Used to avoid
     restoring a suspended reseller while they still owe on a different invoice — paying one
     invoice must not lift enforcement when other debts remain."""
-    today = dt.date.today()
+    from app.services.periods import today as tehran_today
+
+    today = tehran_today()  # Tehran-local, matching enforcement/dunning deadline checks
     rows = (
         await session.execute(
             select(Invoice).where(

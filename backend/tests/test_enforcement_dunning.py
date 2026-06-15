@@ -288,7 +288,7 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
-        res = await enforcement.restore_reseller(s, r)
+        res = await enforcement.queue_restore(s, r)
         assert res.status == EnforcementActionStatus.planned
 
         # Tick 1: admin limits restored (success), u1 enabled (success), u2 fails → partial.

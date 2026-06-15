@@ -125,24 +125,14 @@ def build_invoice_pdf(
     period_end: dt.date,
     lines: list[dict],
     total_gb: float,
-    price_per_gb: int,
-    amount_toman: float,
-    amount_usdt: float,
-    usdt_rate: int,
-    wallet_address: str = "",
-    card_number: str = "",
-    card_holder: str = "",
-    base_amount_toman: float | None = None,
-    min_sale_toman: int = 0,
-    floor_applied: bool = False,
     owner_name: str = "",
     issued_at: dt.date | None = None,
     invoice_title: str = "فاکتور",
 ) -> str:
-    # NOTE: the money args (price_per_gb, amount_toman, amount_usdt, usdt_rate,
-    # wallet_address, card_number, card_holder, base_amount_toman, min_sale_toman,
-    # floor_applied) are accepted for backward-compat but NO LONGER rendered — the PDF is a
-    # volume-only usage report. Pricing/payment is shown in the bot's text message instead.
+    # The PDF is a VOLUME-ONLY usage report by design (M29): it shows the header + per-user
+    # line items + total GB, never price/amount/wallet. Pricing & payment instructions live in
+    # the bot's text message so a reseller can hand the PDF to a sub-reseller without exposing
+    # the owner's configured prices.
     reg = _font_or_default(FONT)
     bold = _font_or_default(BOLD)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

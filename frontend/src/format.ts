@@ -12,15 +12,6 @@ export const fmtGb = (n: number) => {
 
 export const fmtNum = (n: number) => (n || 0).toLocaleString("fa-IR");
 
-// Compact axis labels: 1.2M / 850K / 320
-export const fmtCompact = (n: number) => {
-  const a = Math.abs(n || 0);
-  if (a >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
-  if (a >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
-  if (a >= 1e3) return (n / 1e3).toFixed(0) + "K";
-  return String(Math.round(n || 0));
-};
-
 export const fmtDate = (s?: string | null) => {
   if (!s) return "—";
   try {

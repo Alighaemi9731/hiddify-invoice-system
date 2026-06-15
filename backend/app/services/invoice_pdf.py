@@ -30,9 +30,6 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
             .order_by(InvoiceLine.usage_gb.desc())
         )
     ).scalars().all()
-    from app.services import payment_methods
-
-    opts = await payment_methods.load_options(session)
     owner_name = await settings_service.get(session, "owner_name", "") or ""
 
     safe = _safe_name(reseller.name)
@@ -49,14 +46,7 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
              "sub_reseller_name": line.sub_reseller_name or reseller.name}
             for line in lines
         ],
-        total_gb=float(inv.usage_gb), price_per_gb=inv.price_per_gb,
-        amount_toman=float(inv.amount_toman), amount_usdt=float(inv.amount_usdt),
-        usdt_rate=int(inv.usdt_rate),
-        wallet_address=opts.wallet if opts.usdt else "",
-        card_number=opts.card_number if opts.card else "",
-        card_holder=opts.card_holder if opts.card else "",
-        base_amount_toman=float(inv.base_amount_toman or inv.amount_toman),
-        min_sale_toman=int(inv.min_sale_toman or 0), floor_applied=bool(inv.floor_applied),
+        total_gb=float(inv.usage_gb),
         owner_name=owner_name,
     )
     inv.pdf_path = out_path
@@ -89,8 +79,7 @@ async def render_node_usage_pdf(
              "sub_reseller_name": line.sub_reseller_name or node.name}
             for line in bundle.lines
         ],
-        total_gb=float(bundle.total_gb), price_per_gb=0,
-        amount_toman=0, amount_usdt=0, usdt_rate=0,
+        total_gb=float(bundle.total_gb),
         owner_name=owner_name, invoice_title=title,
     )
     return out_path, f"{title.replace(' ', '_')}_{safe}_{period.label}.pdf"
@@ -122,8 +111,7 @@ async def render_own_usage_pdf(
              "sub_reseller_name": line.sub_reseller_name or node.name}
             for line in bundle.lines
         ],
-        total_gb=float(bundle.total_gb), price_per_gb=0,
-        amount_toman=0, amount_usdt=0, usdt_rate=0,
+        total_gb=float(bundle.total_gb),
         owner_name=owner_name, invoice_title=title,
     )
     return out_path, f"{title.replace(' ', '_')}_own_{safe}_{period.label}.pdf"
@@ -136,7 +124,6 @@ async def render_sub_invoice_pdf(
     a period, so a reseller can bill their sub-resellers. NOT persisted as an Invoice
     (the owner's invoice already covers the subtree). Returns None if zero billable usage.
     """
-    from app.services import pricing
     from app.services.reseller_report import node_invoice
 
     bundle = await node_invoice(session, node, period)
@@ -144,9 +131,6 @@ async def render_sub_invoice_pdf(
         return None
 
     panel = await session.get(Panel, node.panel_id)
-    rate = await pricing.get_rate(session)
-    amount_toman = bundle.amount_toman
-    amount_usdt = float(pricing.toman_to_usdt(amount_toman, rate))
     safe = _safe_name(node.name)
     out_path = f"data/invoices/{period.label}/sub_{safe}_{node.id}_{period.label}.pdf"
     pdf_service.build_invoice_pdf(
@@ -159,11 +143,7 @@ async def render_sub_invoice_pdf(
              "sub_reseller_name": line.sub_reseller_name or node.name}
             for line in bundle.lines
         ],
-        total_gb=float(bundle.total_gb), price_per_gb=bundle.price_per_gb,
-        amount_toman=float(amount_toman), amount_usdt=amount_usdt,
-        usdt_rate=int(rate), wallet_address="",  # reseller↔sub settlement is off-system
-        base_amount_toman=float(bundle.base_amount_toman or amount_toman),
-        min_sale_toman=int(bundle.min_sale_toman or 0), floor_applied=bool(bundle.floor_applied),
+        total_gb=float(bundle.total_gb),
         owner_name=issuer_name,  # the issuing reseller, not the panel owner
     )
     return out_path, f"factor_{safe}_{period.label}.pdf"

@@ -565,9 +565,3 @@ export function makeTheme(mode: PaletteMode) {
 }
 
 export const theme = makeTheme("light");
-
-// Chart colours — Apple system palette
-export const CHART_COLORS = [
-  "#0071e3", "#30d158", "#ff9500", "#ff3b30", "#bf5af2",
-  "#32ade6", "#ffd60a", "#ff6961", "#6ac4dc", "#8e8e93",
-];

@@ -28,7 +28,7 @@ from app.models.enums import (
     InvoiceStatus,
     PaymentStatus,
 )
-from app.services import enforcement, notifier, settings_service
+from app.services import enforcement, notifier, owner_notify, settings_service
 
 log = logging.getLogger("dunning")
 
@@ -207,10 +207,14 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                 action = await enforcement.queue_enforcement(session, reseller, invoice_id=inv.id)
                 if action.dry_run:
                     counts["enforced_dry"] += 1
-                elif action.status.value == "done":
-                    counts["enforced"] += 1
                 else:
-                    counts["enforcement_queued"] += 1
+                    # A real (queued or done) suspension → give the owner a clickable link to the
+                    # reseller's PV in the daily report so they can message them directly.
+                    enforced_links.append(owner_notify.user_link(reseller))
+                    if action.status.value == "done":
+                        counts["enforced"] += 1
+                    else:
+                        counts["enforcement_queued"] += 1
     finally:
         if bot is not None:
             await bot.session.close()
