@@ -21,35 +21,30 @@ from app.services import invoice_pdf, notifier
 log = logging.getLogger("delivery")
 
 
+# Call to action at the bottom of the sent invoice. The invoice text itself is kept lean — the
+# wallet/card/USDT/TON details are NOT embedded (they'd duplicate the pay-button view AND a TON
+# amount printed at send time goes stale by the time the customer pays). The reseller taps the
+# «💳 پرداخت فاکتور» button (attached under the message) to see the live payment details.
+_PAY_CTA = (
+    "برای پرداخت، روی دکمهٔ «💳 پرداخت فاکتور» زیرِ همین پیام بزنید "
+    "(یا از منوی «🧾 فاکتورهای پرداخت‌نشده»)، فاکتورِ خود را انتخاب و پرداخت کنید."
+)
+
+
 async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Reseller) -> str:
-    """Build the payable invoice text as **HTML** (so the wallet/card render as tap-to-copy
-    <code>). Always sent with parse_mode="HTML"; dynamic free text (the reseller name) is
-    HTML-escaped so a name with </>/& can't break it."""
+    """Build the payable invoice text as **HTML**. Lean by design: amount + a CTA to the pay
+    button — NO embedded wallet/card/USDT/TON (those live on the «💳 پرداخت فاکتور» path, with a
+    live TON rate). Dynamic free text (the reseller name) is HTML-escaped."""
     import html as _html
 
     from app.core.codes import invoice_code
-    from app.services import payment_methods, rates
 
-    opts = await payment_methods.load_options(session)
-    amount_ton = None
-    if opts.ton:
-        ton_rate = await rates.get_ton_toman(session)
-        if ton_rate:
-            amount_ton = f"{float(inv.amount_toman) / ton_rate:,.2f}"
-    instructions = payment_methods.instructions_text(
-        opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
-        amount_toman=f"{float(inv.amount_toman):,.0f}", amount_ton=amount_ton, html=True,
-        via_button=True,
-    )
     text = await texts.render(
         session, "tpl_invoice",
         name=_html.escape(reseller.name or ""), period=inv.period_label,
         usage_gb=f"{float(inv.usage_gb):,.0f}",
         amount_toman=f"{float(inv.amount_toman):,.0f}",
-        amount_usdt=f"{float(inv.amount_usdt):,.2f}",
-        payment_instructions=instructions,
-        # kept for backward-compat with any owner-customized template still using it
-        wallet_address=_html.escape(opts.wallet or "(تنظیم نشده)"),
+        pay_cta=_PAY_CTA,
     )
     # When the minimum-sale floor was applied, explain it transparently.
     if getattr(inv, "floor_applied", False):

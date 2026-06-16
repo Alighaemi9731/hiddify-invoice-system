@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.78 - 2026-06-16
+
+### Changed (sent invoice text — slimmer, no stale payment details)
+
+- The invoice text delivered by the bot now shows only the **invoice number, period,
+  usage (GB), and payable amount**, followed by a call to action to tap the
+  «💳 پرداخت فاکتور» button (or the «🧾 فاکتورهای پرداخت‌نشده» menu) to choose the
+  method and pay. The embedded card/USDT/TON instructions — and especially the TON
+  amount, which could be stale by the time the customer reads the message — were
+  removed from the invoice body. The live amounts are shown on the pay screen, which
+  recomputes them at tap time. PDFs and the pay/unpaid-invoices flows are unchanged.
+- `tpl_invoice` migrated for un-customized installs (the prior `{payment_instructions}`
+  default → the new `{pay_cta}` form); customized templates are never overwritten.
+
+### Added (TON deposit reader — decision aid for manual confirmation)
+
+- The panel Payments confirm dialog now shows, for a TON payment, the **actual TON
+  deposited** for the txid (read best-effort from the public toncenter API), its Toman
+  equivalent at the live TON rate, and the invoice amount, with a green/red badge when
+  the received value is within / outside the new `ton_amount_tolerance_pct` setting
+  (default **5%**). This is purely a decision aid — confirmation stays **manual**; no
+  TON auto-confirm was added. Optional `toncenter_api_key` setting raises the read rate
+  limit. The reader never blocks billing or the event loop and fails silently when the
+  API is unavailable.
+
 ## 1.37.77 - 2026-06-16
 
 ### Changed (billing — multiple legitimate renewals in one month)

@@ -45,9 +45,11 @@ _TPL_LINK_NOT_FOUND = (
     "❌ نتوانستیم این لینک را به هیچ نماینده‌ای متصل کنیم.\n"
     "لطفاً لینک پنل خودتان را به‌صورت کامل ارسال کنید."
 )
-# Previous default — kept only so seed_defaults can migrate an un-customized install to the
-# new, more minimal header (no redundant USDT line; Toman shown once).
-_TPL_INVOICE_LEGACY = (
+# Previous defaults — kept ONLY so seed_defaults can migrate an un-customized install to the
+# current template. The current invoice text no longer embeds the wallet/card/amount; it shows a
+# CTA pointing to the «💳 پرداخت فاکتور» button (so a stale TON amount is never printed and the
+# payment details aren't duplicated — those live on the button path).
+_TPL_INVOICE_LEGACY = (  # the «معادل USDT» form
     "🧾 فاکتور دوره {period}\n"
     "نماینده: {name}\n"
     "مجموع مصرف: {usage_gb} گیگ\n"
@@ -55,12 +57,19 @@ _TPL_INVOICE_LEGACY = (
     "معادل: {amount_usdt} USDT\n\n"
     "{payment_instructions}"
 )
-_TPL_INVOICE = (
+_TPL_INVOICE_PAYINSTR = (  # the previous minimal default that embedded payment instructions
     "🧾 فاکتور دوره {period}\n"
     "👤 نماینده: {name}\n"
     "📊 مصرف این دوره: {usage_gb} گیگ\n"
     "💰 مبلغ قابل پرداخت: {amount_toman} تومان\n\n"
     "{payment_instructions}"
+)
+_TPL_INVOICE = (
+    "🧾 فاکتور دوره {period}\n"
+    "👤 نماینده: {name}\n"
+    "📊 مصرف این دوره: {usage_gb} گیگ\n"
+    "💰 مبلغ قابل پرداخت: {amount_toman} تومان\n\n"
+    "{pay_cta}"
 )
 _TPL_REMINDER1 = (
     "⏰ یادآوری: فاکتور دوره {period} شما هنوز پرداخت نشده است.\n"
@@ -127,6 +136,10 @@ DEFS: list[SettingDef] = [
     SettingDef("pay_ton_enabled", False, False, "payments"),        # TON (Toncoin) transfer
     SettingDef("ton_wallet_address", "", False, "payments"),        # the destination TON wallet
     SettingDef("ton_toman_auto", 0, False, "payments"),             # last live TON→Toman (status)
+    # Optional toncenter API key (higher rate limit) for the manual TON-deposit check; works
+    # without one. And the tolerance for matching the on-chain deposit to the invoice amount.
+    SettingDef("toncenter_api_key", "", True, "payments"),
+    SettingDef("ton_amount_tolerance_pct", 5, False, "payments"),
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
@@ -254,6 +267,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "pending_payment_hold_days": (1, 365),
     "kick_grace_minutes": (0, 24 * 60),
     "min_confirmations": (0, 10_000),
+    "ton_amount_tolerance_pct": (0, 100),
 }
 _NONNEGATIVE_NUMBERS = {
     "payment_amount_tolerance_usdt", "free_under_gb", "overage_tolerance_gb",
@@ -343,25 +357,20 @@ async def seed_defaults(session: AsyncSession) -> None:
         session.add(Setting(key=d.key, value=value, is_secret=d.is_secret))
     await session.commit()
 
-    # One-time upgrade of the invoice template: older installs have a tpl_invoice that
-    # hard-codes the wallet (`{wallet_address}`) and a "BEP-20" line. The new flow injects
-    # `{payment_instructions}` (built from the enabled methods), so migrate any saved
-    # template still on the legacy form to the new default. A template the owner customized
-    # to already use {payment_instructions} is left untouched.
-    row = await session.get(Setting, "tpl_invoice")
-    if row is not None and isinstance(row.value, str) \
-            and "{payment_instructions}" not in row.value:
-        row.value = _TPL_INVOICE
-        await session.commit()
-
-    # One-time upgrade to the minimal header (drops the redundant «معادل: USDT» line, shows the
-    # Toman amount once). Only an UN-customized install (stored value == the previous default) is
-    # updated, so an owner's hand-edited template is never clobbered.
+    # One-time upgrade of the invoice template to the current default, which shows a CTA to the
+    # «💳 پرداخت فاکتور» button instead of embedding the wallet/card/amount (so the invoice never
+    # prints a stale TON figure and doesn't duplicate the pay-button details). Migrate ONLY an
+    # un-customized install — an exact match of a previous default, or a very old `{wallet_address}`
+    # form — so an owner's hand-edited template is never clobbered. Idempotent: once on the new
+    # template (which has `{pay_cta}`) nothing matches.
     inv = await session.get(Setting, "tpl_invoice")
-    if inv is not None and isinstance(inv.value, str) \
-            and inv.value.strip() == _TPL_INVOICE_LEGACY.strip():
-        inv.value = _TPL_INVOICE
-        await session.commit()
+    if inv is not None and isinstance(inv.value, str):
+        cur = inv.value.strip()
+        if cur in (_TPL_INVOICE_LEGACY.strip(), _TPL_INVOICE_PAYINSTR.strip()) or (
+            "{wallet_address}" in cur and "{pay_cta}" not in cur
+        ):
+            inv.value = _TPL_INVOICE
+            await session.commit()
 
     # One-time upgrade of the reject template: older installs don't name the invoice period.
     # Migrate any saved template that lacks {period} to the new default (a customized one that

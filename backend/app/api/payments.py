@@ -89,6 +89,19 @@ async def list_payments(
     ]
 
 
+@router.get("/{payment_id}/ton-deposit")
+async def ton_deposit(payment_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    """Read the actual TON deposited for this (TON) payment's txid and compare it to the invoice
+    amount — a decision aid for manual confirmation. Best-effort; never auto-confirms. Returns
+    {'available': False} when not a TON payment or the chain can't be read."""
+    from app.services import payments as payments_service
+
+    p = await session.get(Payment, payment_id)
+    if not p:
+        raise HTTPException(404, "Payment not found")
+    return await payments_service.ton_deposit_check(session, p)
+
+
 @router.get("/{payment_id}", response_model=PaymentOut)
 async def get_payment(payment_id: int, session: AsyncSession = Depends(get_session)) -> PaymentOut:
     p = await session.get(Payment, payment_id)

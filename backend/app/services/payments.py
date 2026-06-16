@@ -24,7 +24,7 @@ from app.models.enums import (
     InvoiceStatus,
     PaymentStatus,
 )
-from app.services import financial_archive, notifier, settings_service
+from app.services import financial_archive, notifier, rates, settings_service
 
 log = logging.getLogger("payments")
 
@@ -100,6 +100,96 @@ class _ChainCheck:
     confirmations: int
     error: str | None = None
     contract_address: str | None = None  # the token contract of the matched tx
+
+
+def _ton_account_id(addr: str) -> str:
+    """Normalize a TON address to its 32-byte account id (hex) so EQ.../UQ.../raw forms of the
+    SAME wallet compare equal. Returns '' if it can't be parsed."""
+    import base64
+
+    a = (addr or "").strip()
+    if not a:
+        return ""
+    if ":" in a:  # raw "workchain:hex"
+        return a.split(":", 1)[1].strip().lower()[-64:]
+    try:
+        raw = base64.urlsafe_b64decode(a + "=" * (-len(a) % 4))
+        if len(raw) >= 34:  # friendly form = [tag(1)][workchain(1)][account(32)][crc(2)]
+            return raw[2:34].hex()
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
+
+
+async def _ton_received(txid: str, our_address: str, api_key: str | None = None) -> Decimal | None:
+    """Best-effort: total TON credited to `our_address` by transaction `txid`, read from
+    toncenter v3. Returns None on any failure / no match so the caller falls back. Network I/O is
+    async (never blocks the loop); this is display-only — it NEVER auto-confirms a payment."""
+    if not txid or not our_address:
+        return None
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+    try:
+        async with httpx.AsyncClient(timeout=12, headers=headers) as client:
+            resp = await client.get(
+                "https://toncenter.com/api/v3/transactions",
+                params={"hash": txid, "limit": 10},
+            )
+            resp.raise_for_status()
+            data = resp.json() or {}
+    except Exception:  # noqa: BLE001 — toncenter down / bad txid → fall back silently
+        return None
+    want = _ton_account_id(our_address)
+    if not want:
+        return None
+    book = data.get("address_book") or {}
+    total = Decimal(0)
+    for tx in (data.get("transactions") or []):
+        in_msg = tx.get("in_msg") or {}
+        dest = in_msg.get("destination")
+        val = in_msg.get("value")
+        if not dest or val in (None, ""):
+            continue
+        friendly = ((book.get(dest) or {}).get("user_friendly")) or dest
+        if _ton_account_id(friendly) == want:
+            try:
+                total += Decimal(int(str(val))) / Decimal(1_000_000_000)
+            except (TypeError, ValueError):
+                continue
+    return total if total > 0 else None
+
+
+async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
+    """Decision aid for the panel's MANUAL TON confirmation: read the actual TON deposited for this
+    payment's txid, convert at the live TON→Toman rate, and compare (within tolerance) to the
+    invoice amount. Display-only — never auto-confirms. Best-effort: returns {'available': False}
+    if the chain can't be read, so the panel just shows the existing figures and nothing breaks."""
+    if payment.chain != "ton" or not payment.txid:
+        return {"available": False}
+    our = await settings_service.get(session, "ton_wallet_address", "") or ""
+    api_key = await settings_service.get(session, "toncenter_api_key", "") or None
+    received = await _ton_received(payment.txid, our, api_key)
+    if received is None:
+        return {"available": False}
+    ton_rate = await rates.get_ton_toman(session)  # int, 0 if unavailable
+    received_toman = float(received) * ton_rate if ton_rate else 0.0
+    inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+    invoice_toman = float(inv.amount_toman) if inv else 0.0
+    tol_pct = float(await settings_service.get(session, "ton_amount_tolerance_pct", 5) or 0)
+    match: bool | None = None
+    if invoice_toman > 0 and received_toman > 0:
+        diff_pct = abs(received_toman - invoice_toman) / invoice_toman * 100
+        match = diff_pct <= tol_pct
+    return {
+        "available": True,
+        "received_ton": round(float(received), 4),
+        "received_toman": round(received_toman),
+        "invoice_toman": round(invoice_toman),
+        "ton_rate": ton_rate,
+        "tolerance_pct": tol_pct,
+        "match": match,
+    }
 
 
 async def _bscscan_tokentx(

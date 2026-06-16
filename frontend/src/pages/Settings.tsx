@@ -116,6 +116,10 @@ const SECTIONS: Section[] = [
         title: "اطلاعات تون‌کوین (TON)",
         fields: [
           { key: "ton_wallet_address", label: "آدرس کیف پول TON", help: "آدرس مقصدِ تون‌کوین. مبلغِ معادلِ TON به‌صورت آنلاین (والکس) محاسبه و به مشتری نشان داده می‌شود؛ تأیید به‌صورت دستی (با تصویر رسید) انجام می‌شود.", dir: "ltr", when: (v) => !!v("pay_ton_enabled") },
+          { key: "ton_amount_tolerance_pct", label: "اغماضِ مبلغِ TON (درصد)", type: "number", min: 0, max: 100,
+            help: "هنگام تأییدِ دستیِ پرداختِ TON، مبلغِ واقعیِ واریزشده از زنجیره خوانده و با مبلغِ فاکتور مقایسه می‌شود؛ اختلافِ تا این درصد «مطابق» در نظر گرفته می‌شود. پیش‌فرض ۵.", when: (v) => !!v("pay_ton_enabled") },
+          { key: "toncenter_api_key", label: "کلید API تون‌سنتر (اختیاری)", advanced: true, dir: "ltr",
+            help: "برای خواندنِ واریزیِ TON از toncenter؛ بدون کلید هم کار می‌کند ولی با محدودیتِ نرخ. خالی بگذارید مگر به سقفِ درخواست بخورید.", when: (v) => !!v("pay_ton_enabled") },
         ],
       },
       {

@@ -13,6 +13,7 @@ import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listPayments, verifyPayment, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
+  tonDeposit,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -47,6 +48,15 @@ export default function Payments() {
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const [confirmRow, setConfirmRow] = useState<any>(null);
+
+  // For a TON payment under review, read the actual on-chain deposit (best-effort) so the operator
+  // can match it against the invoice amount before confirming. Fetched only when the dialog opens.
+  const tonChk = useQuery({
+    queryKey: ["ton-deposit", confirmRow?.id],
+    queryFn: () => tonDeposit(confirmRow.id),
+    enabled: !!confirmRow && confirmRow.chain === "ton" && !!confirmRow.txid,
+    staleTime: 30_000,
+  });
 
   const verify = useMutation({ mutationFn: verifyPayment, onSuccess: (r: any) => { show(r?.message || "بررسی شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
   const reject = useMutation({ mutationFn: rejectPayment, onSuccess: (r: any) => { show(r?.message || "رد شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
@@ -168,6 +178,30 @@ export default function Payments() {
               فاکتور دوره: <b>{confirmRow.invoice_period || "—"}</b>
               {confirmRow.invoice_amount_toman ? <> — {fmtToman(confirmRow.invoice_amount_toman)}</> : null}
             </Typography>
+            {confirmRow.chain === "ton" && confirmRow.txid && (
+              <Box sx={{ mb: 1, p: 1, borderRadius: 2, bgcolor: "action.hover" }}>
+                {tonChk.isFetching ? (
+                  <Typography variant="caption" color="text.secondary">در حال خواندن واریزیِ TON از زنجیره…</Typography>
+                ) : tonChk.data?.available ? (
+                  <Stack spacing={0.3}>
+                    <Typography variant="body2">
+                      واریزی: <b dir="ltr">{tonChk.data.received_ton} TON</b> ≈ <b>{fmtToman(tonChk.data.received_toman)}</b>
+                    </Typography>
+                    <Typography variant="body2">فاکتور: <b>{fmtToman(tonChk.data.invoice_toman)}</b></Typography>
+                    {tonChk.data.match === true && (
+                      <Chip size="small" color="success" label={`✓ مطابق (±${tonChk.data.tolerance_pct}٪)`} />
+                    )}
+                    {tonChk.data.match === false && (
+                      <Chip size="small" color="error" label={`✗ مغایر (خارج از ±${tonChk.data.tolerance_pct}٪)`} />
+                    )}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    واریزیِ TON از زنجیره خوانده نشد؛ مبلغ را با لینکِ تراکنش دستی بررسی کنید.
+                  </Typography>
+                )}
+              </Box>
+            )}
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               با تأیید، فقط همین فاکتور «پرداخت‌شده» می‌شود.
             </Typography>
