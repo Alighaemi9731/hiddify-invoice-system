@@ -965,10 +965,13 @@ function ResellerTableRow({
     <TableRow
       hover
       sx={{
-        bgcolor: (theme) => tree && depth === 0
-          ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.08 : 0.035)
-          : tree && depth > 0
-            ? alpha(theme.palette.background.paper, 0.22)
+        // Keep tree rows as crisp as the main list — hierarchy is shown by the indentation,
+        // connectors, chevrons and bold root names. (A faint violet wash marks root branches.)
+        // NOTE: never tint with alpha(background.paper, …): the glass paper is already
+        // translucent, so that produced a heavy ~22% white film over nested rows.
+        bgcolor: (theme) =>
+          tree && depth === 0
+            ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.05 : 0.025)
             : undefined,
         "& td": { py: 1.05 },
       }}

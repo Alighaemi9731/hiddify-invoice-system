@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.86 - 2026-06-17
+
+### Fixed (UI — Resellers tree tab looked foggy)
+
+- The «درخت زیرمجموعه‌ها» table rows were tinted with `alpha(background.paper, …)`. Under the
+  glass theme `background.paper` is already translucent (`rgba(255,255,255,0.07)`), so nested rows
+  ended up with a heavy ~22% white film — the "something fell on it / matte" look. Tree rows are
+  now as crisp as the main list (hierarchy is conveyed by indentation, connectors, chevrons, and
+  bold root names; root branches keep only a whisper-faint violet wash).
+
 ## 1.37.85 - 2026-06-17
 
 ### Added (absent resellers — see & safely delete removed admins)
