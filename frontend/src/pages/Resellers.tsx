@@ -730,8 +730,8 @@ function AbsentResellers({ panelId }: { panelId: string }) {
 
   const del = useMutation({
     mutationFn: (id: number) => deleteAbsentReseller(id),
-    onSuccess: () => {
-      show("ردیفِ نمایندهٔ غایب حذف شد (تاریخچهٔ مالی حفظ شد).");
+    onSuccess: (r: any) => {
+      show(`حذف شد: ${fmtNum(r?.resellers_deleted ?? 1)} نماینده و ${fmtNum(r?.users_deleted ?? 0)} کاربر (تاریخچهٔ مالی حفظ شد).`);
       setConfirmRow(null);
       qc.invalidateQueries({ queryKey: ["absent-resellers"] });
       qc.invalidateQueries({ queryKey: ["resellers"] });
@@ -807,8 +807,8 @@ function AbsentResellers({ panelId }: { panelId: string }) {
           <DialogTitle>حذفِ نمایندهٔ غایب — {confirmRow.name}</DialogTitle>
           <DialogContent>
             <Typography variant="body2" sx={{ mb: 1 }}>
-              ردیفِ این نماینده به‌همراه فاکتورها و پرداخت‌هایش برای همیشه حذف می‌شود.
-              <b> تاریخچهٔ مالی (لجر) حفظ می‌شود.</b>
+              این نماینده، زیرمجموعه‌هایِ <b>غایبِ</b> زیرِ آن، و <b>کاربرانِ</b> همهٔ آن‌ها برای همیشه حذف می‌شوند
+              (به‌همراه فاکتورها و پرداخت‌هایشان). <b>تاریخچهٔ مالی (لجر) حفظ می‌شود.</b>
             </Typography>
             {confirmRow.has_nondraft_invoices && (
               <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
@@ -822,7 +822,7 @@ function AbsentResellers({ panelId }: { panelId: string }) {
             )}
             {confirmRow.sub_resellers > 0 && (
               <Typography variant="body2" color="warning.main" sx={{ fontWeight: 700 }}>
-                ⚠️ این نماینده {fmtNum(confirmRow.sub_resellers)} زیرمجموعه در سامانه دارد؛ آن‌ها حذف نمی‌شوند و در صورت غیاب، جداگانه قابلِ حذف‌اند.
+                ⚠️ این نماینده {fmtNum(confirmRow.sub_resellers)} زیرمجموعه دارد؛ زیرمجموعه‌هایِ غایب پاک می‌شوند، ولی هر زیرمجموعه‌ای که هنوز روی پنل حاضر است دست‌نخورده می‌ماند.
               </Typography>
             )}
           </DialogContent>

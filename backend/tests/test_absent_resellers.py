@@ -19,6 +19,7 @@ from app.api.resellers import (  # noqa: E402
 )
 from app.core.db import Base  # noqa: E402
 from app.models import (  # noqa: E402
+    EndUserSnapshot,
     FinancialRecord,
     Invoice,
     InvoiceLine,
@@ -118,4 +119,37 @@ def test_delete_absent_cascades_but_keeps_ledger(tmp_path):
         # The ledger survives the deletion (intentional — financial history is permanent).
         ledger = (await s.execute(select(FinancialRecord))).scalars().all()
         assert len(ledger) == 1 and ledger[0].reseller_admin_uuid == "absent"
+    _run(body, tmp_path)
+
+
+def test_delete_absent_cascades_subtree_and_users(tmp_path):
+    async def body(s):
+        ok = Panel(key="ok", host="ok.invalid", proxy_path_enc="x", owner_uuid="o1",
+                   status=PanelStatus.ok, last_synced_at=NOW)
+        s.add(ok)
+        await s.flush()
+        parent = Reseller(panel_id=ok.id, admin_uuid="P", name="Parent", last_seen_at=OLD)
+        sub_absent = Reseller(panel_id=ok.id, admin_uuid="A", parent_admin_uuid="P",
+                              name="SubAbsent", last_seen_at=OLD)
+        sub_present = Reseller(panel_id=ok.id, admin_uuid="B", parent_admin_uuid="P",
+                               name="SubPresent", last_seen_at=NOW)   # still on the panel → kept
+        s.add_all([parent, sub_absent, sub_present])
+        await s.flush()
+        # end-users created by each admin
+        for uuid, n in [("P", 2), ("A", 1), ("B", 3)]:
+            for i in range(n):
+                s.add(EndUserSnapshot(panel_id=ok.id, user_uuid=f"{uuid}-u{i}",
+                                      added_by_uuid=uuid, enable=True, is_active=True))
+        await s.commit()
+
+        res = await delete_absent_reseller(parent.id, session=s)
+        assert res["resellers_deleted"] == 2   # parent + the ABSENT sub only
+        assert res["users_deleted"] == 3        # P's 2 + A's 1 (B's are kept)
+
+        assert await s.get(Reseller, parent.id) is None
+        assert await s.get(Reseller, sub_absent.id) is None
+        assert await s.get(Reseller, sub_present.id) is not None  # present sub untouched
+        remaining = (await s.execute(select(EndUserSnapshot))).scalars().all()
+        assert {x.added_by_uuid for x in remaining} == {"B"}      # only the present sub's users
+        assert len(remaining) == 3
     _run(body, tmp_path)

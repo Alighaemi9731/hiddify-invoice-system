@@ -10,7 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import BotUser, EndUserSnapshot, Invoice, Panel, Payment, Reseller
+from app.models import (
+    BotUser,
+    EndUserSnapshot,
+    Invoice,
+    InvoiceLine,
+    Panel,
+    Payment,
+    Reseller,
+    UsageMeter,
+)
 from app.models.enums import InvoiceStatus, PanelStatus
 from app.schemas.reseller import (
     AbsentResellerOut,
@@ -229,9 +238,12 @@ async def list_absent_resellers(
 async def delete_absent_reseller(
     reseller_id: int, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    """Permanently delete an ABSENT reseller's row (and cascade its invoices/lines/payments). The
-    durable financial ledger (`financial_records`, no FK) is intentionally KEPT. Guarded: a
-    reseller currently present on the panel is refused (this path is only for removed admins)."""
+    """Permanently delete an ABSENT reseller, the ABSENT sub-resellers beneath it, and the end-user
+    snapshots (+ usage meters) those removed admins created — full cleanup of a branch that's gone
+    from the panel. PRESENT sub-resellers are left untouched (the next sync would just recreate
+    them). The durable financial ledger (`financial_records`, no FK) is intentionally KEPT.
+    Guarded: a reseller currently present on the panel is refused (this path is removed-admins
+    only)."""
     reseller = await session.get(Reseller, reseller_id)
     if reseller is None:
         raise HTTPException(404, "Reseller not found")
@@ -239,15 +251,64 @@ async def delete_absent_reseller(
     if not _is_absent(reseller, panel):
         raise HTTPException(
             409, "این نماینده هنوز روی پنل حاضر است؛ این مسیر فقط برای حذفِ نماینده‌های حذف‌شده از پنل است.")
-    # Payments have a DB-level ondelete=CASCADE but no ORM relationship on Reseller, so delete them
-    # explicitly (works on SQLite too); the reseller delete then ORM-cascades invoices + lines.
-    await session.execute(sa_delete(Payment).where(Payment.reseller_id == reseller_id))
-    await session.delete(reseller)
+
+    # Walk the whole subtree on this panel (case-insensitive parent links, cycle-safe). Delete the
+    # target + every ABSENT descendant; traverse THROUGH present nodes to still reach absent ones
+    # below them, but never delete a present node.
+    panel_resellers = (await session.execute(
+        select(Reseller).where(Reseller.panel_id == reseller.panel_id)
+    )).scalars().all()
+    children: dict[str, list[Reseller]] = {}
+    for r in panel_resellers:
+        if r.parent_admin_uuid:
+            children.setdefault(r.parent_admin_uuid.lower(), []).append(r)
+
+    to_delete = [reseller]
+    seen_ids = {reseller.id}
+    queue = [reseller]
+    while queue:
+        cur = queue.pop()
+        for child in children.get((cur.admin_uuid or "").lower(), []):
+            if child.id in seen_ids:
+                continue
+            seen_ids.add(child.id)
+            queue.append(child)                 # descend through present nodes too
+            if _is_absent(child, panel):
+                to_delete.append(child)
+
+    del_ids = [r.id for r in to_delete]
+    del_uuids = [(r.admin_uuid or "").lower() for r in to_delete]
+
+    # End-users created by any of the deleted admins on this panel (their "users").
+    user_uuids = list((await session.execute(
+        select(EndUserSnapshot.user_uuid).where(
+            EndUserSnapshot.panel_id == reseller.panel_id,
+            func.lower(EndUserSnapshot.added_by_uuid).in_(del_uuids),
+        )
+    )).scalars().all())
+
+    # Order matters on SQLite (no FK enforcement): children before parents.
+    if user_uuids:
+        await session.execute(sa_delete(UsageMeter).where(
+            UsageMeter.panel_id == reseller.panel_id, UsageMeter.user_uuid.in_(user_uuids)))
+    await session.execute(sa_delete(EndUserSnapshot).where(
+        EndUserSnapshot.panel_id == reseller.panel_id,
+        func.lower(EndUserSnapshot.added_by_uuid).in_(del_uuids)))
+    await session.execute(sa_delete(Payment).where(Payment.reseller_id.in_(del_ids)))
+    inv_ids = list((await session.execute(
+        select(Invoice.id).where(Invoice.reseller_id.in_(del_ids))
+    )).scalars().all())
+    if inv_ids:
+        await session.execute(sa_delete(InvoiceLine).where(InvoiceLine.invoice_id.in_(inv_ids)))
+        await session.execute(sa_delete(Invoice).where(Invoice.id.in_(inv_ids)))
+    await session.execute(sa_delete(Reseller).where(Reseller.id.in_(del_ids)))
     await session.commit()
     return {
         "deleted": True,
         "reseller_id": reseller_id,
-        "financial_records_kept": True,  # the durable ledger is never touched by this delete
+        "resellers_deleted": len(del_ids),   # target + absent sub-resellers
+        "users_deleted": len(user_uuids),    # their end-user snapshots
+        "financial_records_kept": True,      # the durable ledger is never touched by this delete
     }
 
 

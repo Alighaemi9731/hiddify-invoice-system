@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.88 - 2026-06-17
+
+### Changed (absent-reseller delete — full branch cleanup)
+
+- Deleting an absent reseller now also removes the **absent sub-resellers beneath it** and the
+  **end-user snapshots (+ usage meters)** those removed admins created — a complete cleanup of a
+  branch that's gone from the panel. PRESENT sub-resellers are left untouched (the next sync would
+  just recreate them). Invoices/lines/payments of the deleted rows go too; the durable financial
+  ledger is still kept. The confirm dialog and result message reflect this (counts of resellers +
+  users removed). Server still refuses to delete a reseller that is currently present.
+
 ## 1.37.87 - 2026-06-17
 
 ### Fixed (UI — tree tab now identical to the main list)
