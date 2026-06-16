@@ -59,6 +59,18 @@ export default function Payments() {
   });
 
   const verify = useMutation({ mutationFn: verifyPayment, onSuccess: (r: any) => { show(r?.message || "بررسی شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
+  // TON has no auto-verify; this reads the actual on-chain deposit (toncenter) and reports it so
+  // the operator can match it against the invoice before confirming manually.
+  const tonCheck = useMutation({
+    mutationFn: (id: number) => tonDeposit(id),
+    onSuccess: (r: any) => {
+      if (!r?.available) { show("واریزیِ TON از زنجیره خوانده نشد؛ از روی لینک تراکنش بررسی کنید.", "error"); return; }
+      const m = r.match === true ? " — ✓ مطابق فاکتور" : r.match === false ? " — ✗ مغایر با فاکتور" : "";
+      show(`واریزی: ${r.received_ton} TON ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}${m}`,
+        r.match === false ? "error" : "success");
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
   const reject = useMutation({ mutationFn: rejectPayment, onSuccess: (r: any) => { show(r?.message || "رد شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
   const confirm_ = useMutation({
     mutationFn: (id: number) => confirmPayment(id),
@@ -151,9 +163,14 @@ export default function Payments() {
                 <TableCell data-label="تاریخ">{fmtDate(p.created_at)}</TableCell>
                 <TableCell data-label="عملیات" align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
-                  {/* Optional on-chain check — USDT/BSC only (no TON verifier). Legacy rows have
-                      chain='' (treated as bsc); only an explicit TON row disables it. */}
-                  <Tooltip title={p.chain === "ton" ? "بررسی زنجیره فقط برای USDT است؛ TON را با لینک بررسی کنید" : "بررسی زنجیره (USDT)"}><span><IconButton size="small" disabled={!p.txid || p.chain === "ton"} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+                  {/* On-chain check: TON reads the actual deposit (toncenter) and reports it;
+                      USDT/BSC runs the BscScan token-transfer verify. Legacy rows have chain=''
+                      (treated as bsc). */}
+                  {p.chain === "ton" ? (
+                    <Tooltip title="بررسی واریزیِ TON روی زنجیره"><span><IconButton size="small" disabled={!p.txid || tonCheck.isPending} onClick={() => tonCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+                  ) : (
+                    <Tooltip title="بررسی زنجیره (USDT)"><span><IconButton size="small" disabled={!p.txid} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+                  )}
                   <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>

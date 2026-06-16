@@ -12,10 +12,13 @@ from app.services import settings_service
 log = logging.getLogger("owner_notify")
 
 
-async def notify_owner(session: AsyncSession, text: str, *, html: bool = False) -> bool:
+async def notify_owner(
+    session: AsyncSession, text: str, *, html: bool = False, reply_markup=None
+) -> bool:
     """Send a message to the owner's chat. Returns True if delivered.
 
-    `html=True` allows clickable tg://user?id=... links for affected resellers."""
+    `html=True` allows clickable tg://user?id=... links for affected resellers.
+    `reply_markup` attaches inline buttons (e.g. approve/reject under a pending payment)."""
     owner_chat = await settings_service.get(session, "owner_chat_id", "") or ""
     if not owner_chat:
         log.info("notify_owner skipped: owner_chat_id not set yet")
@@ -30,6 +33,7 @@ async def notify_owner(session: AsyncSession, text: str, *, html: bool = False) 
             int(owner_chat), rtl(text),
             parse_mode="HTML" if html else None,
             disable_web_page_preview=True,
+            reply_markup=reply_markup,
         )
         return True
     except Exception:  # noqa: BLE001

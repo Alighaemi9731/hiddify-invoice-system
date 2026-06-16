@@ -1132,18 +1132,7 @@ async def cb_owner_payment_view(cb: CallbackQuery, bot: Bot) -> None:
             await cb.message.answer("این پرداخت دیگر در انتظار نیست (شاید قبلاً رسیدگی شده).")
             await cb.answer()
             return
-        reseller = await s.get(Reseller, pay.reseller_id)
-        inv = await s.get(Invoice, pay.invoice_id) if pay.invoice_id else None
-        amt = f"{float(pay.amount_toman or 0):,.0f} تومان" if pay.amount_toman else "—"
-        method_fa = {"usdt_txid": "USDT", "ton_txid": "TON", "screenshot": "رسید", "manual": "دستی"}
-        lines = [
-            f"💳 پرداخت #{payment_code(pay.id)}",
-            _iso(f"نماینده: {reseller.name if reseller else '—'}"),
-            f"روش: {method_fa.get(pay.method.value, pay.method.value)} | مبلغ: {amt}",
-            f"فاکتور: دورهٔ {inv.period_label}" if inv else "فاکتور: —",
-        ]
-        if pay.txid:
-            lines.append(_iso(f"TXID: {pay.txid}"))
+        text = rtl(await _payment_review_html(s, pay))
         kb = keyboards.owner_payment_detail_keyboard(pay.id)
         # If there's a proof image, send it with the detail as caption; else just the text.
         proof = pay.proof_path
@@ -1151,10 +1140,11 @@ async def cb_owner_payment_view(cb: CallbackQuery, bot: Bot) -> None:
             from aiogram.types import FSInputFile
 
             await cb.message.answer_photo(
-                FSInputFile(proof), caption="\n".join(lines), reply_markup=kb
+                FSInputFile(proof), caption=text, parse_mode="HTML", reply_markup=kb
             )
         else:
-            await cb.message.answer("\n".join(lines), reply_markup=kb)
+            await cb.message.answer(text, parse_mode="HTML", reply_markup=kb,
+                                    disable_web_page_preview=True)
     await cb.answer()
 
 
@@ -1443,7 +1433,8 @@ async def _owner_pending_payments(answer, session) -> None:
     """List PENDING payments as buttons → tap to see proof + confirm/reject."""
     rows = (
         await session.execute(
-            select(Payment.id, Reseller.name, Payment.amount_toman, Payment.method, Invoice.period_label)
+            select(Payment.id, Reseller.name, Payment.amount_toman,
+                   Invoice.period_label, Invoice.amount_toman)
             .join(Reseller, Payment.reseller_id == Reseller.id)
             .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
             .where(Payment.status == PaymentStatus.pending)
@@ -1455,8 +1446,11 @@ async def _owner_pending_payments(answer, session) -> None:
         await answer("✅ پرداختِ در انتظارِ تأییدی وجود ندارد.")
         return
     items: list[tuple[int, str]] = []
-    for pid, name, toman, method, period in rows:
-        amt = f"{float(toman or 0):,.0f}ت" if toman else "—"
+    for pid, name, toman, period, inv_toman in rows:
+        # A TON/screenshot payment rarely stores its own amount; fall back to the invoice amount
+        # so the list never shows a bare «—».
+        shown = float(toman or 0) or float(inv_toman or 0)
+        amt = f"{shown:,.0f}ت" if shown else "—"
         items.append((pid, f"#{payment_code(pid)} · {(name or '—')[:18]} · {amt} · {period or '—'}"))
     await answer(
         f"💳 {len(rows)} پرداختِ در انتظارِ تأیید:",
@@ -2111,16 +2105,8 @@ async def _registration_candidate(session, parsed) -> Reseller | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _invoice_amount_fa(invoice) -> str:
-    """«X تومان» for an owner-facing receipt (Toman is the price); «نامشخص» if no invoice.
-    Used for screenshot/card receipts — a Toman payment, so no crypto figure."""
-    if invoice is None:
-        return "نامشخص"
-    return f"{float(invoice.amount_toman):,.0f} تومان"
-
-
 async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
-    """Like _invoice_amount_fa but shows the equivalent in the PAID currency: TON for a TON
+    """The invoice amount in Toman plus its equivalent in the PAID currency: TON for a TON
     payment, USDT otherwise — so a TON payment's owner message doesn't show a USDT figure."""
     if invoice is None:
         return "نامشخص"
@@ -2132,6 +2118,63 @@ async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
             return f"{toman} (≈ {float(invoice.amount_toman) / rate:,.2f} TON)"
         return toman
     return f"{toman} ({float(invoice.amount_usdt):,.2f} USDT)"
+
+
+_PAYMENT_METHOD_FA = {
+    "usdt_txid": "تتر (USDT)", "ton_txid": "تون‌کوین (TON)",
+    "screenshot": "رسید تصویری", "manual": "دستی",
+}
+
+
+def _explorer_link(chain: str, txid: str) -> str:
+    """An HTML link to the matching block explorer so the owner can open the tx in one tap."""
+    if chain == "ton":
+        return f"<a href='https://tonscan.org/tx/{txid}'>مشاهده در tonscan</a>"
+    return f"<a href='https://bscscan.com/tx/{txid}'>مشاهده در bscscan</a>"
+
+
+async def _payment_review_html(session, pay, *, reseller=None, inv=None) -> str:
+    """Rich, owner-facing HTML summary of a pending payment — shared by the submit notification
+    and the «پرداخت‌های در انتظار» detail view so both are complete and identical. Includes the
+    tracking number, a CLICKABLE reseller name (opens their Telegram profile), method, the exact
+    invoice amount with its paid-currency equivalent, a clickable explorer link, and — for TON — a
+    best-effort on-chain deposit read (actual TON received ≈ Toman, matched against the invoice
+    within tolerance) so the owner can decide before confirming."""
+    if reseller is None:
+        reseller = await session.get(Reseller, pay.reseller_id)
+    if inv is None and pay.invoice_id:
+        inv = await session.get(Invoice, pay.invoice_id)
+    chain = pay.chain or ("ton" if pay.method == PaymentMethod.ton_txid else "bsc")
+    name_link = owner_notify.user_link(reseller) if reseller else "—"
+    lines = [
+        f"💳 پرداخت — شمارهٔ پیگیری #{payment_code(pay.id)}",
+        f"👤 نماینده: {name_link}",
+        f"📤 روش: {_PAYMENT_METHOD_FA.get(pay.method.value, pay.method.value)}",
+    ]
+    if inv:
+        lines.append(f"🧾 فاکتور: دورهٔ {inv.period_label}")
+        lines.append(f"💰 مبلغ فاکتور: {await _invoice_amount_for_chain(session, inv, chain)}")
+    else:
+        lines.append("🧾 فاکتور: —")
+    if pay.txid:
+        lines.append(f"🔗 تراکنش: {_explorer_link(chain, pay.txid)}")
+        lines.append(_iso(f"TXID: {pay.txid}"))
+    # On-chain status — only for TON (we can read it without an API key). Best-effort.
+    if chain == "ton" and pay.txid:
+        from app.services import payments as _payments
+        chk = await _payments.ton_deposit_check(session, pay)
+        if chk.get("available"):
+            recv = f"{chk['received_ton']} TON ≈ {chk['received_toman']:,.0f} تومان"
+            tol = f"{chk['tolerance_pct']:.0f}"
+            if chk.get("match") is True:
+                lines.append(f"🔍 وضعیت شبکه: ✅ واریزی یافت شد: {recv} — مطابق فاکتور (±{tol}٪)")
+            elif chk.get("match") is False:
+                lines.append(f"🔍 وضعیت شبکه: ⚠️ واریزی یافت شد: {recv} — مغایر با فاکتور (خارج از ±{tol}٪)")
+            else:
+                lines.append(f"🔍 وضعیت شبکه: 🟢 واریزی یافت شد: {recv}")
+        else:
+            lines.append("🔍 وضعیت شبکه: ⚪️ از زنجیره خوانده نشد — تراکنش را از روی لینک بررسی کنید.")
+    return "\n".join(lines)
 
 
 async def _revalidate_payable(session, invoice, reseller_ids: set[int]):
@@ -2192,12 +2235,10 @@ async def _handle_txid(
             "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
             f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}"
         ))
-        inv2 = await session.get(Invoice, existing.invoice_id) if existing.invoice_id else None
+        review = await _payment_review_html(session, existing, reseller=resellers[0])
         await owner_notify.notify_owner(
-            session,
-            f"🔁 نمایندهٔ «{resellers[0].name}» تراکنشِ ردشده را دوباره فرستاد (#{existing.id}).\n"
-            f"دوره: {inv2.period_label if inv2 else '—'} | مبلغ فاکتور: {_invoice_amount_fa(inv2)}\n"
-            "برای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
+            session, "🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.\n\n" + review,
+            html=True, reply_markup=keyboards.owner_payment_detail_keyboard(existing.id))
         return
     # Re-validate the exact invoice chosen in «پرداخت فاکتور». Never move a proof to a
     # different debt if the selection became stale while the customer was paying.
@@ -2230,13 +2271,10 @@ async def _handle_txid(
         "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
         f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
     ))
-    name = resellers[0].name
-    period = invoice.period_label
-    amount = await _invoice_amount_for_chain(session, invoice, chain)
+    review = await _payment_review_html(session, payment, reseller=resellers[0], inv=invoice)
     await owner_notify.notify_owner(
-        session, f"💳 پرداخت جدید ({label} TXID) از «{name}» ثبت شد و منتظر تأیید شماست.\n"
-        f"دوره: {period} | مبلغ فاکتور: {amount}\n"
-        f"شناسهٔ پرداخت در پنل: #{payment.id}\nبرای تأیید/رد به «پرداخت‌ها» در پنل بروید.")
+        session, "💳 پرداخت جدید ثبت شد و منتظر تأیید شماست.\n\n" + review,
+        html=True, reply_markup=keyboards.owner_payment_detail_keyboard(payment.id))
 
 
 async def _handle_payment_proof(
@@ -2299,22 +2337,19 @@ async def _handle_payment_proof(
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
     if owner_chat:
-        r = resellers[0]
-        period = invoice.period_label
-        amount = _invoice_amount_fa(invoice)
-        caption = rtl(
-            f"🧾 رسید پرداخت از «{r.name}»\n"
-            f"دوره: {period}\nمبلغ فاکتور: {amount}\n"
-            f"شناسهٔ پرداخت در پنل: #{payment.id}\n"
-            "برای تأیید/رد به بخش «پرداخت‌ها» در پنل بروید."
-        )
+        review = await _payment_review_html(session, payment, reseller=resellers[0], inv=invoice)
+        caption = rtl("🧾 رسید پرداخت جدید — منتظر تأیید شماست.\n\n" + review)
+        kb = keyboards.owner_payment_detail_keyboard(payment.id)
         try:
-            await message.bot.send_photo(int(owner_chat), photo.file_id, caption=caption)
+            await message.bot.send_photo(
+                int(owner_chat), photo.file_id, caption=caption,
+                parse_mode="HTML", reply_markup=kb,
+            )
         except Exception:  # noqa: BLE001
             log.warning("failed to forward payment proof to owner", exc_info=True)
             if not saved:
                 await message.bot.send_message(
                     int(owner_chat),
-                    rtl(f"🧾 رسید پرداخت از «{resellers[0].name}» ثبت شد (#{payment.id})، "
-                        "اما ارسال تصویر ناموفق بود. در پنل بررسی کنید."),
+                    rtl(review + "\n\n(ارسال تصویرِ رسید ناموفق بود؛ آن را در پنل ببینید.)"),
+                    parse_mode="HTML", reply_markup=kb,
                 )

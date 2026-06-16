@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.81 - 2026-06-16
+
+### Changed (payment review — professional, complete, actionable)
+
+- **Owner bot — the payment notification and the «پرداخت‌های در انتظار» detail are now one rich,
+  complete summary** with approve/reject buttons attached directly under it (no more «به پنل
+  بروید»). Each shows: the tracking number, a **clickable reseller name** that opens their
+  Telegram profile, the method, the **exact invoice amount** with its paid-currency equivalent
+  (TON/USDT), a **clickable explorer link** to the transaction, and — for TON — a best-effort
+  **on-chain status** line («✅ واریزی یافت شد: X TON ≈ Y تومان — مطابق فاکتور (±5٪)» / «⚠️ مغایر»
+  / «⚪️ از زنجیره خوانده نشد»). The screenshot-receipt forward to the owner carries the same
+  summary and buttons.
+- The pending-payments list no longer shows a bare «—» for the amount: it falls back to the
+  invoice amount when the payment row has none (typical for TON/screenshot).
+
+### Fixed (panel — TON on-chain check)
+
+- The Payments «بررسی زنجیره» action no longer errors for a TON payment. For TON it now reads the
+  **actual TON deposited** (toncenter) and reports «واریزی: X TON ≈ Y | فاکتور: Z» with a
+  match/mismatch verdict; USDT still runs the BscScan verify. Confirmation stays manual.
+
 ## 1.37.80 - 2026-06-16
 
 ### Fixed (bot — pay flow locked, no duplicate payment details)
