@@ -27,6 +27,7 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
     HTML-escaped so a name with </>/& can't break it."""
     import html as _html
 
+    from app.core.codes import invoice_code
     from app.services import payment_methods, rates
 
     opts = await payment_methods.load_options(session)
@@ -58,7 +59,8 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
             f"حداقل مجاز است؛ بنابراین حداقل مبلغ ({float(inv.amount_toman):,.0f} تومان) "
             f"به‌عنوان فاکتور برای شما صادر شد."
         )
-    return text
+    # Prepend the public 8-digit invoice number (tap-to-copy) at the top.
+    return f"🔢 شماره فاکتور: <code>{invoice_code(inv.id)}</code>\n{text}"
 
 
 # Unicode First-Strong Isolate (U+2068 … U+2069): wraps a possibly-English value so it keeps

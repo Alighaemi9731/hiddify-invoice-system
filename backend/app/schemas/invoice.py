@@ -16,6 +16,7 @@ class InvoiceLineOut(BaseModel):
 
 class InvoiceOut(BaseModel):
     id: int
+    number: str = ""   # public 8-digit invoice number (non-sequential; hides the count)
     reseller_id: int
     reseller_name: str
     panel_id: int

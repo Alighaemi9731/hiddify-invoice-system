@@ -189,6 +189,7 @@ export default function Invoices() {
         <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
+              <TableCell>شماره</TableCell>
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="usage_gb" label="مصرف" sortKey={key} dir={dir} onSort={toggle} />
@@ -200,6 +201,7 @@ export default function Invoices() {
           <TableBody>
             {paged.map((i: any) => (
               <TableRow key={i.id} hover>
+                <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }} dir="ltr">{i.number}</TableCell>
                 <TableCell>{i.reseller_name}</TableCell>
                 <TableCell>{i.panel_key}</TableCell>
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
@@ -244,7 +246,7 @@ export default function Invoices() {
                 </TableCell>
               </TableRow>
             ))}
-            {sorted.length === 0 && <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: "text.secondary" }}>فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید</TableCell></TableRow>}
+            {sorted.length === 0 && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید</TableCell></TableRow>}
           </TableBody>
         </Table>
         {sorted.length > rowsPerPage && (
@@ -310,7 +312,7 @@ export default function Invoices() {
       {/* Detail dialog */}
       <Dialog open={!!detail} onClose={() => setDetail(null)} fullWidth maxWidth="md">
         {detail && (<>
-          <DialogTitle>فاکتور {detail.reseller_name} — دوره {detail.period_label}</DialogTitle>
+          <DialogTitle>فاکتور #{detail.number} — {detail.reseller_name} — دوره {detail.period_label}</DialogTitle>
           <DialogContent>
             <Stack direction="row" spacing={3} sx={{ mb: 2, flexWrap: "wrap" }}>
               <Typography variant="body2">مصرف کل: <b>{fmtGb(detail.usage_gb)}</b></Typography>

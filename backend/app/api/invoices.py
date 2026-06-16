@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.codes import invoice_code
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
@@ -55,7 +56,8 @@ _SORT_COLUMNS = {
 
 def _to_out(inv: Invoice, reseller_name: str, panel_key: str) -> InvoiceOut:
     return InvoiceOut(
-        id=inv.id, reseller_id=inv.reseller_id, reseller_name=reseller_name,
+        id=inv.id, number=invoice_code(inv.id),
+        reseller_id=inv.reseller_id, reseller_name=reseller_name,
         panel_id=inv.panel_id, panel_key=panel_key,
         period_label=inv.period_label, period_start=inv.period_start, period_end=inv.period_end,
         usage_gb=float(inv.usage_gb), users_count=inv.users_count, price_per_gb=inv.price_per_gb,

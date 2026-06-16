@@ -128,6 +128,7 @@ def build_invoice_pdf(
     owner_name: str = "",
     issued_at: dt.date | None = None,
     invoice_title: str = "فاکتور",
+    invoice_no: str = "",
 ) -> str:
     # The PDF is a VOLUME-ONLY usage report by design (M29): it shows the header + per-user
     # line items + total GB, never price/amount/wallet. Pricing & payment instructions live in
@@ -176,6 +177,12 @@ def build_invoice_pdf(
         ("ROUNDEDCORNERS", [8, 8, 8, 8]),
     ]))
     elems += [header, Spacer(1, 12)]
+
+    # Public invoice number (8-digit, non-sequential) — prominent, right-aligned.
+    if invoice_no:
+        no_style = ParagraphStyle("ino", fontName=bold, fontSize=11, alignment=2,
+                                  textColor=PRIMARY, leading=16)
+        elems += [Paragraph(rtl(f"شماره فاکتور: {_fa_digits(invoice_no)}"), no_style), Spacer(1, 6)]
 
     # ---------- meta grid (two columns of label/value) ----------
     # Dates are pure LTR — render them left-aligned WITHOUT bidi reshaping so the

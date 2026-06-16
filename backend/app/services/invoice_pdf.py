@@ -6,6 +6,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.codes import invoice_code
 from app.models import Invoice, InvoiceLine, Panel, Reseller
 from app.services import pdf as pdf_service
 from app.services import settings_service
@@ -48,6 +49,7 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
         ],
         total_gb=float(inv.usage_gb),
         owner_name=owner_name,
+        invoice_no=invoice_code(inv.id),
     )
     inv.pdf_path = out_path
     await session.commit()

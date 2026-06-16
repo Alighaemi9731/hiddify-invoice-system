@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.73 - 2026-06-16
+
+### Added
+
+- **8-digit invoice number** that hides the business volume. Instead of the raw sequential id
+  (1, 2, 3…), every invoice now has a stable, unique, **non-sequential** 8-digit number — so a
+  reseller can't tell how many invoices have ever been issued. It's shown on the invoice PDF, in
+  the bot invoice message (tap-to-copy), and in the panel (a «شماره» column + the detail title).
+  Pure derivation from the id (a bijection coprime to the 8-digit span → no collisions); no
+  database change.
+
 ## 1.37.72 - 2026-06-16
 
 ### Changed
