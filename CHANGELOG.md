@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.77 - 2026-06-16
+
+### Changed (billing — multiple legitimate renewals in one month)
+
+- **Several proper (day+volume) renewals of the same config in one month are now billed on real
+  usage, not just once.** Before, the normal rule counted only the last package, so 3× renewing a
+  10 GB config billed 10 GB (your loss). Now each closed cycle's **actual consumption** (capped at
+  that cycle's sold quota) is banked and billed, while the final cycle is billed on sold quota like
+  any present user. So fully-used renewals bill ~3×, but renewals the customer didn't use aren't
+  over-charged — neither your loss nor the reseller's. A cycle that started a prior month isn't
+  re-billed (already invoiced then). Tracked in a new `usage_meters.renew_used_gb` column
+  (Alembic migration `b2d5e8f1a673`); applied to the real invoice AND the interim/report/GB-cap;
+  it's normal usage, so it never triggers the abuse warning.
+
 ## 1.37.76 - 2026-06-16
 
 ### Changed (billing — closes a revenue loophole)

@@ -23,7 +23,7 @@ def _snap(**kw):
 
 def _meter(**kw):
     d = dict(added_by_uuid=None, name="", quota_added_gb=0.0, edit_renewal_gb=0.0,
-             consumed_gb=0.0, overage_gb=0.0, reset_count=0)
+             consumed_gb=0.0, overage_gb=0.0, renew_used_gb=0.0, reset_count=0)
     d.update(kw)
     return SimpleNamespace(**d)
 
@@ -66,3 +66,40 @@ def test_renew_day_clears_edit_renewal_no_double_count():
     # proper renew-day: start_date advances to June → base rule will bill the full new quota.
     _apply(snap, m, prev_limit=15, prev_used=0.0, new_limit=20, new_used=0.0, start_date=JUNE1)
     assert m.edit_renewal_gb == 0.0   # cleared → the 20 GB is billed once (by the start_date rule)
+
+
+def test_multiple_in_month_renewals_bill_prior_cycles_consumption():
+    """Policy «مصرف واقعی»: a config legitimately renewed (day+volume) several times in a month
+    banks each CLOSED cycle's actual usage (capped at its sold quota). The last cycle is billed
+    by the normal start_date rule; renew_used_gb carries the earlier cycles' real consumption."""
+    snap = _snap(meter_provisioned_gb=10.0, meter_consumed_gb=0.0, start_date=JUNE1)
+    m = _meter()
+    # cycle 0 (start Jun 1): consume to 8
+    _apply(snap, m, prev_limit=10, prev_used=0.0, new_limit=10, new_used=8.0, start_date=JUNE1)
+    assert snap.meter_consumed_gb == 8.0
+    # renew #1 (start advances within June, usage resets) → bank cycle 0's used (8, capped at 10)
+    _apply(snap, m, prev_limit=10, prev_used=8.0, new_limit=10, new_used=0.0, start_date=dt.date(2026, 6, 10))
+    assert m.renew_used_gb == 8.0
+    snap.start_date = dt.date(2026, 6, 10)   # caller advances start_date after apply
+    # cycle 1: consume to 9
+    _apply(snap, m, prev_limit=10, prev_used=0.0, new_limit=10, new_used=9.0, start_date=dt.date(2026, 6, 10))
+    # renew #2 → bank cycle 1's used (9)
+    _apply(snap, m, prev_limit=10, prev_used=9.0, new_limit=10, new_used=0.0, start_date=dt.date(2026, 6, 20))
+    assert m.renew_used_gb == 17.0   # 8 + 9; the final cycle's 10 is billed by the normal rule
+
+
+def test_renewal_caps_banked_usage_at_sold_quota():
+    # a closed cycle that somehow shows consumed > provisioned is capped at the sold quota.
+    snap = _snap(meter_provisioned_gb=10.0, meter_consumed_gb=14.0, start_date=JUNE1)
+    m = _meter()
+    _apply(snap, m, prev_limit=10, prev_used=14.0, new_limit=10, new_used=0.0, start_date=dt.date(2026, 6, 15))
+    assert m.renew_used_gb == 10.0   # min(14, 10)
+
+
+def test_renewal_of_prior_month_cycle_not_double_billed():
+    # a cycle that STARTED last month was already billed then → renewing it this month must NOT
+    # bank its usage again (no double-bill across months).
+    snap = _snap(meter_provisioned_gb=10.0, meter_consumed_gb=8.0, start_date=MAY1)
+    m = _meter()
+    _apply(snap, m, prev_limit=10, prev_used=8.0, new_limit=10, new_used=0.0, start_date=JUNE1)
+    assert m.renew_used_gb == 0.0

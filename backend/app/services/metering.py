@@ -93,6 +93,16 @@ def apply(
     # PREVIOUS cycle's consumption can't show up as "overage" against the new quota.
     # (The new package is billed by the normal start_date rule, not here.)
     if start_date is not None and (prev_start is None or start_date > prev_start):
+        # Before re-baselining, bank what the CLOSING cycle actually used (capped at its sold
+        # quota) — but only if that cycle STARTED this month, because then it was never billed by
+        # the normal start_date rule (which only bills the final snapshot's package). A cycle that
+        # started a prior month was already billed there, so we must not bill it again.
+        if period_of(prev_start) == period_label:
+            closing_used = min(
+                float(snapshot.meter_consumed_gb or 0), float(snapshot.meter_provisioned_gb or 0)
+            )
+            if closing_used > _EPS:
+                meter.renew_used_gb = float(meter.renew_used_gb or 0) + round(closing_used, 3)
         snapshot.meter_provisioned_gb = new_limit
         snapshot.meter_consumed_gb = new_used
         # A proper renewal (renew-day advances start_date) is the CORRECT way and supersedes any
@@ -175,11 +185,18 @@ async def bundle_extra(
         raw_over = float(m.overage_gb or 0)
         over = raw_over if raw_over > overage_tol else 0.0
         edit = float(m.edit_renewal_gb or 0)
-        extra = 0.0
+        # ABUSE extra (overage from usage resets + renew-by-edit) → billed AND flagged in the
+        # heads-up notice.
+        abuse = 0.0
         if over > _EPS:
-            extra += over
+            abuse += over
         if edit > free_threshold_gb:        # ignore tiny test-config renewals
-            extra += edit
+            abuse += edit
+        # LEGITIMATE extra: the actual usage of cycles renewed properly (day+volume) earlier this
+        # month — billed, but it's NORMAL (not abuse), so it never triggers the abuse warning.
+        renew = float(m.renew_used_gb or 0)
+        renew_bill = renew if renew > _EPS else 0.0
+        extra = abuse + renew_bill
         if extra <= _EPS:
             continue
         total += extra
@@ -187,11 +204,12 @@ async def bundle_extra(
             "user_uuid": m.user_uuid, "name": m.name or "",
             "usage_gb": round(extra, 3), "added_by_uuid": m.added_by_uuid,
         })
-        abnormal.append({
-            "name": m.name or m.user_uuid[-6:], "user_uuid": m.user_uuid,
-            "overage_gb": round(over, 3), "edit_renewal_gb": round(edit, 3),
-            "reset_count": int(m.reset_count or 0), "billed_gb": round(extra, 3),
-        })
+        if abuse > _EPS:
+            abnormal.append({
+                "name": m.name or m.user_uuid[-6:], "user_uuid": m.user_uuid,
+                "overage_gb": round(over, 3), "edit_renewal_gb": round(edit, 3),
+                "reset_count": int(m.reset_count or 0), "billed_gb": round(abuse, 3),
+            })
     return {"gb": round(total, 3), "lines": lines, "abnormal": abnormal}
 
 

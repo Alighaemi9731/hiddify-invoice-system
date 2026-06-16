@@ -28,6 +28,9 @@ class UsageMeter(Base, TimestampMixin):
         CheckConstraint(
             "edit_renewal_gb >= 0", name="ck_usage_meters_edit_renewal_nonnegative"
         ),
+        CheckConstraint(
+            "renew_used_gb >= 0", name="ck_usage_meters_renew_used_nonnegative"
+        ),
         CheckConstraint("reset_count >= 0", name="ck_usage_meters_reset_count_nonnegative"),
     )
 
@@ -42,4 +45,10 @@ class UsageMeter(Base, TimestampMixin):
     consumed_gb: Mapped[float] = mapped_column(Numeric(16, 3), default=0)      # this month (reset-aware)
     overage_gb: Mapped[float] = mapped_column(Numeric(16, 3), default=0)       # beyond paid buffer
     edit_renewal_gb: Mapped[float] = mapped_column(Numeric(16, 3), default=0)  # top-up w/o new start_date
+    # Actual consumption of cycles that were legitimately renewed away (start_date advanced) this
+    # month — capped at each closed cycle's sold quota. Billed so multiple in-month renewals aren't
+    # under-counted, while an unused renewal isn't over-charged. See app.services.metering.
+    renew_used_gb: Mapped[float] = mapped_column(
+        Numeric(16, 3), default=0, server_default="0", nullable=False
+    )
     reset_count: Mapped[int] = mapped_column(Integer, default=0)

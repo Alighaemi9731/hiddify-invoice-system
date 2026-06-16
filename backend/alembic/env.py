@@ -24,6 +24,12 @@ log = logging.getLogger("alembic.env")
 BASELINE_REVISION = "18a3b4fd6e33"
 _MIGRATION_LOCK = 734_137_043
 
+# Columns ADDED by migrations after the baseline (v1.37.43). A genuine pre-Alembic database is at
+# the baseline schema and legitimately lacks these — they're created by `upgrade` right after the
+# baseline is stamped — so the adoption validator must not treat them as "missing". Append the
+# fully-qualified "table.column" for every post-baseline column-add migration.
+_POST_BASELINE_COLUMNS = {"usage_meters.renew_used_gb"}
+
 
 def run_migrations_offline() -> None:
     context.configure(
@@ -88,8 +94,9 @@ def _adopt_existing_schema(connection) -> None:
             continue
         actual = {column["name"] for column in inspector.get_columns(table.name)}
         for column in table.columns:
-            if column.name not in actual:
-                missing_columns.append(f"{table.name}.{column.name}")
+            qualified = f"{table.name}.{column.name}"
+            if column.name not in actual and qualified not in _POST_BASELINE_COLUMNS:
+                missing_columns.append(qualified)
     if missing_tables or missing_columns:
         details = []
         if missing_tables:
