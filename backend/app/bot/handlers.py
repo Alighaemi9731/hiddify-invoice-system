@@ -2133,6 +2133,26 @@ def _explorer_link(chain: str, txid: str) -> str:
     return f"<a href='https://bscscan.com/tx/{txid}'>مشاهده در bscscan</a>"
 
 
+def _network_status_fa(chk: dict) -> str:
+    """One-line on-chain status from a `deposit_check` result, for either chain (TON/USDT)."""
+    if not chk.get("available"):
+        return "⚪️ از زنجیره خوانده نشد — تراکنش را از روی لینک بررسی کنید."
+    if chk.get("kind") == "ton":
+        recv = f"{chk['received_ton']} TON ≈ {chk['received_toman']:,.0f} تومان"
+        tol = f"±{chk['tolerance_pct']:.0f}٪"
+    else:  # usdt
+        recv = f"{chk['received_usdt']:,.2f} USDT"
+        conf = chk.get("confirmations")
+        if conf is not None:
+            recv += f" ({conf} تأیید)"
+        tol = f"±{chk['tolerance_usdt']:g} USDT"
+    if chk.get("match") is True:
+        return f"✅ واریزی یافت شد: {recv} — مطابق فاکتور ({tol})"
+    if chk.get("match") is False:
+        return f"⚠️ واریزی یافت شد: {recv} — مغایر با فاکتور (خارج از {tol})"
+    return f"🟢 واریزی یافت شد: {recv}"
+
+
 async def _payment_review_html(session, pay, *, reseller=None, inv=None) -> str:
     """Rich, owner-facing HTML summary of a pending payment — shared by the submit notification
     and the «پرداخت‌های در انتظار» detail view so both are complete and identical. Includes the
@@ -2159,21 +2179,10 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None) -> str:
     if pay.txid:
         lines.append(f"🔗 تراکنش: {_explorer_link(chain, pay.txid)}")
         lines.append(_iso(f"TXID: {pay.txid}"))
-    # On-chain status — only for TON (we can read it without an API key). Best-effort.
-    if chain == "ton" and pay.txid:
+        # Best-effort on-chain read (free): TON via toncenter, USDT via a public BSC RPC node.
         from app.services import payments as _payments
-        chk = await _payments.ton_deposit_check(session, pay)
-        if chk.get("available"):
-            recv = f"{chk['received_ton']} TON ≈ {chk['received_toman']:,.0f} تومان"
-            tol = f"{chk['tolerance_pct']:.0f}"
-            if chk.get("match") is True:
-                lines.append(f"🔍 وضعیت شبکه: ✅ واریزی یافت شد: {recv} — مطابق فاکتور (±{tol}٪)")
-            elif chk.get("match") is False:
-                lines.append(f"🔍 وضعیت شبکه: ⚠️ واریزی یافت شد: {recv} — مغایر با فاکتور (خارج از ±{tol}٪)")
-            else:
-                lines.append(f"🔍 وضعیت شبکه: 🟢 واریزی یافت شد: {recv}")
-        else:
-            lines.append("🔍 وضعیت شبکه: ⚪️ از زنجیره خوانده نشد — تراکنش را از روی لینک بررسی کنید.")
+        chk = await _payments.deposit_check(session, pay)
+        lines.append(f"🔍 وضعیت شبکه: {_network_status_fa(chk)}")
     return "\n".join(lines)
 
 

@@ -123,6 +123,10 @@ DEFS: list[SettingDef] = [
     SettingDef("usdt_bep20_contract", boot.usdt_bep20_contract, False, "payments"),
     SettingDef("bscscan_api_key", boot.bscscan_api_key, True, "payments"),
     SettingDef("bscscan_api_url", "https://api.bscscan.com/api", False, "payments"),
+    # Public BSC JSON-RPC node used for the (free, key-less) USDT on-chain deposit read — reads
+    # the tx receipt's ERC-20 Transfer logs. No API key needed; swap for another public node if
+    # this one rate-limits.
+    SettingDef("bsc_rpc_url", "https://bsc-rpc.publicnode.com", False, "payments"),
     SettingDef("usdt_master_xpub", boot.usdt_master_xpub, True, "payments"),
     SettingDef("min_confirmations", 12, False, "payments"),
     SettingDef("payment_amount_tolerance_usdt", 0.5, False, "payments"),

@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.83 - 2026-06-16
+
+### Added / Fixed (USDT on-chain read — now free & working, like TON)
+
+- The USDT (BEP-20) on-chain check was broken: the old `api.bscscan.com` endpoint is a
+  **deprecated V1 API** (returns an error), and Etherscan's V2 API **excludes BSC from the free
+  tier**. Replaced it with a **free, key-less read straight from a public BSC JSON-RPC node**
+  (`eth_getTransactionReceipt` → parse the ERC-20 Transfer logs for our wallet), mirroring how TON
+  is read via toncenter. New `bsc_rpc_url` setting (default a public node; verified against a real
+  BSC-USDT transfer).
+- The on-chain read is now **unified for both chains**: one «بررسی واریزی روی زنجیره» action and
+  one confirm-dialog block in the panel handle TON and USDT, and the owner bot's payment summary
+  shows the «وضعیت شبکه» line for both (received amount vs invoice, match/mismatch within
+  tolerance; USDT also shows confirmations). Display-only — confirmation stays **manual** for
+  every method; no auto-confirm.
+
 ## 1.37.82 - 2026-06-16
 
 ### Fixed (TON on-chain read — now finds the deposit)

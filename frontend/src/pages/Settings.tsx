@@ -110,6 +110,8 @@ const SECTIONS: Section[] = [
         fields: [
           { key: "usdt_bep20_address", label: "آدرس کیف پول USDT", help: "آدرس مقصد روی شبکهٔ BEP-20.", dir: "ltr", when: (v) => !!v("pay_usdt_enabled") },
           { key: "usdt_bep20_contract", label: "قرارداد توکن USDT", advanced: true, dir: "ltr", when: (v) => !!v("pay_usdt_enabled") },
+          { key: "bsc_rpc_url", label: "نودِ RPC شبکهٔ BSC", advanced: true, dir: "ltr",
+            help: "برای خواندنِ واریزیِ USDT از زنجیره هنگام تأییدِ دستی (رایگان، بدون کلید). پیش‌فرض را تغییر ندهید مگر به محدودیتِ نرخ بخورید.", when: (v) => !!v("pay_usdt_enabled") },
         ],
       },
       {

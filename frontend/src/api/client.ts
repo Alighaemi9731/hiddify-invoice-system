@@ -197,9 +197,9 @@ export const confirmPayment = (id: number) =>
   api.post(`/api/payments/${id}/confirm`).then((r) => r.data);
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);
 export const deletePayment = (id: number) => api.delete(`/api/payments/${id}`).then((r) => r.data);
-// Manual-confirm aid for TON payments: actual on-chain deposit vs the invoice amount.
-export const tonDeposit = (id: number) =>
-  api.get(`/api/payments/${id}/ton-deposit`).then((r) => r.data);
+// Manual-confirm aid: the actual on-chain deposit (TON or USDT/BEP-20) vs the invoice amount.
+export const depositCheck = (id: number) =>
+  api.get(`/api/payments/${id}/deposit-check`).then((r) => r.data);
 export const refreshRate = () => api.post("/api/ops/refresh-rate").then((r) => r.data);
 
 export interface RatesInfo {

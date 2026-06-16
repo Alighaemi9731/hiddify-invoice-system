@@ -12,8 +12,8 @@ import ImageIcon from "@mui/icons-material/esm/Image";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  listPayments, verifyPayment, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
-  tonDeposit,
+  listPayments, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
+  depositCheck,
 } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
@@ -49,25 +49,26 @@ export default function Payments() {
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const [confirmRow, setConfirmRow] = useState<any>(null);
 
-  // For a TON payment under review, read the actual on-chain deposit (best-effort) so the operator
-  // can match it against the invoice amount before confirming. Fetched only when the dialog opens.
-  const tonChk = useQuery({
-    queryKey: ["ton-deposit", confirmRow?.id],
-    queryFn: () => tonDeposit(confirmRow.id),
-    enabled: !!confirmRow && confirmRow.chain === "ton" && !!confirmRow.txid,
+  // For a crypto payment under review, read the actual on-chain deposit (best-effort) so the
+  // operator can match it against the invoice before confirming. Fetched only when the dialog opens.
+  const depChk = useQuery({
+    queryKey: ["deposit-check", confirmRow?.id],
+    queryFn: () => depositCheck(confirmRow.id),
+    enabled: !!confirmRow && !!confirmRow.txid,
     staleTime: 30_000,
   });
 
-  const verify = useMutation({ mutationFn: verifyPayment, onSuccess: (r: any) => { show(r?.message || "بررسی شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
-  // TON has no auto-verify; this reads the actual on-chain deposit (toncenter) and reports it so
-  // the operator can match it against the invoice before confirming manually.
-  const tonCheck = useMutation({
-    mutationFn: (id: number) => tonDeposit(id),
+  // No auto-verify anywhere; this just reads the actual on-chain deposit (TON via toncenter, USDT
+  // via a public BSC RPC node — both free) and reports it for the manual confirm decision.
+  const depLabel = (r: any) => r.kind === "ton"
+    ? `${r.received_ton} TON ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}`
+    : `${r.received_usdt} USDT${r.confirmations != null ? ` (${r.confirmations} تأیید)` : ""} | فاکتور: ${r.invoice_usdt} USDT`;
+  const chainCheck = useMutation({
+    mutationFn: (id: number) => depositCheck(id),
     onSuccess: (r: any) => {
-      if (!r?.available) { show("واریزیِ TON از زنجیره خوانده نشد؛ از روی لینک تراکنش بررسی کنید.", "error"); return; }
+      if (!r?.available) { show("واریزی از زنجیره خوانده نشد؛ از روی لینک تراکنش بررسی کنید.", "error"); return; }
       const m = r.match === true ? " — ✓ مطابق فاکتور" : r.match === false ? " — ✗ مغایر با فاکتور" : "";
-      show(`واریزی: ${r.received_ton} TON ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}${m}`,
-        r.match === false ? "error" : "success");
+      show(`واریزی: ${depLabel(r)}${m}`, r.match === false ? "error" : "success");
     },
     onError: (e) => show(errMsg(e), "error"),
   });
@@ -163,14 +164,9 @@ export default function Payments() {
                 <TableCell data-label="تاریخ">{fmtDate(p.created_at)}</TableCell>
                 <TableCell data-label="عملیات" align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
-                  {/* On-chain check: TON reads the actual deposit (toncenter) and reports it;
-                      USDT/BSC runs the BscScan token-transfer verify. Legacy rows have chain=''
-                      (treated as bsc). */}
-                  {p.chain === "ton" ? (
-                    <Tooltip title="بررسی واریزیِ TON روی زنجیره"><span><IconButton size="small" disabled={!p.txid || tonCheck.isPending} onClick={() => tonCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
-                  ) : (
-                    <Tooltip title="بررسی زنجیره (USDT)"><span><IconButton size="small" disabled={!p.txid} onClick={() => verify.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
-                  )}
+                  {/* On-chain check (read-only, free): reads the actual deposit — TON via toncenter,
+                      USDT/BEP-20 via a public BSC RPC node — and reports it for the manual decision. */}
+                  <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
@@ -195,26 +191,36 @@ export default function Payments() {
               فاکتور دوره: <b>{confirmRow.invoice_period || "—"}</b>
               {confirmRow.invoice_amount_toman ? <> — {fmtToman(confirmRow.invoice_amount_toman)}</> : null}
             </Typography>
-            {confirmRow.chain === "ton" && confirmRow.txid && (
+            {confirmRow.txid && (
               <Box sx={{ mb: 1, p: 1, borderRadius: 2, bgcolor: "action.hover" }}>
-                {tonChk.isFetching ? (
-                  <Typography variant="caption" color="text.secondary">در حال خواندن واریزیِ TON از زنجیره…</Typography>
-                ) : tonChk.data?.available ? (
+                {depChk.isFetching ? (
+                  <Typography variant="caption" color="text.secondary">در حال خواندن واریزی از زنجیره…</Typography>
+                ) : depChk.data?.available ? (
                   <Stack spacing={0.3}>
-                    <Typography variant="body2">
-                      واریزی: <b dir="ltr">{tonChk.data.received_ton} TON</b> ≈ <b>{fmtToman(tonChk.data.received_toman)}</b>
-                    </Typography>
-                    <Typography variant="body2">فاکتور: <b>{fmtToman(tonChk.data.invoice_toman)}</b></Typography>
-                    {tonChk.data.match === true && (
-                      <Chip size="small" color="success" label={`✓ مطابق (±${tonChk.data.tolerance_pct}٪)`} />
-                    )}
-                    {tonChk.data.match === false && (
-                      <Chip size="small" color="error" label={`✗ مغایر (خارج از ±${tonChk.data.tolerance_pct}٪)`} />
+                    {depChk.data.kind === "ton" ? (
+                      <>
+                        <Typography variant="body2">
+                          واریزی: <b dir="ltr">{depChk.data.received_ton} TON</b> ≈ <b>{fmtToman(depChk.data.received_toman)}</b>
+                        </Typography>
+                        <Typography variant="body2">فاکتور: <b>{fmtToman(depChk.data.invoice_toman)}</b></Typography>
+                        {depChk.data.match === true && <Chip size="small" color="success" label={`✓ مطابق (±${depChk.data.tolerance_pct}٪)`} />}
+                        {depChk.data.match === false && <Chip size="small" color="error" label={`✗ مغایر (خارج از ±${depChk.data.tolerance_pct}٪)`} />}
+                      </>
+                    ) : (
+                      <>
+                        <Typography variant="body2">
+                          واریزی: <b dir="ltr">{depChk.data.received_usdt} USDT</b>
+                          {depChk.data.confirmations != null ? <> — {depChk.data.confirmations} تأیید</> : null}
+                        </Typography>
+                        <Typography variant="body2">فاکتور: <b dir="ltr">{depChk.data.invoice_usdt} USDT</b></Typography>
+                        {depChk.data.match === true && <Chip size="small" color="success" label={`✓ مطابق (±${depChk.data.tolerance_usdt} USDT)`} />}
+                        {depChk.data.match === false && <Chip size="small" color="error" label={`✗ مغایر (±${depChk.data.tolerance_usdt} USDT)`} />}
+                      </>
                     )}
                   </Stack>
                 ) : (
                   <Typography variant="caption" color="text.secondary">
-                    واریزیِ TON از زنجیره خوانده نشد؛ مبلغ را با لینکِ تراکنش دستی بررسی کنید.
+                    واریزی از زنجیره خوانده نشد؛ مبلغ را با لینکِ تراکنش دستی بررسی کنید.
                   </Typography>
                 )}
               </Box>

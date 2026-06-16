@@ -207,6 +207,114 @@ async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
     }
 
 
+# ERC-20 `Transfer(address,address,uint256)` event signature (topics[0]).
+_ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+
+async def _usdt_received(
+    txid: str, our_wallet: str, contract: str, rpc_url: str
+) -> tuple[Decimal | None, int | None]:
+    """Best-effort (USDT credited to our wallet by this tx, confirmations), read straight from a
+    public BSC JSON-RPC node — free, no API key. Parses the tx receipt's ERC-20 Transfer logs for
+    the configured token contract and sums transfers whose recipient is our wallet. Returns
+    (None, None) on any failure so the caller falls back. Display-only — never auto-confirms."""
+    tx = (txid or "").strip()
+    if not tx or not our_wallet or not contract or not rpc_url:
+        return None, None
+    if not tx.startswith("0x"):
+        tx = "0x" + tx
+    want = our_wallet.lower()
+    token = contract.lower()
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            resp = await client.post(rpc_url, json={
+                "jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionReceipt", "params": [tx]})
+            resp.raise_for_status()
+            receipt = (resp.json() or {}).get("result")
+            # status 0x1 = success; a reverted (0x0) transfer credited nothing.
+            if not receipt or receipt.get("status") != "0x1":
+                return None, None
+            total = Decimal(0)
+            for lg in receipt.get("logs") or []:
+                if (lg.get("address") or "").lower() != token:
+                    continue
+                topics = lg.get("topics") or []
+                if len(topics) < 3 or (topics[0] or "").lower() != _ERC20_TRANSFER_TOPIC:
+                    continue
+                to_addr = "0x" + (topics[2] or "")[-40:].lower()  # topic is 32-byte left-padded
+                if to_addr != want:
+                    continue
+                try:
+                    total += Decimal(int(lg.get("data") or "0x0", 16)) / (Decimal(10) ** USDT_DECIMALS)
+                except (TypeError, ValueError):
+                    continue
+            if total <= 0:
+                return None, None
+            confs: int | None = None
+            try:
+                bn = await client.post(rpc_url, json={
+                    "jsonrpc": "2.0", "id": 2, "method": "eth_blockNumber", "params": []})
+                latest = int((bn.json() or {}).get("result") or "0x0", 16)
+                txblk = int(receipt.get("blockNumber") or "0x0", 16)
+                if latest and txblk:
+                    confs = max(0, latest - txblk + 1)
+            except Exception:  # noqa: BLE001 — confirmations are optional
+                confs = None
+            return total, confs
+    except Exception:  # noqa: BLE001 — node down / bad txid → fall back silently
+        return None, None
+
+
+async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
+    """Decision aid for the panel's MANUAL USDT confirmation: read the actual USDT credited to our
+    wallet by this payment's txid (free BSC RPC) and compare (within tolerance) to the invoice's
+    USDT amount. Display-only — never auto-confirms. Best-effort: returns {'available': False}."""
+    if payment.chain == "ton" or not payment.txid:
+        return {"available": False}
+    cfg = await settings_service.get_many(
+        session,
+        ["usdt_bep20_address", "usdt_bep20_contract", "bsc_rpc_url",
+         "min_confirmations", "payment_amount_tolerance_usdt"],
+    )
+    received, confs = await _usdt_received(
+        payment.txid, cfg.get("usdt_bep20_address") or "",
+        cfg.get("usdt_bep20_contract") or "", cfg.get("bsc_rpc_url") or "",
+    )
+    if received is None:
+        return {"available": False}
+    inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+    invoice_usdt = float(inv.amount_usdt) if inv else 0.0
+    tol = float(cfg.get("payment_amount_tolerance_usdt") or 0)
+    match: bool | None = None
+    if invoice_usdt > 0:
+        match = abs(float(received) - invoice_usdt) <= tol
+    return {
+        "available": True,
+        "received_usdt": round(float(received), 2),
+        "invoice_usdt": round(invoice_usdt, 2),
+        "confirmations": confs,
+        "min_confirmations": int(cfg.get("min_confirmations") or 0),
+        "tolerance_usdt": tol,
+        "match": match,
+    }
+
+
+async def deposit_check(session: AsyncSession, payment: Payment) -> dict:
+    """Unified on-chain deposit read for the panel + bot. Dispatches by the payment's chain to the
+    free TON (toncenter) or USDT (BSC RPC) reader and tags the result with `kind`. Display-only —
+    never auto-confirms. {'available': False, 'kind': 'none'} when there's nothing to read."""
+    if not payment.txid:
+        return {"available": False, "kind": "none"}
+    if payment.chain == "ton":
+        d = await ton_deposit_check(session, payment)
+        d["kind"] = "ton" if d.get("available") else "none"
+        return d
+    # chain "bsc" or legacy "" with a txid → USDT/BEP-20
+    d = await usdt_deposit_check(session, payment)
+    d["kind"] = "usdt" if d.get("available") else "none"
+    return d
+
+
 async def _bscscan_tokentx(
     api_url: str, api_key: str, wallet: str, contract: str, txid: str
 ) -> _ChainCheck:
