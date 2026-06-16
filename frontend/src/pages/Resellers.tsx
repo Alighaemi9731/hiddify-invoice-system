@@ -302,9 +302,8 @@ export default function Resellers() {
   const currentCount = tab === 0 ? data.length : treeCount;
   const loading = tab === 0 ? listLoading : treeLoading;
 
-  useEffect(() => {
-    if (tab === 1) setExpanded(new Set(pagedTree.map((item) => item.id)));
-  }, [tab, pagedTree]);
+  // The tree starts COLLAPSED so its default height/scroll matches the main list (a compact page
+  // of root rows); branches expand on demand (chevrons) or all at once via «باز کردن شاخه‌ها».
 
   const changeTab = (_event: unknown, value: number) => {
     setTab(value);
@@ -964,17 +963,10 @@ function ResellerTableRow({
   return (
     <TableRow
       hover
-      sx={{
-        // Keep tree rows as crisp as the main list — hierarchy is shown by the indentation,
-        // connectors, chevrons and bold root names. (A faint violet wash marks root branches.)
-        // NOTE: never tint with alpha(background.paper, …): the glass paper is already
-        // translucent, so that produced a heavy ~22% white film over nested rows.
-        bgcolor: (theme) =>
-          tree && depth === 0
-            ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.05 : 0.025)
-            : undefined,
-        "& td": { py: 1.05 },
-      }}
+      // Tree rows render EXACTLY like the main-list rows — no background tint of any kind (a tint
+      // over the translucent glass surface looked foggy/matte). Hierarchy is shown only by the
+      // indentation, connectors, chevrons and bold root names.
+      sx={{ "& td": { py: 1.05 } }}
     >
       <TableCell sx={{ minWidth: 260 }}>
         <ResellerIdentity

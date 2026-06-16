@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.87 - 2026-06-17
+
+### Fixed (UI — tree tab now identical to the main list)
+
+- Removed the **last row-background tint** from the tree tab (even the faint violet wash on root
+  rows). Over the translucent glass surface any tint read as a foggy/matte film; tree rows now
+  render with the exact same transparent background as the crisp main-list rows.
+- The subtree tree now **starts collapsed** instead of auto-expanding every root branch, so its
+  default height and scrolling match the main list (a compact page of root rows). Branches expand
+  on demand via the chevrons or all at once with «باز کردن شاخه‌ها».
+
 ## 1.37.86 - 2026-06-17
 
 ### Fixed (UI — Resellers tree tab looked foggy)
