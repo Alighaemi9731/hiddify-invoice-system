@@ -222,6 +222,9 @@ DEFS: list[SettingDef] = [
     SettingDef("owner_chat_id", "", False, "general"),
     # First-run setup wizard state (locked once the owner completes setup).
     SettingDef("setup_done", False, False, "general"),
+    # Timestamp (ISO, UTC) of the last SUCCESSFUL backup — read by the health report's
+    # «آخرین پشتیبان». Internal/read-only; written by backup.mark_backup_done.
+    SettingDef("last_backup_at", "", False, "general"),
     # Deployment (Phase 2): domain + automatic HTTPS, applied by the installer.
     SettingDef("server_domain", "", False, "deploy"),
     SettingDef("https_enabled", False, False, "deploy"),
@@ -243,7 +246,7 @@ DEFS: list[SettingDef] = [
 _DEF_BY_KEY = {d.key: d for d in DEFS}
 _API_READ_ONLY = {
     "owner_chat_id", "setup_done", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
-    "ton_toman_auto",
+    "ton_toman_auto", "last_backup_at",
 }
 _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "default_price_per_gb": (0, None),

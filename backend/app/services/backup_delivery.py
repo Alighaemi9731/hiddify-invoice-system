@@ -17,12 +17,14 @@ async def send_backup_to_owner(session: AsyncSession) -> dict:
     if not chat_id:
         # Save locally anyway so it's not lost.
         path = await backup.save_backup_to_disk(session)
+        await backup.mark_backup_done(session)
         return {"status": "no_owner_chat", "saved": str(path)}
 
     data, name = await backup.create_backup(session)
     bot = await build_bot(session)
     if bot is None:
         path = await backup.save_backup_to_disk(session)
+        await backup.mark_backup_done(session)
         return {"status": "no_bot", "saved": str(path)}
     try:
         await bot.send_document(
@@ -31,5 +33,8 @@ async def send_backup_to_owner(session: AsyncSession) -> dict:
         )
     finally:
         await bot.session.close()
+    # Only reached when send_document didn't raise → a real successful delivery. (On failure the
+    # exception propagates and the scheduler's backup_job already alerts the owner — no stamp.)
+    await backup.mark_backup_done(session)
     log.info("Backup sent to owner (%s bytes)", len(data))
     return {"status": "sent", "filename": name, "size": len(data)}

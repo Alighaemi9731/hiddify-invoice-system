@@ -316,8 +316,27 @@ async def health(session: AsyncSession) -> Health:
         ).scalar_one()
         or 0
     )
-    h.last_backup = _latest_backup_label()
+    # Source of truth: the timestamp stamped on every SUCCESSFUL backup (the auto-backup streams
+    # to Telegram and never writes a zip to disk, so the disk folder can't be trusted). Fall back
+    # to any on-disk zip only for installs that haven't produced a stamped backup yet.
+    stamp = str(await settings_service.get(session, "last_backup_at", "") or "")
+    h.last_backup = _format_backup_stamp(stamp) or _latest_backup_label()
     return h
+
+
+def _format_backup_stamp(stamp: str) -> str | None:
+    """Format an ISO last_backup_at timestamp as Tehran-local «YYYY-MM-DD HH:MM» (None if unset
+    or unparseable → render_health shows «—»)."""
+    if not stamp:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    local = ts.astimezone(_TZ) if _TZ else ts
+    return local.strftime("%Y-%m-%d %H:%M")
 
 
 def _latest_backup_label() -> str | None:

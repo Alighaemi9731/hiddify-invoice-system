@@ -301,6 +301,18 @@ def _pg_restore(sql: bytes) -> bool:
         return False
 
 
+async def mark_backup_done(session: AsyncSession) -> None:
+    """Record the time of a SUCCESSFUL backup (read by the health report's «آخرین پشتیبان»).
+
+    The normal auto-backup streams straight to the owner's Telegram and never writes a zip to
+    disk, so the health label can't be derived from the disk folder — this timestamp is the
+    source of truth. Follows the `toman_per_usdt_auto_at` precedent (ISO, UTC, seconds)."""
+    await settings_service.set_value(
+        session, "last_backup_at",
+        dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    )
+
+
 async def save_backup_to_disk(session: AsyncSession) -> Path:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     data, name = await create_backup(session)

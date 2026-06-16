@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.89 - 2026-06-17
+
+### Fixed (health report — «آخرین پشتیبان» showed «—»)
+
+- The system-health message read the last-backup time from the `data/backups` disk folder, but the
+  normal auto-backup streams straight to the owner's Telegram and never writes a zip there — so it
+  always showed «—». Now every SUCCESSFUL backup stamps an internal `last_backup_at` timestamp
+  (auto-backup all three branches, and the manual panel download), and the health label is read
+  from that (formatted Tehran-local). A failed backup never stamps (the scheduler still alerts the
+  owner). No DB+key zips pile up on the server. Existing installs show «—» until the next
+  successful backup, then it fills in.
+
 ## 1.37.88 - 2026-06-17
 
 ### Changed (absent-reseller delete — full branch cleanup)

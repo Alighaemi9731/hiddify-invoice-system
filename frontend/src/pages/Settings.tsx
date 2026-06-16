@@ -48,7 +48,7 @@ type Section = {
 };
 
 // Settings that are machine-managed, not user-editable — hidden from the panel entirely.
-const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at", "ton_toman_auto"]);
+const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at", "ton_toman_auto", "last_backup_at"]);
 
 const SECTIONS: Section[] = [
   {

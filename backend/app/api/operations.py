@@ -230,6 +230,8 @@ async def channel_guard_run(session: AsyncSession = Depends(get_session)) -> dic
 @router.get("/backup/download")
 async def backup_download(session: AsyncSession = Depends(get_session)) -> StreamingResponse:
     data, name = await backup_service.create_backup(session)
+    # A manual panel download is a real backup the owner now holds → count it as the last backup.
+    await backup_service.mark_backup_done(session)
     return StreamingResponse(
         io.BytesIO(data), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
