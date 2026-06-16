@@ -144,15 +144,30 @@ async def _ton_received(txid: str, our_address: str, api_key: str | None = None)
     if not want:
         return None
     book = data.get("address_book") or {}
+
+    def _credits_us(dest: str | None) -> bool:
+        if not dest:
+            return False
+        friendly = ((book.get(dest) or {}).get("user_friendly")) or dest
+        return _ton_account_id(friendly) == want
+
     total = Decimal(0)
     for tx in (data.get("transactions") or []):
+        # The hash a user copies from their wallet is usually the SENDER-side transaction: its
+        # in_msg is the external trigger (no TON value) and the credit to us sits in its out_msgs.
+        # If instead the pasted hash is the RECEIVER-side transaction (on our own account), the
+        # credit is the in_msg. Scan BOTH directions and count only messages whose destination is
+        # our wallet — for one transaction the deposit appears in exactly one direction, so there
+        # is no double-count.
+        msgs = []
         in_msg = tx.get("in_msg") or {}
-        dest = in_msg.get("destination")
-        val = in_msg.get("value")
-        if not dest or val in (None, ""):
-            continue
-        friendly = ((book.get(dest) or {}).get("user_friendly")) or dest
-        if _ton_account_id(friendly) == want:
+        if in_msg:
+            msgs.append(in_msg)
+        msgs.extend(tx.get("out_msgs") or [])
+        for m in msgs:
+            val = m.get("value")
+            if val in (None, "") or not _credits_us(m.get("destination")):
+                continue
             try:
                 total += Decimal(int(str(val))) / Decimal(1_000_000_000)
             except (TypeError, ValueError):

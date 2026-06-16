@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.82 - 2026-06-16
+
+### Fixed (TON on-chain read — now finds the deposit)
+
+- The TON deposit reader said «از زنجیره خوانده نشد» even for a real, confirmed transaction. Root
+  cause: the hash a customer copies from their wallet is the **sender-side** transaction — its
+  `in_msg` is the external trigger (no TON value) and the actual credit to our wallet is in the
+  transaction's **`out_msgs`**, which the reader didn't inspect. It now scans both `in_msg` and
+  `out_msgs` and counts any message whose destination is our wallet, so a normal TON payment is
+  read correctly (verified against the real transaction: 17.35 TON → our wallet). Still
+  best-effort and display-only — confirmation stays manual. (toncenter v3, free; the optional
+  `toncenter_api_key` setting only raises the rate limit, not required for this volume.)
+
 ## 1.37.81 - 2026-06-16
 
 ### Changed (payment review — professional, complete, actionable)

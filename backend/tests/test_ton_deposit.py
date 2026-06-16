@@ -50,6 +50,21 @@ def test_ton_received_sums_only_incoming_to_our_address(monkeypatch):
     assert got == Decimal("2.5")
 
 
+def test_ton_received_credits_from_out_msgs_sender_side_tx(monkeypatch):
+    # The real-world case: the hash a user copies is the SENDER-side transaction — its in_msg is
+    # the external trigger (no value) and the credit to us is in out_msgs. We must still find it.
+    data = {"transactions": [{
+        "account": "0:" + "b" * 64,                               # the sender's wallet, not us
+        "in_msg": {"destination": "0:" + "b" * 64, "value": None},  # external trigger, no TON
+        "out_msgs": [
+            {"destination": "0:" + "d" * 64, "value": "1000000000"},  # to someone else
+            {"destination": OUR, "value": "17350000000"},             # 17.35 TON to us
+        ],
+    }]}
+    _patch(monkeypatch, data)
+    assert asyncio.run(P._ton_received("hash", OUR)) == Decimal("17.35")
+
+
 def test_ton_received_none_when_no_match(monkeypatch):
     _patch(monkeypatch, {"transactions": [
         {"in_msg": {"destination": "0:" + "c" * 64, "value": "1000000000"}}]})
