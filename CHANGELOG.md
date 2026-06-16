@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.75 - 2026-06-16
+
+### Fixed (critical — backup restore)
+
+- **Restore now works onto a database that already has the schema** (i.e. always, since the
+  backend creates the schema on boot). Previously `psql` aborted with «cannot drop constraint
+  app_users_pkey … webauthn_credentials_user_id_fkey depends on it» — the dump's `--clean`
+  drop-ordering failed on the passkey→owner foreign key, so the whole restore rolled back and
+  did nothing. The restore now resets the `public` schema to a clean slate first (inside the
+  same single transaction, so it's still all-or-nothing), then imports the dump. Verified by a
+  real end-to-end test: a from-scratch isolated install was restored from a live backup and came
+  up healthy with the **owner account, password, passkey, TOTP, all encrypted secrets, and all
+  data preserved** (every row count + the owner-row hash + the SECRET_KEY matched production).
+
 ## 1.37.74 - 2026-06-16
 
 ### Changed

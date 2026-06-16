@@ -232,6 +232,21 @@ def _strip_incompatible_sets(sql: bytes) -> bytes:
     return _PG17_ONLY_SET.sub(b"", sql)
 
 
+# pg_dump's `--clean` emits per-object DROPs, but their ordering can fail when a foreign key in
+# one table depends on another table's primary-key index (e.g. webauthn_credentials → app_users):
+# "cannot drop constraint app_users_pkey ... because ... _fkey depends on it". Restoring is always
+# onto a DB that already has the schema (the backend migrates on boot), so we reset the schema to a
+# clean slate FIRST. It runs inside the same --single-transaction as the import, so a failure still
+# rolls everything back (the live DB is never left with an empty schema).
+_RESET_SCHEMA = b"DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n"
+
+
+def _restore_sql(sql: bytes) -> bytes:
+    """The exact SQL piped to psql on restore: a clean-slate schema reset, then the dump with
+    PG17-only statements stripped. Pure (testable) so the assembly can't silently regress."""
+    return _RESET_SCHEMA + _strip_incompatible_sets(sql)
+
+
 def _save_pre_restore_dump() -> Path | None:
     """Best-effort safety dump of the CURRENT database before a restore overwrites it,
     so the prior state can be recovered manually if needed."""
@@ -260,7 +275,9 @@ def _pg_restore(sql: bytes) -> bool:
     is left exactly as it was (never half-dropped)."""
     import subprocess
 
-    sql = _strip_incompatible_sets(sql)
+    # Clean-slate the schema first (atomic, within the same transaction as the import), so the
+    # dump's --clean drop-ordering can't fail on cross-table FK→PK dependencies.
+    sql = _restore_sql(sql)
     _save_pre_restore_dump()
     try:
         subprocess.run(
@@ -268,9 +285,10 @@ def _pg_restore(sql: bytes) -> bool:
             capture_output=True, timeout=60,
         )
         out = subprocess.run(
-            # --single-transaction: the entire dump is one transaction → all-or-nothing.
-            # ON_ERROR_STOP=1: a failed statement aborts (→ rollback) and is reported as
-            # failure (caller keeps the .sql for manual import) instead of a false "ok".
+            # --single-transaction: the entire dump (incl. the schema reset above) is one
+            # transaction → all-or-nothing. ON_ERROR_STOP=1: a failed statement aborts (→ rollback)
+            # and is reported as failure (caller keeps the .sql for manual import), never a false
+            # "ok" or a half-dropped DB.
             ["psql", "--dbname", _pg_url(), "--single-transaction",
              "-v", "ON_ERROR_STOP=1"],
             input=sql, capture_output=True, timeout=300,

@@ -20,6 +20,7 @@ from app.services.backup import (  # noqa: E402
     _decrypt_archive,
     _encrypt_archive,
     _open_validated_zip,
+    _restore_sql,
     _strip_incompatible_sets,
     _validate_dump,
     _validate_sqlite,
@@ -53,6 +54,17 @@ def test_strips_pg17_transaction_timeout():
 def test_no_transaction_timeout_is_noop():
     sql = b"SET statement_timeout = 0;\nCREATE TABLE x(i int);\n"
     assert _strip_incompatible_sets(sql) == sql
+
+
+def test_restore_sql_resets_schema_first():
+    # The restore must clean-slate the schema BEFORE the dump, so the dump's --clean
+    # drop-ordering can't fail on FK→PK deps (the bug a real restore test surfaced).
+    out = _restore_sql(_DUMP)
+    assert out.startswith(b"DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n")
+    assert b"transaction_timeout" not in out          # still strips PG17-only SETs
+    assert b"CREATE TABLE public.t (id integer);" in out  # dump body preserved
+    # reset must come before any dump statement
+    assert out.index(b"CREATE SCHEMA public;") < out.index(b"CREATE TABLE public.t")
 
 
 # ---------------------------------------------------------------- validation
