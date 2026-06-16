@@ -35,14 +35,14 @@ export default function Payments() {
     ["payments", "invoices", "dashboard", "debts"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
   };
   const { sorted, key, dir, toggle } = useSort(data, "created_at", "desc");
-  // Search by tracking number (the «#N» the customer quotes) or reseller name. Persian/Arabic
-  // digits are normalized to ASCII so a hand-typed «#۱۲» matches the (ASCII) id «12».
+  // Search by tracking number (the public «#N» the customer quotes) or reseller name.
+  // Persian/Arabic digits are normalized to ASCII so a hand-typed «#۱۲» matches the code.
   const toAscii = (s: string) =>
     s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
      .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
   const q = toAscii(search.trim().replace(/^#/, "")).toLowerCase();
   const shown = q
-    ? sorted.filter((p: any) => String(p.id).includes(q) || (p.reseller_name || "").toLowerCase().includes(q))
+    ? sorted.filter((p: any) => String(p.number || "").includes(q) || (p.reseller_name || "").toLowerCase().includes(q))
     : sorted;
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
@@ -105,7 +105,7 @@ export default function Payments() {
           <TableBody>
             {shown.map((p: any) => (
               <TableRow key={p.id} hover>
-                <TableCell data-label="#" dir="ltr" sx={{ color: "text.secondary", fontWeight: 600 }}>#{p.id}</TableCell>
+                <TableCell data-label="#" dir="ltr" sx={{ color: "text.secondary", fontWeight: 600, fontFamily: "monospace" }}>#{p.number}</TableCell>
                 <TableCell data-label="نماینده">
                   {/* Click the name → open the customer's Telegram PV (username if known, else by id). */}
                   {p.reseller_username

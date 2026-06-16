@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.codes import payment_code
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import BotUser, Invoice, Payment, Reseller
@@ -43,7 +44,8 @@ def _to_out(
     invoice_equiv: str = "",
 ) -> PaymentOut:
     return PaymentOut(
-        id=p.id, reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
+        id=p.id, number=payment_code(p.id),
+        reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
         reseller_chat_id=reseller_chat_id, reseller_username=reseller_username,
         invoice_period=invoice_period, invoice_amount_toman=float(invoice_amount_toman or 0),
         invoice_equiv=invoice_equiv,

@@ -17,6 +17,7 @@ from sqlalchemy import func, or_, select
 from app.bot import keyboards, texts
 from app.bot.matching import normalize_host, normalize_path, parse_link
 from app.bot.rtl import rtl
+from app.core.codes import payment_code
 from app.core.db import SessionLocal
 from app.models import BotUser, Invoice, Panel, Payment, Reseller
 from app.models.enums import (
@@ -1124,7 +1125,7 @@ async def cb_owner_payment_view(cb: CallbackQuery, bot: Bot) -> None:
         amt = f"{float(pay.amount_toman or 0):,.0f} تومان" if pay.amount_toman else "—"
         method_fa = {"usdt_txid": "USDT", "ton_txid": "TON", "screenshot": "رسید", "manual": "دستی"}
         lines = [
-            f"💳 پرداخت #{pay.id}",
+            f"💳 پرداخت #{payment_code(pay.id)}",
             _iso(f"نماینده: {reseller.name if reseller else '—'}"),
             f"روش: {method_fa.get(pay.method.value, pay.method.value)} | مبلغ: {amt}",
             f"فاکتور: دورهٔ {inv.period_label}" if inv else "فاکتور: —",
@@ -1444,7 +1445,7 @@ async def _owner_pending_payments(answer, session) -> None:
     items: list[tuple[int, str]] = []
     for pid, name, toman, method, period in rows:
         amt = f"{float(toman or 0):,.0f}ت" if toman else "—"
-        items.append((pid, f"#{pid} · {(name or '—')[:18]} · {amt} · {period or '—'}"))
+        items.append((pid, f"#{payment_code(pid)} · {(name or '—')[:18]} · {amt} · {period or '—'}"))
     await answer(
         f"💳 {len(rows)} پرداختِ در انتظارِ تأیید:",
         reply_markup=keyboards.owner_pending_payments_keyboard(items),
@@ -2177,7 +2178,7 @@ async def _handle_txid(
         await session.commit()
         await message.answer(rtl(
             "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
-            f"🔖 شمارهٔ پیگیری: #{existing.id}"
+            f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}"
         ))
         inv2 = await session.get(Invoice, existing.invoice_id) if existing.invoice_id else None
         await owner_notify.notify_owner(
@@ -2215,7 +2216,7 @@ async def _handle_txid(
     await message.answer(rtl(
         f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
         "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
-        f"🔖 شمارهٔ پیگیری: #{payment.id}"
+        f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
     ))
     name = resellers[0].name
     period = invoice.period_label
@@ -2280,7 +2281,7 @@ async def _handle_payment_proof(
     await message.answer(rtl(
         "✅ رسید شما دریافت شد و در انتظار تأیید پشتیبانی است.\n"
         "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. (نیازی به ارسال دوباره نیست.)\n"
-        f"🔖 شمارهٔ پیگیری: #{payment.id}"
+        f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
     ))
 
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.

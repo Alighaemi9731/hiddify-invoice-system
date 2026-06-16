@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 class PaymentOut(BaseModel):
     id: int
+    number: str = ""   # public 8-digit tracking number (non-sequential; hides the count)
     reseller_id: int
     reseller_name: str | None
     reseller_chat_id: int | None = None   # Telegram chat id → deep-link to the customer's PV

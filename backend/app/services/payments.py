@@ -280,10 +280,13 @@ async def verify_payment(
     return PaymentResult("confirmed", True, msg)
 
 
-def _ref_line(code: int | None) -> str:
+def _ref_line(payment_id: int | None) -> str:
     """Tracking-number footer so the customer can quote «شمارهٔ پیگیری #N» to support and the
-    owner can find that exact payment in the panel."""
-    return f"\n🔖 شمارهٔ پیگیری: #{code}" if code else ""
+    owner can find that exact payment in the panel. Shows the public 8-digit code (not the raw
+    sequential id), so the payment count isn't leaked."""
+    from app.core.codes import payment_code
+
+    return f"\n🔖 شمارهٔ پیگیری: #{payment_code(payment_id)}" if payment_id else ""
 
 
 async def _payment_received_text(session: AsyncSession, period: str, code: int | None = None) -> str:

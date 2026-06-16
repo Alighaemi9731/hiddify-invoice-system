@@ -15,8 +15,10 @@ from __future__ import annotations
 _BASE = 10_000_000
 _SPAN = 90_000_000  # 10,000,000 .. 99,999,999  (= 2^7 · 3^2 · 5^7)
 # Coprime to _SPAN (odd, digit-sum not divisible by 3, not ending in 0/5) → the map is a
-# bijection over the whole 8-digit space, so codes are unique with zero collisions.
+# bijection over the whole 8-digit space, so codes are unique with zero collisions. Distinct
+# multipliers per type so an invoice and a payment with the SAME numeric id get different codes.
 _MULT_INVOICE = 73_939_133
+_MULT_PAYMENT = 51_345_271
 
 
 def _code(n: int, mult: int) -> int:
@@ -30,3 +32,8 @@ def _code(n: int, mult: int) -> int:
 def invoice_code(invoice_id: int) -> str:
     """Stable 8-digit public invoice number for a given invoice id."""
     return str(_code(invoice_id, _MULT_INVOICE))
+
+
+def payment_code(payment_id: int) -> str:
+    """Stable 8-digit public tracking number for a payment id (the «شمارهٔ پیگیری»)."""
+    return str(_code(payment_id, _MULT_PAYMENT))

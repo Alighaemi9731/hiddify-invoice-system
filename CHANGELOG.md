@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.74 - 2026-06-16
+
+### Changed
+
+- **Payment tracking number («شمارهٔ پیگیری») is now an 8-digit non-sequential code** too, so
+  customers can't infer how many payments the business has processed. Applied everywhere it's
+  shown — the customer's payment ack/reject messages, the owner bot's pending-payment review,
+  and the Payments panel (list + search). Search matches the new code; a different multiplier
+  from the invoice code means a payment and an invoice with the same internal id get different
+  numbers. Bijective (no collisions); covered by tests. No database change.
+
 ## 1.37.73 - 2026-06-16
 
 ### Added
