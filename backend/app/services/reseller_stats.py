@@ -49,11 +49,11 @@ class RootStats:
     connected: int  # billable roots registered in the bot (bot_chat_id set)
 
 
-async def load_root_stats(session: AsyncSession, panel_id: int | None = None) -> RootStats:
-    """Compute top-level reseller counts (optionally for one panel).
-
-    Only counts resellers currently present on their panel — removed admins (those whose
-    last_seen_at predates the panel's latest successful sync) are excluded from all stats."""
+async def _present_top_level_roots(
+    session: AsyncSession, panel_id: int | None = None
+) -> list[Reseller]:
+    """All top-level roots currently PRESENT on their panel (removed admins — last_seen_at older
+    than the panel's latest successful sync — are excluded). Includes billing-exempt roots."""
     q = (
         select(Reseller)
         .join(Panel, Reseller.panel_id == Panel.id)
@@ -68,7 +68,25 @@ async def load_root_stats(session: AsyncSession, panel_id: int | None = None) ->
     )
     if panel_id is not None:
         q = q.where(Reseller.panel_id == panel_id)
-    roots = top_level_roots((await session.execute(q)).scalars().all())
+    return top_level_roots((await session.execute(q)).scalars().all())
+
+
+async def load_billable_roots(
+    session: AsyncSession, panel_id: int | None = None
+) -> list[Reseller]:
+    """The base audience for the panel/bot broadcast: top-level resellers shown in the
+    «نمایندگان» main list that are NOT exempt from billing and are present on an active panel.
+    Every broadcast filter narrows down from exactly this set."""
+    return [r for r in await _present_top_level_roots(session, panel_id)
+            if not r.exclude_from_billing]
+
+
+async def load_root_stats(session: AsyncSession, panel_id: int | None = None) -> RootStats:
+    """Compute top-level reseller counts (optionally for one panel).
+
+    Only counts resellers currently present on their panel — removed admins (those whose
+    last_seen_at predates the panel's latest successful sync) are excluded from all stats."""
+    roots = await _present_top_level_roots(session, panel_id)
     billable = [r for r in roots if not r.exclude_from_billing]
     exempt = [r for r in roots if r.exclude_from_billing]
     connected = sum(1 for r in billable if r.bot_chat_id is not None)

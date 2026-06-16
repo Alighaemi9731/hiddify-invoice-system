@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.84 - 2026-06-17
+
+### Fixed (broadcast — correct audience) & Added (professional filters + report)
+
+- **Bug fixed:** every broadcast audience was selecting chat ids from *all* resellers
+  (sub-resellers and billing-exempt included, across every panel), so a targeted send went to
+  the wrong people. All audiences now start from ONE base set — the **top-level resellers in the
+  «نمایندگان» main list that are NOT exempt from billing and are present on an active panel** —
+  exactly the set the user expects. Sub-resellers, exempt resellers, the owner, and removed admins
+  are never included. Recipients are de-duplicated by Telegram id (one person on two panels gets
+  one message).
+- **Configurable filters** (each on top of the base set, combinable with an optional single-panel
+  restriction): همه نمایندگان · بدهکاران (فاکتور پرداخت‌نشده) · فروش صفرِ این ماه · **کم‌تر از N
+  کاربرِ فعال** (N editable) · **فاکتورِ این ماه زیرِ مبلغ** (amount editable).
+- **Preview + full report:** a «پیش‌نمایشِ گیرندگان» button shows exactly who matches before
+  sending; after sending, a per-recipient report lists who received / was blocked / failed, plus a
+  count of matched-but-unregistered resellers. The bot broadcast report now also names who it
+  couldn't reach. None of this is written to the database (no log/DB bloat).
+
 ## 1.37.83 - 2026-06-16
 
 ### Added / Fixed (USDT on-chain read — now free & working, like TON)

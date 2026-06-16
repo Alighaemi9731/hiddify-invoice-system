@@ -77,9 +77,10 @@ class DomainBody(BaseModel):
 
 
 class BroadcastBody(BaseModel):
-    text: str
-    audience: str = "all"          # all | debtors | panel
-    panel_id: int | None = None
+    text: str = ""
+    audience: str = "all"          # all | debtors | zero_sale | few_active | invoice_below
+    panel_id: int | None = None    # optional single-panel restriction (combinable)
+    threshold: float | None = None  # few_active: max active users; invoice_below: max Toman
 
 
 @router.post("/dunning/run")
@@ -203,7 +204,19 @@ async def broadcast(
     body: BroadcastBody, session: AsyncSession = Depends(get_session)
 ) -> broadcast_service.BroadcastResult:
     return await broadcast_service.broadcast(
-        session, body.text, audience=body.audience, panel_id=body.panel_id
+        session, body.text, audience=body.audience,
+        panel_id=body.panel_id, threshold=body.threshold,
+    )
+
+
+@router.post("/broadcast/preview")
+async def broadcast_preview(
+    body: BroadcastBody, session: AsyncSession = Depends(get_session)
+) -> broadcast_service.BroadcastResult:
+    """Resolve who WOULD receive the broadcast (no message sent), so the owner can verify the
+    filter and see the exact recipient list before sending."""
+    return await broadcast_service.preview(
+        session, audience=body.audience, panel_id=body.panel_id, threshold=body.threshold
     )
 
 

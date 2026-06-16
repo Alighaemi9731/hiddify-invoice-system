@@ -482,11 +482,20 @@ async def _do_broadcast(
 
     counts = await bc.broadcast(session, text, audience=audience, panel_id=panel_id)
     label = await _audience_label(session, audience, panel_id)
-    await message.answer(
-        f"📢 ارسال به «{label}»:\n"
-        f"{counts['sent']} موفق، {counts['blocked']} مسدود، "
-        f"{counts['failed']} ناموفق (از {counts['total']} گیرنده)"
-    )
+    lines = [
+        f"📢 ارسال به «{label}»:",
+        f"✅ {counts['sent']} موفق · 🚫 {counts['blocked']} مسدود · "
+        f"⚠️ {counts['failed']} ناموفق (از {counts['total']} گیرنده)",
+    ]
+    if counts["unregistered"]:
+        lines.append(f"ℹ️ {counts['unregistered']} نماینده هنوز در ربات ثبت‌نام نکرده‌اند (پیام نگرفتند).")
+    # Name the ones that didn't go through, so the owner can follow up (kept short).
+    problems = [r for r in counts["recipients"] if r["status"] in ("blocked", "failed")]
+    if problems:
+        names = "، ".join(_iso(r["name"]) for r in problems[:10])
+        more = f" و {len(problems) - 10} مورد دیگر" if len(problems) > 10 else ""
+        lines.append(f"❗️ نرسید به: {names}{more}")
+    await message.answer(rtl("\n".join(lines)))
 
 
 @router.callback_query(F.data.startswith("bcaud:"))

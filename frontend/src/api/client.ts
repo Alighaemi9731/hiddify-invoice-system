@@ -280,8 +280,13 @@ export const getFinancialHistory = (params: any = {}) =>
   api.get("/api/reports/financial-history", { params }).then((r) => r.data);
 
 // ---- operations ----
-export const broadcastMessage = (body: { text: string; audience?: string; panel_id?: number }) =>
+export interface BroadcastBody {
+  text?: string; audience?: string; panel_id?: number; threshold?: number;
+}
+export const broadcastMessage = (body: BroadcastBody) =>
   api.post("/api/ops/broadcast", body).then((r) => r.data);
+export const broadcastPreview = (body: BroadcastBody) =>
+  api.post("/api/ops/broadcast/preview", body).then((r) => r.data);
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);
 export const setDomain = (domain: string, acme_email?: string) =>
   api.post("/api/ops/set-domain", { domain, acme_email }).then((r) => r.data);
