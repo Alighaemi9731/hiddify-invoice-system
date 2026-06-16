@@ -32,7 +32,6 @@ import AccountTreeIcon from "@mui/icons-material/esm/AccountTree";
 import AddIcon from "@mui/icons-material/esm/Add";
 import BlockIcon from "@mui/icons-material/esm/Block";
 import CheckCircleOutlineIcon from "@mui/icons-material/esm/CheckCircleOutline";
-import TelegramIcon from "@mui/icons-material/esm/Telegram";
 import EditIcon from "@mui/icons-material/esm/Edit";
 import FormatListBulletedIcon from "@mui/icons-material/esm/FormatListBulleted";
 import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
@@ -55,6 +54,7 @@ import {
 } from "../api/client";
 import CapacityBar from "../components/CapacityBar";
 import SegmentedTabs from "../components/SegmentedTabs";
+import TelegramLink, { telegramHref } from "../components/TelegramLink";
 import { Dir, SortTh, useSort } from "../components/sortable";
 import { errMsg, useToast } from "../components/Toast";
 import { fmtNum } from "../format";
@@ -805,36 +805,6 @@ function ResellerIdentity({
   );
 }
 
-// Deep-link to a reseller's Telegram private chat: prefer the public @username link
-// (opens reliably in any browser), else fall back to the numeric tg:// link.
-function telegramHref(r: { username: string | null; bot_chat_id: number | null }): string | null {
-  if (r.username) return `https://t.me/${r.username}`;
-  if (r.bot_chat_id) return `tg://user?id=${r.bot_chat_id}`;
-  return null;
-}
-
-function TelegramLink({ reseller }: { reseller: ResellerRow | ResellerTreeRow }) {
-  const href = telegramHref(reseller);
-  if (!href) {
-    return <Typography variant="caption" color="text.disabled">—</Typography>;
-  }
-  return (
-    <Tooltip title="گفتگو در تلگرام">
-      <IconButton
-        size="small"
-        component="a"
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        sx={{ color: "#229ED9" }}
-        aria-label="گفتگوی تلگرام با این نماینده"
-      >
-        <TelegramIcon fontSize="small" />
-      </IconButton>
-    </Tooltip>
-  );
-}
-
 function ResellerTableRow({
   reseller,
   depth = 0,
@@ -873,7 +843,7 @@ function ResellerTableRow({
           onToggle={onToggle}
         />
       </TableCell>
-      <TableCell align="center"><TelegramLink reseller={reseller} /></TableCell>
+      <TableCell align="center"><TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} /></TableCell>
       <TableCell>
         <Chip size="small" label={reseller.panel_key} variant="outlined" />
       </TableCell>
@@ -940,7 +910,7 @@ function ResellerMobileCard({
         onToggle={onToggle}
       />
       <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mt: 1.2 }}>
-        {telegramHref(reseller) && <TelegramLink reseller={reseller} />}
+        {telegramHref(reseller.username, reseller.bot_chat_id) && <TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} />}
         <Chip size="small" label={reseller.panel_key} variant="outlined" />
         <ConnectionStatus connected={reseller.registered} />
         <EnforcementStatus state={reseller.enforcement_state} />

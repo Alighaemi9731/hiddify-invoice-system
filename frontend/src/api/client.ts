@@ -147,8 +147,11 @@ export const setResellerCanAddAdmin = (id: number, enabled: boolean) =>
 // ---- invoices ----
 export interface InvoiceListItem {
   id: number;
+  number: string;
   reseller_id: number;
   reseller_name: string;
+  reseller_chat_id: number | null;
+  reseller_username: string | null;
   panel_id: number;
   panel_key: string;
   period_label: string;

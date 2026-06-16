@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.79 - 2026-06-16
+
+### Added (Invoices tab — Telegram link + search)
+
+- The Invoices list now has a **تلگرام** column: for a reseller whose Telegram is
+  connected (started the bot), it shows a clickable Telegram icon that opens their
+  private chat (`https://t.me/<username>`, or `tg://user?id=…` when no @username),
+  so the owner can message them in one tap. The same column was added to the
+  «نمایندگان با فاکتور صفر» tab.
+- The Invoices list got a **search box** (like other tabs): filter by reseller name
+  or the 8-digit invoice number, with Persian/Arabic digit normalization. The result
+  count, total, pagination, and empty state all respect the active search.
+- The Telegram deep-link logic is now a single shared `TelegramLink` component reused
+  by the Resellers and Invoices pages (one source of truth for the href rules).
+
 ## 1.37.78 - 2026-06-16
 
 ### Changed (sent invoice text — slimmer, no stale payment details)

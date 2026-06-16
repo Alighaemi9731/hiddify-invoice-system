@@ -15,7 +15,10 @@ import AutorenewIcon from "@mui/icons-material/esm/Autorenew";
 import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
 import ReceiptLongIcon from "@mui/icons-material/esm/ReceiptLong";
 import PersonOffIcon from "@mui/icons-material/esm/PersonOff";
+import SearchIcon from "@mui/icons-material/esm/Search";
+import InputAdornment from "@mui/material/InputAdornment";
 import SegmentedTabs from "../components/SegmentedTabs";
+import TelegramLink from "../components/TelegramLink";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
@@ -38,6 +41,7 @@ export default function Invoices() {
   const { node, show } = useToast();
   const [period, setPeriod] = useState(currentPeriod());
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const [detail, setDetail] = useState<any>(null);
   const [editRow, setEditRow] = useState<any>(null);
   const [deferRow, setDeferRow] = useState<any>(null);
@@ -53,11 +57,20 @@ export default function Invoices() {
     enabled: tab === 1,
   });
   const { sorted, key, dir, toggle } = useSort(data, "amount_toman", "desc");
+  // Search by reseller name or the public 8-digit invoice number. Persian/Arabic digits are
+  // normalized to ASCII so a hand-typed «۱۲۳۴…» matches the number shown on each row.
+  const toAscii = (s: string) =>
+    s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
+     .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
+  const q = toAscii(search.trim()).toLowerCase();
+  const filtered = q
+    ? sorted.filter((i: any) => String(i.number || "").includes(q) || (i.reseller_name || "").toLowerCase().includes(q))
+    : sorted;
   // Paginate the (often hundreds of) rows so we never render the whole month at once.
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
-  useEffect(() => { setPage(0); }, [period, status, tab, key, dir]);
-  const paged = sorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  useEffect(() => { setPage(0); }, [period, status, search, tab, key, dir]);
+  const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
   const refresh = () => qc.invalidateQueries({ queryKey: ["invoices"] });
   const mut = (fn: any, ok: any) =>
     useMutation({ mutationFn: fn, onSuccess: (r: any) => { show(typeof ok === "function" ? ok(r) : ok); refresh(); }, onError: (e) => show(errMsg(e), "error") });
@@ -105,7 +118,7 @@ export default function Invoices() {
   });
 
   const openDetail = async (id: number) => setDetail(await getInvoice(id));
-  const total = sorted.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
+  const total = filtered.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
 
   return (
     <Box>
@@ -143,7 +156,7 @@ export default function Invoices() {
           }}>ارسال همه پیش‌نویس‌ها</Button>
       </Stack>
 
-      <Box sx={{ mb: 2 }}>
+      <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }} alignItems={{ md: "center" }}>
         <SegmentedTabs
           value={tab}
           onChange={setTab}
@@ -152,7 +165,22 @@ export default function Invoices() {
             { label: "نمایندگان با فاکتور صفر", icon: <PersonOffIcon fontSize="small" /> },
           ]}
         />
-      </Box>
+        <Box sx={{ flexGrow: 1 }} />
+        {tab === 0 && (
+          <TextField
+            size="small"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="جستجو: نام نماینده یا شماره فاکتور"
+            sx={{ minWidth: { xs: "100%", md: 280 } }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+              ),
+            }}
+          />
+        )}
+      </Stack>
 
       {tab === 1 ? (
         <Card>
@@ -162,7 +190,7 @@ export default function Invoices() {
           <Table size="small" className="resp-table">
             <TableHead>
               <TableRow>
-                <TableCell>نماینده</TableCell><TableCell>پنل</TableCell>
+                <TableCell>نماینده</TableCell><TableCell align="center">تلگرام</TableCell><TableCell>پنل</TableCell>
                 <TableCell>زیرمجموعه‌ها</TableCell><TableCell>ربات</TableCell>
               </TableRow>
             </TableHead>
@@ -170,19 +198,20 @@ export default function Invoices() {
               {zero.map((z: any) => (
                 <TableRow key={z.reseller_id} hover>
                   <TableCell>{z.reseller_name}</TableCell>
+                  <TableCell align="center"><TelegramLink username={z.reseller_username} chatId={z.reseller_chat_id} /></TableCell>
                   <TableCell>{z.panel_key}</TableCell>
                   <TableCell>{fmtNum(z.sub_resellers)}</TableCell>
                   <TableCell>{z.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}</TableCell>
                 </TableRow>
               ))}
-              {zero.length === 0 && <TableRow><TableCell colSpan={4} align="center" sx={{ py: 4, color: "text.secondary" }}>همه نماینده‌ها در این دوره فروش داشته‌اند</TableCell></TableRow>}
+              {zero.length === 0 && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>همه نماینده‌ها در این دوره فروش داشته‌اند</TableCell></TableRow>}
             </TableBody>
           </Table>
         </Card>
       ) : (
       <>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        {fmtNum(sorted.length)} فاکتور — جمع: {fmtToman(total)}
+        {fmtNum(filtered.length)} فاکتور{q ? ` (از ${fmtNum(sorted.length)})` : ""} — جمع: {fmtToman(total)}
       </Typography>
 
       <Card>
@@ -191,6 +220,7 @@ export default function Invoices() {
             <TableRow>
               <TableCell>شماره</TableCell>
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
+              <TableCell align="center">تلگرام</TableCell>
               <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="usage_gb" label="مصرف" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="amount_toman" label="مبلغ (تومان)" sortKey={key} dir={dir} onSort={toggle} />
@@ -203,6 +233,7 @@ export default function Invoices() {
               <TableRow key={i.id} hover>
                 <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }} dir="ltr">{i.number}</TableCell>
                 <TableCell>{i.reseller_name}</TableCell>
+                <TableCell align="center"><TelegramLink username={i.reseller_username} chatId={i.reseller_chat_id} /></TableCell>
                 <TableCell>{i.panel_key}</TableCell>
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(i.amount_toman)}</TableCell>
@@ -246,12 +277,12 @@ export default function Invoices() {
                 </TableCell>
               </TableRow>
             ))}
-            {sorted.length === 0 && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید</TableCell></TableRow>}
+            {filtered.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
-        {sorted.length > rowsPerPage && (
+        {filtered.length > rowsPerPage && (
           <TablePagination
-            component="div" count={sorted.length} page={page}
+            component="div" count={filtered.length} page={page}
             onPageChange={(_, p) => setPage(p)}
             rowsPerPage={rowsPerPage} rowsPerPageOptions={[25, 50, 100]}
             onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}

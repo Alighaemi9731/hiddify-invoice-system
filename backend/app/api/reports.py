@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
+    BotUser,
     DeliveryLog,
     EnforcementAction,
     FinancialRecord,
@@ -249,6 +250,21 @@ async def zero_invoices(
 
     p = parse_period(period) if period else current_month()
     pairs = await invoicing.preview_bundles(session, p)
+    zero = [(panel, b) for panel, b in pairs if b.total_gb <= 0]
+    # Resolve Telegram @usernames for the connected resellers → clickable PV deep-link.
+    chat_ids = [b.root.bot_chat_id for _, b in zero if b.root.bot_chat_id]
+    usernames: dict[int, str] = {}
+    if chat_ids:
+        usernames = {
+            tid: uname
+            for tid, uname in (
+                await session.execute(
+                    select(BotUser.telegram_id, BotUser.username).where(
+                        BotUser.telegram_id.in_(chat_ids), BotUser.username.is_not(None)
+                    )
+                )
+            ).all()
+        }
     rows = [
         {
             "reseller_id": b.root.id,
@@ -256,8 +272,10 @@ async def zero_invoices(
             "panel_key": panel.key,
             "sub_resellers": max(0, len(b.admin_uuids) - 1),
             "registered": b.root.bot_chat_id is not None,
+            "reseller_chat_id": b.root.bot_chat_id,
+            "reseller_username": usernames.get(b.root.bot_chat_id) if b.root.bot_chat_id else None,
         }
-        for panel, b in pairs if b.total_gb <= 0
+        for panel, b in zero
     ]
     rows.sort(key=lambda r: r["reseller_name"])
     return rows

@@ -19,6 +19,8 @@ class InvoiceOut(BaseModel):
     number: str = ""   # public 8-digit invoice number (non-sequential; hides the count)
     reseller_id: int
     reseller_name: str
+    reseller_chat_id: int | None = None   # Telegram id, set once the reseller starts the bot
+    reseller_username: str | None = None  # Telegram @username (for a reliable PV deep-link)
     panel_id: int
     panel_key: str
     period_label: str

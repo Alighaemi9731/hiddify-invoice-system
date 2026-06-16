@@ -12,6 +12,7 @@ from app.core.codes import invoice_code
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
+    BotUser,
     DeliveryLog,
     FinancialRecord,
     Invoice,
@@ -54,10 +55,14 @@ _SORT_COLUMNS = {
 }
 
 
-def _to_out(inv: Invoice, reseller_name: str, panel_key: str) -> InvoiceOut:
+def _to_out(
+    inv: Invoice, reseller_name: str, panel_key: str,
+    reseller_chat_id: int | None = None, reseller_username: str | None = None,
+) -> InvoiceOut:
     return InvoiceOut(
         id=inv.id, number=invoice_code(inv.id),
         reseller_id=inv.reseller_id, reseller_name=reseller_name,
+        reseller_chat_id=reseller_chat_id, reseller_username=reseller_username,
         panel_id=inv.panel_id, panel_key=panel_key,
         period_label=inv.period_label, period_start=inv.period_start, period_end=inv.period_end,
         usage_gb=float(inv.usage_gb), users_count=inv.users_count, price_per_gb=inv.price_per_gb,
@@ -129,9 +134,10 @@ async def list_invoices(
     session: AsyncSession = Depends(get_session),
 ) -> list[InvoiceOut]:
     q = (
-        select(Invoice, Reseller.name, Panel.key)
+        select(Invoice, Reseller.name, Panel.key, Reseller.bot_chat_id, BotUser.username)
         .join(Reseller, Invoice.reseller_id == Reseller.id)
         .join(Panel, Invoice.panel_id == Panel.id)
+        .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
     )
     if period:
         q = q.where(Invoice.period_label == period)
@@ -146,7 +152,7 @@ async def list_invoices(
     q = q.order_by(col.asc() if order == "asc" else col.desc()).limit(limit).offset(offset)
 
     rows = (await session.execute(q)).all()
-    return [_to_out(inv, name, key) for inv, name, key in rows]
+    return [_to_out(inv, name, key, chat_id, username) for inv, name, key, chat_id, username in rows]
 
 
 @router.get("/{invoice_id}", response_model=InvoiceDetail)
