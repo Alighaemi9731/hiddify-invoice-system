@@ -34,6 +34,21 @@ class ResellerOut(BaseModel):
     last_seen_at: dt.datetime | None
 
 
+class AbsentResellerOut(BaseModel):
+    """A reseller row whose admin was removed from the Hiddify panel (last_seen_at older than the
+    panel's latest successful sync) but whose DB row still lingers — a candidate for safe deletion."""
+    id: int
+    panel_id: int
+    panel_key: str
+    admin_uuid: str
+    name: str
+    last_seen_at: dt.datetime | None
+    users_count: int = 0
+    sub_resellers: int = 0           # direct children still lingering in the DB
+    has_nondraft_invoices: bool = False  # delivered/paid invoices exist → louder delete warning
+    has_payments: bool = False
+
+
 class ResellerUpdate(BaseModel):
     price_per_gb: int | None = Field(default=None, ge=0)
     min_sale_toman: int | None = Field(default=None, ge=0)

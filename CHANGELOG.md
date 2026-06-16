@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.85 - 2026-06-17
+
+### Added (absent resellers — see & safely delete removed admins)
+
+- New **«نماینده‌های غایب (حذف‌شده از پنل)»** view in the Resellers page (third tab beside
+  list/tree): admins removed from the Hiddify panel whose DB row still lingers. Each shows name,
+  panel, last seen (Jalali), user count, and remaining sub-reseller count, with a guarded delete.
+- Backend `GET /api/resellers/absent` (inverse of the presence filter, restricted to panels with a
+  good latest sync so a failed sync never marks everyone absent) and `DELETE
+  /api/resellers/{id}/absent`. The delete **re-checks absence server-side** and refuses (409) a
+  reseller that is currently present — this path is only for removed admins.
+- Deletion cascades the reseller's invoices, invoice lines, and payments, but the **durable
+  financial ledger (`financial_records`) is intentionally kept** (financial history is permanent).
+  Sub-resellers are not cascaded (their `parent_admin_uuid` is a plain string, not an FK); the
+  delete dialog warns when the row has delivered/paid invoices, payments, or remaining
+  sub-resellers. Owner-only; nothing extra is persisted.
+
 ## 1.37.84 - 2026-06-17
 
 ### Fixed (broadcast — correct audience) & Added (professional filters + report)

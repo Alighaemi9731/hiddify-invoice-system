@@ -133,6 +133,23 @@ export const listResellers = (params: any = {}) =>
   api.get("/api/resellers", { params }).then((r) => r.data as ResellerRow[]);
 export const getResellerTree = (params: any = {}) =>
   api.get("/api/resellers/tree", { params }).then((r) => r.data as ResellerTreeRow[]);
+
+export interface AbsentReseller {
+  id: number;
+  panel_id: number;
+  panel_key: string;
+  admin_uuid: string;
+  name: string;
+  last_seen_at: string | null;
+  users_count: number;
+  sub_resellers: number;
+  has_nondraft_invoices: boolean;
+  has_payments: boolean;
+}
+export const listAbsentResellers = (params: { panel_id?: number } = {}) =>
+  api.get("/api/resellers/absent", { params }).then((r) => r.data as AbsentReseller[]);
+export const deleteAbsentReseller = (id: number) =>
+  api.delete(`/api/resellers/${id}/absent`).then((r) => r.data);
 export const updateReseller = (id: number, b: any) =>
   api.patch(`/api/resellers/${id}`, b).then((r) => r.data);
 export const enforceReseller = (id: number, dry_run?: boolean) =>

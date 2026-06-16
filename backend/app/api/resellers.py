@@ -4,14 +4,16 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import BotUser, EndUserSnapshot, Panel, Reseller
-from app.models.enums import PanelStatus
+from app.models import BotUser, EndUserSnapshot, Invoice, Panel, Payment, Reseller
+from app.models.enums import InvoiceStatus, PanelStatus
 from app.schemas.reseller import (
+    AbsentResellerOut,
     BumpLimitsBody,
     CanAddAdminBody,
     ResellerOut,
@@ -33,6 +35,16 @@ def _present_filter():
         Reseller.last_seen_at.is_(None),
         Reseller.last_seen_at >= Panel.last_synced_at - _PRESENCE_SKEW,
     )
+
+
+def _is_absent(reseller: Reseller, panel: Panel | None) -> bool:
+    """Re-check (in Python) whether a reseller is currently absent — used to guard deletion so an
+    active reseller can never be removed through the absent-only path."""
+    if panel is None or panel.status != PanelStatus.ok or panel.last_synced_at is None:
+        return False
+    if reseller.last_seen_at is None:
+        return False
+    return reseller.last_seen_at < panel.last_synced_at - _PRESENCE_SKEW
 
 
 router = APIRouter(
@@ -147,6 +159,96 @@ async def list_resellers(
             ).all()
         }
     return [_to_out(r, key, default_price, counts, usernames) for r, key in rows]
+
+
+@router.get("/absent", response_model=list[AbsentResellerOut])
+async def list_absent_resellers(
+    panel_id: int | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[AbsentResellerOut]:
+    """Resellers whose admin was removed from Hiddify but whose DB row still lingers — the
+    candidates for safe deletion. Owners are excluded (sync removes absent owner rows itself).
+
+    Restricts to panels with a good latest sync (status ok + a real last_synced_at) so a
+    failed/never-synced panel never makes everyone look 'absent'. The precise skew check is done
+    in Python (`_is_absent`) so it behaves identically on Postgres and SQLite (the DB-side
+    `timestamp - interval` arithmetic is Postgres-only)."""
+    query = (
+        select(Reseller, Panel)
+        .join(Panel, Reseller.panel_id == Panel.id)
+        .where(
+            Panel.status == PanelStatus.ok,
+            Panel.last_synced_at.is_not(None),
+            Reseller.last_seen_at.is_not(None),
+            Reseller.is_owner.is_(False),
+        )
+    )
+    if panel_id is not None:
+        query = query.where(Reseller.panel_id == panel_id)
+    candidates = [(r, p) for r, p in (await session.execute(query)).tuples().all()
+                  if _is_absent(r, p)]
+    # All candidates have a non-null last_seen_at (SQL filter), so this never mixes None.
+    candidates.sort(key=lambda rp: rp[0].last_seen_at)  # type: ignore[arg-type,return-value]
+    rows = [(r, p.key) for r, p in candidates]
+    if not rows:
+        return []
+
+    counts = await _usage_counts(session, panel_id)
+    ids = [r.id for r, _ in rows]
+    # Direct children still lingering in the DB, per (panel_id, parent_admin_uuid).
+    child_counts: dict[tuple[int, str], int] = {}
+    for pid, parent, n in (await session.execute(
+        select(Reseller.panel_id, Reseller.parent_admin_uuid, func.count())
+        .where(Reseller.parent_admin_uuid.is_not(None))
+        .group_by(Reseller.panel_id, Reseller.parent_admin_uuid)
+    )).all():
+        child_counts[(pid, parent)] = int(n)
+    # Which absentees have delivered/paid invoices, and which have any payment.
+    nondraft = set((await session.execute(
+        select(Invoice.reseller_id).where(
+            Invoice.reseller_id.in_(ids), Invoice.status != InvoiceStatus.draft
+        ).distinct()
+    )).scalars().all())
+    with_pay = set((await session.execute(
+        select(Payment.reseller_id).where(Payment.reseller_id.in_(ids)).distinct()
+    )).scalars().all())
+
+    out: list[AbsentResellerOut] = []
+    for r, key in rows:
+        total, _active = counts.get((r.panel_id, r.admin_uuid), (0, 0))
+        out.append(AbsentResellerOut(
+            id=r.id, panel_id=r.panel_id, panel_key=key, admin_uuid=r.admin_uuid,
+            name=r.name, last_seen_at=r.last_seen_at, users_count=total,
+            sub_resellers=child_counts.get((r.panel_id, r.admin_uuid), 0),
+            has_nondraft_invoices=r.id in nondraft, has_payments=r.id in with_pay,
+        ))
+    return out
+
+
+@router.delete("/{reseller_id}/absent")
+async def delete_absent_reseller(
+    reseller_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Permanently delete an ABSENT reseller's row (and cascade its invoices/lines/payments). The
+    durable financial ledger (`financial_records`, no FK) is intentionally KEPT. Guarded: a
+    reseller currently present on the panel is refused (this path is only for removed admins)."""
+    reseller = await session.get(Reseller, reseller_id)
+    if reseller is None:
+        raise HTTPException(404, "Reseller not found")
+    panel = await session.get(Panel, reseller.panel_id)
+    if not _is_absent(reseller, panel):
+        raise HTTPException(
+            409, "این نماینده هنوز روی پنل حاضر است؛ این مسیر فقط برای حذفِ نماینده‌های حذف‌شده از پنل است.")
+    # Payments have a DB-level ondelete=CASCADE but no ORM relationship on Reseller, so delete them
+    # explicitly (works on SQLite too); the reseller delete then ORM-cascades invoices + lines.
+    await session.execute(sa_delete(Payment).where(Payment.reseller_id == reseller_id))
+    await session.delete(reseller)
+    await session.commit()
+    return {
+        "deleted": True,
+        "reseller_id": reseller_id,
+        "financial_records_kept": True,  # the durable ledger is never touched by this delete
+    }
 
 
 @router.get("/tree")

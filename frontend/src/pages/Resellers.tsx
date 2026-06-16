@@ -32,7 +32,9 @@ import AccountTreeIcon from "@mui/icons-material/esm/AccountTree";
 import AddIcon from "@mui/icons-material/esm/Add";
 import BlockIcon from "@mui/icons-material/esm/Block";
 import CheckCircleOutlineIcon from "@mui/icons-material/esm/CheckCircleOutline";
+import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import EditIcon from "@mui/icons-material/esm/Edit";
+import PersonOffIcon from "@mui/icons-material/esm/PersonOff";
 import FormatListBulletedIcon from "@mui/icons-material/esm/FormatListBulleted";
 import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
 import KeyboardArrowLeftIcon from "@mui/icons-material/esm/KeyboardArrowLeft";
@@ -41,9 +43,12 @@ import SearchIcon from "@mui/icons-material/esm/Search";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AbsentReseller,
   bumpResellerLimits,
+  deleteAbsentReseller,
   enforceReseller,
   getResellerTree,
+  listAbsentResellers,
   listPanels,
   listResellers,
   ResellerRow,
@@ -57,7 +62,7 @@ import SegmentedTabs from "../components/SegmentedTabs";
 import TelegramLink, { telegramHref } from "../components/TelegramLink";
 import { Dir, SortTh, useSort } from "../components/sortable";
 import { errMsg, useToast } from "../components/Toast";
-import { fmtNum } from "../format";
+import { fmtDate, fmtNum } from "../format";
 
 type VisibleTreeRow = { node: ResellerTreeRow; depth: number };
 
@@ -459,11 +464,16 @@ export default function Resellers() {
           tabs={[
             { label: "فهرست اصلی", icon: <FormatListBulletedIcon fontSize="small" /> },
             { label: "درخت زیرمجموعه‌ها", icon: <AccountTreeIcon fontSize="small" /> },
+            { label: "نماینده‌های غایب", icon: <PersonOffIcon fontSize="small" /> },
           ]}
         />
 
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          {tab === 0 ? (
+          {tab === 2 ? (
+            <Typography variant="caption" color="text.secondary">
+              ادمین‌هایی که از پنل حذف شده‌اند ولی ردیفشان در سامانه مانده است.
+            </Typography>
+          ) : tab === 0 ? (
             <>
               <Chip
                 size="small"
@@ -504,6 +514,9 @@ export default function Resellers() {
         </Stack>
       </Stack>
 
+      {tab === 2 ? (
+        <AbsentResellers panelId={panelId} />
+      ) : (
       <Card sx={{ overflow: "hidden" }}>
         {loading ? (
           <Stack spacing={1} sx={{ p: 2 }}>
@@ -604,6 +617,7 @@ export default function Resellers() {
           </>
         )}
       </Card>
+      )}
 
       <Dialog open={!!form} onClose={() => setForm(null)} fullWidth maxWidth="xs">
         <DialogTitle>ویرایش نماینده {form?.name}</DialogTitle>
@@ -697,6 +711,131 @@ export default function Resellers() {
       </Dialog>
       {toastNode}
     </Box>
+  );
+}
+
+// ── Absent resellers (removed from the panel, row still lingering) ────────────
+function AbsentResellers({ panelId }: { panelId: string }) {
+  const qc = useQueryClient();
+  const { node: toastNode, show } = useToast();
+  const [confirmRow, setConfirmRow] = useState<AbsentReseller | null>(null);
+  const [page, setPage] = useState(0);
+
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["absent-resellers", panelId],
+    queryFn: () => listAbsentResellers({ panel_id: panelId ? Number(panelId) : undefined }),
+  });
+  useEffect(() => { setPage(0); }, [panelId]);
+  const { sorted, key, dir, toggle } = useSort(data, "last_seen_at", "asc");
+  const rows = sorted.slice(page * 25, page * 25 + 25);
+
+  const del = useMutation({
+    mutationFn: (id: number) => deleteAbsentReseller(id),
+    onSuccess: () => {
+      show("ردیفِ نمایندهٔ غایب حذف شد (تاریخچهٔ مالی حفظ شد).");
+      setConfirmRow(null);
+      qc.invalidateQueries({ queryKey: ["absent-resellers"] });
+      qc.invalidateQueries({ queryKey: ["resellers"] });
+      qc.invalidateQueries({ queryKey: ["reseller-tree"] });
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
+  return (
+    <Card sx={{ overflow: "hidden" }}>
+      <Typography variant="body2" color="text.secondary" sx={{ p: 2, pb: 0 }}>
+        {fmtNum(data.length)} نمایندهٔ حذف‌شده از پنل (ردیفشان هنوز در سامانه مانده).
+      </Typography>
+      {isLoading ? (
+        <Stack spacing={1} sx={{ p: 2 }}>
+          {[0, 1, 2].map((i) => <Skeleton key={i} variant="rounded" height={56} />)}
+        </Stack>
+      ) : (
+        <>
+          <Table size="small" className="resp-table">
+            <TableHead>
+              <TableRow>
+                <SortTh id="name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="last_seen_at" label="آخرین حضور" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="users_count" label="کاربر" sortKey={key} dir={dir} onSort={toggle} />
+                <SortTh id="sub_resellers" label="زیرمجموعه" sortKey={key} dir={dir} onSort={toggle} />
+                <TableCell align="left">عملیات</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.id} hover>
+                  <TableCell data-label="نماینده">{r.name}</TableCell>
+                  <TableCell data-label="پنل"><Chip size="small" label={r.panel_key} variant="outlined" /></TableCell>
+                  <TableCell data-label="آخرین حضور" dir="ltr">{r.last_seen_at ? fmtDate(r.last_seen_at) : "—"}</TableCell>
+                  <TableCell data-label="کاربر">{fmtNum(r.users_count)}</TableCell>
+                  <TableCell data-label="زیرمجموعه">
+                    {r.sub_resellers > 0
+                      ? <Chip size="small" color="warning" variant="outlined" label={fmtNum(r.sub_resellers)} />
+                      : fmtNum(0)}
+                  </TableCell>
+                  <TableCell data-label="عملیات" align="left">
+                    <Tooltip title="حذفِ ردیفِ این نمایندهٔ غایب">
+                      <span><IconButton size="small" color="error" disabled={del.isPending}
+                        onClick={() => setConfirmRow(r)}><DeleteOutlineIcon fontSize="small" /></IconButton></span>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {data.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} align="center" sx={{ py: 7, color: "text.secondary" }}>
+                    نماینده‌ای که از پنل حذف شده باشد وجود ندارد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          {data.length > 25 && (
+            <TablePagination
+              component="div" count={data.length} page={page}
+              rowsPerPage={25} rowsPerPageOptions={[25]}
+              onPageChange={(_e, p) => setPage(p)}
+              labelDisplayedRows={({ from, to, count }) => `${fmtNum(from)}–${fmtNum(to)} از ${fmtNum(count)}`}
+            />
+          )}
+        </>
+      )}
+
+      <Dialog open={!!confirmRow} onClose={() => setConfirmRow(null)} fullWidth maxWidth="xs">
+        {confirmRow && (<>
+          <DialogTitle>حذفِ نمایندهٔ غایب — {confirmRow.name}</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              ردیفِ این نماینده به‌همراه فاکتورها و پرداخت‌هایش برای همیشه حذف می‌شود.
+              <b> تاریخچهٔ مالی (لجر) حفظ می‌شود.</b>
+            </Typography>
+            {confirmRow.has_nondraft_invoices && (
+              <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
+                ⚠️ این نماینده فاکتورِ ارسال‌شده/پرداختی دارد؛ آن فاکتورها هم حذف خواهند شد.
+              </Typography>
+            )}
+            {confirmRow.has_payments && (
+              <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
+                ⚠️ پرداخت‌های ثبت‌شدهٔ این نماینده هم حذف می‌شوند.
+              </Typography>
+            )}
+            {confirmRow.sub_resellers > 0 && (
+              <Typography variant="body2" color="warning.main" sx={{ fontWeight: 700 }}>
+                ⚠️ این نماینده {fmtNum(confirmRow.sub_resellers)} زیرمجموعه در سامانه دارد؛ آن‌ها حذف نمی‌شوند و در صورت غیاب، جداگانه قابلِ حذف‌اند.
+              </Typography>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmRow(null)}>انصراف</Button>
+            <Button variant="contained" color="error" disabled={del.isPending}
+              onClick={() => del.mutate(confirmRow.id)}>حذف</Button>
+          </DialogActions>
+        </>)}
+      </Dialog>
+      {toastNode}
+    </Card>
   );
 }
 
