@@ -873,6 +873,18 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
     customer's TXID / receipt photo, which is then attributed to exactly this invoice."""
     from app.services import payment_methods
 
+    # Already mid-payment → don't start another flow. Tapping an invoice button repeatedly
+    # used to re-send the payment details every time (the duplicates the user saw). The flow
+    # stays locked on the chosen invoice until they send a proof or /cancel; to switch
+    # invoices they re-open the «💳 پرداخت فاکتور» list (cb_pay, which clears the state).
+    if await state.get_state() == PayState.waiting.state:
+        await cb.answer(
+            "شما در حال پرداخت یک فاکتور هستید. رسید یا شناسهٔ تراکنش (TXID) همین فاکتور را "
+            "بفرستید، یا برای انتخاب فاکتور دیگر ابتدا /cancel را بزنید.",
+            show_alert=True,
+        )
+        return
+
     try:
         inv_id = int(cb.data.split(":", 1)[1])
     except (ValueError, IndexError):

@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.80 - 2026-06-16
+
+### Fixed (bot — pay flow locked, no duplicate payment details)
+
+- Tapping an invoice's «💳 پرداخت فاکتور» button repeatedly used to re-send the full
+  payment-details message every time, piling up duplicates. Now, once a reseller is in
+  the pay flow for an invoice, tapping any invoice button again is rejected with a single
+  alert («شما در حال پرداخت یک فاکتور هستید … برای انتخاب فاکتور دیگر ابتدا /cancel را بزنید»)
+  — no new message is sent. The flow stays locked on the chosen invoice until the customer
+  sends a proof/TXID or cancels. To switch invoices they re-open the pay list (/pay or
+  /menu, which clear the flow) or send /cancel.
+
 ## 1.37.79 - 2026-06-16
 
 ### Added (Invoices tab — Telegram link + search)
