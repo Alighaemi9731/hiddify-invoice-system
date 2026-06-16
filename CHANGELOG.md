@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.76 - 2026-06-16
+
+### Changed (billing — closes a revenue loophole)
+
+- **A deleted config that consumed real traffic is now billed its full sold quota.** Previously a
+  user removed from the panel was always billed only on consumption, so a reseller could sell a
+  50 GB config, let the customer use 30 GB, then delete it and be charged for just 30 GB. Now: if
+  a deleted config's consumption is **at/above `deleted_full_quota_over_gb`** (Settings →
+  قیمت‌گذاری, default **5 GB**), it's billed the full sold quota (e.g. 50 GB); below the cutoff it's
+  still billed on consumption (small leftover / renew-by-delete); negligible usage (≤ free
+  threshold) is still ignored. `0` disables (consumption-only, the old behaviour). Applied
+  consistently to the real invoice AND the interim/sub-report/GB-cap so they stay in sync.
+
 ## 1.37.75 - 2026-06-16
 
 ### Fixed (critical — backup restore)

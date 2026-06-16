@@ -157,6 +157,10 @@ DEFS: list[SettingDef] = [
     # and billed NOTHING; above it, the FULL overage is billed as real over-consumption. Real
     # reset-abuse is many GB, so it's always billed.
     SettingDef("overage_tolerance_gb", 0.5, False, "pricing"),
+    # A user DELETED from the panel that consumed >= this many GB is billed its full SOLD quota
+    # (not just consumption) — so a reseller can't delete a config to be charged only the used
+    # part. Below it, the deleted config is billed on consumption. 0 disables. Default 5 GB.
+    SettingDef("deleted_full_quota_over_gb", 5, False, "pricing"),
     # Scheduler timings — ALL automated jobs. Every value here actually drives the
     # APScheduler triggers (see app.scheduler.jobs.load_config). Hour/day values fire at
     # that fixed clock time in the owner's timezone (Asia/Tehran); repeating values use

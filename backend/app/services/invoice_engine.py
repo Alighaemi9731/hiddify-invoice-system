@@ -135,16 +135,20 @@ def billable_gb_for_user(
     excluded_usage_gb: set[int],
     free_threshold_gb: float,
     panel_synced_at: dt.datetime | None = None,
+    deleted_full_quota_over_gb: float = 0.0,
 ) -> tuple[float, bool] | None:
     """The single source of truth for one user's billable GB in a period.
 
-    Returns `(gb, from_deleted)` or `None` if the user isn't billed. A user the panel no
-    longer has (its snapshot predates the panel's latest sync) is billed on what it actually
-    CONSUMED before deletion (`current_usage_gb`); everyone still on the panel is billed on the
-    SOLD quota (`usage_limit_gb`). The "is it a test config?" exclusion uses the SOLD quota (so a
-    deleted real config isn't mistaken for a test one); a removed config whose CONSUMPTION is
-    below the free threshold is also dropped as negligible. `panel_synced_at=None` disables
-    deletion detection (everyone billed on sold quota — the legacy behaviour)."""
+    Returns `(gb, from_deleted)` or `None` if the user isn't billed. A user still on the panel is
+    billed on the SOLD quota (`usage_limit_gb`). A user the panel no longer has (its snapshot
+    predates the panel's latest sync) is billed by CONSUMPTION (`current_usage_gb`) — UNLESS it
+    consumed at least `deleted_full_quota_over_gb` GB (when >0), in which case it's billed the
+    FULL sold quota, exactly like a present user. This closes the "delete the config so only the
+    used part is billed, not the sold quota" loophole while still ignoring barely-used / test
+    configs. The "is it a test config?" exclusion uses the SOLD quota (so a deleted real config
+    isn't mistaken for a test one); a removed config whose CONSUMPTION is below the free threshold
+    is dropped as negligible. `panel_synced_at=None` disables deletion detection (everyone billed
+    on sold quota — the legacy behaviour)."""
     if not period.contains(u.start_date):
         return None
     gb_sold = float(u.usage_limit_gb or 0)
@@ -165,9 +169,14 @@ def billable_gb_for_user(
         gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
         # A removed config whose CONSUMPTION is below the free threshold is negligible (e.g. a
         # config renewed by delete+recreate that was barely used, or one that used a few MB) →
-        # not billed, just like a test config. Real removed usage (above the threshold) is billed.
+        # not billed, just like a test config.
         if gb <= free_threshold_gb:
             return None
+        # A removed config that consumed REAL traffic (>= the cutoff) is billed the FULL sold
+        # quota — the reseller can't delete it to be charged only the used portion. Below the
+        # cutoff it's billed on consumption (small leftover / renew-by-delete).
+        if deleted_full_quota_over_gb and gb >= deleted_full_quota_over_gb:
+            return gb_sold, True
         return gb, True
     return gb_sold, False
 
@@ -182,6 +191,7 @@ def compute_invoices(
     default_min_sale_toman: int = 0,
     free_threshold_gb: float = 1.0,
     panel_synced_at: dt.datetime | None = None,
+    deleted_full_quota_over_gb: float = 0.0,
 ) -> list[BundleResult]:
     """Return one BundleResult per billable top-level reseller (including zero ones)."""
     children_map = build_children_map(resellers)
@@ -202,7 +212,8 @@ def compute_invoices(
         for uuid in admin_uuids:
             for u in users_by_adder.get(uuid, []):
                 res = billable_gb_for_user(
-                    u, period, excluded_usage_gb, free_threshold_gb, panel_synced_at
+                    u, period, excluded_usage_gb, free_threshold_gb, panel_synced_at,
+                    deleted_full_quota_over_gb,
                 )
                 if res is None:
                     continue

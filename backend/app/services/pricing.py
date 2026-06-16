@@ -61,3 +61,14 @@ async def get_free_threshold_gb(session: AsyncSession) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 1.0
+
+
+async def get_deleted_full_quota_over_gb(session: AsyncSession) -> float:
+    """A user deleted from the panel that CONSUMED at least this many GB is billed its full SOLD
+    quota (not just consumption). 0 disables — deleted users are billed on consumption only.
+    Default 5 GB."""
+    value = await settings_service.get(session, "deleted_full_quota_over_gb", 5)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 5.0

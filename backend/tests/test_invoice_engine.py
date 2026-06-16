@@ -128,3 +128,29 @@ def test_no_panel_synced_at_keeps_quota_billing():
         default_price_per_gb=1000, excluded_usage_gb={1},
     )[0]
     assert b.total_gb == 60 and not any(ln.from_deleted for ln in b.lines)
+
+
+def test_deleted_user_billed_full_quota_over_threshold():
+    """A user deleted from the panel: negligible usage → not billed; small usage → consumption;
+    real usage (>= cutoff) → the FULL sold quota (closes the delete-to-dodge-quota loophole)."""
+    from app.services.invoice_engine import billable_gb_for_user
+
+    period = month_period(2026, 2)
+    panel_synced = dt.datetime(2026, 2, 28, 12, 0, tzinfo=dt.timezone.utc)
+    stale = panel_synced - dt.timedelta(days=1)  # snapshot older than panel sync → deleted
+
+    def du(sold, used, synced=stale):
+        return SimpleNamespace(
+            user_uuid="x", added_by_uuid="r1", name="x", start_date=dt.date(2026, 2, 10),
+            usage_limit_gb=sold, current_usage_gb=used, last_synced_at=synced,
+        )
+
+    free, thr = 1.0, 5.0
+    assert billable_gb_for_user(du(50, 0.4), period, set(), free, panel_synced, thr) is None
+    assert billable_gb_for_user(du(50, 3), period, set(), free, panel_synced, thr) == (3.0, True)
+    assert billable_gb_for_user(du(50, 30), period, set(), free, panel_synced, thr) == (50.0, True)
+    assert billable_gb_for_user(du(50, 5), period, set(), free, panel_synced, thr) == (50.0, True)
+    # rule disabled (cutoff 0) → consumption only (legacy behaviour)
+    assert billable_gb_for_user(du(50, 30), period, set(), free, panel_synced, 0.0) == (30.0, True)
+    # a user still present (fresh snapshot) is unaffected → full sold quota, from_deleted False
+    assert billable_gb_for_user(du(50, 30, panel_synced), period, set(), free, panel_synced, thr) == (50.0, False)

@@ -1,7 +1,7 @@
-"""Integration test: an invoice generated for a panel where one user is still present and
-another was removed bills the present user on SOLD quota and the removed one on CONSUMPTION,
-labelling the removed line « — مصرف حذف‌شده از پنل». Covers the full generate→persist path
-(the engine flag AND _persist_bundle's labelling)."""
+"""Integration test (full generate→persist path): a present user is billed on SOLD quota; a
+removed user that consumed BELOW the full-quota cutoff is billed on CONSUMPTION; a removed user
+that consumed AT/ABOVE the cutoff (default 5 GB) is billed its FULL sold quota. Removed lines are
+labelled « — مصرف حذف‌شده از پنل»."""
 import datetime as dt
 
 import pytest
@@ -38,8 +38,13 @@ async def test_generate_bills_deleted_user_on_consumption_with_label(tmp_path):
             EndUserSnapshot(panel_id=panel.id, user_uuid="present", name="A", added_by_uuid=R,
                             usage_limit_gb=30, current_usage_gb=8, start_date=created,
                             enable=True, is_active=True, last_synced_at=now),
+            # removed, consumed 3 GB (< 5 cutoff) → billed on consumption
             EndUserSnapshot(panel_id=panel.id, user_uuid="gone", name="B", added_by_uuid=R,
-                            usage_limit_gb=30, current_usage_gb=5, start_date=created,
+                            usage_limit_gb=30, current_usage_gb=3, start_date=created,
+                            enable=True, is_active=True, last_synced_at=now - dt.timedelta(days=1)),
+            # removed, consumed 40 GB (>= 5 cutoff) → billed its FULL sold quota (50)
+            EndUserSnapshot(panel_id=panel.id, user_uuid="gone_big", name="C", added_by_uuid=R,
+                            usage_limit_gb=50, current_usage_gb=40, start_date=created,
                             enable=True, is_active=True, last_synced_at=now - dt.timedelta(days=1)),
         ])
         await s.commit()
@@ -52,11 +57,13 @@ async def test_generate_bills_deleted_user_on_consumption_with_label(tmp_path):
             select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id)
         )).scalars().all()
 
-        assert inv.usage_gb == 30 + 5  # present billed on sold 30, deleted on consumed 5
+        assert inv.usage_gb == 30 + 3 + 50  # present sold 30 + deleted-small consumed 3 + deleted-big full 50
         by_uuid = {ln.end_user_uuid: ln for ln in lines}
         assert by_uuid["present"].usage_gb == 30
         assert "مصرف حذف‌شده از پنل" not in by_uuid["present"].name
-        assert by_uuid["gone"].usage_gb == 5
+        assert by_uuid["gone"].usage_gb == 3
         assert by_uuid["gone"].name.endswith("مصرف حذف‌شده از پنل")
+        assert by_uuid["gone_big"].usage_gb == 50  # full sold quota, not the 40 consumed
+        assert by_uuid["gone_big"].name.endswith("مصرف حذف‌شده از پنل")
 
     await engine.dispose()

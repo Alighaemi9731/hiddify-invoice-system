@@ -122,6 +122,7 @@ async def generate_invoices(
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     free_threshold = await pricing.get_free_threshold_gb(session)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
     rate = await pricing.get_rate(session)
 
@@ -155,6 +156,7 @@ async def generate_invoices(
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
             panel_synced_at=panel.last_synced_at,
+            deleted_full_quota_over_gb=deleted_over,
         )
         for bundle in bundles:
             # A reseller removed from the panel (gone in the latest sync) must not be billed
@@ -208,6 +210,7 @@ async def preview_bundles(
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     free_threshold = await pricing.get_free_threshold_gb(session)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
 
     panel_q = select(Panel).where(Panel.enabled.is_(True))
@@ -235,6 +238,7 @@ async def preview_bundles(
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
             panel_synced_at=panel.last_synced_at,
+            deleted_full_quota_over_gb=deleted_over,
         ):
             if not _reseller_present(b.root, panel):
                 continue
@@ -286,6 +290,7 @@ async def recompute_invoice(
     default_price = await pricing.get_default_price_per_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     free_threshold = await pricing.get_free_threshold_gb(session)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
     rate = await pricing.get_rate(session) or int(invoice.usdt_rate or 0)
 
@@ -300,6 +305,7 @@ async def recompute_invoice(
         default_price_per_gb=default_price, excluded_usage_gb=excluded,
         default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
         panel_synced_at=panel.last_synced_at,
+        deleted_full_quota_over_gb=deleted_over,
     )
     bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
 

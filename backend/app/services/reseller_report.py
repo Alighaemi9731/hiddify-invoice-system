@@ -77,6 +77,7 @@ async def node_invoice(
         default_min_sale_toman=await pricing.get_default_min_sale(session),
         free_threshold_gb=await pricing.get_free_threshold_gb(session),
         panel_synced_at=await _panel_synced_at(session, node.panel_id),
+        deleted_full_quota_over_gb=await pricing.get_deleted_full_quota_over_gb(session),
     )
     return next((b for b in bundles if b.root.id == node.id), None)
 
@@ -105,6 +106,7 @@ async def node_invoice_own(
         default_min_sale_toman=await pricing.get_default_min_sale(session),
         free_threshold_gb=await pricing.get_free_threshold_gb(session),
         panel_synced_at=await _panel_synced_at(session, node.panel_id),
+        deleted_full_quota_over_gb=await pricing.get_deleted_full_quota_over_gb(session),
     )
     return next((b for b in bundles if b.root.id == node.id), None)
 
@@ -119,18 +121,22 @@ async def _panel_synced_at(session: AsyncSession, panel_id: int) -> dt.datetime 
 def _billable_gb_for_period(
     users, period: Period, free_threshold: float, excluded: set[int] | None = None,
     panel_synced_at: dt.datetime | None = None,
+    deleted_full_quota_over_gb: float = 0.0,
 ) -> tuple[float, int]:
     """Sum of billable GB (and count) of services created in `period`, using the invoice
     engine's EXACT per-user rule via `billable_gb_for_user` — free threshold, excluded sizes,
-    AND consumption-billing for users removed from the panel — so this report/interim/cap math
-    matches the real invoice. Pass `panel_synced_at` to enable the deleted-user rule."""
+    AND the deleted-user rule (consumption, or full sold quota over the cutoff) — so this
+    report/interim/cap math matches the real invoice. Pass `panel_synced_at` to enable the
+    deleted-user rule."""
     from app.services.invoice_engine import billable_gb_for_user
 
     excluded = excluded or set()
     gb = 0.0
     cnt = 0
     for u in users:
-        res = billable_gb_for_user(u, period, excluded, free_threshold, panel_synced_at)
+        res = billable_gb_for_user(
+            u, period, excluded, free_threshold, panel_synced_at, deleted_full_quota_over_gb
+        )
         if res is None:
             continue
         gb += res[0]
@@ -147,12 +153,15 @@ async def _billable_gb_with_metering(
     free_threshold: float,
     excluded: set[int],
     panel_synced_at: dt.datetime | None,
+    deleted_full_quota_over_gb: float = 0.0,
 ) -> tuple[float, int]:
     """Base billable GB (snapshot rule) PLUS the abuse-metered extra (overage + renew-by-edit)
     for `uuids` in `period`. This is EXACTLY what `generate_invoices` bills for that subtree, so
     the bot's interim («علی‌الحساب»), sub-reseller report, and GB-cap numbers match the
     end-of-month invoice instead of under-reporting whenever there is metered abuse."""
-    base_gb, cnt = _billable_gb_for_period(users, period, free_threshold, excluded, panel_synced_at)
+    base_gb, cnt = _billable_gb_for_period(
+        users, period, free_threshold, excluded, panel_synced_at, deleted_full_quota_over_gb
+    )
     extra = await metering.bundle_extra(session, panel_id, uuids, period.label, free_threshold)
     return round(base_gb + float(extra.get("gb", 0) or 0), 3), cnt + len(extra.get("lines", []))
 
@@ -174,11 +183,13 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     psa = await _panel_synced_at(session, reseller.panel_id)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
 
     by_month: list[MonthSummary] = []
     for p in _last_months(months):
         gb, cnt = await _billable_gb_with_metering(
-            session, reseller.panel_id, uuids, users, p, free_threshold, excluded, psa
+            session, reseller.panel_id, uuids, users, p, free_threshold, excluded, psa,
+            deleted_over,
         )
         by_month.append({
             "label": p.label,
@@ -228,6 +239,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     psa = await _panel_synced_at(session, reseller.panel_id)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
 
     # All resellers on the panel → children map, to find this node's DIRECT subs + subtrees.
     panel_resellers = (
@@ -252,7 +264,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
     own_users = await _users_for({reseller.admin_uuid})
     own_gb, own_cnt = await _billable_gb_with_metering(
         session, reseller.panel_id, {reseller.admin_uuid}, own_users,
-        period, free_threshold, excluded, psa,
+        period, free_threshold, excluded, psa, deleted_over,
     )
 
     # Each direct sub-reseller, counted as its whole subtree (so no user is double-counted).
@@ -305,7 +317,9 @@ async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> floa
     free_threshold = await pricing.get_free_threshold_gb(session)
     excluded = await pricing.get_excluded_usage_gb(session)
     psa = await _panel_synced_at(session, reseller.panel_id)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     gb, _ = await _billable_gb_with_metering(
-        session, reseller.panel_id, uuids, users, current_month(), free_threshold, excluded, psa
+        session, reseller.panel_id, uuids, users, current_month(), free_threshold, excluded, psa,
+        deleted_over,
     )
     return gb
