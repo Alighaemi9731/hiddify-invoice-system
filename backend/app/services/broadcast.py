@@ -205,15 +205,19 @@ def migration_text(panel: Panel, previous_host: str, admin_uuid: str, tag: str |
 
     new_link = panel.admin_link(admin_uuid, tag=tag)
     prev_link = panel.admin_link(admin_uuid, tag=tag, host=previous_host)
+    # Each Persian label sits on its OWN line and each (English) URL alone on the NEXT line inside
+    # <code> — so no line mixes Persian + Latin and the bidi layout stays clean (rtl() also
+    # isolates runs). Keep it short and unambiguous.
     body = (
-        "🔔 آدرسِ جدیدِ پنلِ شما\n\n"
-        "نمایندهٔ گرامی، ممکن است دامنهٔ قبلی برای شما باز نشود. از این پس می‌توانید با آدرسِ "
-        "جدید (بدونِ فیلتر) واردِ پنلِ خود شوید و اشتراک‌ها را به‌روزرسانی کنید.\n\n"
-        "🟢 آدرسِ جدید (پیشنهادی):\n"
+        "🔔 آدرسِ جدیدِ پنلِ شما\n"
+        "—\n"
+        "نمایندهٔ گرامی، دامنهٔ پنل عوض شده است. اگر آدرسِ قبلی باز نمی‌شود، با آدرسِ جدیدِ زیر "
+        "وارد پنل شوید (بدونِ نیاز به فیلترشکن).\n\n"
+        "🟢 آدرسِ جدید (برای کپی، روی آن بزنید):\n"
         f"<code>{_html.escape(new_link)}</code>\n\n"
-        "↩️ آدرسِ قبلی (هنوز هم کار می‌کند):\n"
+        "🔵 آدرسِ قبلی (فعلاً کار می‌کند):\n"
         f"<code>{_html.escape(prev_link)}</code>\n\n"
-        "✅ هر دو آدرس به همان پنلِ شما وصل‌اند؛ توصیه می‌کنیم آدرسِ جدید را ذخیره کنید."
+        "ℹ️ هر دو آدرس به همان پنلِ شما وصل‌اند؛ لطفاً آدرسِ جدید را ذخیره کنید."
     )
     return rtl(body)
 

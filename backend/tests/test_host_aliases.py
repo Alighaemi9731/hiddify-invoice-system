@@ -91,11 +91,12 @@ def test_matcher_ambiguous_returns_none():
     _run(body, "amb.db")
 
 
-def test_send_panels_shows_link_from_current_host_and_previous_line():
+def test_send_panels_shows_only_current_link_never_previous():
     uuid = "44444444-5555-6666-7777-888888888888"
 
     async def body(s):
         p = Panel(key="fa1", host="new.example.com", proxy_path_enc=crypto.encrypt("path"), owner_uuid="o")
+        p.set_host_aliases(["old.example.com"])   # even WITH an alias…
         s.add(p)
         await s.flush()
         s.add(Reseller(panel_id=p.id, admin_uuid=uuid, name="r", bot_chat_id=555, link_tag="PH"))
@@ -107,15 +108,10 @@ def test_send_panels_shows_link_from_current_host_and_previous_line():
             captured.append(text)
 
         await handlers._send_panels(answer, 555, s)
+        # …only the CURRENT-host link is shown; the old host is never exposed here.
         assert f"https://new.example.com/path/{uuid}/#PH" in captured[0]
-        assert "آدرسِ قبلی" not in captured[0]              # no alias yet
-
-        captured.clear()
-        p.set_host_aliases(["old.example.com"])
-        await s.commit()
-        await handlers._send_panels(answer, 555, s)
-        assert f"https://old.example.com/path/{uuid}/#PH" in captured[0]
-        assert "آدرسِ قبلی" in captured[0]
+        assert "old.example.com" not in captured[0]
+        assert "قبلی" not in captured[0]
     _run(body, "panels.db")
 
 

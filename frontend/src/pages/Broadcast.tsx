@@ -244,8 +244,10 @@ export default function Broadcast() {
                 به <b>{fmtNum(migPreview.total)}</b> نمایندهٔ ثبت‌شده ارسال می‌شود
                 {migPreview.unregistered ? ` • ${fmtNum(migPreview.unregistered)} بدون ربات (پیام نمی‌گیرند)` : ""}.
                 <Box sx={{ mt: 1, fontSize: 13 }}>
-                  <div>🟢 نمونهٔ آدرسِ جدید: <code dir="ltr">{migPreview.sample_new_link}</code></div>
-                  <div>↩️ نمونهٔ آدرسِ قبلی: <code dir="ltr">{migPreview.sample_previous_link}</code></div>
+                  <Box sx={{ mt: 0.5 }}>🟢 نمونهٔ آدرسِ جدید:</Box>
+                  <Box component="code" sx={{ display: "block", direction: "ltr", textAlign: "left", wordBreak: "break-all", fontFamily: "monospace", color: "success.main" }}>{migPreview.sample_new_link}</Box>
+                  <Box sx={{ mt: 0.5 }}>🔵 نمونهٔ آدرسِ قبلی:</Box>
+                  <Box component="code" sx={{ display: "block", direction: "ltr", textAlign: "left", wordBreak: "break-all", fontFamily: "monospace", color: "text.secondary" }}>{migPreview.sample_previous_link}</Box>
                 </Box>
               </>) : "این پنل «هاستِ قبلی» ندارد؛ ابتدا در صفحهٔ «پنل‌ها» با «مهاجرتِ دامنه» یا فیلدِ «هاست‌های قبلی» آن را ثبت کنید."}
             </Alert>

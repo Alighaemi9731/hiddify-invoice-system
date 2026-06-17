@@ -1713,12 +1713,12 @@ async def _send_removelink(answer, chat_id: int, session) -> None:
 async def _send_panels(answer, chat_id: int, session) -> None:
     """Show a reseller the list of panels they're registered on (with sub-counts + their own
     tap-to-copy panel link). The link is built from the panel's CURRENT host, so it auto-updates
-    after a domain move; if the panel has an old host, a «آدرسِ قبلی» line is shown too."""
+    after a domain move."""
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
-    lines = ["🖥 پنل‌های شما:\n"]
+    lines = ["🖥 پنل‌های شما:"]
     for r in resellers:
         panel = await session.get(Panel, r.panel_id)
         subs = (
@@ -1730,13 +1730,10 @@ async def _send_panels(answer, chat_id: int, session) -> None:
             )
         ).scalar_one()
         tag = f" (#{r.link_tag})" if r.link_tag else ""
-        lines.append(f"‏• پنل {_iso((panel.name or panel.key) + tag)} — زیرمجموعه‌ها: {subs}")
         link = panel.admin_link(r.admin_uuid, tag=r.link_tag)
-        lines.append(f"‏  🔗 آدرس: <code>{html.escape(link)}</code>")
-        aliases = panel.host_alias_list
-        if aliases:
-            prev = panel.admin_link(r.admin_uuid, tag=r.link_tag, host=aliases[0])
-            lines.append(f"‏  ↩️ آدرسِ قبلی: <code>{html.escape(prev)}</code>")
+        lines.append("")  # blank line between panels for readability
+        lines.append(f"‏• پنل {_iso((panel.name or panel.key) + tag)} — زیرمجموعه‌ها: {subs}")
+        lines.append(f"‏🔗 <code>{html.escape(link)}</code>")
     await answer(rtl("\n".join(lines)), parse_mode="HTML")
 
 

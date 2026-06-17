@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.92 - 2026-06-18
+
+### Changed (bot panel messages — clearer & bidi-clean)
+
+- **«🖥 پنل‌های من»**: now shows each reseller ONLY their current panel link (the «آدرسِ قبلی» line
+  was removed) with a blank line between panels — much tidier, no duplicate-link clutter.
+- **«اعلامِ آدرسِ جدیدِ پنل»** message: reworded to be shorter and clearer, with every Persian label
+  on its own line and each URL alone on the next line (in tap-to-copy `<code>`), so no line mixes
+  Persian + English and the layout stays clean.
+- **Panel-migration preview** on the broadcast page: the sample links are each on their own
+  left-aligned monospace line below their label (no more Persian-label-plus-URL wrapping mess).
+
 ## 1.37.91 - 2026-06-18
 
 ### Added (panel domain migration — keep old reseller links working)
