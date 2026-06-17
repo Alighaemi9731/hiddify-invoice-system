@@ -1,6 +1,7 @@
 """Reseller + owner bot handlers: membership gate, menus, registration, payment."""
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import html
 import logging
@@ -475,27 +476,36 @@ async def _audience_label(session, audience: str, panel_id: int | None) -> str:
     return _AUDIENCE_FA.get(audience, audience)
 
 
+async def _bot_broadcast_bg(text: str, reachable: list, unregistered: int) -> None:
+    """Background send for an owner bot-triggered broadcast — its own session/bot (the handler's
+    session is already closed). The final summary reaches the owner via owner_notify.notify_owner."""
+    try:
+        async with SessionLocal() as session:
+            from app.services import broadcast as bc
+
+            await bc.run_broadcast(session, text, reachable, unregistered=unregistered)
+    except Exception:  # noqa: BLE001
+        log.exception("bot background broadcast failed")
+
+
 async def _do_broadcast(
     message: Message, session, text: str, audience: str = "all", panel_id: int | None = None
 ) -> None:
     from app.services import broadcast as bc
 
-    counts = await bc.broadcast(session, text, audience=audience, panel_id=panel_id)
+    reachable, unregistered = await bc.resolve_recipients(session, audience, panel_id, None)
     label = await _audience_label(session, audience, panel_id)
-    lines = [
-        f"📢 ارسال به «{label}»:",
-        f"✅ {counts['sent']} موفق · 🚫 {counts['blocked']} مسدود · "
-        f"⚠️ {counts['failed']} ناموفق (از {counts['total']} گیرنده)",
-    ]
-    if counts["unregistered"]:
-        lines.append(f"ℹ️ {counts['unregistered']} نماینده هنوز در ربات ثبت‌نام نکرده‌اند (پیام نگرفتند).")
-    # Name the ones that didn't go through, so the owner can follow up (kept short).
-    problems = [r for r in counts["recipients"] if r["status"] in ("blocked", "failed")]
-    if problems:
-        names = "، ".join(_iso(r["name"]) for r in problems[:10])
-        more = f" و {len(problems) - 10} مورد دیگر" if len(problems) > 10 else ""
-        lines.append(f"❗️ نرسید به: {names}{more}")
-    await message.answer(rtl("\n".join(lines)))
+    if not text.strip() or not reachable:
+        await message.answer(rtl(f"📢 «{label}»: گیرنده‌ای برای ارسال نبود."))
+        return
+    # Send in the background (bounded concurrency + rate limit); reply immediately. The summary
+    # arrives here when it finishes (notify_owner targets the owner's PV = this chat).
+    asyncio.create_task(_bot_broadcast_bg(text, reachable, len(unregistered)))
+    note = [f"📣 ارسال به «{label}» در پس‌زمینه شروع شد — {len(reachable)} گیرنده."]
+    if unregistered:
+        note.append(f"ℹ️ {len(unregistered)} نماینده در ربات ثبت‌نام نکرده‌اند (پیام نمی‌گیرند).")
+    note.append("خلاصهٔ نتیجه پس از پایان، همین‌جا ارسال می‌شود.")
+    await message.answer(rtl("\n".join(note)))
 
 
 @router.callback_query(F.data.startswith("bcaud:"))

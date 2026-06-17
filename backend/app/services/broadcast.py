@@ -6,26 +6,69 @@ The audience always starts from ONE base set — the top-level resellers shown i
 (`reseller_stats.load_billable_roots`). Every filter only narrows that set down; it never
 sends to sub-resellers, billing-exempt resellers, or removed admins.
 
-Nothing here is written to the database — the per-recipient report is returned to the
-caller and shown live, so broadcasting never bloats the DB.
+Sending is standard-broadcast style: the request resolves the recipients fast and returns; the
+actual send runs in the BACKGROUND with bounded concurrency + a global rate limit, and a summary
+is pushed to the owner's Telegram at the end. Nothing is written to the database — only a tiny
+in-memory snapshot of the current run (for the panel's live progress) + the server log.
 """
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 import logging
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.telegram import build_bot
 from app.models import EndUserSnapshot, Invoice, Panel, Reseller
 from app.models.enums import InvoiceStatus
-from app.services import reseller_stats
+from app.services import owner_notify, reseller_stats
 
 log = logging.getLogger("broadcast")
 
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+
+# Standard-broadcast send model. Telegram allows ~30 msgs/sec to DIFFERENT users; 25 leaves a
+# safety margin. Concurrency is bounded so slow sends can't pile up unboundedly; the rate limiter
+# is the real throttle. A send that keeps hitting 429 is retried up to this many times.
+BROADCAST_RATE_PER_SEC = 25
+BROADCAST_CONCURRENCY = 20
+BROADCAST_MAX_RETRY = 3
+
+
+class _RateLimiter:
+    """Global send-rate cap: spaces acquisitions at least 1/rate apart (token-bucket-ish). The
+    clock/sleep are injectable so it's deterministically testable without real time."""
+
+    def __init__(self, rate_per_sec: float, *, clock=None, sleep=None) -> None:
+        self._min_interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
+        self._clock = clock or (lambda: asyncio.get_event_loop().time())
+        self._sleep = sleep or asyncio.sleep
+        self._next_at = 0.0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = self._clock()
+            if self._next_at > now:
+                await self._sleep(self._next_at - now)
+                now = self._clock()
+            self._next_at = max(now, self._next_at) + self._min_interval
+
+
+# In-memory snapshot of the LAST/current run only (no DB, no per-recipient persistence) so the
+# panel can show live progress while the background send runs.
+_status: dict[str, Any] = {
+    "running": False, "total": 0, "sent": 0, "blocked": 0, "failed": 0,
+    "unregistered": 0, "started_at": None, "finished_at": None, "duration_s": None,
+}
+
+
+def current_status() -> dict[str, Any]:
+    return dict(_status)
 
 # Audience filters (each applied ON TOP of the base set). `panel_id` is an independent,
 # combinable restriction (one panel, or all panels when None).
@@ -153,46 +196,84 @@ async def preview(
     return res
 
 
-async def broadcast(
-    session: AsyncSession, text: str, *, audience: str = "all",
-    panel_id: int | None = None, threshold: float | None = None,
-) -> BroadcastResult:
-    """Send `text` to the resolved recipients and return a full per-recipient report."""
-    reachable, unregistered = await resolve_recipients(session, audience, panel_id, threshold)
-    res = _empty(audience, panel_id, threshold)
-    res["skipped"] = unregistered
-    res["unregistered"] = len(unregistered)
-    res["total"] = len(reachable)
-    res["matched"] = len(reachable) + len(unregistered)
+def _finish(counts: dict[str, int], started: dt.datetime, *, no_bot: bool = False) -> float:
+    finished = dt.datetime.now(dt.timezone.utc)
+    dur = (finished - started).total_seconds()
+    _status.update({
+        "running": False, "sent": counts["sent"], "blocked": counts["blocked"],
+        "failed": counts["failed"], "finished_at": finished.isoformat(timespec="seconds"),
+        "duration_s": round(dur, 1), "no_bot": no_bot,
+    })
+    return dur
+
+
+async def run_broadcast(
+    session: AsyncSession, text: str, reachable: list[Recipient], *,
+    unregistered: int = 0,
+    rate_per_sec: float = BROADCAST_RATE_PER_SEC, concurrency: int = BROADCAST_CONCURRENCY,
+) -> dict[str, int]:
+    """Send `text` to the already-resolved reachable recipients with bounded concurrency + a global
+    rate limit, then push a summary to the owner's Telegram. Runs in the background (its own session
+    + bot). Nothing is persisted; only the in-memory `_status` snapshot is updated for live progress."""
+    total = len(reachable)
+    started = dt.datetime.now(dt.timezone.utc)
+    counts = {"sent": 0, "blocked": 0, "failed": 0}
+    _status.update({
+        "running": True, "total": total, "sent": 0, "blocked": 0, "failed": 0,
+        "unregistered": unregistered, "started_at": started.isoformat(timespec="seconds"),
+        "finished_at": None, "duration_s": None,
+    })
     if not text.strip() or not reachable:
-        res["recipients"] = reachable
-        return res
+        _finish(counts, started)
+        return counts
 
     bot = await build_bot(session)
     if bot is None:
-        for rec in reachable:
-            rec["status"] = "failed"
-        res["failed"] = len(reachable)
-        res["recipients"] = reachable
-        return res
+        log.warning("broadcast: no bot token configured; %s recipients not sent", total)
+        _finish(counts, started, no_bot=True)
+        return counts
+
+    limiter = _RateLimiter(rate_per_sec)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _send(rec: Recipient) -> None:
+        cid = rec["chat_id"]
+        if cid is None:  # reachable always has a chat_id; satisfies the type checker
+            return
+        async with sem:
+            for _attempt in range(BROADCAST_MAX_RETRY):
+                await limiter.acquire()
+                try:
+                    await bot.send_message(cid, text)
+                    counts["sent"] += 1
+                    _status["sent"] = counts["sent"]
+                    return
+                except TelegramRetryAfter as e:           # 429 → wait then retry the same recipient
+                    await asyncio.sleep(e.retry_after)
+                    continue
+                except TelegramForbiddenError:            # user blocked the bot → no retry
+                    counts["blocked"] += 1
+                    _status["blocked"] = counts["blocked"]
+                    return
+                except Exception:  # noqa: BLE001
+                    counts["failed"] += 1
+                    _status["failed"] = counts["failed"]
+                    return
+            counts["failed"] += 1                          # kept hitting 429 past the retry budget
+            _status["failed"] = counts["failed"]
+
     try:
-        for rec in reachable:
-            cid = rec["chat_id"]
-            if cid is None:  # reachable always has a chat_id; this just satisfies the type checker
-                continue
-            try:
-                await bot.send_message(cid, text)
-                rec["status"] = "sent"
-                res["sent"] += 1
-            except TelegramForbiddenError:
-                rec["status"] = "blocked"
-                res["blocked"] += 1
-            except Exception:  # noqa: BLE001
-                rec["status"] = "failed"
-                res["failed"] += 1
+        await asyncio.gather(*[_send(r) for r in reachable])
     finally:
         await bot.session.close()
-    res["recipients"] = reachable
-    log.info("Broadcast %s panel=%s: sent=%s blocked=%s failed=%s unreg=%s",
-             audience, panel_id, res["sent"], res["blocked"], res["failed"], res["unregistered"])
-    return res
+
+    dur = _finish(counts, started)
+    await owner_notify.notify_owner(
+        session,
+        f"📣 پیام همگانی تمام شد — ✅ {counts['sent']} موفق، 🚫 {counts['blocked']} مسدود، "
+        f"❌ {counts['failed']} ناموفق، 📵 {unregistered} بدونِ‌ربات (از مجموعِ {total} گیرنده) "
+        f"• مدت: ~{int(dur)} ثانیه",
+    )
+    log.info("Broadcast done: sent=%s blocked=%s failed=%s unreg=%s total=%s in %.1fs",
+             counts["sent"], counts["blocked"], counts["failed"], unregistered, total, dur)
+    return counts

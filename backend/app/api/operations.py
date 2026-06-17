@@ -7,13 +7,13 @@ import logging
 import os
 import signal
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_session
+from app.core.db import SessionLocal, get_session
 from app.core.security import get_current_subject
 from app.models import (
     BotUser,
@@ -199,14 +199,36 @@ async def set_domain(body: DomainBody, session: AsyncSession = Depends(get_sessi
     return await domain_setup.set_domain(session, body.domain, body.acme_email)
 
 
+async def _broadcast_bg(text: str, reachable: list, unregistered: int) -> None:
+    """Background task: send the broadcast in its own DB session (the request's session/bot are
+    already closed by the time this runs)."""
+    try:
+        async with SessionLocal() as session:
+            await broadcast_service.run_broadcast(
+                session, text, reachable, unregistered=unregistered)
+    except Exception:  # noqa: BLE001
+        log.exception("background broadcast failed")
+
+
 @router.post("/broadcast")
 async def broadcast(
-    body: BroadcastBody, session: AsyncSession = Depends(get_session)
-) -> broadcast_service.BroadcastResult:
-    return await broadcast_service.broadcast(
-        session, body.text, audience=body.audience,
-        panel_id=body.panel_id, threshold=body.threshold,
-    )
+    body: BroadcastBody, background: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Resolve recipients fast, launch the send in the BACKGROUND, and return immediately. The
+    result summary is delivered to the owner's Telegram when it finishes (and is also visible via
+    the live status endpoint). Avoids the request timeout on large audiences."""
+    reachable, unregistered = await broadcast_service.resolve_recipients(
+        session, body.audience, body.panel_id, body.threshold)
+    if body.text.strip() and reachable:
+        background.add_task(_broadcast_bg, body.text, reachable, len(unregistered))
+    return {"status": "started", "total": len(reachable), "unregistered": len(unregistered)}
+
+
+@router.get("/broadcast/status")
+async def broadcast_status() -> dict:
+    """Live in-memory snapshot of the current/last broadcast run (no DB) for the panel's progress."""
+    return broadcast_service.current_status()
 
 
 @router.post("/broadcast/preview")

@@ -304,6 +304,8 @@ export const broadcastMessage = (body: BroadcastBody) =>
   api.post("/api/ops/broadcast", body).then((r) => r.data);
 export const broadcastPreview = (body: BroadcastBody) =>
   api.post("/api/ops/broadcast/preview", body).then((r) => r.data);
+export const broadcastStatus = () =>
+  api.get("/api/ops/broadcast/status").then((r) => r.data);
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);
 export const setDomain = (domain: string, acme_email?: string) =>
   api.post("/api/ops/set-domain", { domain, acme_email }).then((r) => r.data);

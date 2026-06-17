@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.90 - 2026-06-18
+
+### Changed (broadcast — proper background send model)
+
+- The owner broadcast used to send to every recipient inline within the one HTTP request (a plain
+  `for` loop, no concurrency or throttle) — slow for large audiences, tripping the 120s request
+  timeout, and the report was lost when it did. Rebuilt as a standard background broadcast:
+  - The request **resolves recipients fast and returns immediately** (`{started, total,
+    unregistered}`); the actual send runs in the background.
+  - Sending uses **bounded concurrency (20) + a global rate limit (~25 msg/s)** with per-recipient
+    error handling: `429` → wait `retry_after` and retry (up to 3×), blocked → counted, others →
+    failed. A **summary is pushed to the owner's Telegram** at the end («📣 پیام همگانی تمام شد …»).
+  - The panel shows an **immediate "started" message + live progress** (polled from an in-memory
+    snapshot — `GET /api/ops/broadcast/status`). The bot owner-broadcast path got the same
+    background treatment.
+  - Still **nothing persisted to the DB** — no table, no per-recipient rows; only the in-memory
+    progress snapshot + server log. The recipient preview is unchanged.
+
 ## 1.37.89 - 2026-06-17
 
 ### Fixed (health report — «آخرین پشتیبان» showed «—»)

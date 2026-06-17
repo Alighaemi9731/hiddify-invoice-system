@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem, Select,
   Chip, Divider, Table, TableBody, TableCell, TableHead, TableRow, Collapse,
@@ -7,7 +7,7 @@ import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
 import GroupIcon from "@mui/icons-material/esm/Group";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { broadcastMessage, broadcastPreview, runChannelGuard, listPanels } from "../api/client";
+import { broadcastMessage, broadcastPreview, broadcastStatus, runChannelGuard, listPanels } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { fmtNum } from "../format";
 
@@ -34,9 +34,22 @@ export default function Broadcast() {
   const [audience, setAudience] = useState("all");
   const [panelId, setPanelId] = useState<string>("");
   const [threshold, setThreshold] = useState<string>("");
-  const [report, setReport] = useState<any>(null);   // last preview OR send result
+  const [report, setReport] = useState<any>(null);   // last preview result (recipient list)
   const [showList, setShowList] = useState(true);
+  const [polling, setPolling] = useState(false);     // poll live progress after a send starts
   const { data: panels = [] } = useQuery({ queryKey: ["panels"], queryFn: listPanels });
+
+  // Live progress of the background send (in-memory snapshot; no DB). Poll while a run is active.
+  const { data: status } = useQuery({
+    queryKey: ["broadcast-status"],
+    queryFn: broadcastStatus,
+    enabled: polling,
+    refetchInterval: polling ? 2000 : false,
+  });
+  // Stop polling once the run reports finished.
+  useEffect(() => {
+    if (polling && status && status.running === false && status.finished_at) setPolling(false);
+  }, [polling, status]);
 
   const audDef = AUDIENCES.find((a) => a.value === audience);
   const needsThreshold = !!audDef?.threshold;
@@ -55,9 +68,13 @@ export default function Broadcast() {
   const send = useMutation({
     mutationFn: () => broadcastMessage(body),
     onSuccess: (r: any) => {
-      setReport({ ...r, _sent: true }); setShowList(true);
-      show(`ارسال شد: ${r.sent} موفق از ${r.total} گیرنده`);
+      show(
+        `ارسال در پس‌زمینه شروع شد — به ${fmtNum(r.total)} نماینده`
+        + (r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات پیام نمی‌گیرند)` : "")
+        + "؛ خلاصهٔ نتیجه به تلگرامِ شما می‌رسد.",
+        "success");
       setText("");
+      if (r.total > 0) setPolling(true);   // show live progress while the send runs
     },
     onError: (e) => show(errMsg(e), "error"),
   });
@@ -90,6 +107,7 @@ export default function Broadcast() {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             پایهٔ همهٔ فیلترها: نماینده‌هایِ «فهرستِ اصلی» که از فاکتور معاف نیستند و پنلِ فعال دارند.
             فیلتر و پنل را انتخاب کنید، «پیش‌نمایشِ گیرندگان» را بزنید تا دقیقاً ببینید پیام به چه کسانی می‌رود، بعد ارسال کنید.
+            ارسال در <b>پس‌زمینه</b> انجام می‌شود؛ پیشرفتِ زنده همین‌جا نمایش داده می‌شود و <b>خلاصهٔ نهایی به تلگرامِ شما</b> می‌رسد.
           </Typography>
 
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap">
@@ -117,13 +135,19 @@ export default function Broadcast() {
           </Stack>
 
           {report && (
-            <Alert severity={report._sent ? "success" : "info"} sx={{ mb: 2 }}
+            <Alert severity="info" sx={{ mb: 2 }}
               action={rows.length
                 ? <Button color="inherit" size="small" onClick={() => setShowList((s) => !s)}>{showList ? "بستن لیست" : "نمایش لیست"}</Button>
                 : undefined}>
-              {report._sent
-                ? <>ارسال شد — <b>{fmtNum(report.sent)}</b> موفق، {fmtNum(report.blocked)} مسدود، {fmtNum(report.failed)} ناموفق (از {fmtNum(report.total)} گیرندهٔ قابل‌دسترس){report.unregistered ? ` • ${fmtNum(report.unregistered)} نماینده بدون ربات (پیام نگرفتند)` : ""}</>
-                : <>این فیلتر <b>{fmtNum(report.matched)}</b> نماینده را شامل می‌شود: {fmtNum(report.total)} قابل‌ارسال{report.unregistered ? ` • ${fmtNum(report.unregistered)} بدون ربات (قابل‌دسترس نیستند)` : ""}.</>}
+              این فیلتر <b>{fmtNum(report.matched)}</b> نماینده را شامل می‌شود: {fmtNum(report.total)} قابل‌ارسال{report.unregistered ? ` • ${fmtNum(report.unregistered)} بدون ربات (قابل‌دسترس نیستند)` : ""}.
+            </Alert>
+          )}
+
+          {status && (status.running || status.finished_at) && (
+            <Alert severity={status.running ? "info" : "success"} sx={{ mb: 2 }}>
+              {status.running
+                ? <>در حال ارسال… <b>{fmtNum(status.sent + status.blocked + status.failed)}</b> از {fmtNum(status.total)} (✅ {fmtNum(status.sent)} • 🚫 {fmtNum(status.blocked)} مسدود • ❌ {fmtNum(status.failed)} ناموفق)</>
+                : <>آخرین ارسال تمام شد — ✅ <b>{fmtNum(status.sent)}</b> موفق، 🚫 {fmtNum(status.blocked)} مسدود، ❌ {fmtNum(status.failed)} ناموفق{status.unregistered ? ` • 📵 ${fmtNum(status.unregistered)} بدون ربات` : ""} (از {fmtNum(status.total)} گیرنده){status.duration_s != null ? ` • ${fmtNum(Math.round(status.duration_s))} ثانیه` : ""}. خلاصه به تلگرامِ شما هم ارسال شد.</>}
             </Alert>
           )}
 
