@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import html as _html
 import logging
+from collections.abc import Callable
 from typing import Any, TypedDict
 
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
@@ -196,6 +198,26 @@ async def preview(
     return res
 
 
+def migration_text(panel: Panel, previous_host: str, admin_uuid: str, tag: str | None) -> str:
+    """Per-reseller «new panel address» message (HTML, bidi-safe via rtl). Shows the reseller's own
+    admin link on the panel's CURRENT host (recommended) and on the chosen previous host."""
+    from app.bot.rtl import rtl
+
+    new_link = panel.admin_link(admin_uuid, tag=tag)
+    prev_link = panel.admin_link(admin_uuid, tag=tag, host=previous_host)
+    body = (
+        "🔔 آدرسِ جدیدِ پنلِ شما\n\n"
+        "نمایندهٔ گرامی، ممکن است دامنهٔ قبلی برای شما باز نشود. از این پس می‌توانید با آدرسِ "
+        "جدید (بدونِ فیلتر) واردِ پنلِ خود شوید و اشتراک‌ها را به‌روزرسانی کنید.\n\n"
+        "🟢 آدرسِ جدید (پیشنهادی):\n"
+        f"<code>{_html.escape(new_link)}</code>\n\n"
+        "↩️ آدرسِ قبلی (هنوز هم کار می‌کند):\n"
+        f"<code>{_html.escape(prev_link)}</code>\n\n"
+        "✅ هر دو آدرس به همان پنلِ شما وصل‌اند؛ توصیه می‌کنیم آدرسِ جدید را ذخیره کنید."
+    )
+    return rtl(body)
+
+
 def _finish(counts: dict[str, int], started: dt.datetime, *, no_bot: bool = False) -> float:
     finished = dt.datetime.now(dt.timezone.utc)
     dur = (finished - started).total_seconds()
@@ -209,12 +231,16 @@ def _finish(counts: dict[str, int], started: dt.datetime, *, no_bot: bool = Fals
 
 async def run_broadcast(
     session: AsyncSession, text: str, reachable: list[Recipient], *,
-    unregistered: int = 0,
+    unregistered: int = 0, render: Callable[[Recipient], str] | None = None,
+    parse_mode: str | None = None,
     rate_per_sec: float = BROADCAST_RATE_PER_SEC, concurrency: int = BROADCAST_CONCURRENCY,
 ) -> dict[str, int]:
-    """Send `text` to the already-resolved reachable recipients with bounded concurrency + a global
-    rate limit, then push a summary to the owner's Telegram. Runs in the background (its own session
-    + bot). Nothing is persisted; only the in-memory `_status` snapshot is updated for live progress."""
+    """Send to the already-resolved reachable recipients with bounded concurrency + a global rate
+    limit, then push a summary to the owner's Telegram. Runs in the background (its own session +
+    bot). Nothing is persisted; only the in-memory `_status` snapshot is updated for live progress.
+
+    `text` is the same message for everyone; pass `render(rec)` instead for a PER-RECIPIENT message
+    (e.g. the panel-migration links). `parse_mode` is forwarded to send_message (e.g. "HTML")."""
     total = len(reachable)
     started = dt.datetime.now(dt.timezone.utc)
     counts = {"sent": 0, "blocked": 0, "failed": 0}
@@ -223,7 +249,7 @@ async def run_broadcast(
         "unregistered": unregistered, "started_at": started.isoformat(timespec="seconds"),
         "finished_at": None, "duration_s": None,
     })
-    if not text.strip() or not reachable:
+    if not reachable or (render is None and not text.strip()):
         _finish(counts, started)
         return counts
 
@@ -240,11 +266,12 @@ async def run_broadcast(
         cid = rec["chat_id"]
         if cid is None:  # reachable always has a chat_id; satisfies the type checker
             return
+        body = render(rec) if render is not None else text
         async with sem:
             for _attempt in range(BROADCAST_MAX_RETRY):
                 await limiter.acquire()
                 try:
-                    await bot.send_message(cid, text)
+                    await bot.send_message(cid, body, parse_mode=parse_mode)
                     counts["sent"] += 1
                     _status["sent"] = counts["sent"]
                     return

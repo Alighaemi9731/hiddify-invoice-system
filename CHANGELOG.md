@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.91 - 2026-06-18
+
+### Added (panel domain migration — keep old reseller links working)
+
+- **Panel host aliases**: a panel can now carry old/alternate hosts (new `panels.host_aliases`
+  column + Alembic migration). They are **matcher-only** — a reseller's stale pasted link with an
+  old host still registers in the bot — and **never** touch billing, backup, or the Admin API
+  (those always derive from the current `host`). Changing aliases alone does **not** trigger a
+  re-sync; only host/proxy/owner/api-key changes do (unchanged). The registration matcher keeps
+  its fail-closed «unique match or None» rule.
+- **Panels page**: the edit dialog gained a «هاست‌های قبلی/مستعار» field and a one-step
+  «مهاجرتِ دامنه» action (moves the current host into the aliases and sets the new host).
+- **«اعلامِ آدرسِ جدیدِ پنل»** (new section on the broadcast page + bot path): sends each registered
+  reseller on a panel a **personalized** message with their OWN new + previous admin link, reusing
+  the background broadcast worker (throttle + bounded concurrency + 429 retry + owner summary).
+  Only registered resellers are messaged; nothing is persisted to the DB.
+- **«🖥 پنل‌های من»** in the bot now shows each reseller their own tap-to-copy panel link (built from
+  the panel's current host, so it auto-updates after a move) plus an «آدرسِ قبلی» line when the
+  panel has an old host.
+
 ## 1.37.90 - 2026-06-18
 
 ### Changed (broadcast — proper background send model)

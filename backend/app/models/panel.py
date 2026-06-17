@@ -28,6 +28,10 @@ class Panel(Base, TimestampMixin):
     proxy_path_enc: Mapped[str] = mapped_column(String(512))  # the secret URL path
     owner_uuid: Mapped[str] = mapped_column(String(64))       # panel super-admin uuid
     admin_api_key_enc: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Old/alternate hosts (comma-separated, normalized). ONLY used to keep matching a reseller's
+    # stale pasted link in the bot after a domain move — never touches billing, backup, or the
+    # Admin API (those always derive from `host`).
+    host_aliases: Mapped[str] = mapped_column(Text, nullable=True, default="", server_default="")
 
     enabled: Mapped[bool] = mapped_column(default=True)
     status: Mapped[PanelStatus] = mapped_column(
@@ -61,6 +65,30 @@ class Panel(Base, TimestampMixin):
     @admin_api_key.setter
     def admin_api_key(self, value: str | None) -> None:
         self.admin_api_key_enc = crypto.encrypt(value)
+
+    # ---- host aliases (matcher-only; never affect fetch) ----
+    @property
+    def host_alias_list(self) -> list[str]:
+        return [h.strip() for h in (self.host_aliases or "").split(",") if h.strip()]
+
+    def set_host_aliases(self, values: list[str] | None) -> None:
+        """Normalize, de-dup, drop blanks and any entry equal to the current host, then store."""
+        from app.bot.matching import normalize_host
+
+        main = normalize_host(self.host)
+        seen: list[str] = []
+        for value in values or []:
+            n = normalize_host(value)
+            if not n or n == main or n in seen:
+                continue
+            seen.append(n)
+        self.host_aliases = ",".join(seen)
+
+    def admin_link(self, admin_uuid: str, *, tag: str | None = None, host: str | None = None) -> str:
+        """The reseller's own Hiddify admin URL: https://<host>/<proxy_path>/<uuid>/[#tag].
+        `host` defaults to the panel's current host (so links auto-update after a domain move)."""
+        base = f"https://{host or self.host}/{self.proxy_path}/{admin_uuid}/"
+        return base + (f"#{tag}" if tag else "")
 
     # ---- derived URLs ----
     @property

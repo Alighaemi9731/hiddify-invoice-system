@@ -6,8 +6,9 @@ import {
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
 import GroupIcon from "@mui/icons-material/esm/Group";
+import PublicIcon from "@mui/icons-material/esm/Public";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { broadcastMessage, broadcastPreview, broadcastStatus, runChannelGuard, listPanels } from "../api/client";
+import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { fmtNum } from "../format";
 
@@ -88,6 +89,24 @@ export default function Broadcast() {
           ? `حالت آزمایشی: ${r.in_channel_non_reseller} کاربر غیرنماینده در کانال (هیچ‌کس حذف نشد)`
           : `${r.kicked} کاربر غیرنماینده از کانال حذف شد`,
         r.dry_run ? "info" : "success");
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
+  // ── «اعلامِ آدرسِ جدیدِ پنل» (personalized per-reseller links) ──
+  const [migPanelId, setMigPanelId] = useState("");
+  const [migPrevHost, setMigPrevHost] = useState("");
+  const [migPreview, setMigPreview] = useState<any>(null);
+  const migPrev = useMutation({
+    mutationFn: () => panelMigrationPreview({ panel_id: Number(migPanelId), previous_host: migPrevHost || undefined }),
+    onSuccess: (r: any) => { setMigPreview(r); if (!migPrevHost && r.previous_host) setMigPrevHost(r.previous_host); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+  const migSend = useMutation({
+    mutationFn: () => panelMigration({ panel_id: Number(migPanelId), previous_host: migPrevHost || undefined }),
+    onSuccess: (r: any) => {
+      show(`اعلامِ آدرسِ جدید در پس‌زمینه شروع شد — به ${fmtNum(r.total)} نماینده؛ خلاصه به تلگرامِ شما می‌رسد.`, "success");
+      if (r.total > 0) setPolling(true);
     },
     onError: (e) => show(errMsg(e), "error"),
   });
@@ -187,6 +206,57 @@ export default function Broadcast() {
                 : "پیام همگانی ارسال شود؟ (برای دیدنِ گیرندگان ابتدا «پیش‌نمایش» را بزنید)"))
                 send.mutate();
             }}>ارسال</Button>
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+            <PublicIcon color="primary" />
+            <Typography variant="h6">اعلامِ آدرسِ جدیدِ پنل</Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            به هر نمایندهٔ ثبت‌شدهٔ یک پنل، پیامِ آماده‌ای با <b>لینکِ مخصوصِ خودش</b> (آدرسِ جدید + آدرسِ قبلی) فرستاده می‌شود.
+            متن ثابت است و تایپ نمی‌کنید. ابتدا در «پنل‌ها» با «مهاجرتِ دامنه» هاستِ قبلی را ثبت کنید.
+          </Typography>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap">
+            <Select size="small" value={migPanelId} displayEmpty
+              onChange={(e) => { setMigPanelId(e.target.value); setMigPrevHost(""); setMigPreview(null); }}
+              renderValue={(v) => v ? (panels.find((p: any) => String(p.id) === String(v))?.key ?? v) : "انتخابِ پنل"}
+              sx={{ minWidth: 200, "& .MuiSelect-select": { py: "7px !important" } }}>
+              <MenuItem value="">انتخابِ پنل</MenuItem>
+              {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}{p.host_aliases?.length ? "" : " (بدون هاستِ قبلی)"}</MenuItem>)}
+            </Select>
+            {migPreview?.aliases?.length > 1 && (
+              <Select size="small" value={migPrevHost} displayEmpty
+                onChange={(e) => setMigPrevHost(e.target.value)}
+                sx={{ minWidth: 200, "& .MuiSelect-select": { py: "7px !important" } }}>
+                {migPreview.aliases.map((h: string) => <MenuItem key={h} value={h}>{h}</MenuItem>)}
+              </Select>
+            )}
+            <Button variant="outlined" startIcon={<GroupIcon />} disabled={!migPanelId || migPrev.isPending}
+              onClick={() => migPrev.mutate()}>پیش‌نمایش</Button>
+          </Stack>
+
+          {migPreview && (
+            <Alert severity={migPreview.previous_host ? "info" : "warning"} sx={{ mb: 2 }}>
+              {migPreview.previous_host ? (<>
+                به <b>{fmtNum(migPreview.total)}</b> نمایندهٔ ثبت‌شده ارسال می‌شود
+                {migPreview.unregistered ? ` • ${fmtNum(migPreview.unregistered)} بدون ربات (پیام نمی‌گیرند)` : ""}.
+                <Box sx={{ mt: 1, fontSize: 13 }}>
+                  <div>🟢 نمونهٔ آدرسِ جدید: <code dir="ltr">{migPreview.sample_new_link}</code></div>
+                  <div>↩️ نمونهٔ آدرسِ قبلی: <code dir="ltr">{migPreview.sample_previous_link}</code></div>
+                </Box>
+              </>) : "این پنل «هاستِ قبلی» ندارد؛ ابتدا در صفحهٔ «پنل‌ها» با «مهاجرتِ دامنه» یا فیلدِ «هاست‌های قبلی» آن را ثبت کنید."}
+            </Alert>
+          )}
+
+          <Button variant="contained" color="primary" startIcon={<PublicIcon />}
+            disabled={!migPanelId || !migPreview?.previous_host || !migPreview?.total || migSend.isPending}
+            onClick={() => {
+              if (window.confirm(`پیامِ آدرسِ جدید به ${fmtNum(migPreview.total)} نماینده ارسال شود؟`))
+                migSend.mutate();
+            }}>ارسالِ اعلام</Button>
         </CardContent>
       </Card>
 

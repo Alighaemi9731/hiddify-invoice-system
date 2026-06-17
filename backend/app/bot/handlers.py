@@ -1711,7 +1711,9 @@ async def _send_removelink(answer, chat_id: int, session) -> None:
 
 
 async def _send_panels(answer, chat_id: int, session) -> None:
-    """Show a reseller the list of panels they're registered on (with sub-counts)."""
+    """Show a reseller the list of panels they're registered on (with sub-counts + their own
+    tap-to-copy panel link). The link is built from the panel's CURRENT host, so it auto-updates
+    after a domain move; if the panel has an old host, a «آدرسِ قبلی» line is shown too."""
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
@@ -1719,7 +1721,6 @@ async def _send_panels(answer, chat_id: int, session) -> None:
     lines = ["🖥 پنل‌های شما:\n"]
     for r in resellers:
         panel = await session.get(Panel, r.panel_id)
-        # count sub-resellers (descendants) on the same panel
         subs = (
             await session.execute(
                 select(func.count(Reseller.id)).where(
@@ -1729,10 +1730,14 @@ async def _send_panels(answer, chat_id: int, session) -> None:
             )
         ).scalar_one()
         tag = f" (#{r.link_tag})" if r.link_tag else ""
-        # Isolate the panel label so the English key + (#tag) render as one clean LTR chunk
-        # inside the RTL line instead of reordering with the trailing count.
         lines.append(f"‏• پنل {_iso((panel.name or panel.key) + tag)} — زیرمجموعه‌ها: {subs}")
-    await answer("\n".join(lines))
+        link = panel.admin_link(r.admin_uuid, tag=r.link_tag)
+        lines.append(f"‏  🔗 آدرس: <code>{html.escape(link)}</code>")
+        aliases = panel.host_alias_list
+        if aliases:
+            prev = panel.admin_link(r.admin_uuid, tag=r.link_tag, host=aliases[0])
+            lines.append(f"‏  ↩️ آدرسِ قبلی: <code>{html.escape(prev)}</code>")
+    await answer(rtl("\n".join(lines)), parse_mode="HTML")
 
 
 # --------------------------- sub-reseller management helpers ---------------------------
@@ -2116,11 +2121,14 @@ async def _registration_candidate(session, parsed) -> Reseller | None:
         panel = await session.get(Panel, candidate.panel_id)
         if panel is None:
             continue
-        if (
-            normalize_host(panel.host) == expected_host
-            and normalize_path(panel.proxy_path) == expected_path
-        ):
+        # The link's host may be the panel's CURRENT host or one of its old/alternate hosts
+        # (after a domain move). Path + UUID identity is otherwise unchanged.
+        host_ok = expected_host == normalize_host(panel.host) or expected_host in {
+            normalize_host(a) for a in panel.host_alias_list
+        }
+        if host_ok and normalize_path(panel.proxy_path) == expected_path:
             matches.append(candidate)
+    # Fail-closed: a unique match or nothing. Never guess / never take the first of several.
     return matches[0] if len(matches) == 1 else None
 
 

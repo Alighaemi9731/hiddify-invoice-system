@@ -32,8 +32,10 @@ class _FakeBot:
         self.max_concurrent = 0
         self.session = _Sess()
         self._retried: set[int] = set()
+        self.sent_bodies: list = []
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, parse_mode=None):
+        self.sent_bodies.append((chat_id, text))
         self.concurrent += 1
         self.max_concurrent = max(self.max_concurrent, self.concurrent)
         try:
@@ -130,6 +132,28 @@ def test_error_handling_and_retry(monkeypatch):
                 assert len(summaries) == 1
                 assert "✅ 3" in summaries[0] and "🚫 1" in summaries[0] and "❌ 1" in summaries[0]
                 assert "📵 2" in summaries[0]
+        finally:
+            await engine.dispose()
+    asyncio.run(body())
+
+
+def test_render_sends_per_recipient_body(monkeypatch):
+    """The panel-migration path reuses run_broadcast with a per-recipient `render` — each recipient
+    must receive its OWN message, not a shared one."""
+    async def body():
+        engine, Session = await _session()()
+        try:
+            async with Session() as s:
+                bot = _FakeBot({})
+                monkeypatch.setattr(B, "build_bot", lambda _s: _coro(bot))
+                monkeypatch.setattr(B.owner_notify, "notify_owner", lambda *a, **k: _coro(True))
+                recips = _recipients([10, 20, 30])
+                counts = await B.run_broadcast(
+                    s, "", recips, render=lambda rec: f"link-for-{rec['chat_id']}",
+                    parse_mode="HTML", rate_per_sec=1_000_000, concurrency=5)
+                assert counts["sent"] == 3
+                assert sorted(bot.sent_bodies) == [
+                    (10, "link-for-10"), (20, "link-for-20"), (30, "link-for-30")]
         finally:
             await engine.dispose()
     asyncio.run(body())

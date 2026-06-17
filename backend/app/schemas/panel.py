@@ -13,6 +13,7 @@ class PanelCreate(BaseModel):
     owner_uuid: str = Field(min_length=8, description="panel super-admin uuid")
     admin_api_key: str | None = None
     enabled: bool = True
+    host_aliases: list[str] = Field(default_factory=list)  # old hosts (matcher-only)
 
 
 class PanelUpdate(BaseModel):
@@ -22,6 +23,7 @@ class PanelUpdate(BaseModel):
     owner_uuid: str | None = None
     admin_api_key: str | None = None
     enabled: bool | None = None
+    host_aliases: list[str] | None = None  # old hosts (matcher-only); does NOT trigger a re-sync
 
 
 class PanelOut(BaseModel):
@@ -29,6 +31,7 @@ class PanelOut(BaseModel):
     key: str
     name: str
     host: str
+    host_aliases: list[str] = Field(default_factory=list)
     owner_uuid: str
     enabled: bool
     status: str

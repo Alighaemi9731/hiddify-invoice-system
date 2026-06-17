@@ -58,6 +58,7 @@ async def _to_out(session: AsyncSession, panel: Panel) -> PanelOut:
         key=panel.key,
         name=panel.name,
         host=panel.host,
+        host_aliases=panel.host_alias_list,
         owner_uuid=panel.owner_uuid,
         enabled=panel.enabled,
         status=panel.status.value,
@@ -104,6 +105,8 @@ async def create_panel(
     panel.proxy_path = body.proxy_path  # encrypts
     if body.admin_api_key:
         panel.admin_api_key = body.admin_api_key
+    if body.host_aliases:
+        panel.set_host_aliases(body.host_aliases)
     session.add(panel)
     await session.commit()
     await session.refresh(panel)
@@ -142,6 +145,10 @@ async def update_panel(
     if body.admin_api_key is not None:
         panel.admin_api_key = body.admin_api_key or None
         conn_changed = True
+    # Aliases are matcher-only — they NEVER affect what the panel fetches, so changing them must
+    # not trigger a re-sync (critical reliability rule). Set AFTER host so dedup-vs-host is correct.
+    if body.host_aliases is not None:
+        panel.set_host_aliases(body.host_aliases)
     if body.enabled is not None:
         panel.enabled = body.enabled
     if conn_changed and panel.enabled:

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   IconButton, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField,
   Tooltip, Switch, FormControlLabel, Typography,
 } from "@mui/material";
@@ -16,7 +16,7 @@ import { useToast, errMsg } from "../components/Toast";
 import { useSort, SortTh } from "../components/sortable";
 import { fmtNum, fmtDateTime } from "../format";
 
-const EMPTY = { key: "", name: "", host: "", proxy_path: "", owner_uuid: "", admin_api_key: "", enabled: true };
+const EMPTY = { key: "", name: "", host: "", proxy_path: "", owner_uuid: "", admin_api_key: "", enabled: true, host_aliases: [] as string[] };
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -56,7 +56,20 @@ export default function Panels() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<any>(EMPTY);
   const [link, setLink] = useState("");
+  const [migrateHost, setMigrateHost] = useState("");
   const refresh = () => qc.invalidateQueries({ queryKey: ["panels"] });
+
+  // Domain move in one save: the current host drops into the aliases (so old reseller links keep
+  // matching in the bot) and the new host replaces it (host change → normal re-sync).
+  const migrate = useMutation({
+    mutationFn: () => {
+      const newHost = migrateHost.trim();
+      const aliases = Array.from(new Set([...(form.host_aliases || []), form.host].filter(Boolean)));
+      return updatePanel(form.id, { host: newHost, host_aliases: aliases });
+    },
+    onSuccess: () => { show("دامنه منتقل شد؛ هاستِ قبلی برای تطبیقِ لینک‌ها حفظ شد."); setOpen(false); refresh(); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
 
   const save = useMutation({
     mutationFn: () => {
@@ -111,7 +124,10 @@ export default function Panels() {
   });
 
   const { sorted, key, dir, toggle } = useSort(data, "key", "asc");
-  const edit = (p?: any) => { setForm(p ? { ...p, proxy_path: "", admin_api_key: "" } : EMPTY); setLink(""); setOpen(true); };
+  const edit = (p?: any) => {
+    setForm(p ? { ...p, proxy_path: "", admin_api_key: "", host_aliases: p.host_aliases || [] } : EMPTY);
+    setLink(""); setMigrateHost(""); setOpen(true);
+  };
 
   const statusChip = (s: string) => {
     const map: any = { ok: ["موفق", "success"], error: ["خطا", "error"], unknown: ["در حال همگام‌سازی…", "info"], disabled: ["غیرفعال", "warning"] };
@@ -193,7 +209,28 @@ export default function Panels() {
             <TextField label="کلید API ادمین (برای مسدودسازی)" inputProps={{ dir: "ltr" }} value={form.admin_api_key}
               onChange={(e) => setForm({ ...form, admin_api_key: e.target.value })}
               helperText="برای اجرای واقعی مسدودسازی لازم است" />
+            <TextField label="هاست‌های قبلی/مستعار (هر خط یک هاست)" inputProps={{ dir: "ltr" }}
+              multiline minRows={2}
+              value={(form.host_aliases || []).join("\n")}
+              onChange={(e) => setForm({ ...form, host_aliases: e.target.value.split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) })}
+              helperText="هاستِ اصلی برای بکاپ/همگام‌سازی استفاده می‌شود؛ هاست‌های قبلی فقط برای اینکه لینک‌های قدیمیِ نماینده‌ها همچنان در ربات ثبت شوند. (تغییرِ این فیلد همگام‌سازیِ مجدد نمی‌زند.)" />
             <FormControlLabel control={<Switch checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />} label="فعال" />
+
+            {form.id && (
+              <>
+                <Divider />
+                <Typography variant="subtitle2">مهاجرتِ دامنه</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  دامنهٔ جدید را وارد کنید؛ هاستِ فعلی («{form.host}») به فهرستِ «هاست‌های قبلی» منتقل و دامنهٔ جدید جایگزین می‌شود — در یک مرحله.
+                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <TextField size="small" fullWidth label="دامنهٔ جدید (بدون https)" inputProps={{ dir: "ltr" }}
+                    value={migrateHost} onChange={(e) => setMigrateHost(e.target.value)} />
+                  <Button variant="outlined" color="warning" disabled={!migrateHost.trim() || migrate.isPending}
+                    onClick={() => migrate.mutate()}>انتقال و ذخیره</Button>
+                </Stack>
+              </>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>

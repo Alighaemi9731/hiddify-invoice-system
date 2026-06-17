@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import io
 import logging
 import os
@@ -10,7 +11,7 @@ import signal
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionLocal, get_session
@@ -28,6 +29,7 @@ from app.models import (
     SyncRun,
     UsageMeter,
 )
+from app.models.enums import PanelStatus
 from app.services import (
     backup as backup_service,
 )
@@ -81,6 +83,11 @@ class BroadcastBody(BaseModel):
     audience: str = "all"          # all | debtors | zero_sale | few_active | invoice_below
     panel_id: int | None = None    # optional single-panel restriction (combinable)
     threshold: float | None = None  # few_active: max active users; invoice_below: max Toman
+
+
+class PanelMigrationBody(BaseModel):
+    panel_id: int
+    previous_host: str | None = None  # which old host to show as «قبلی» (defaults to the first alias)
 
 
 @router.post("/dunning/run")
@@ -240,6 +247,94 @@ async def broadcast_preview(
     return await broadcast_service.preview(
         session, audience=body.audience, panel_id=body.panel_id, threshold=body.threshold
     )
+
+
+# ----- panel-migration broadcast (personalized «new panel address» per reseller) -----
+_PRESENCE_SKEW = dt.timedelta(seconds=2)
+
+
+def _present(reseller: Reseller, panel: Panel) -> bool:
+    if panel.status != PanelStatus.ok or panel.last_synced_at is None:
+        return True
+    if reseller.last_seen_at is None:
+        return True
+    return reseller.last_seen_at >= panel.last_synced_at - _PRESENCE_SKEW
+
+
+async def _panel_migration_targets(session: AsyncSession, panel: Panel) -> tuple[list[Reseller], int]:
+    """Present non-owner resellers on the panel, split into (registered-in-bot, unregistered-count).
+    Each registered reseller gets their own link (NOT deduped by chat_id)."""
+    rows = (await session.execute(
+        select(Reseller).where(Reseller.panel_id == panel.id, Reseller.is_owner.is_(False))
+    )).scalars().all()
+    present = [r for r in rows if _present(r, panel)]
+    registered = [r for r in present if r.bot_chat_id]
+    return registered, len(present) - len(registered)
+
+
+def _resolve_prev_host(panel: Panel, requested: str | None) -> str:
+    aliases = panel.host_alias_list
+    return (requested or "").strip() or (aliases[0] if aliases else "")
+
+
+async def _panel_migration_bg(reachable: list, texts: dict, unregistered: int) -> None:
+    try:
+        async with SessionLocal() as session:
+            await broadcast_service.run_broadcast(
+                session, "", reachable, unregistered=unregistered,
+                render=lambda rec: texts.get(rec["reseller_id"], ""), parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        log.exception("background panel-migration broadcast failed")
+
+
+@router.post("/broadcast/panel-migration")
+async def broadcast_panel_migration(
+    body: PanelMigrationBody, background: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Send each registered reseller on the panel a personalized «new address» message (their own
+    new + previous link), in the background via the shared broadcast worker."""
+    panel = await session.get(Panel, body.panel_id)
+    if panel is None:
+        raise HTTPException(404, "Panel not found")
+    prev = _resolve_prev_host(panel, body.previous_host)
+    if not prev:
+        raise HTTPException(
+            400, "هاستِ قبلی ثبت نشده است؛ ابتدا در ویرایشِ پنل یک «هاستِ قبلی/مستعار» اضافه کنید.")
+    registered, unregistered = await _panel_migration_targets(session, panel)
+    texts = {r.id: broadcast_service.migration_text(panel, prev, r.admin_uuid, r.link_tag)
+             for r in registered}
+    reachable = [
+        broadcast_service.Recipient(
+            reseller_id=r.id, name=r.name or "—", panel=panel.key,
+            chat_id=r.bot_chat_id, status="pending")
+        for r in registered
+    ]
+    if reachable:
+        background.add_task(_panel_migration_bg, reachable, texts, unregistered)
+    return {"status": "started", "total": len(reachable),
+            "unregistered": unregistered, "previous_host": prev}
+
+
+@router.post("/broadcast/panel-migration/preview")
+async def broadcast_panel_migration_preview(
+    body: PanelMigrationBody, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Recipient counts + a sample of the two links, so the owner can verify before sending."""
+    panel = await session.get(Panel, body.panel_id)
+    if panel is None:
+        raise HTTPException(404, "Panel not found")
+    prev = _resolve_prev_host(panel, body.previous_host)
+    registered, unregistered = await _panel_migration_targets(session, panel)
+    sample = registered[0] if registered else None
+    sample_uuid = sample.admin_uuid if sample else "00000000-0000-0000-0000-000000000000"
+    sample_tag = sample.link_tag if sample else None
+    return {
+        "total": len(registered), "unregistered": unregistered,
+        "new_host": panel.host, "previous_host": prev, "aliases": panel.host_alias_list,
+        "sample_new_link": panel.admin_link(sample_uuid, tag=sample_tag),
+        "sample_previous_link": panel.admin_link(sample_uuid, tag=sample_tag, host=prev) if prev else "",
+    }
 
 
 @router.post("/channel-guard")
