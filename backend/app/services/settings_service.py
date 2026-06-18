@@ -162,6 +162,9 @@ DEFS: list[SettingDef] = [
     SettingDef("rate_max_age_hours", 48, False, "pricing"),
     SettingDef("rate_refresh_hours", 1, False, "schedule"),  # how often to refresh the live rate
     SettingDef("excluded_usage_gb", [1], False, "pricing"),  # extra exact sizes to skip
+    # Flag end-users created with at least this sold quota (GB) as "high volume" — the default
+    # Hiddify create size is 1000 GB, often left by mistake and over-billing the reseller.
+    SettingDef("high_volume_gb_threshold", 1000, False, "pricing"),
     # Any config whose quota is <= this many GB is a free test config and is NOT
     # billed (e.g. 1 → both 0.5 GB and 1 GB are free; 1.5+ GB is billed).
     SettingDef("free_under_gb", 1, False, "pricing"),
@@ -255,6 +258,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "rate_refresh_hours": (1, 24),
     "min_sale_toman": (0, None),
     "ton_toman_manual": (0, None),
+    "high_volume_gb_threshold": (1, None),
     "invoice_day_of_month": (1, 28),
     "invoice_hour": (0, 23),
     "dunning_hour": (0, 23),

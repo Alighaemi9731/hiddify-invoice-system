@@ -2,15 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem, Select,
   Chip, Divider, Table, TableBody, TableCell, TableHead, TableRow, Collapse,
+  FormControlLabel, Switch, Link, Tooltip, IconButton,
 } from "@mui/material";
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
 import GroupIcon from "@mui/icons-material/esm/Group";
 import PublicIcon from "@mui/icons-material/esm/Public";
+import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
+import NotificationsActiveIcon from "@mui/icons-material/esm/NotificationsActive";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels } from "../api/client";
+import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels, highVolumeUsers, highVolumeWarn } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
-import { fmtNum } from "../format";
+import { telegramHref } from "../components/TelegramLink";
+import { fmtNum, fmtToman } from "../format";
 
 // Audience filters — each is applied ON TOP of the base set (resellers in the main «نمایندگان»
 // list that are not exempt from billing and are on an active panel). The panel filter is combinable.
@@ -92,6 +96,34 @@ export default function Broadcast() {
     },
     onError: (e) => show(errMsg(e), "error"),
   });
+
+  // ── «هشدارِ کاربرانِ پرحجم» (the 1000 GB mistake) ──
+  const [hvThreshold, setHvThreshold] = useState("");
+  const [hvPanelId, setHvPanelId] = useState("");
+  const [hvThisMonth, setHvThisMonth] = useState(true);
+  const [hvData, setHvData] = useState<any>(null);
+  const [hvShow, setHvShow] = useState(true);
+  const hvParams = () => ({
+    threshold: hvThreshold ? Number(hvThreshold) : undefined,
+    panel_id: hvPanelId ? Number(hvPanelId) : undefined,
+    this_month_only: hvThisMonth,
+  });
+  const hvCheck = useMutation({
+    mutationFn: () => highVolumeUsers(hvParams()),
+    onSuccess: (r: any) => { setHvData(r); setHvShow(true); if (!hvThreshold && r.threshold) setHvThreshold(String(r.threshold)); },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+  const hvWarnAll = useMutation({
+    mutationFn: () => highVolumeWarn(hvParams()),
+    onSuccess: (r: any) => show(`هشدارها در پس‌زمینه ارسال شد — به ${fmtNum(r.total)} ادمین${r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات)` : ""}؛ خلاصه به تلگرامِ شما می‌رسد.`, "success"),
+    onError: (e) => show(errMsg(e), "error"),
+  });
+  const hvWarnOne = useMutation({
+    mutationFn: (rootId: number) => highVolumeWarn({ ...hvParams(), root_reseller_ids: [rootId] }),
+    onSuccess: () => show("هشدار به این ادمین ارسال شد؛ خلاصه به تلگرامِ شما می‌رسد.", "success"),
+    onError: (e) => show(errMsg(e), "error"),
+  });
+  const hvRows = hvData?.rows || [];
 
   // ── «اعلامِ آدرسِ جدیدِ پنل» (personalized per-reseller links) ──
   const [migPanelId, setMigPanelId] = useState("");
@@ -276,6 +308,100 @@ export default function Broadcast() {
             disabled={guard.isPending} onClick={() => guard.mutate()}>
             اجرای پاک‌سازی کانال
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mt: 2 }}>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+            <WarningAmberIcon color="warning" />
+            <Typography variant="h6">هشدارِ کاربرانِ پرحجم</Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            کاربرانی که با حجمِ بسیار بالا (حجمِ پیش‌فرضِ ۱۰۰۰ گیگِ هیدیفای، اغلب اشتباهی) ساخته شده‌اند
+            و فاکتورِ ادمینِ اصلی را سنگین می‌کنند. می‌توانید به ادمینِ اصلیِ هر کاربر هشدار دهید تا حجم را اصلاح کند.
+          </Typography>
+
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap" alignItems="center">
+            <TextField size="small" type="number" label="آستانهٔ حجم (گیگ)" sx={{ minWidth: 150 }}
+              value={hvThreshold} placeholder="1000"
+              onChange={(e) => setHvThreshold(e.target.value)}
+              InputProps={{ inputProps: { min: 1, dir: "ltr" } }} />
+            <Select size="small" value={hvPanelId} displayEmpty
+              onChange={(e) => { setHvPanelId(e.target.value); setHvData(null); }}
+              renderValue={(v) => v ? (panels.find((p: any) => String(p.id) === String(v))?.key ?? v) : "همهٔ پنل‌ها"}
+              sx={{ minWidth: 150, "& .MuiSelect-select": { py: "7px !important" } }}>
+              <MenuItem value="">همهٔ پنل‌ها</MenuItem>
+              {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}</MenuItem>)}
+            </Select>
+            <FormControlLabel control={<Switch checked={hvThisMonth} onChange={(e) => { setHvThisMonth(e.target.checked); setHvData(null); }} />} label="فقط ماهِ جاری" />
+            <Button variant="outlined" startIcon={<GroupIcon />} disabled={hvCheck.isPending}
+              onClick={() => hvCheck.mutate()}>بررسی / نمایش</Button>
+          </Stack>
+
+          {hvData && (
+            <Alert severity={hvRows.length ? "warning" : "success"} sx={{ mb: 2 }}
+              action={hvRows.length
+                ? <Button color="inherit" size="small" onClick={() => setHvShow((s) => !s)}>{hvShow ? "بستن لیست" : "نمایش لیست"}</Button>
+                : undefined}>
+              {hvRows.length
+                ? <><b>{fmtNum(hvRows.length)}</b> کاربر با حجمِ ≥ {fmtNum(hvData.threshold)} گیگ پیدا شد.</>
+                : `کاربری با حجمِ ≥ ${fmtNum(hvData.threshold)} گیگ پیدا نشد.`}
+            </Alert>
+          )}
+
+          {hvData && hvRows.length > 0 && (
+            <Collapse in={hvShow} unmountOnExit>
+              <Box sx={{ mb: 2, maxHeight: 360, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 2 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>کاربر</TableCell><TableCell>پنل</TableCell>
+                      <TableCell>حجم (گیگ)</TableCell><TableCell>مبلغِ تقریبی</TableCell>
+                      <TableCell>تاریخِ ساخت</TableCell><TableCell>ادمینِ اصلی</TableCell>
+                      <TableCell align="center">هشدار</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {hvRows.map((r: any, i: number) => {
+                      const href = telegramHref(r.root_username, r.root_bot_chat_id);
+                      return (
+                        <TableRow key={`${r.panel_key}-${r.user_uuid}-${i}`} hover>
+                          <TableCell>
+                            {r.name || "—"}
+                            <Typography variant="caption" color="text.secondary" display="block" dir="ltr">{r.user_uuid}</Typography>
+                            {r.creator_is_sub && (
+                              <Typography variant="caption" color="warning.main" display="block">↳ ساختهٔ زیرمجموعه: {r.creator_name}</Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>{r.panel_key}</TableCell>
+                          <TableCell dir="ltr">{fmtNum(r.usage_limit_gb)}</TableCell>
+                          <TableCell>{fmtToman(r.would_be_toman)}</TableCell>
+                          <TableCell dir="ltr">{r.start_date || "—"}</TableCell>
+                          <TableCell>
+                            {href ? <Link href={href} target="_blank" rel="noopener noreferrer">{r.root_name}</Link> : r.root_name}
+                          </TableCell>
+                          <TableCell align="center">
+                            <Tooltip title={r.root_bot_chat_id ? "هشدار به این ادمین" : "این ادمین در ربات ثبت نشده"}>
+                              <span><IconButton size="small" color="warning" disabled={!r.root_bot_chat_id || hvWarnOne.isPending}
+                                onClick={() => hvWarnOne.mutate(r.root_reseller_id)}><NotificationsActiveIcon fontSize="small" /></IconButton></span>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </Box>
+              <Button variant="contained" color="warning" startIcon={<NotificationsActiveIcon />}
+                disabled={hvWarnAll.isPending}
+                onClick={() => {
+                  const admins = new Set(hvRows.map((r: any) => r.root_reseller_id)).size;
+                  if (window.confirm(`هشدار به ${fmtNum(admins)} ادمینِ اصلی ارسال شود؟`))
+                    hvWarnAll.mutate();
+                }}>ارسالِ هشدار به همهٔ ادمین‌های جدول</Button>
+            </Collapse>
+          )}
         </CardContent>
       </Card>
       {node}

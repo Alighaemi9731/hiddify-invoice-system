@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_session
+from app.core.db import SessionLocal, get_session
 from app.core.security import get_current_subject
 from app.models import (
     BotUser,
@@ -34,6 +36,8 @@ from app.services.periods import current_month, month_period, parse_period
 router = APIRouter(
     prefix="/api/reports", tags=["reports"], dependencies=[Depends(get_current_subject)]
 )
+
+log = logging.getLogger("api.reports")
 
 # "Owed" = delivered but not yet paid.
 OUTSTANDING = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
@@ -279,6 +283,67 @@ async def zero_invoices(
     ]
     rows.sort(key=lambda r: r["reseller_name"])
     return rows
+
+
+# ---- high-volume users (the 1000 GB mistake) + warn their responsible admin ----
+class HighVolumeWarnBody(BaseModel):
+    threshold: float | None = None
+    panel_id: int | None = None
+    this_month_only: bool = True
+    root_reseller_ids: list[int] | None = None  # None = all admins in the list; else only these
+
+
+async def _resolve_threshold(session: AsyncSession, threshold: float | None) -> float:
+    if threshold is not None:
+        return threshold
+    from app.services import settings_service
+
+    return float(await settings_service.get(session, "high_volume_gb_threshold", 1000) or 1000)
+
+
+@router.get("/high-volume-users")
+async def high_volume_users(
+    threshold: float | None = None, panel_id: int | None = None,
+    this_month_only: bool = True, session: AsyncSession = Depends(get_session),
+) -> dict:
+    """End-users with a very large sold quota (the 1000 GB default left by mistake) + the
+    responsible top-level reseller. Mirrors the invoice engine, so it matches what will be billed."""
+    from app.services import high_volume as hv
+
+    th = await _resolve_threshold(session, threshold)
+    rows = await hv.high_volume_users(
+        session, threshold=th, panel_id=panel_id, this_month_only=this_month_only)
+    return {"threshold": th, "rows": rows}
+
+
+async def _high_volume_warn_bg(reachable: list, texts: dict, unregistered: int) -> None:
+    try:
+        async with SessionLocal() as session:
+            from app.services import broadcast as bc
+
+            await bc.run_broadcast(
+                session, "", reachable, unregistered=unregistered,
+                render=lambda rec: texts.get(rec["reseller_id"], ""), parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        log.exception("high-volume warn broadcast failed")
+
+
+@router.post("/high-volume-users/warn")
+async def high_volume_users_warn(
+    body: HighVolumeWarnBody, background: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """DM each responsible top-level reseller one aggregated warning listing their high-volume
+    users. Runs in the background via the shared broadcast worker; nothing is persisted."""
+    from app.services import high_volume as hv
+
+    th = await _resolve_threshold(session, body.threshold)
+    reachable, texts, unregistered = await hv.build_warnings(
+        session, threshold=th, panel_id=body.panel_id,
+        this_month_only=body.this_month_only, root_reseller_ids=body.root_reseller_ids)
+    if reachable:
+        background.add_task(_high_volume_warn_bg, reachable, texts, unregistered)
+    return {"status": "started", "total": len(reachable), "unregistered": unregistered}
 
 
 @router.get("/dashboard", response_model=DashboardSummary)

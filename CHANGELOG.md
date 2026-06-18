@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.94 - 2026-06-18
+
+### Added (high-volume users — catch the 1000 GB mistake before billing)
+
+- A new **«⚠️ هشدارِ کاربرانِ پرحجم»** card on the broadcast page lists end-users created with a very
+  large sold quota (the Hiddify 1000 GB default, often left by mistake) and the **responsible
+  top-level reseller** the invoice lands on — even when a deep sub-reseller created the user (the
+  real creator is shown as a «↳ ساختهٔ زیرمجموعه» note). Filter by threshold (default from the new
+  `high_volume_gb_threshold` setting), panel, and «فقط ماهِ جاری» (default on). Each row shows the
+  would-be amount (GB × the root's price) and a tap-through Telegram deep-link to the admin.
+- **Warn action**: DM the responsible admin one aggregated message listing all their high-volume
+  users (per-row «هشدار به این ادمین» or «به همهٔ ادمین‌های جدول»), reusing the background broadcast
+  worker (throttle + concurrency + 429 retry + owner summary). Only bot-registered admins are
+  messaged; the rest are counted in the owner summary. Nothing is persisted to the DB.
+- The creator→root mapping, present-filter, and current-month rule mirror the invoice engine, so
+  the list matches exactly what will be billed. `GET/POST /api/reports/high-volume-users[/warn]`.
+
 ## 1.37.93 - 2026-06-18
 
 ### Fixed (Resellers — «پُری ظرفیت» now counts the whole subtree)

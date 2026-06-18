@@ -310,6 +310,10 @@ export const panelMigrationPreview = (body: { panel_id: number; previous_host?: 
   api.post("/api/ops/broadcast/panel-migration/preview", body).then((r) => r.data);
 export const panelMigration = (body: { panel_id: number; previous_host?: string }) =>
   api.post("/api/ops/broadcast/panel-migration", body).then((r) => r.data);
+export const highVolumeUsers = (params: { threshold?: number; panel_id?: number; this_month_only?: boolean }) =>
+  api.get("/api/reports/high-volume-users", { params }).then((r) => r.data);
+export const highVolumeWarn = (body: { threshold?: number; panel_id?: number; this_month_only?: boolean; root_reseller_ids?: number[] }) =>
+  api.post("/api/reports/high-volume-users/warn", body).then((r) => r.data);
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);
 export const setDomain = (domain: string, acme_email?: string) =>
   api.post("/api/ops/set-domain", { domain, acme_email }).then((r) => r.data);
