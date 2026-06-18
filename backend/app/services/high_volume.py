@@ -32,6 +32,20 @@ def _iso(value: object) -> str:
     return f"⁨{value}⁩"
 
 
+def _present_in_latest_sync(user_synced, panel_synced) -> bool:
+    """Mirror the invoice engine's deletion check: a user not seen in the panel's latest sync was
+    removed from Hiddify. Missing timestamps → treat as present (detection disabled)."""
+    import datetime as _dt
+
+    if not user_synced or not panel_synced:
+        return True
+    if user_synced.tzinfo is None:
+        user_synced = user_synced.replace(tzinfo=_dt.timezone.utc)
+    if panel_synced.tzinfo is None:
+        panel_synced = panel_synced.replace(tzinfo=_dt.timezone.utc)
+    return user_synced >= panel_synced
+
+
 async def high_volume_users(
     session: AsyncSession, *, threshold: float, panel_id: int | None = None,
     this_month_only: bool = True,
@@ -39,6 +53,8 @@ async def high_volume_users(
     """Rows of high-volume users (usage_limit_gb >= threshold) with the responsible top-level
     reseller. Only users whose creator sits under a present, billable root are included."""
     default_price = await pricing.get_default_price_per_gb(session)
+    free_threshold = await pricing.get_free_threshold_gb(session)
+    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     period = current_month()
 
     panel_q = select(Panel).where(Panel.enabled.is_(True))
@@ -80,9 +96,21 @@ async def high_volume_users(
             root = creator_to_root.get(creator)
             if root is None:
                 continue  # created by the Owner or a removed reseller → not billed to anyone here
+            gb = float(u.usage_limit_gb or 0)
+            # Bill the SOLD quota only for users actually billed on quota: present users, OR users
+            # removed from Hiddify that consumed >= the deleted cutoff (full-quota anti-abuse). A
+            # removed user billed on its small consumption (or dropped) is NOT a high-volume risk —
+            # its huge SOLD quota is irrelevant — so it must NOT appear here (e.g. a deleted 1000 GB
+            # config that used 0.8 GB is billed 0, not 1000 × price).
+            from_deleted = not _present_in_latest_sync(u.last_synced_at, panel.last_synced_at)
+            if from_deleted:
+                consumed = round(float(u.current_usage_gb or 0), 3)
+                if consumed <= free_threshold:
+                    continue
+                if not (deleted_over and consumed >= deleted_over):
+                    continue  # billed on consumption (small) → not a sold-quota inflation
             creator_res = by_uuid.get(creator)
             eff_price = int(root.price_per_gb or default_price)
-            gb = float(u.usage_limit_gb or 0)
             if root.bot_chat_id:
                 chat_ids.append(root.bot_chat_id)
             rows.append({
@@ -91,6 +119,7 @@ async def high_volume_users(
                 "usage_limit_gb": gb,
                 "start_date": u.start_date.isoformat() if u.start_date else None,
                 "in_current_month": in_month,
+                "from_deleted": from_deleted,
                 "panel_key": panel.key,
                 "creator_name": (creator_res.name if creator_res else "—") or "—",
                 "creator_is_sub": creator != (root.admin_uuid or "").lower(),
@@ -135,6 +164,8 @@ def _warn_text(items: list[dict[str, Any]]) -> str:
         lines.append(f"‏👤 {name} — حجم: {gb} گیگ ≈ {toman} تومان")
         if it["creator_is_sub"]:
             lines.append(f"‏   ↳ ساختهٔ زیرمجموعهٔ شما: {_iso(_html.escape(it['creator_name']))}")
+        if it.get("from_deleted"):
+            lines.append("‏   ↳ این کاربر حذف شده ولی چون مصرفِ واقعی داشته، کلِ حجمش محاسبه می‌شود.")
     lines.append("─────────────────")
     lines.append("")
     lines.append(

@@ -38,10 +38,11 @@ def _run(body):
     asyncio.run(go())
 
 
-def _user(panel_id, added_by, gb, start, name="u"):
+def _user(panel_id, added_by, gb, start, name="u", *, user_synced=NOW, consumed=0.0):
     return EndUserSnapshot(panel_id=panel_id, user_uuid=f"{added_by}-{gb}-{name}",
-                           added_by_uuid=added_by, usage_limit_gb=gb, start_date=start,
-                           name=name, enable=True, is_active=True)
+                           added_by_uuid=added_by, usage_limit_gb=gb, current_usage_gb=consumed,
+                           start_date=start, name=name, enable=True, is_active=True,
+                           last_synced_at=user_synced)
 
 
 async def _seed(s, *, panel_status=PanelStatus.ok, root_seen=NOW):
@@ -89,6 +90,29 @@ def test_mapping_threshold_month_and_amount():
         # this_month_only=False also surfaces last-month high-volume users
         rows_all = await hv.high_volume_users(s, threshold=1000, this_month_only=False)
         assert "oldmonth" in {r["name"] for r in rows_all}
+    _run(body)
+
+
+def test_removed_users_billed_on_consumption_are_excluded():
+    async def body(s):
+        p = await _seed(s)
+        # All three have a huge SOLD quota, but were REMOVED from Hiddify (stale last_synced_at).
+        s.add_all([
+            _user(p.id, "ROOT", 1_000_000, THIS_MONTH, "out_low",   # consumed < free → dropped
+                  user_synced=OLD, consumed=0.8),
+            _user(p.id, "ROOT", 1000, THIS_MONTH, "out_mid",        # 1..5 GB → billed on consumption
+                  user_synced=OLD, consumed=3),
+            _user(p.id, "ROOT", 1000, THIS_MONTH, "out_high",       # >=5 GB → billed FULL quota
+                  user_synced=OLD, consumed=20),
+        ])
+        await s.commit()
+        rows = await hv.high_volume_users(s, threshold=1000, this_month_only=True)
+        names = {r["name"] for r in rows}
+        # The 1-billion-GB "out_low" (deleted, barely used) must NOT appear — it's billed ~0.
+        assert "out_low" not in names
+        assert "out_mid" not in names          # billed on its small consumption, not the quota
+        assert "out_high" in names             # deleted but consumed a lot → billed full quota
+        assert next(r for r in rows if r["name"] == "out_high")["from_deleted"] is True
     _run(body)
 
 

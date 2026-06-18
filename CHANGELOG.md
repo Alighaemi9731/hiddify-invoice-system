@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.95 - 2026-06-18
+
+### Fixed (high-volume finder — exclude removed users billed on consumption)
+
+- The «هشدارِ کاربرانِ پرحجم» list wrongly included end-users that were DELETED from Hiddify,
+  showing them by their (now irrelevant) sold quota — e.g. a removed test config with a 1-billion-GB
+  quota that used 0.8 GB appeared with an absurd would-be amount, even though a deleted user is billed on
+  CONSUMPTION (and dropped entirely when consumption ≤ the free threshold). The finder now computes
+  the ACTUAL billed quota (mirroring the invoice engine): present users by sold quota, removed
+  users only when they consumed ≥ the deleted-full-quota cutoff (then full quota). Removed users
+  billed on small consumption — or dropped — no longer appear. Such rows that DO appear are marked
+  «حذف‌شده» in the list and warning. No data was orphaned by a bug: removed-user snapshots are
+  retained ON PURPOSE so mid-month deletions are billed fairly.
+
 ## 1.37.94 - 2026-06-18
 
 ### Added (high-volume users — catch the 1000 GB mistake before billing)

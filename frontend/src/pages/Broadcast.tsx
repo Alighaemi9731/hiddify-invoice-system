@@ -373,6 +373,9 @@ export default function Broadcast() {
                             {r.creator_is_sub && (
                               <Typography variant="caption" color="warning.main" display="block">↳ ساختهٔ زیرمجموعه: {r.creator_name}</Typography>
                             )}
+                            {r.from_deleted && (
+                              <Typography variant="caption" color="error" display="block">↳ حذف‌شده؛ به‌خاطرِ مصرف، کل حجم حساب می‌شود</Typography>
+                            )}
                           </TableCell>
                           <TableCell>{r.panel_key}</TableCell>
                           <TableCell dir="ltr">{fmtNum(r.usage_limit_gb)}</TableCell>
