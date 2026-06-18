@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import defaultdict
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import delete as sa_delete
@@ -29,6 +31,7 @@ from app.schemas.reseller import (
     ResellerUpdate,
 )
 from app.services import admin_capacity, enforcement, pricing
+from app.services.invoice_engine import build_children_map
 
 # Resellers removed from Hiddify keep their DB row for billing history but must not
 # appear in the UI.  This filter, applied to queries that JOIN Panel, keeps only
@@ -86,28 +89,83 @@ def _to_out(
     )
 
 
+def _subtree_counts(
+    nodes: list, own_total: dict[tuple[int, str], int],
+    own_active: dict[tuple[int, str], int], panel_id: int,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Memoized post-order sums of (own + ALL descendants) per node, keyed by lowercased uuid.
+    Cycle-safe (a back-edge counts own-only and stops). O(n) — each node's subtree is computed once."""
+    children = build_children_map(nodes)
+    memo_t: dict[str, int] = {}
+    memo_a: dict[str, int] = {}
+    visiting: set[str] = set()
+
+    def dfs(u: str) -> tuple[int, int]:
+        if u in memo_t:
+            return memo_t[u], memo_a[u]
+        if u in visiting:  # pathological cycle → count this node's own users only, don't recurse
+            return own_total.get((panel_id, u), 0), own_active.get((panel_id, u), 0)
+        visiting.add(u)
+        t = own_total.get((panel_id, u), 0)
+        a = own_active.get((panel_id, u), 0)
+        for c in children.get(u, []):
+            ct, ca = dfs(c.admin_uuid)
+            t += ct
+            a += ca
+        visiting.discard(u)
+        memo_t[u] = t
+        memo_a[u] = a
+        return t, a
+
+    for n in nodes:
+        dfs(n.admin_uuid)
+    return memo_t, memo_a
+
+
 async def _usage_counts(
     session: AsyncSession, panel_id: int | None
 ) -> dict[tuple[int, str], tuple[int, int]]:
-    """(total, active) end-users per creating admin, in one grouped query.
-    active = enabled AND is_active (the metric the panel's max_active_users tracks)."""
-    total_q = (
-        select(EndUserSnapshot.panel_id, EndUserSnapshot.added_by_uuid,
+    """(total, active) end-users for each admin's WHOLE SUBTREE (itself + all descendant
+    sub-resellers), keyed by (panel_id, admin_uuid). total = all snapshots, active = enabled AND
+    is_active. This mirrors what Hiddify shows as an admin's capacity (own + subs), compared
+    against the admin's own max_users — so a full subtree can read >100% (red), which is correct.
+    UUID matching is case-insensitive throughout (project-wide identity rule)."""
+    # 1) Own counts per creating admin (case-insensitive uuid key).
+    base_q = (
+        select(EndUserSnapshot.panel_id, func.lower(EndUserSnapshot.added_by_uuid),
                func.count(EndUserSnapshot.id))
         .where(EndUserSnapshot.added_by_uuid.is_not(None))
-        .group_by(EndUserSnapshot.panel_id, EndUserSnapshot.added_by_uuid)
+        .group_by(EndUserSnapshot.panel_id, func.lower(EndUserSnapshot.added_by_uuid))
     )
     if panel_id is not None:
-        total_q = total_q.where(EndUserSnapshot.panel_id == panel_id)
+        base_q = base_q.where(EndUserSnapshot.panel_id == panel_id)
+    own_total: dict[tuple[int, str], int] = {}
+    own_active: dict[tuple[int, str], int] = {}
+    for pid, uuid, n in (await session.execute(base_q)).all():
+        own_total[(pid, uuid)] = own_total.get((pid, uuid), 0) + int(n)
+    for pid, uuid, n in (await session.execute(
+        base_q.where(EndUserSnapshot.enable.is_(True), EndUserSnapshot.is_active.is_(True))
+    )).all():
+        own_active[(pid, uuid)] = own_active.get((pid, uuid), 0) + int(n)
+
+    # 2) Reseller hierarchy, built PER PANEL (a uuid may exist on two panels), case-insensitive.
+    res_q = select(Reseller.panel_id, Reseller.admin_uuid, Reseller.parent_admin_uuid)
+    if panel_id is not None:
+        res_q = res_q.where(Reseller.panel_id == panel_id)
+    nodes_by_panel: dict[int, list] = defaultdict(list)
+    originals_by_panel: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    for pid, uuid, parent in (await session.execute(res_q)).all():
+        low = (uuid or "").lower()
+        nodes_by_panel[pid].append(SimpleNamespace(
+            admin_uuid=low, parent_admin_uuid=((parent or "").lower() or None)))
+        originals_by_panel[pid].append((uuid, low))
+
+    # 3) Sum each subtree; key the output by the reseller's ORIGINAL-case uuid so _to_out finds it.
     out: dict[tuple[int, str], tuple[int, int]] = {}
-    for pid, uuid, n in (await session.execute(total_q)).all():
-        out[(pid, uuid)] = (int(n), 0)
-    active_q = total_q.where(
-        EndUserSnapshot.enable.is_(True), EndUserSnapshot.is_active.is_(True)
-    )
-    for pid, uuid, n in (await session.execute(active_q)).all():
-        prev = out.get((pid, uuid), (0, 0))
-        out[(pid, uuid)] = (prev[0], int(n))
+    for pid, nodes in nodes_by_panel.items():
+        memo_t, memo_a = _subtree_counts(nodes, own_total, own_active, pid)
+        for orig, low in originals_by_panel[pid]:
+            out[(pid, orig)] = (memo_t.get(low, 0), memo_a.get(low, 0))
     return out
 
 

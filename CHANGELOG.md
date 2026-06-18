@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.93 - 2026-06-18
+
+### Fixed (Resellers — «پُری ظرفیت» now counts the whole subtree)
+
+- The capacity column counted only the admin's OWN users, not their sub-resellers' — so e.g. an
+  admin with 108 users across their subtree showed 22. `_usage_counts` now returns **subtree**
+  totals (the admin itself + all descendants, per panel, cycle-safe, memoized O(n)), matching what
+  Hiddify shows. Both the list and the tree tab use this single source, so they agree. The quota
+  denominator stays the admin's own `max_users` (so a full subtree correctly reads >100% / red).
+  UUID matching is case-insensitive, and the total counts ALL users (not just active). Frontend
+  unchanged (`users_count` is now the subtree total).
+
 ## 1.37.92 - 2026-06-18
 
 ### Changed (bot panel messages — clearer & bidi-clean)
