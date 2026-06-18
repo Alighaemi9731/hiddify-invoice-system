@@ -213,10 +213,13 @@ async def daily_digest_job() -> None:
 
 
 async def daily_maintenance_job() -> None:
-    """Daily retention sweep of the append-only log/audit tables (keeps the DB lean)."""
+    """Daily retention sweep: aged log/audit rows + stale (removed-from-Hiddify) end-user
+    snapshots older than the previous billing month + their orphaned usage meters."""
     try:
         async with SessionLocal() as session:
             await maintenance.prune_old_logs(session)
+        async with SessionLocal() as session:
+            await maintenance.prune_stale_snapshots(session)
     except Exception:  # noqa: BLE001
         log.exception("daily_maintenance_job failed")
 

@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.96 - 2026-06-18
+
+### Added (DB retention — stale removed-user snapshots)
+
+- The daily maintenance sweep now also prunes **end-user snapshots of users removed from Hiddify**
+  whose creation month is older than the **previous** billing month, plus any **orphaned
+  `usage_meters`** left behind (that table has no foreign key, so meters from a deleted snapshot or
+  a deleted panel were never cleaned). The current + previous month are always preserved, so
+  mid-month-deletion billing (which reads the lingering snapshot) is never affected; financial
+  tables are never touched. This caps the slow growth of removed-user rows.
+- Audit: no other table currently orphans on Hiddify removal — `end_user_snapshots`/`invoices`/
+  `payments` cascade on panel/reseller delete, `delivery_log`/`sync_runs` null out, and
+  `enforcement_actions` cascade. The only gap was `usage_meters` (no FK), now swept here.
+
 ## 1.37.95 - 2026-06-18
 
 ### Fixed (high-volume finder — exclude removed users billed on consumption)

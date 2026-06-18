@@ -30,12 +30,21 @@ import datetime as dt
 import logging
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, or_, select
+from sqlalchemy import CursorResult, delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DeliveryLog, EnforcementAction, Invoice, SyncRun
-from app.models.enums import EnforcementActionStatus, InvoiceStatus
+from app.models import (
+    DeliveryLog,
+    EndUserSnapshot,
+    EnforcementAction,
+    Invoice,
+    Panel,
+    SyncRun,
+    UsageMeter,
+)
+from app.models.enums import EnforcementActionStatus, InvoiceStatus, PanelStatus
 from app.services import settings_service
+from app.services.periods import previous_month
 
 log = logging.getLogger("services.maintenance")
 
@@ -111,4 +120,50 @@ async def prune_old_logs(
     }
     if counts["sync_runs"] or counts["delivery_log"] or counts["enforcement_actions"]:
         log.info("Log retention sweep (>%dd): %s", days, counts)
+    return counts
+
+
+async def prune_stale_snapshots(session: AsyncSession) -> dict[str, int]:
+    """Delete end-user snapshots of users REMOVED from Hiddify whose creation month is older than
+    the previous billing month, plus any now-orphaned usage_meters.
+
+    A removed user (its `last_synced_at` is older than the panel's latest sync) is kept ON PURPOSE
+    while its creation month can still be invoiced — the invoice engine bills mid-month deletions
+    from this lingering snapshot. Once its `start_date` is older than the previous month, no current
+    or next invoice can reference it, so it's pure bloat and safe to drop. The current + previous
+    month are always preserved. `usage_meters` has no FK, so meters left behind by a deleted
+    snapshot (or a deleted panel) are swept too. Billing/financial tables are never touched."""
+    async def _delete(stmt: Any) -> int:
+        result = await session.execute(stmt.execution_options(synchronize_session=False))
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    keep_from = previous_month().start  # first day of the previous month (a date)
+    stale_old = (
+        select(EndUserSnapshot.id)
+        .join(Panel, Panel.id == EndUserSnapshot.panel_id)
+        .where(
+            Panel.status == PanelStatus.ok,
+            Panel.last_synced_at.is_not(None),
+            EndUserSnapshot.last_synced_at.is_not(None),
+            EndUserSnapshot.last_synced_at < Panel.last_synced_at,  # not seen in the latest sync
+            or_(
+                EndUserSnapshot.start_date.is_(None),               # never billable (no create date)
+                EndUserSnapshot.start_date < keep_from,             # older than the previous month
+            ),
+        )
+    )
+    snapshots = await _delete(delete(EndUserSnapshot).where(EndUserSnapshot.id.in_(stale_old)))
+
+    # usage_meters has NO foreign key → meters orphaned by the deletion above (or by a deleted
+    # panel/user) are never cleaned automatically. Drop any meter with no matching snapshot.
+    orphan_meter = exists().where(
+        EndUserSnapshot.panel_id == UsageMeter.panel_id,
+        EndUserSnapshot.user_uuid == UsageMeter.user_uuid,
+    )
+    meters = await _delete(delete(UsageMeter).where(~orphan_meter))
+    await session.commit()
+
+    counts = {"stale_snapshots": snapshots, "orphan_meters": meters}
+    if snapshots or meters:
+        log.info("Stale-snapshot retention sweep (keep >= %s): %s", keep_from, counts)
     return counts

@@ -147,3 +147,50 @@ def test_retention_zero_disables_pruning(tmp_path):
         assert await _count(s, SyncRun) == 1  # nothing pruned
 
     _run(body, tmp_path, "maint_off.db")
+
+
+def test_prune_stale_snapshots(tmp_path):
+    """Removed-from-Hiddify users older than the previous billing month are dropped; present users
+    and recent (current/previous-month) removed users are kept; orphaned usage_meters are swept."""
+    import datetime as dt2
+
+    from app.models import EndUserSnapshot, UsageMeter
+    from app.models import Panel as P
+    from app.models.enums import PanelStatus
+    from app.services.periods import current_month, previous_month
+
+    now = dt2.datetime.now()  # naive → SQLite round-trips naive, comparisons stay consistent
+    stale_seen = now - dt2.timedelta(days=1)        # older than the panel's latest sync → removed
+    keep_from = previous_month().start
+    old_date = keep_from - dt2.timedelta(days=40)   # well before the previous month
+
+    def snap(uid, *, seen, start):
+        return EndUserSnapshot(panel_id=1, user_uuid=uid, added_by_uuid="a",
+                               usage_limit_gb=10, start_date=start, last_synced_at=seen,
+                               enable=True, is_active=True, name=uid)
+
+    async def body(s):
+        s.add(P(id=1, key="p1", host="p1", proxy_path_enc="x", owner_uuid="o",
+                status=PanelStatus.ok, last_synced_at=now))
+        s.add_all([
+            snap("present", seen=now, start=old_date),               # not stale → kept
+            snap("stale_recent", seen=stale_seen, start=current_month().start),  # kept (recent)
+            snap("stale_prev", seen=stale_seen, start=keep_from),    # kept (previous month edge)
+            snap("stale_old", seen=stale_seen, start=old_date),      # DELETED
+            snap("stale_nullstart", seen=stale_seen, start=None),    # DELETED (never billable)
+        ])
+        s.add_all([
+            UsageMeter(panel_id=1, user_uuid="present", period_label="2026-06"),     # kept
+            UsageMeter(panel_id=1, user_uuid="stale_old", period_label="2026-06"),   # orphan → gone
+            UsageMeter(panel_id=1, user_uuid="ghost", period_label="2026-06"),       # no snapshot → gone
+        ])
+        await s.commit()
+
+        counts = await maintenance.prune_stale_snapshots(s)
+        assert counts == {"stale_snapshots": 2, "orphan_meters": 2}
+
+        remaining = {u for (u,) in await s.execute(select(EndUserSnapshot.user_uuid))}
+        assert remaining == {"present", "stale_recent", "stale_prev"}
+        meters = (await s.execute(select(func.count(UsageMeter.id)))).scalar_one()
+        assert meters == 1
+    _run(body, tmp_path, "stale.db")
