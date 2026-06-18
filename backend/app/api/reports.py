@@ -28,9 +28,11 @@ from app.schemas.reports import (
     DeliveryLogRow,
     EnforcementActionRow,
     PanelSalesRow,
+    SalesByDayRow,
     SalesRow,
     StatusCount,
 )
+from app.services import invoicing
 from app.services.periods import current_month, month_period, parse_period
 
 router = APIRouter(
@@ -344,6 +346,32 @@ async def high_volume_users_warn(
     if reachable:
         background.add_task(_high_volume_warn_bg, reachable, texts, unregistered)
     return {"status": "started", "total": len(reachable), "unregistered": unregistered}
+
+
+@router.get("/sales-by-day", response_model=list[SalesByDayRow])
+async def sales_by_day(
+    period: str | None = None, session: AsyncSession = Depends(get_session)
+) -> list[SalesByDayRow]:
+    """Daily sale trend for the period: one bucket per day of the month, height = that day's share
+    of the sale by each service's CREATION date (line usage_gb × the bundle root's price). Computed
+    live via the invoice engine (present-filtered) so it matches what's billed and works for the
+    in-progress current month. NOTE: per-bundle floor (min-sale) and metering overage are
+    bundle-level, not per-line, so this is the faithful BASE-sale trend (sum of days ≈ month base)."""
+    p = parse_period(period) if period else current_month()
+    n_days = p.end.day
+    buckets = [0.0] * n_days
+    for _panel, b in await invoicing.preview_bundles(session, p):
+        for line in b.lines:
+            if line.start_date and p.contains(line.start_date):
+                buckets[line.start_date.day - 1] += line.usage_gb * b.price_per_gb
+    return [
+        SalesByDayRow(
+            day=i + 1,
+            date=dt.date(p.start.year, p.start.month, i + 1).isoformat(),
+            amount_toman=round(v),
+        )
+        for i, v in enumerate(buckets)
+    ]
 
 
 @router.get("/dashboard", response_model=DashboardSummary)

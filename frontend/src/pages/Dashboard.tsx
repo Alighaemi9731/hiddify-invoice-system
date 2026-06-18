@@ -21,7 +21,7 @@ import TrendingUpIcon from "@mui/icons-material/esm/TrendingUp";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { getDashboard } from "../api/client";
+import { getDashboard, getSalesByDay } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
@@ -121,6 +121,10 @@ export default function Dashboard() {
     queryKey: ["dashboard", period],
     queryFn: () => getDashboard(period),
   });
+  const { data: salesByDay = [], isLoading: salesByDayLoading } = useQuery({
+    queryKey: ["sales-by-day", period],
+    queryFn: () => getSalesByDay(period),
+  });
 
   const panelData = data?.sales_by_panel || [];
   const topResellers = data?.top_resellers || [];
@@ -147,6 +151,71 @@ export default function Dashboard() {
     backgroundColor: isDark ? "rgba(14,16,32,0.88)" : "rgba(255,255,255,0.88)",
     borderColor: isDark ? "rgba(255,255,255,0.14)" : "rgba(200,210,255,0.55)",
     textStyle: { color: isDark ? "#e2e8f0" : "#334155", fontFamily: FONT },
+  };
+  // Compact Toman for the y-axis (full amount stays in the tooltip).
+  const fmtAxisToman = (v: number) =>
+    v >= 1_000_000 ? `${fmtNum(Math.round(v / 1_000_000))}م`
+      : v >= 1_000 ? `${fmtNum(Math.round(v / 1_000))}هزار`
+        : fmtNum(v);
+  const accent = theme.palette.primary.main;
+  const salesDayEmpty = !salesByDay.length || salesByDay.every((d: any) => !d.amount_toman);
+  const salesByDayOption = {
+    textStyle: { fontFamily: FONT },
+    grid: { left: 6, right: 14, top: 18, bottom: 4, containLabel: true },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      formatter: (params: any) => {
+        const p = Array.isArray(params) ? params[0] : params;
+        const row = salesByDay[p.dataIndex];
+        return `${row?.date ?? ""}<br/><b>${fmtToman(p.value || 0)}</b>`;
+      },
+      ...tooltip,
+    },
+    xAxis: {
+      type: "category",
+      data: salesByDay.map((d: any) => fmtNum(d.day)),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: alpha(theme.palette.text.secondary, 0.25) } },
+      axisLabel: {
+        color: theme.palette.text.secondary, fontFamily: FONT, fontSize: 11,
+        interval: salesByDay.length > 16 ? 1 : 0,
+      },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: {
+        color: theme.palette.text.secondary, fontFamily: FONT, fontSize: 11,
+        formatter: fmtAxisToman,
+      },
+      splitLine: { lineStyle: { color: theme.palette.divider } },
+    },
+    series: [{
+      type: "bar",
+      data: salesByDay.map((d: any) => d.amount_toman),
+      barMaxWidth: 18,
+      itemStyle: {
+        borderRadius: [6, 6, 0, 0],
+        color: {
+          type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: accent },
+            { offset: 1, color: alpha(accent, isDark ? 0.35 : 0.45) },
+          ],
+        },
+      },
+      emphasis: {
+        itemStyle: {
+          color: {
+            type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: accent },
+              { offset: 1, color: alpha(accent, 0.7) },
+            ],
+          },
+        },
+      },
+    }],
   };
   const statusOption = {
     textStyle: { fontFamily: FONT },
@@ -505,6 +574,24 @@ export default function Dashboard() {
                     </Box>
                   ) : (
                     <EmptyState>برای رتبه‌بندی این دوره داده‌ای وجود ندارد.</EmptyState>
+                  )}
+                </SectionCard>
+              </Grid>
+
+              <Grid item xs={12}>
+                <SectionCard
+                  title="روند فروش روزانه"
+                  action={<Chip size="small" label={data.period} sx={{ fontWeight: 700 }} />}
+                >
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+                    سهم هر روز از فروش این ماه (بر اساس تاریخ ساخت سرویس‌ها)
+                  </Typography>
+                  {salesByDayLoading ? (
+                    <Skeleton variant="rounded" height={300} />
+                  ) : salesDayEmpty ? (
+                    <EmptyState>فروشی در این دوره ثبت نشده است.</EmptyState>
+                  ) : (
+                    <EChart option={salesByDayOption} height={300} ariaLabel="روند فروش روزانه" />
                   )}
                 </SectionCard>
               </Grid>

@@ -285,6 +285,8 @@ export interface DashboardSummary {
 export const getDashboard = (period?: string) =>
   api.get("/api/reports/dashboard", { params: { period } })
     .then((r) => r.data as DashboardSummary);
+export const getSalesByDay = (period?: string) =>
+  api.get("/api/reports/sales-by-day", { params: { period } }).then((r) => r.data);
 export const getSales = (params: any = {}) => api.get("/api/reports/sales", { params }).then((r) => r.data);
 export const getDebts = () => api.get("/api/reports/debts").then((r) => r.data);
 export const getZeroInvoices = (period?: string) =>

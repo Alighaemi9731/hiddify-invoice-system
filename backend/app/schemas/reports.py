@@ -13,6 +13,12 @@ class PanelSalesRow(BaseModel):
     amount_toman: float
 
 
+class SalesByDayRow(BaseModel):
+    day: int
+    date: str
+    amount_toman: float
+
+
 class SalesRow(BaseModel):
     invoice_id: int
     reseller_id: int

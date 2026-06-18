@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.97 - 2026-06-19
+
+### Added (Dashboard — daily sale trend chart)
+
+- A new full-width **«روند فروش روزانه»** bar chart under «۱۰ نماینده برتر»: one bar per day of the
+  selected month, height = that day's share of the sale (Σ of each service's `usage_gb × the
+  bundle root's price`, bucketed by the service's creation date). Computed live via the invoice
+  engine (present-filtered) so it matches what's billed and works for the in-progress month.
+  Styled to match the other dashboard charts (theme accent vertical gradient, rounded bars, axis
+  tooltip, dark/light aware). New `GET /api/reports/sales-by-day?period=YYYY-MM`. NOTE: per-bundle
+  floor (min-sale) and metering overage are bundle-level, so this is the faithful BASE-sale trend
+  (Σ days ≈ the month's base sale).
+
 ## 1.37.96 - 2026-06-18
 
 ### Added (DB retention — stale removed-user snapshots)
