@@ -1,9 +1,10 @@
-import { useEffect, useState, lazy } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useState, lazy, Suspense } from "react";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Box, CircularProgress } from "@mui/material";
 import { useAuth } from "./auth/AuthContext";
 import { getSetupStatus } from "./api/client";
 import Layout from "./components/Layout";
+const PortalApp = lazy(() => import("./portal/PortalApp"));
 // Login + Setup stay eager — they're the pre-auth entry points and must paint instantly
 // with no chunk flash. Everything behind auth is lazy so each route (and the heavy chart
 // libs) splits into its own chunk, keeping the initial bundle small.
@@ -45,11 +46,17 @@ function Spinner() {
 }
 
 export default function App() {
+  const location = useLocation();
+  // The reseller portal is a fully independent site (own auth + token). It must NOT be gated
+  // by the owner's first-run setup wizard, so short-circuit before any owner-setup logic.
+  const isPortal = location.pathname.startsWith("/portal");
+
   // Gate everything on the one-time setup state. Until the owner completes setup,
   // the wizard is shown for ANY path; afterwards it's never shown again.
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
 
   useEffect(() => {
+    if (isPortal) return; // portal doesn't need the owner setup status
     let cancelled = false;
     // Retry a few times on transient errors so a brief backend hiccup on a fresh
     // install doesn't skip the setup wizard and strand the user on a login they can't use.
@@ -64,7 +71,14 @@ export default function App() {
     };
     attempt(4);
     return () => { cancelled = true; };
-  }, []);
+  }, [isPortal]);
+
+  if (isPortal)
+    return (
+      <Suspense fallback={<Spinner />}>
+        <PortalApp />
+      </Suspense>
+    );
 
   if (setupDone === null) return <Spinner />;
   if (!setupDone) return <Setup onDone={() => setSetupDone(true)} />;

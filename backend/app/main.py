@@ -18,6 +18,7 @@ from app.api import (
     panels,
     passkey,
     payments,
+    portal,
     reports,
     resellers,
 )
@@ -123,4 +124,5 @@ app.include_router(payments.router)
 app.include_router(reports.router)
 app.include_router(operations.router)
 app.include_router(settings_api.router)
+app.include_router(portal.router)
 # The bot runs as a separate process; the scheduler runs in this process.

@@ -140,10 +140,12 @@ def test_support_html_escapes_user_content():
 
 
 def test_payable_revalidation_uses_tehran_today(tmp_path, monkeypatch):
-    from app.bot import handlers
+    # The payable re-validation now lives in payments.submit_reseller_payment, which reads
+    # the Tehran-local "today" from app.services.periods at call time.
+    from app.services import payments
 
     local_today = dt.date(2026, 6, 10)
-    monkeypatch.setattr(handlers, "tehran_today", lambda: local_today)
+    monkeypatch.setattr("app.services.periods.today", lambda: local_today)
 
     async def body(session):
         reseller = Reseller(
@@ -160,10 +162,16 @@ def test_payable_revalidation_uses_tehran_today(tmp_path, monkeypatch):
         )
         session.add(invoice)
         await session.commit()
-        assert await handlers._revalidate_payable(session, invoice, {reseller.id}) is None
+        # Deferred to a FUTURE date → not payable yet.
+        res = await payments.submit_reseller_payment(
+            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="d1")
+        assert res.status == "not_payable"
 
+        # Deadline reached today → payable.
         invoice.deferred_until = local_today
         await session.commit()
-        assert await handlers._revalidate_payable(session, invoice, {reseller.id}) is not None
+        res2 = await payments.submit_reseller_payment(
+            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="d2")
+        assert res2.status == "ok"
 
     _run(body, tmp_path, "date.db")

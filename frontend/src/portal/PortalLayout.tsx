@@ -1,0 +1,245 @@
+import { useState, Suspense } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  AppBar, Box, Chip, Drawer, IconButton, List, ListItemButton, ListItemIcon,
+  ListItemText, Stack, Toolbar, Typography, Divider, Tooltip, useMediaQuery,
+  CircularProgress,
+} from "@mui/material";
+import { alpha, useTheme } from "@mui/material/styles";
+import DashboardIcon from "@mui/icons-material/esm/Dashboard";
+import ReceiptLongIcon from "@mui/icons-material/esm/ReceiptLong";
+import PaymentsIcon from "@mui/icons-material/esm/Payments";
+import GroupIcon from "@mui/icons-material/esm/Group";
+import DnsIcon from "@mui/icons-material/esm/Dns";
+import SupportAgentIcon from "@mui/icons-material/esm/SupportAgent";
+import LogoutIcon from "@mui/icons-material/esm/Logout";
+import MenuIcon from "@mui/icons-material/esm/Menu";
+import PersonOutlineIcon from "@mui/icons-material/esm/PersonOutline";
+import DarkModeIcon from "@mui/icons-material/esm/DarkModeOutlined";
+import LightModeIcon from "@mui/icons-material/esm/LightModeOutlined";
+import { usePortalAuth } from "./PortalAuthContext";
+import { useColorMode } from "../colorMode";
+import ErrorBoundary from "../components/ErrorBoundary";
+import { PageTransition } from "../components/motion";
+
+const WIDTH = 248;
+
+const NAV = [
+  { to: "/portal", label: "داشبورد", icon: <DashboardIcon />, color: "#0071e3" },
+  { to: "/portal/invoices", label: "فاکتورها", icon: <ReceiptLongIcon />, color: "#f59e0b" },
+  { to: "/portal/payments", label: "پرداخت‌ها", icon: <PaymentsIcon />, color: "#10b981" },
+  { to: "/portal/subs", label: "زیرمجموعه‌ها", icon: <GroupIcon />, color: "#22c55e" },
+  { to: "/portal/panels", label: "پنل‌های من", icon: <DnsIcon />, color: "#0ea5e9" },
+  { to: "/portal/support", label: "پشتیبانی", icon: <SupportAgentIcon />, color: "#a855f7" },
+];
+
+export default function PortalLayout() {
+  const theme = useTheme();
+  const isDark = theme.palette.mode === "dark";
+  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
+  const [open, setOpen] = useState(false);
+  const nav = useNavigate();
+  const loc = useLocation();
+  const { resellers, logout } = usePortalAuth();
+  const { mode, toggle } = useColorMode();
+  const primary = theme.palette.primary.main;
+
+  const title = resellers[0]?.name || "نماینده";
+
+  const navItemSx = (selected: boolean) => ({
+    position: "relative",
+    borderRadius: 2.5,
+    mx: 1.25,
+    my: 0.3,
+    py: 0.7,
+    color: selected ? "text.primary" : "text.secondary",
+    "& .MuiListItemIcon-root": { minWidth: 40 },
+    "&.Mui-selected": {
+      backgroundColor: isDark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.60)",
+      boxShadow: isDark
+        ? "inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)"
+        : "inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(30,40,100,.18)",
+      border: isDark ? "1px solid rgba(255,255,255,.10)" : "1px solid rgba(255,255,255,.78)",
+      "&::before": {
+        content: '""',
+        position: "absolute",
+        insetInlineStart: 4,
+        top: 9,
+        bottom: 9,
+        width: 3,
+        borderRadius: 3,
+        background: `linear-gradient(180deg, ${alpha(primary, 0.9)} 0%, ${alpha(primary, 0.55)} 100%)`,
+        boxShadow: `0 0 8px 2px ${alpha(primary, 0.42)}`,
+      },
+    },
+    "&:hover:not(.Mui-selected)": {
+      backgroundColor: isDark ? "rgba(255,255,255,.05)" : "rgba(255,255,255,.38)",
+    },
+    transition: "background-color .18s, box-shadow .18s, border .18s",
+  });
+
+  const sidebar = (
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }}>
+      <Box
+        aria-hidden
+        sx={{
+          position: "absolute",
+          inset: 0,
+          background: isDark
+            ? "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent 70%)"
+            : "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.18) 0%, transparent 70%)",
+          pointerEvents: "none",
+          zIndex: 0,
+        }}
+      />
+      <Box sx={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", height: "100%" }}>
+        <Toolbar sx={{ py: 2.5 }}>
+          <Stack direction="row" alignItems="center" spacing={1.25}>
+            <Box
+              sx={{
+                width: 40, height: 40, borderRadius: 2.5, color: "#fff",
+                display: "grid", placeItems: "center",
+                background: "linear-gradient(145deg, #5ab5ff 0%, #0071e3 100%)",
+                boxShadow: "0 6px 18px -6px rgba(0,113,227,.55), inset 0 1.5px 0 rgba(255,255,255,.40)",
+              }}
+            >
+              <ReceiptLongIcon fontSize="small" />
+            </Box>
+            <Box>
+              <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.1 }}>
+                پنلِ نماینده
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                مدیریت فروش و فاکتورها
+              </Typography>
+            </Box>
+          </Stack>
+        </Toolbar>
+
+        <Divider />
+
+        <List sx={{ py: 1, flexGrow: 1 }}>
+          {NAV.map((item) => {
+            const selected = loc.pathname === item.to;
+            return (
+              <ListItemButton
+                key={item.to}
+                selected={selected}
+                onClick={() => { nav(item.to); setOpen(false); }}
+                sx={navItemSx(selected)}
+              >
+                <ListItemIcon>
+                  <Box
+                    sx={{
+                      width: 31, height: 31, borderRadius: 2,
+                      display: "grid", placeItems: "center",
+                      color: item.color,
+                      bgcolor: alpha(item.color, isDark ? 0.22 : 0.14),
+                      boxShadow: selected
+                        ? `0 0 0 1px ${alpha(item.color, 0.5)}, 0 4px 12px -4px ${alpha(item.color, 0.55)}`
+                        : "inset 0 1px 0 rgba(255,255,255,.18)",
+                      "& svg": { fontSize: 19 },
+                    }}
+                  >
+                    {item.icon}
+                  </Box>
+                </ListItemIcon>
+                <ListItemText
+                  primary={item.label}
+                  primaryTypographyProps={{ fontWeight: selected ? 700 : 500, fontSize: 14.5 }}
+                />
+              </ListItemButton>
+            );
+          })}
+
+          <Divider sx={{ mx: 1.5, my: 1 }} />
+
+          <ListItemButton
+            onClick={() => { logout(); nav("/portal/login", { replace: true }); }}
+            sx={{
+              borderRadius: 2.5, mx: 1.25, my: 0.3, py: 0.85,
+              color: "error.main",
+              "& .MuiListItemIcon-root": { color: "error.main", minWidth: 38 },
+              "&:hover": { bgcolor: alpha(theme.palette.error.main, 0.08) },
+            }}
+          >
+            <ListItemIcon><LogoutIcon /></ListItemIcon>
+            <ListItemText primary="خروج" primaryTypographyProps={{ fontWeight: 600, fontSize: 14.5 }} />
+          </ListItemButton>
+        </List>
+      </Box>
+    </Box>
+  );
+
+  const sidebarGlassSx = {
+    backdropFilter: "blur(48px) saturate(220%) brightness(1.03)",
+    WebkitBackdropFilter: "blur(48px) saturate(220%) brightness(1.03)",
+    backgroundColor: isDark ? "rgba(9,11,20,.50)" : "rgba(255,255,255,.55)",
+    borderInlineStart: `1px solid ${isDark ? "rgba(255,255,255,.10)" : "rgba(255,255,255,.75)"}`,
+  };
+
+  return (
+    <Box sx={{ display: "flex", minHeight: "100vh" }}>
+      {isDesktop ? (
+        <Box
+          component="nav"
+          sx={{
+            width: WIDTH, flexShrink: 0, position: "sticky", top: 0,
+            alignSelf: "flex-start", height: "100vh", overflowY: "auto", ...sidebarGlassSx,
+          }}
+        >
+          {sidebar}
+        </Box>
+      ) : (
+        <Drawer
+          variant="temporary"
+          anchor="right"
+          open={open}
+          onClose={() => setOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{ "& .MuiDrawer-paper": { width: WIDTH, boxSizing: "border-box" } }}
+        >
+          {sidebar}
+        </Drawer>
+      )}
+
+      <Box component="main" sx={{ flexGrow: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <AppBar position="sticky" elevation={0} color="transparent"
+          sx={{ borderBottom: "1px solid", borderColor: "divider" }}>
+          <Toolbar>
+            {!isDesktop && (
+              <IconButton edge="start" onClick={() => setOpen(true)} sx={{ ml: 1 }}>
+                <MenuIcon />
+              </IconButton>
+            )}
+            <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 800 }}>
+              {NAV.find((n) => n.to === loc.pathname)?.label || ""}
+            </Typography>
+            <Tooltip title={mode === "dark" ? "حالت روشن" : "حالت تیره"}>
+              <IconButton onClick={toggle} sx={{ mr: 1 }}>
+                {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
+              </IconButton>
+            </Tooltip>
+            <Chip icon={<PersonOutlineIcon />} label={title} variant="outlined" size="small" />
+          </Toolbar>
+        </AppBar>
+
+        <Box sx={{ p: { xs: 2, md: 3 }, flexGrow: 1 }}>
+          <ErrorBoundary>
+            <Suspense
+              fallback={
+                <Box sx={{ display: "grid", placeItems: "center", py: 12 }}>
+                  <CircularProgress />
+                </Box>
+              }
+            >
+              <PageTransition key={loc.pathname}>
+                <Outlet />
+              </PageTransition>
+            </Suspense>
+          </ErrorBoundary>
+        </Box>
+      </Box>
+    </Box>
+  );
+}

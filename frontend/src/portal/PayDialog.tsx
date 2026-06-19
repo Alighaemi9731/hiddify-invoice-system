@@ -1,0 +1,227 @@
+import { useState } from "react";
+import {
+  Alert, Box, Button, Chip, CircularProgress, Dialog, DialogContent, DialogTitle,
+  Divider, IconButton, Stack, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
+} from "@mui/material";
+import ContentCopyIcon from "@mui/icons-material/esm/ContentCopy";
+import UploadFileIcon from "@mui/icons-material/esm/UploadFile";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  portalPayOptions, portalPayTxid, portalPayScreenshot, PortalInvoice,
+} from "./portalClient";
+import { useToast, errMsg } from "../components/Toast";
+import { fmtToman } from "../format";
+
+function CopyRow({ label, value, show }: { label: string; value: string; show: (m: string, s?: any) => void }) {
+  return (
+    <Box sx={{ mt: 0.8 }}>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Box
+        dir="ltr"
+        sx={{
+          mt: 0.3, p: 1, borderRadius: 2, bgcolor: "action.hover",
+          fontFamily: "monospace", fontSize: 13, wordBreak: "break-all",
+          display: "flex", alignItems: "center", gap: 1,
+        }}
+      >
+        <Box sx={{ flex: 1, minWidth: 0 }}>{value}</Box>
+        <Tooltip title="کپی">
+          <IconButton
+            size="small"
+            onClick={async () => {
+              try { await navigator.clipboard.writeText(value); show("کپی شد", "success"); }
+              catch { show("کپی نشد", "error"); }
+            }}
+          >
+            <ContentCopyIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </Box>
+  );
+}
+
+export default function PayDialog({
+  invoice, onClose,
+}: { invoice: PortalInvoice | null; onClose: () => void }) {
+  const open = !!invoice;
+  const qc = useQueryClient();
+  const { node: toast, show } = useToast();
+  const [chain, setChain] = useState<"bsc" | "ton">("bsc");
+  const [txid, setTxid] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const { data: opts, isLoading, isError } = useQuery({
+    queryKey: ["portal-pay-options", invoice?.id],
+    queryFn: () => portalPayOptions(invoice!.id),
+    enabled: open,
+  });
+
+  const m = opts?.methods;
+  const canTxid = !!(m?.usdt || m?.ton);
+  const canReceipt = !!(m?.card || m?.screenshot);
+  // Default the chain selector to whichever crypto method is enabled.
+  const chainOptions: ("bsc" | "ton")[] = [
+    ...(m?.usdt ? ["bsc" as const] : []),
+    ...(m?.ton ? ["ton" as const] : []),
+  ];
+  const effChain = chainOptions.includes(chain) ? chain : chainOptions[0] || "bsc";
+
+  const finish = (msg: string) => {
+    show(msg, "success");
+    qc.invalidateQueries({ queryKey: ["portal-invoices"] });
+    qc.invalidateQueries({ queryKey: ["portal-payments"] });
+    qc.invalidateQueries({ queryKey: ["portal-pay-options"] });
+    setTxid(""); setFile(null);
+    setTimeout(onClose, 800);
+  };
+
+  const submitTxid = async () => {
+    if (!invoice || !txid.trim()) { show("شناسهٔ تراکنش را وارد کنید", "warning"); return; }
+    setBusy(true);
+    try {
+      const r = await portalPayTxid({ invoice_id: invoice.id, txid: txid.trim(), chain: effChain });
+      if (r.status === "ok" || r.status === "reopened") finish(r.message);
+      else show(r.message, "warning");
+    } catch (e) { show(errMsg(e), "error"); }
+    finally { setBusy(false); }
+  };
+
+  const submitReceipt = async () => {
+    if (!invoice || !file) { show("یک تصویر رسید انتخاب کنید", "warning"); return; }
+    setBusy(true);
+    try {
+      const r = await portalPayScreenshot(invoice.id, file);
+      if (r.status === "ok") finish(r.message);
+      else show(r.message, "warning");
+    } catch (e) { show(errMsg(e), "error"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="sm" fullWidth>
+      {toast}
+      <DialogTitle sx={{ fontWeight: 800 }}>
+        پرداخت فاکتور {invoice?.period_label}
+      </DialogTitle>
+      <DialogContent dividers>
+        {isLoading ? (
+          <Box sx={{ display: "grid", placeItems: "center", py: 4 }}><CircularProgress /></Box>
+        ) : isError || !opts ? (
+          <Alert severity="error">خطا در بارگذاری اطلاعات پرداخت.</Alert>
+        ) : opts.pending ? (
+          <Alert severity="info">برای این فاکتور قبلاً پرداختی ثبت شده و در انتظار تأیید است.</Alert>
+        ) : !opts.payable ? (
+          <Alert severity="warning">این فاکتور در حال حاضر قابل پرداخت نیست.</Alert>
+        ) : (
+          <Stack spacing={1.5}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Typography color="text.secondary">مبلغ قابل پرداخت:</Typography>
+              <Typography sx={{ fontWeight: 850, fontSize: 18 }}>{fmtToman(opts.invoice.amount_toman)}</Typography>
+            </Stack>
+            <Divider />
+
+            {m!.usdt && (
+              <Box>
+                <Chip size="small" color="success" label="USDT — شبکهٔ BEP-20 (BSC)" sx={{ fontWeight: 700 }} />
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
+                  مبلغ: {opts.invoice.amount_usdt.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT
+                  — ⚠️ فقط شبکهٔ BEP-20؛ واریز از شبکهٔ دیگر = از‌دست‌رفتن وجه.
+                </Typography>
+                <CopyRow label="آدرس کیف پول USDT" value={m!.wallet} show={show} />
+              </Box>
+            )}
+            {m!.ton && (
+              <Box>
+                <Chip size="small" color="info" label="تون‌کوین (TON)" sx={{ fontWeight: 700 }} />
+                {m!.amount_ton != null && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
+                    مبلغ تقریبی: {m!.amount_ton.toLocaleString("en-US", { maximumFractionDigits: 2 })} TON — فقط روی شبکهٔ TON واریز شود.
+                  </Typography>
+                )}
+                <CopyRow label="آدرس کیف پول TON" value={m!.ton_address} show={show} />
+              </Box>
+            )}
+            {m!.card && (
+              <Box>
+                <Chip size="small" color="warning" label="کارت‌به‌کارت" sx={{ fontWeight: 700 }} />
+                <CopyRow label="شمارهٔ کارت" value={m!.card_number} show={show} />
+                {m!.card_holder && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
+                    به نام: {m!.card_holder}
+                  </Typography>
+                )}
+              </Box>
+            )}
+
+            <Divider />
+
+            {canTxid && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                  ارسال شناسهٔ تراکنش (TXID)
+                </Typography>
+                {chainOptions.length > 1 && (
+                  <ToggleButtonGroup
+                    size="small"
+                    exclusive
+                    value={effChain}
+                    onChange={(_, v) => v && setChain(v)}
+                    sx={{ mb: 1 }}
+                  >
+                    {m!.usdt && <ToggleButton value="bsc">USDT</ToggleButton>}
+                    {m!.ton && <ToggleButton value="ton">TON</ToggleButton>}
+                  </ToggleButtonGroup>
+                )}
+                <TextField
+                  fullWidth
+                  size="small"
+                  placeholder="شناسهٔ تراکنش یا لینک آن را اینجا بچسبانید"
+                  value={txid}
+                  onChange={(e) => setTxid(e.target.value)}
+                  inputProps={{ dir: "ltr" }}
+                />
+                <Button
+                  variant="contained"
+                  sx={{ mt: 1 }}
+                  disabled={busy || !txid.trim()}
+                  onClick={submitTxid}
+                >
+                  ارسال شناسهٔ تراکنش
+                </Button>
+              </Box>
+            )}
+
+            {canReceipt && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, mt: canTxid ? 1 : 0 }}>
+                  ارسال تصویر رسید
+                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <Button component="label" variant="outlined" startIcon={<UploadFileIcon />}>
+                    انتخاب تصویر
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(e) => setFile(e.target.files?.[0] || null)}
+                    />
+                  </Button>
+                  {file && <Typography variant="caption" noWrap sx={{ maxWidth: 160 }}>{file.name}</Typography>}
+                  <Button variant="contained" disabled={busy || !file} onClick={submitReceipt}>
+                    ارسال رسید
+                  </Button>
+                </Stack>
+              </Box>
+            )}
+
+            {!canTxid && !canReceipt && (
+              <Alert severity="info">روشِ پرداختی پیکربندی نشده است؛ با پشتیبانی هماهنگ کنید.</Alert>
+            )}
+          </Stack>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -43,6 +43,35 @@ async def notify_owner(
         await bot.session.close()
 
 
+async def notify_owner_photo(
+    session: AsyncSession, photo_path: str, caption: str, *, reply_markup=None
+) -> bool:
+    """Send a local image (e.g. an uploaded payment receipt) to the owner's chat with an
+    HTML caption + optional inline buttons. Used by the web portal, which has no Telegram
+    file_id to forward (unlike the bot). Returns True if delivered."""
+    from aiogram.types import FSInputFile
+
+    owner_chat = await settings_service.get(session, "owner_chat_id", "") or ""
+    if not owner_chat:
+        return False
+    bot = await build_bot(session)
+    if bot is None:
+        return False
+    from app.bot.rtl import rtl
+
+    try:
+        await bot.send_photo(
+            int(owner_chat), FSInputFile(photo_path), caption=rtl(caption),
+            parse_mode="HTML", reply_markup=reply_markup,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("notify_owner_photo failed", exc_info=True)
+        return False
+    finally:
+        await bot.session.close()
+
+
 def user_link(reseller) -> str:
     """An HTML link to a reseller's Telegram profile (clickable in the owner's chat).
     The name is HTML-escaped so a name with <, > or & can't break the message or inject markup."""

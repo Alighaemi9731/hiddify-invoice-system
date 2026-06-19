@@ -18,10 +18,12 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.codes import payment_code
 from app.models import Invoice, Payment, Reseller
 from app.models.enums import (
     DeliveryKind,
     InvoiceStatus,
+    PaymentMethod,
     PaymentStatus,
 )
 from app.services import financial_archive, notifier, rates, settings_service
@@ -32,6 +34,139 @@ USDT_DECIMALS = 18
 
 # Owed = delivered but not yet paid.
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+
+
+@dataclass
+class SubmitResult:
+    """Outcome of a reseller payment submission. `user_message` is the plain-Persian reply to
+    show the reseller (identical on the bot and the web portal). When `notify` is set the caller
+    should send the owner the rich review (built by the bot's `_payment_review_html`) with
+    confirm/reject buttons, prefixed by `owner_intro`."""
+
+    status: str  # ok | reopened | dup_confirmed | dup_pending | wrong_owner | not_payable | pending_exists
+    user_message: str
+    payment: Payment | None = None
+    invoice: Invoice | None = None
+    notify: bool = False
+    owner_intro: str = ""
+
+
+async def _pending_payment_for_invoice(session: AsyncSession, invoice_id: int | None) -> Payment | None:
+    """The PENDING payment already submitted for this invoice (if any) — used to block a
+    duplicate submission so one invoice never spawns several pending payments."""
+    if not invoice_id:
+        return None
+    return (
+        await session.execute(
+            select(Payment).where(
+                Payment.invoice_id == invoice_id, Payment.status == PaymentStatus.pending
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def submit_reseller_payment(
+    session: AsyncSession,
+    *,
+    reseller_ids: set[int],
+    invoice_id: int | None,
+    txid: str | None = None,
+    chain: str = "bsc",
+    screenshot: bool = False,
+) -> SubmitResult:
+    """Validate + create a PENDING payment for one OWED invoice the caller owns. Shared by the
+    Telegram bot and the web portal so the safety rules are identical on both surfaces:
+      * a tx hash already in the system is never duplicated (confirmed/pending blocked; a
+        REJECTED one is re-opened only for the reseller it belongs to);
+      * the invoice is re-checked under a row lock — must still belong to the caller, be OWED,
+        and not be deferred to a future date (no mis-attributing money to a stale selection);
+      * one pending payment per invoice (no 2–3 rows for one transfer).
+    Never auto-confirms — the owner decides. The file save for a screenshot proof is done by the
+    caller (it needs the new payment id)."""
+    from app.services.periods import today as tehran_today
+
+    if txid:
+        existing = (
+            await session.execute(select(Payment).where(Payment.txid == txid))
+        ).scalars().first()
+        if existing:
+            if existing.status == PaymentStatus.confirmed:
+                return SubmitResult("dup_confirmed", "این تراکنش قبلاً ثبت و تأیید شده است.")
+            if existing.status == PaymentStatus.pending:
+                return SubmitResult("dup_pending", "این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
+            # Rejected → re-open the SAME row (txid is unique), but only for its real owner so
+            # nobody who happens to know a tx hash can resurrect/claim another's payment.
+            if existing.reseller_id not in reseller_ids:
+                return SubmitResult("wrong_owner", "این شناسهٔ تراکنش به حساب شما مربوط نیست.")
+            existing.status = PaymentStatus.pending
+            if "[resubmitted]" not in (existing.note or ""):
+                existing.note = (existing.note or "") + " [resubmitted]"
+            await session.commit()
+            return SubmitResult(
+                "reopened",
+                "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
+                f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}",
+                payment=existing, notify=True,
+                owner_intro="🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.",
+            )
+
+    # Re-validate the chosen invoice under lock. It could have been paid/canceled/reverted/
+    # re-deadlined between the button tap and the proof arriving.
+    fresh = await session.get(Invoice, invoice_id, with_for_update=True) if invoice_id else None
+    if (
+        fresh is None
+        or fresh.reseller_id not in reseller_ids
+        or fresh.status not in _OWED
+        or (fresh.deferred_until and fresh.deferred_until > tehran_today())
+    ):
+        return SubmitResult(
+            "not_payable",
+            "این فاکتور دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
+            "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید.",
+        )
+
+    if await _pending_payment_for_invoice(session, fresh.id) is not None:
+        msg = (
+            "برای این فاکتور قبلاً رسید فرستاده‌اید که در انتظار تأیید است؛ "
+            "لطفاً منتظر بررسیِ پشتیبانی بمانید. (نیازی به ارسال دوباره نیست.)"
+            if screenshot else
+            "برای این فاکتور قبلاً پرداختی ثبت کرده‌اید که در انتظار تأیید است؛ "
+            "لطفاً منتظر بررسیِ پشتیبانی بمانید."
+        )
+        return SubmitResult("pending_exists", msg)
+
+    if screenshot:
+        payment = Payment(
+            reseller_id=fresh.reseller_id, invoice_id=fresh.id,
+            method=PaymentMethod.screenshot, status=PaymentStatus.pending,
+            note="رسید تصویری (در انتظار بررسی مالک)",
+        )
+    else:
+        method = PaymentMethod.ton_txid if chain == "ton" else PaymentMethod.usdt_txid
+        payment = Payment(
+            reseller_id=fresh.reseller_id, invoice_id=fresh.id,
+            method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
+        )
+    session.add(payment)
+    await session.commit()
+
+    if screenshot:
+        user_message = (
+            "✅ رسید شما دریافت شد و در انتظار تأیید پشتیبانی است.\n"
+            "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. "
+            "(نیازی به ارسال دوباره نیست.)\n"
+            f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
+        )
+        owner_intro = "🧾 رسید پرداخت جدید — منتظر تأیید شماست."
+    else:
+        label = "TON" if chain == "ton" else "USDT"
+        user_message = (
+            f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
+            "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
+            f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
+        )
+        owner_intro = "💳 پرداخت جدید ثبت شد و منتظر تأیید شماست."
+    return SubmitResult("ok", user_message, payment=payment, invoice=fresh, notify=True, owner_intro=owner_intro)
 
 
 async def _reseller_has_other_due(

@@ -46,12 +46,15 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 # ------------------------------- JWT ---------------------------------
-def create_access_token(subject: str, extra: dict | None = None) -> str:
+def create_access_token(
+    subject: str, extra: dict | None = None, *, expires_minutes: int | None = None
+) -> str:
     now = dt.datetime.now(dt.timezone.utc)
+    ttl = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
     payload: dict = {
         "sub": subject,
         "iat": now,
-        "exp": now + dt.timedelta(minutes=settings.access_token_expire_minutes),
+        "exp": now + dt.timedelta(minutes=ttl),
     }
     if extra:
         payload.update(extra)

@@ -221,9 +221,11 @@ def test_restore_held_when_other_due_invoice_remains(tmp_path):
 
 
 # ------------------------------ bot revalidation ------------------------------
-def test_revalidate_payable_rejects_stale_invoice(tmp_path):
+def test_submit_revalidates_stale_invoice(tmp_path):
+    # The payable re-validation now lives in payments.submit_reseller_payment: an owed invoice
+    # the caller owns is accepted; paid/canceled/future-deferred/other-owner are rejected.
     async def body(s):
-        from app.bot import handlers
+        from app.services import payments
         r = _reseller()
         s.add(r)
         await s.flush()
@@ -235,11 +237,16 @@ def test_revalidate_payable_rejects_stale_invoice(tmp_path):
         s.add_all([owed, paid, canceled, deferred])
         await s.commit()
         ids = {r.id}
-        assert (await handlers._revalidate_payable(s, owed, ids)) is not None
-        assert (await handlers._revalidate_payable(s, paid, ids)) is None
-        assert (await handlers._revalidate_payable(s, canceled, ids)) is None
-        assert (await handlers._revalidate_payable(s, deferred, ids)) is None
-        assert (await handlers._revalidate_payable(s, owed, {9999})) is None  # not owner's
+
+        async def status(inv_id, ids_, tx):
+            return (await payments.submit_reseller_payment(
+                s, reseller_ids=ids_, invoice_id=inv_id, txid=tx)).status
+
+        assert await status(owed.id, ids, "t1") == "ok"
+        assert await status(paid.id, ids, "t2") == "not_payable"
+        assert await status(canceled.id, ids, "t3") == "not_payable"
+        assert await status(deferred.id, ids, "t4") == "not_payable"
+        assert await status(owed.id, {9999}, "t5") == "not_payable"  # not owner's
 
     _run(body, tmp_path, "p4.db")
 

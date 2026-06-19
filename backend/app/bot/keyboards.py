@@ -25,6 +25,7 @@ def reseller_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📄 فاکتور علی‌الحساب (ماه جاری)", callback_data="menu:interim")],
             [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
              InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],
+            [InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", callback_data="menu:portal")],
             [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
             [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support"),
              InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],

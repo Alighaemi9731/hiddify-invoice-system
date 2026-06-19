@@ -441,6 +441,12 @@ async def cmd_panels(message: Message) -> None:
         await _send_panels(message.answer, message.from_user.id, s)
 
 
+@router.message(Command("portal"))
+async def cmd_portal(message: Message) -> None:
+    async with SessionLocal() as s:
+        await _send_portal_link(message.answer, message.from_user.id, s)
+
+
 @router.message(Command("interim"))
 async def cmd_interim(message: Message, bot: Bot) -> None:
     async with SessionLocal() as s:
@@ -678,6 +684,13 @@ async def cb_register(cb: CallbackQuery) -> None:
 async def cb_panels(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_panels(cb.message.answer, cb.from_user.id, s)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "menu:portal")
+async def cb_portal(cb: CallbackQuery) -> None:
+    async with SessionLocal() as s:
+        await _send_portal_link(cb.message.answer, cb.from_user.id, s)
     await cb.answer()
 
 
@@ -1737,6 +1750,32 @@ async def _send_panels(answer, chat_id: int, session) -> None:
     await answer(rtl("\n".join(lines)), parse_mode="HTML")
 
 
+async def _send_portal_link(answer, chat_id: int, session) -> None:
+    """Give the reseller a one-time link that opens the standalone web portal already logged in
+    (no password). The link carries a short-lived signed token the site exchanges for a session."""
+    resellers = await _resellers_for_chat(session, chat_id)
+    if not resellers:
+        await answer(await texts.render(session, "tpl_link_not_found"))
+        return
+    domain = (await settings_service.get(session, "server_domain", "") or "").strip()
+    domain = domain.replace("https://", "").replace("http://", "").strip("/")
+    if not domain:
+        await answer(rtl("🌐 پنلِ تحتِ وب هنوز پیکربندی نشده است؛ لطفاً به پشتیبانی اطلاع دهید."))
+        return
+    from app.core.portal_auth import create_portal_login_token
+
+    url = f"https://{domain}/portal/login?t={create_portal_login_token(chat_id)}"
+    msg = (
+        "🌐 ورود به پنلِ تحتِ وب\n\n"
+        "برای دیدنِ فاکتورها، پرداخت، آمار و مدیریتِ زیرمجموعه‌ها در سایت، روی لینکِ زیر بزنید "
+        "(این لینک تا ۱۵ دقیقه معتبر است):\n\n"
+        f"<a href=\"{html.escape(url, quote=True)}\">باز کردنِ پنلِ من</a>\n\n"
+        "یا این آدرس را کپی کنید:\n"
+        f"<code>{html.escape(url)}</code>"
+    )
+    await answer(rtl(msg), parse_mode="HTML", disable_web_page_preview=True)
+
+
 # --------------------------- sub-reseller management helpers ---------------------------
 async def _owns_sub(session, chat_id: int, sub: Reseller) -> bool:
     """True if `sub` is a descendant of one of the chat's own resellers (same panel).
@@ -2210,24 +2249,6 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None) -> str:
     return "\n".join(lines)
 
 
-async def _revalidate_payable(session, invoice, reseller_ids: set[int]):
-    """Re-check a chosen invoice under lock at submission time: it must still belong to the
-    caller, still be OWED, and not be deferred to a future date. The invoice could have been
-    paid / canceled / reverted / re-deadlined between the button tap and the proof arriving —
-    attaching a payment to that stale invoice would mis-settle or mis-attribute the money.
-    Returns the fresh invoice if it is still payable, otherwise None."""
-    if invoice is None:
-        return None
-    fresh = await session.get(Invoice, invoice.id, with_for_update=True)
-    if fresh is None or fresh.reseller_id not in reseller_ids:
-        return None
-    if fresh.status not in _OWED:
-        return None
-    if fresh.deferred_until and fresh.deferred_until > tehran_today():
-        return None
-    return fresh
-
-
 async def _handle_txid(
     message: Message,
     session,
@@ -2239,75 +2260,24 @@ async def _handle_txid(
     """Record a submitted tx hash (USDT/BSC or TON) as a PENDING payment for MANUAL review —
     no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
     confirms/rejects."""
+    from app.services import payments
+
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
-    existing = (
-        await session.execute(select(Payment).where(Payment.txid == txid))
-    ).scalars().first()
-    if existing:
-        if existing.status == PaymentStatus.confirmed:
-            await message.answer("این تراکنش قبلاً ثبت و تأیید شده است.")
-            return
-        if existing.status == PaymentStatus.pending:
-            await message.answer("این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
-            return
-        # Rejected → the reject notice told them «دوباره ارسال کنید», and the txid is unique, so
-        # RE-OPEN the same row for another manual review instead of dead-ending them. But only
-        # the reseller the payment belongs to may re-open it (don't let someone who happens to
-        # know another's tx hash resurrect — or claim — their payment).
-        if existing.reseller_id not in {r.id for r in resellers}:
-            await message.answer("این شناسهٔ تراکنش به حساب شما مربوط نیست.")
-            return
-        existing.status = PaymentStatus.pending
-        if "[resubmitted]" not in (existing.note or ""):
-            existing.note = (existing.note or "") + " [resubmitted]"
-        await session.commit()
-        await message.answer(rtl(
-            "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
-            f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}"
-        ))
-        review = await _payment_review_html(session, existing, reseller=resellers[0])
-        await owner_notify.notify_owner(
-            session, "🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.\n\n" + review,
-            html=True, reply_markup=keyboards.owner_payment_detail_keyboard(existing.id))
-        return
-    # Re-validate the exact invoice chosen in «پرداخت فاکتور». Never move a proof to a
-    # different debt if the selection became stale while the customer was paying.
-    invoice = await _revalidate_payable(session, invoice, {r.id for r in resellers})
-    if invoice is None:
-        await message.answer(
-            "این فاکتور دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
-            "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید."
-        )
-        return
-    # One pending payment per invoice → don't create a duplicate for an invoice under review.
-    if await _pending_payment_for_invoice(session, invoice.id) is not None:
-        await message.answer(
-            "برای این فاکتور قبلاً پرداختی ثبت کرده‌اید که در انتظار تأیید است؛ "
-            "لطفاً منتظر بررسیِ پشتیبانی بمانید."
-        )
-        return
-    method = PaymentMethod.ton_txid if chain == "ton" else PaymentMethod.usdt_txid
-    payment = Payment(
-        reseller_id=invoice.reseller_id,
-        invoice_id=invoice.id,
-        method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
+    # Shared validation + creation (identical rules on the bot and the web portal).
+    result = await payments.submit_reseller_payment(
+        session, reseller_ids={r.id for r in resellers},
+        invoice_id=invoice.id if invoice else None, txid=txid, chain=chain,
     )
-    session.add(payment)
-    await session.commit()
-
-    label = "TON" if chain == "ton" else "USDT"
-    await message.answer(rtl(
-        f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
-        "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
-        f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
-    ))
-    review = await _payment_review_html(session, payment, reseller=resellers[0], inv=invoice)
-    await owner_notify.notify_owner(
-        session, "💳 پرداخت جدید ثبت شد و منتظر تأیید شماست.\n\n" + review,
-        html=True, reply_markup=keyboards.owner_payment_detail_keyboard(payment.id))
+    await message.answer(rtl(result.user_message))
+    if result.notify and result.payment is not None:
+        review = await _payment_review_html(
+            session, result.payment, reseller=resellers[0], inv=result.invoice)
+        await owner_notify.notify_owner(
+            session, result.owner_intro + "\n\n" + review,
+            html=True, reply_markup=keyboards.owner_payment_detail_keyboard(result.payment.id))
 
 
 async def _handle_payment_proof(
@@ -2316,36 +2286,23 @@ async def _handle_payment_proof(
     """A reseller sent a deposit screenshot as proof of payment. Store it, link it to the
     exact invoice chosen in «پرداخت فاکتور» as a PENDING payment, and forward it to the
     owner for manual confirmation."""
+    from app.services import payments
+
     resellers = await _resellers_for_chat(session, message.from_user.id)
     if not resellers:
         # Not a registered reseller → can't attribute the payment.
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
-    # Re-validate the exact chosen invoice. A stale selection must not silently attach this
-    # receipt to another unpaid invoice.
-    invoice = await _revalidate_payable(session, invoice, {r.id for r in resellers})
-    if invoice is None:
-        await message.answer(
-            "این فاکتور دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
-            "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید."
-        )
-        return
-    # One pending payment per invoice — block a duplicate receipt for an invoice already
-    # awaiting review (so a customer who sends 2–3 receipts doesn't spawn 2–3 payments).
-    if await _pending_payment_for_invoice(session, invoice.id) is not None:
-        await message.answer(
-            "برای این فاکتور قبلاً رسید فرستاده‌اید که در انتظار تأیید است؛ "
-            "لطفاً منتظر بررسیِ پشتیبانی بمانید. (نیازی به ارسال دوباره نیست.)"
-        )
-        return
-    payment = Payment(
-        reseller_id=invoice.reseller_id,
-        invoice_id=invoice.id,
-        method=PaymentMethod.screenshot, status=PaymentStatus.pending,
-        note="رسید تصویری (در انتظار بررسی مالک)",
+    # Shared validation + creation (identical rules on the bot and the web portal).
+    result = await payments.submit_reseller_payment(
+        session, reseller_ids={r.id for r in resellers},
+        invoice_id=invoice.id if invoice else None, screenshot=True,
     )
-    session.add(payment)
-    await session.commit()
+    if result.status != "ok" or result.payment is None:
+        await message.answer(rtl(result.user_message))
+        return
+    payment = result.payment
+    invoice = result.invoice
 
     # Download the largest rendition of the photo to disk for the panel to display.
     photo = message.photo[-1]
@@ -2361,11 +2318,7 @@ async def _handle_payment_proof(
     except Exception:  # noqa: BLE001 — keep the pending payment even if the file fails
         log.warning("failed to save payment proof for payment %s", payment.id, exc_info=True)
 
-    await message.answer(rtl(
-        "✅ رسید شما دریافت شد و در انتظار تأیید پشتیبانی است.\n"
-        "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. (نیازی به ارسال دوباره نیست.)\n"
-        f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
-    ))
+    await message.answer(rtl(result.user_message))
 
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()

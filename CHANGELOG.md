@@ -8,6 +8,44 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.98 - 2026-06-19
+
+### Added (Reseller web portal — standalone site, Telegram one-time login)
+
+Resellers can now log into a full standalone website (besides the Telegram bot) and see/do
+everything that concerns them. Login is via Telegram but **not** a Mini App: the bot hands a
+one-time link that opens the real site already signed in (no passwords for ~400 resellers).
+
+- **Auth** — a new reseller-bot button/command «🌐 ورود به پنلِ تحتِ وب» (`/portal`) mints a
+  short-lived (15-min) **signed** login token and replies with `https://<server_domain>/portal/login?t=…`.
+  The site exchanges it (`POST /api/portal/auth/exchange`) for a ~7-day reseller session token
+  (`role="reseller"`). Stateless (bot + backend share `SECRET_KEY`) — no new table/migration.
+  **Strict role isolation:** reseller tokens reach ONLY `/api/portal/*` (owner's `get_current_subject`
+  rejects them); owner tokens are rejected by the new `get_current_reseller` dependency. Every
+  request is scoped to the caller's own reseller rows — a reseller can never see another reseller's
+  or the owner's data; client-supplied ids are never trusted.
+- **View** — Dashboard (month-to-date sale estimate, daily-sale bar chart, per-reseller breakdown,
+  outstanding debt), Invoices (+PDF, owed flagged), Payments history, Sub-resellers (usage/GB-cap/
+  status), and Panel links (tap-to-copy). New read endpoints under `/api/portal`.
+- **Actions** — pay an owed invoice by **TXID** (USDT/BEP-20 or TON) or by uploading a **receipt
+  image**; set/clear a sub-reseller's monthly **GB cap**; **suspend/restore** a sub-reseller; and
+  **message support** (relayed to the owner's Telegram with a reply button). The owner receives the
+  same rich review + confirm/reject buttons as for bot-submitted payments.
+- **Shared payment core (no behavior drift):** extracted the bot's payment-submission rules into
+  `payments.submit_reseller_payment` — re-validate the chosen invoice under a row lock (owned + owed
+  + not future-deferred), block duplicate tx hashes (confirmed/pending) and re-open a rejected one
+  only for its owner, enforce one pending payment per invoice, and **never auto-confirm**. Both the
+  bot (`_handle_txid`/`_handle_payment_proof`) and the portal call it, so the safety rules are
+  identical on both surfaces.
+- **Frontend** — a self-contained `/portal` route group in the existing SPA: own axios instance
+  (`portal_token`), own auth context + layout, fully independent of the owner app and its first-run
+  setup gate, reusing the existing RTL glass theme + components.
+- Regression tests in `backend/tests/test_portal.py` (login-token roundtrip/expiry, owner/reseller
+  role isolation, per-reseller scoping of invoices/payments/PDF, the shared submit rules incl.
+  duplicate/reopen/one-pending/not-payable, sub-cap + ownership guards, support relay). NOTE: the
+  portal login link is shown only when the `server_domain` setting is configured (it is in
+  production). No database schema change.
+
 ## 1.37.97 - 2026-06-19
 
 ### Added (Dashboard — daily sale trend chart)
