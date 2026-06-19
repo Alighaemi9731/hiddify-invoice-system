@@ -1,9 +1,9 @@
 import { useState } from "react";
 import {
   Box, Button, Card, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, Grid, LinearProgress, Menu, MenuItem, Stack, Switch, TextField, Tooltip, Typography,
+  FormControlLabel, Grid, LinearProgress, Menu, MenuItem, Skeleton, Stack, Switch, TextField, Typography,
 } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
+import { useTheme } from "@mui/material/styles";
 import BlockIcon from "@mui/icons-material/esm/Block";
 import LockOpenIcon from "@mui/icons-material/esm/LockOpen";
 import SpeedIcon from "@mui/icons-material/esm/Speed";
@@ -12,11 +12,13 @@ import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   portalSubs, PortalSub, portalSetSubCap, portalSuspendSub, portalRestoreSub,
-  portalBumpSub, portalSubCanAddAdmin, openPortalSubPdf,
+  portalBumpSub, portalSubCanAddAdmin, openPortalSubPdf, portalSubSalesByDay,
 } from "../portalClient";
 import { DataState } from "../../components/DataState";
 import { useToast, errMsg } from "../../components/Toast";
 import CapacityBar from "../../components/CapacityBar";
+import EChart from "../../components/EChart";
+import { dailyTrendOption } from "../dailyTrend";
 import { fmtGb, fmtNum, fmtToman } from "../../format";
 import { EmptyState } from "../ui";
 
@@ -41,33 +43,31 @@ function CapMeter({ sub }: { sub: PortalSub }) {
   );
 }
 
-// Tiny monthly-sale trend (last few months, oldest→newest). Cheap inline bars (no chart lib per card).
-function Sparkline({ months }: { months: PortalSub["months"] }) {
+// Current-month daily sale trend per sub — same look as the owner dashboard's «روند فروش روزانه».
+// Lazily fetched per card (React Query dedupes/caches).
+function SubDailyChart({ subId }: { subId: number }) {
   const theme = useTheme();
-  const accent = theme.palette.primary.main;
-  const data = [...months].reverse(); // API sends newest-first → chronological
-  const max = Math.max(...data.map((m) => m.amount_toman), 1);
-  if (!data.length) return null;
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["portal-sub-salesbyday", subId],
+    queryFn: () => portalSubSalesByDay(subId),
+    staleTime: 300000,
+  });
+  const empty = !data.length || data.every((d) => !d.amount_toman);
   return (
     <Box sx={{ mt: 1.5 }}>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
-        روندِ فروش (۶ ماه)
+        روندِ فروشِ روزانه (ماهِ جاری)
       </Typography>
-      <Stack direction="row" spacing={0.6} alignItems="flex-end" sx={{ height: 40 }}>
-        {data.map((m) => {
-          const h = Math.max(3, Math.round((m.amount_toman / max) * 40));
-          return (
-            <Tooltip key={m.label} title={`${m.label}: ${fmtToman(m.amount_toman)}`}>
-              <Box sx={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%" }}>
-                <Box sx={{
-                  height: h, borderRadius: "3px 3px 0 0",
-                  background: `linear-gradient(180deg, ${accent}, ${alpha(accent, 0.45)})`,
-                }} />
-              </Box>
-            </Tooltip>
-          );
-        })}
-      </Stack>
+      {isLoading ? (
+        <Skeleton variant="rounded" height={120} />
+      ) : empty ? (
+        <Typography variant="caption" color="text.disabled" sx={{ display: "block", py: 2, textAlign: "center" }}>
+          فروشی این ماه ثبت نشده است.
+        </Typography>
+      ) : (
+        <EChart option={dailyTrendOption(theme, data, { compact: true })} height={120}
+          ariaLabel="روند فروش روزانهٔ زیرمجموعه" />
+      )}
     </Box>
   );
 }
@@ -192,7 +192,7 @@ export default function PortalSubs() {
                         </Typography>
                       </Box>
 
-                      <Sparkline months={sub.months} />
+                      <SubDailyChart subId={sub.id} />
 
                       <Box sx={{ mt: 1.5 }}><CapMeter sub={sub} /></Box>
 

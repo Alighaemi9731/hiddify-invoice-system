@@ -13,8 +13,7 @@ import EChart from "../../components/EChart";
 import { CountUp, Reveal } from "../../components/motion";
 import { fmtGb, fmtNum, fmtToman } from "../../format";
 import { SectionCard, EmptyState } from "../ui";
-
-const FONT = "Vazirmatn, sans-serif";
+import { dailyTrendOption } from "../dailyTrend";
 
 export default function PortalDashboard() {
   const [period, setPeriod] = useState(currentPeriod());
@@ -27,61 +26,8 @@ export default function PortalDashboard() {
 
   const trend = data?.trend || [];
   const perReseller = data?.per_reseller || [];
-  const accent = theme.palette.primary.main;
   const trendEmpty = !trend.length || trend.every((d) => !d.amount_toman);
-
-  const fmtAxisToman = (v: number) =>
-    v >= 1_000_000 ? `${fmtNum(Math.round(v / 1_000_000))}م`
-      : v >= 1_000 ? `${fmtNum(Math.round(v / 1_000))}هزار` : fmtNum(v);
-
-  const tooltip = {
-    backgroundColor: isDark ? "rgba(14,16,32,0.88)" : "rgba(255,255,255,0.88)",
-    borderColor: isDark ? "rgba(255,255,255,0.14)" : "rgba(200,210,255,0.55)",
-    textStyle: { color: isDark ? "#e2e8f0" : "#334155", fontFamily: FONT },
-  };
-  const trendOption = {
-    textStyle: { fontFamily: FONT },
-    grid: { left: 6, right: 14, top: 18, bottom: 4, containLabel: true },
-    tooltip: {
-      trigger: "axis", axisPointer: { type: "shadow" },
-      formatter: (params: any) => {
-        const p = Array.isArray(params) ? params[0] : params;
-        const row = trend[p.dataIndex];
-        return `${row?.date ?? ""}<br/><b>${fmtToman(p.value || 0)}</b>`;
-      },
-      ...tooltip,
-    },
-    xAxis: {
-      type: "category",
-      data: trend.map((d) => fmtNum(d.day)),
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: alpha(theme.palette.text.secondary, 0.25) } },
-      axisLabel: {
-        color: theme.palette.text.secondary, fontFamily: FONT, fontSize: 11,
-        interval: trend.length > 16 ? 1 : 0,
-      },
-    },
-    yAxis: {
-      type: "value",
-      axisLabel: { color: theme.palette.text.secondary, fontFamily: FONT, fontSize: 11, formatter: fmtAxisToman },
-      splitLine: { lineStyle: { color: theme.palette.divider } },
-    },
-    series: [{
-      type: "bar",
-      data: trend.map((d) => d.amount_toman),
-      barMaxWidth: 18,
-      itemStyle: {
-        borderRadius: [6, 6, 0, 0],
-        color: {
-          type: "linear", x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [
-            { offset: 0, color: accent },
-            { offset: 1, color: alpha(accent, isDark ? 0.35 : 0.45) },
-          ],
-        },
-      },
-    }],
-  };
+  const trendOption = dailyTrendOption(theme, trend);
 
   const [welcome, setWelcome] = useState(() => !localStorage.getItem("portal_welcome_dismissed"));
   const dismissWelcome = () => { localStorage.setItem("portal_welcome_dismissed", "1"); setWelcome(false); };

@@ -460,3 +460,52 @@ def test_notifications_scoped_and_sorted():
         keys = " ".join(e["key"] for e in evs)
         assert "bbb" not in keys  # Bita's txid never surfaces
     _run(body)
+
+
+# ===================== follow-ups: daily trend + capacity approve =====================
+def test_sub_sales_by_day_ownership_and_shape():
+    async def body(s):
+        _ali, sara, other = await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        rows = await portal.sub_sales_by_day(sub_id=sara.id, period="2026-06", ctx=ctx_a, session=s)
+        assert len(rows) == 30  # June has 30 days
+        assert {"day", "date", "amount_toman"} <= set(rows[0])
+        assert rows[0]["day"] == 1 and rows[-1]["day"] == 30
+        # foreign sub → 404
+        with pytest.raises(HTTPException) as ei:
+            await portal.sub_sales_by_day(sub_id=other.id, period="2026-06", ctx=ctx_a, session=s)
+        assert ei.value.status_code == 404
+        # bad period → 400
+        with pytest.raises(HTTPException) as bad:
+            await portal.sub_sales_by_day(sub_id=sara.id, period="2026-13", ctx=ctx_a, session=s)
+        assert bad.value.status_code == 400
+    _run(body)
+
+
+def test_capacity_request_attaches_action_keyboard(monkeypatch):
+    captured = {}
+
+    async def _capture(session, text, *, html=False, reply_markup=None):
+        captured["markup"] = reply_markup
+        return True
+    monkeypatch.setattr("app.services.owner_notify.notify_owner", _capture)
+
+    async def body(s):
+        ali, _sara, _other = await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        await portal.capacity_request(
+            portal.CapacityRequestBody(reseller_id=ali.id, amount=150), ctx=ctx_a, session=s)
+        data = [b.callback_data for row in captured["markup"].inline_keyboard for b in row]
+        assert any(d == f"capok:{ali.id}:150" for d in data)   # approve the requested amount
+        assert any(d == f"capmore:{ali.id}" for d in data)     # custom amount
+        assert any(d == f"capno:{ali.id}" for d in data)       # reject
+    _run(body)
+
+
+def test_capacity_request_keyboard_variants():
+    from app.bot import keyboards as kb
+    with_amount = [b.callback_data for row in kb.capacity_request_keyboard(7, 200).inline_keyboard for b in row]
+    assert "capok:7:200" in with_amount and "capmore:7" in with_amount and "capno:7" in with_amount
+    no_amount = [b.callback_data for row in kb.capacity_request_keyboard(7, 0).inline_keyboard for b in row]
+    assert not any(d.startswith("capok:") for d in no_amount)  # nothing to approve without an amount
+    assert "capmore:7" in no_amount and "capno:7" in no_amount

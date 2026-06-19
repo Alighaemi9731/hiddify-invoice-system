@@ -87,6 +87,25 @@ def broadcast_panel_keyboard(panels: list[tuple[int, str]]) -> InlineKeyboardMar
     )
 
 
+def capacity_request_keyboard(reseller_id: int, amount: int) -> InlineKeyboardMarkup:
+    """Owner actions on a reseller's capacity-increase request: approve the requested amount,
+    pick a custom amount, or reject. `amount` is the reseller's requested bump (0 = unspecified)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if amount and amount > 0:
+        rows.append([InlineKeyboardButton(
+            text=f"✅ تأیید (+{amount})", callback_data=f"capok:{reseller_id}:{amount}")])
+        rows.append([
+            InlineKeyboardButton(text="✏️ مبلغِ دیگر", callback_data=f"capmore:{reseller_id}"),
+            InlineKeyboardButton(text="❌ رد", callback_data=f"capno:{reseller_id}"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(text="✏️ تعیین و افزایش", callback_data=f"capmore:{reseller_id}"),
+            InlineKeyboardButton(text="❌ رد", callback_data=f"capno:{reseller_id}"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def support_reply_keyboard(user_id: int, message_id: int) -> InlineKeyboardMarkup:
     # Carry the user's original message id so the owner's reply quotes (replies to) it.
     return InlineKeyboardMarkup(

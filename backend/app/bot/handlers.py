@@ -55,6 +55,13 @@ class SubCapState(StatesGroup):
     waiting = State()
 
 
+class OwnerCapBumpState(StatesGroup):
+    """The owner is entering a custom capacity-increase amount for a reseller that requested
+    more capacity from the web portal (the reseller id is held in FSM data)."""
+
+    waiting = State()
+
+
 class PayState(StatesGroup):
     """A reseller chose ONE invoice to pay and is now sending its TXID / receipt photo
     (the chosen invoice id is held in FSM data as `pay_invoice_id`)."""
@@ -843,6 +850,43 @@ async def on_sub_cap_text(message: Message, state: FSMContext) -> None:
             await message.answer(f"✅ سقف حجم «{sub.name}» حذف شد (بدون محدودیت).")
 
 
+@router.message(OwnerCapBumpState.waiting)
+async def on_owner_cap_bump_text(message: Message, state: FSMContext) -> None:
+    """Owner typed a custom capacity-increase amount for a reseller that requested more from the
+    web portal. Apply the bump and notify the reseller."""
+    data = await state.get_data()
+    rid = data.get("cap_rid")
+    await state.clear()
+    raw = (message.text or "").strip().replace("٬", "").replace(",", "")
+    raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    if not raw.isdigit():
+        await message.answer("عدد نامعتبر بود. یک عددِ صحیح بفرستید یا /cancel.")
+        return
+    amount = int(raw)
+    if not (0 < amount <= 5000):
+        await message.answer("مقدار باید بین ۱ تا ۵۰۰۰ باشد.")
+        return
+    async with SessionLocal() as s:
+        from app.services import admin_capacity, notifier
+
+        r = await s.get(Reseller, rid) if rid else None
+        if r is None:
+            await message.answer("نماینده پیدا نشد.")
+            return
+        rname = r.name
+        try:
+            new_mu, _new_mau = await admin_capacity.bump_limits(s, r, amount)
+        except Exception as exc:  # noqa: BLE001
+            await message.answer(f"❌ افزایش ظرفیت ناموفق بود: {exc}")
+            return
+        await notifier.send_to_reseller(
+            s, r,
+            f"✅ درخواستِ افزایشِ ظرفیتِ شما تأیید شد.\nسقفِ جدیدِ کاربران: {new_mu}",
+            bot=message.bot,
+        )
+    await message.answer(f"✅ ظرفیت «{rname}» {amount}+ شد (سقف جدید: {new_mu}).")
+
+
 @router.callback_query(F.data == "menu:support")
 async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
@@ -1382,6 +1426,89 @@ async def cb_owner_bump(cb: CallbackQuery) -> None:
             return
         await cb.message.answer(f"✅ ظرفیت «{r.name}» {amount}+ شد (سقف جدید: {new_mu}).")
     await cb.answer("انجام شد")
+
+
+@router.callback_query(F.data.startswith("capok:"))
+async def cb_cap_approve(cb: CallbackQuery) -> None:
+    """Owner approved a reseller's web-portal capacity-increase request: apply the requested bump."""
+    _, rid_s, amount_s = cb.data.split(":")
+    rid, amount = int(rid_s), int(amount_s)
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import admin_capacity, notifier
+
+        r = await s.get(Reseller, rid)
+        if r is None:
+            await cb.answer("نماینده پیدا نشد.", show_alert=True)
+            return
+        rname = r.name
+        try:
+            new_mu, _new_mau = await admin_capacity.bump_limits(s, r, amount)
+        except Exception as exc:  # noqa: BLE001
+            await cb.answer(f"ناموفق: {exc}", show_alert=True)
+            return
+        await notifier.send_to_reseller(
+            s, r,
+            f"✅ درخواستِ افزایشِ ظرفیتِ شما تأیید شد.\nسقفِ جدیدِ کاربران: {new_mu}",
+            bot=cb.message.bot,
+        )
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)  # prevent double-tap
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.message.answer(f"✅ ظرفیت «{rname}» {amount}+ شد (سقف جدید: {new_mu}) و به نماینده اطلاع داده شد.")
+    await cb.answer("اعمال شد")
+
+
+@router.callback_query(F.data.startswith("capno:"))
+async def cb_cap_reject(cb: CallbackQuery) -> None:
+    """Owner rejected a reseller's capacity-increase request."""
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        from app.services import notifier
+
+        r = await s.get(Reseller, rid)
+        if r is None:
+            await cb.answer("نماینده پیدا نشد.", show_alert=True)
+            return
+        rname = r.name
+        await notifier.send_to_reseller(
+            s, r,
+            "❌ درخواستِ افزایشِ ظرفیتِ شما در حالِ حاضر تأیید نشد. برای جزئیات با پشتیبانی در تماس باشید.",
+            bot=cb.message.bot,
+        )
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.message.answer(f"❌ درخواستِ «{rname}» رد شد و به او اطلاع داده شد.")
+    await cb.answer("رد شد")
+
+
+@router.callback_query(F.data.startswith("capmore:"))
+async def cb_cap_more(cb: CallbackQuery, state: FSMContext) -> None:
+    """Owner wants to enter a custom capacity-increase amount for the requesting reseller."""
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        r = await s.get(Reseller, rid)
+        if r is None:
+            await cb.answer("نماینده پیدا نشد.", show_alert=True)
+            return
+        rname = r.name
+    await state.set_state(OwnerCapBumpState.waiting)
+    await state.update_data(cap_rid=rid)
+    await cb.message.answer(
+        f"➕ مقدارِ افزایشِ ظرفیت برای «{rname}» را به‌صورتِ عدد بفرستید (۱ تا ۵۰۰۰). برای لغو: /cancel"
+    )
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("orcinv:"))

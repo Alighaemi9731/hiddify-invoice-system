@@ -144,6 +144,10 @@ export async function openPortalSubPdf(subId: number, period: string) {
   window.open(url, "_blank");
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
+export const portalSubSalesByDay = (subId: number, period?: string) =>
+  portalApi.get(`/api/portal/subs/${subId}/sales-by-day`, { params: { period } })
+    .then((r) => r.data as { day: number; date: string; amount_toman: number }[]);
+
 export const portalBumpSub = (subId: number, amount: number) =>
   portalApi.post(`/api/portal/subs/${subId}/bump-limits`, { amount })
     .then((r) => r.data as { max_users: number; max_active_users: number });

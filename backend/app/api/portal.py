@@ -551,6 +551,38 @@ async def sub_pdf(
     return FileResponse(path, media_type="application/pdf", filename=filename)
 
 
+@router.get("/subs/{sub_id}/sales-by-day")
+async def sub_sales_by_day(
+    sub_id: int,
+    period: str | None = None,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """One of the caller's sub-resellers' daily sale trend for a month (sub + its subtree): one bucket
+    per day, height = that day's share by each service's creation date. Same shape/logic as the owner
+    dashboard's sales-by-day and the portal `/summary` trend."""
+    sub = await session.get(Reseller, sub_id)
+    if sub is None or not await _owns_sub(session, ctx, sub):
+        raise HTTPException(404, "Sub-reseller not found")
+    try:
+        p = parse_period(period) if period else current_month()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "دورهٔ نامعتبر است.") from exc
+    n_days = p.end.day
+    buckets = [0.0] * n_days
+    bundle = await reseller_report.node_invoice(session, sub, p)
+    if bundle:
+        for line in bundle.lines:
+            if line.start_date and p.contains(line.start_date):
+                buckets[line.start_date.day - 1] += line.usage_gb * bundle.price_per_gb
+    return [
+        {"day": i + 1,
+         "date": dt.date(p.start.year, p.start.month, i + 1).isoformat(),
+         "amount_toman": round(v)}
+        for i, v in enumerate(buckets)
+    ]
+
+
 class BumpBody(BaseModel):
     amount: int
 
@@ -656,7 +688,8 @@ async def capacity_request(
     from app.bot import keyboards as kb
 
     sent = await owner_notify.notify_owner(
-        session, msg, html=True, reply_markup=kb.support_reply_keyboard(ctx.chat_id, 0))
+        session, msg, html=True,
+        reply_markup=kb.capacity_request_keyboard(r.id, int(body.amount or 0)))
     if not sent:
         raise HTTPException(503, "در حال حاضر در دسترس نیست؛ بعداً تلاش کنید.")
     return {"ok": True}

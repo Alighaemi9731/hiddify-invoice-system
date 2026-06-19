@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.100 - 2026-06-19
+
+### Changed / Added (portal follow-ups)
+
+- **Sub-card sale trend → daily (current month).** Replaced the per-sub 6-month sparkline with a
+  **daily** bar chart for the current month — the same look as the owner dashboard's «روند فروش
+  روزانه» — so a reseller sees roughly how much each sub sold each day. New
+  `GET /api/portal/subs/{id}/sales-by-day?period=` (reuses `node_invoice` + the same daily bucketing
+  as `/summary` and `reports.sales_by_day`, `_owns_sub`-guarded). The dashboard's chart option was
+  extracted into a shared `dailyTrendOption` helper used by both, so they stay identical (the existing
+  daily chart is unchanged). Fetched lazily per card (cached).
+- **Capacity-increase request is now actionable for the owner.** A reseller's «درخواستِ افزایشِ
+  ظرفیت» no longer just asks the owner to free-text reply — the owner's Telegram message now carries
+  **«✅ تأیید (+N) / ✏️ مبلغِ دیگر / ❌ رد»** buttons. Approving applies the bump immediately via the
+  existing `admin_capacity.bump_limits`, «مبلغِ دیگر» prompts the owner for a custom amount (1–5000),
+  and either way the requesting reseller is notified of the outcome (`notifier.send_to_reseller`);
+  rejecting notifies a decline. Buttons are owner-only and removed after the action (no double-tap).
+  New `keyboards.capacity_request_keyboard` + bot handlers `capok`/`capmore`/`capno` +
+  `OwnerCapBumpState`. No DB schema change. Tests in `backend/tests/test_portal.py` (sales-by-day
+  ownership/shape/bad-period, request attaches the action keyboard, keyboard variants). 185 backend
+  tests pass; ruff + mypy clean; frontend tsc + build clean.
+
 ## 1.37.99 - 2026-06-19
 
 ### Added (Reseller portal — feature batch v2) + Subs ratio fix
