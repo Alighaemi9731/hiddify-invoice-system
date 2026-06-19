@@ -232,6 +232,12 @@ DEFS: list[SettingDef] = [
     SettingDef("server_domain", "", False, "deploy"),
     SettingDef("https_enabled", False, False, "deploy"),
     SettingDef("acme_email", "", False, "deploy"),
+    # Bot user-creation: top-level resellers create end-users from the bot. The owner curates the
+    # bounded option lists; an empty/zero value uses the default. Master toggle gates the feature.
+    SettingDef("user_create_enabled", True, False, "usercreate"),
+    SettingDef("user_create_gb_options", [20, 30, 50, 100], False, "usercreate"),
+    SettingDef("user_create_day_options", [30, 60], False, "usercreate"),
+    SettingDef("user_create_bulk_counts", [5, 10, 20], False, "usercreate"),
     # Message templates
     SettingDef("tpl_welcome", _TPL_WELCOME, False, "templates"),
     SettingDef("tpl_membership", _TPL_MEMBERSHIP, False, "templates"),
@@ -250,6 +256,12 @@ _DEF_BY_KEY = {d.key: d for d in DEFS}
 _API_READ_ONLY = {
     "owner_chat_id", "setup_done", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
     "ton_toman_auto", "last_backup_at",
+}
+# Bounded positive-integer option lists (deduped + sorted) — the bot user-creation menus.
+_POSITIVE_INT_LISTS = {
+    "user_create_gb_options",
+    "user_create_day_options",
+    "user_create_bulk_counts",
 }
 _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "default_price_per_gb": (0, None),
@@ -332,7 +344,23 @@ def validate_api_value(key: str, value: Any) -> Any:
             raise ValueError(f"{key} must be non-negative")
         return number
     if isinstance(default, list):
-        if key != "excluded_usage_gb" or not isinstance(value, list):
+        if not isinstance(value, list):
+            raise ValueError(f"{key} must be a list")
+        # The user-creation option lists are bounded positive-integer menus (deduped, capped).
+        if key in _POSITIVE_INT_LISTS:
+            seen: list[int] = []
+            for item in value:
+                if isinstance(item, bool) or not isinstance(item, (int, float)):
+                    raise ValueError(f"{key} entries must be numbers")
+                number = int(item)
+                if number <= 0 or number > 100000:
+                    raise ValueError(f"{key} entries must be between 1 and 100000")
+                if number not in seen:
+                    seen.append(number)
+            if not seen:
+                raise ValueError(f"{key} must have at least one value")
+            return sorted(seen)
+        if key != "excluded_usage_gb":
             raise ValueError(f"{key} must be a list")
         normalized: list[float] = []
         for item in value:

@@ -8,6 +8,37 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.101 - 2026-06-19
+
+### Added (Bot: top-level resellers create Hiddify end-users — single + bulk)
+
+A top-level reseller can now create end-users from the Telegram bot («➕ ساخت کاربر» / `/newuser`)
+instead of going into the Hiddify panel — and the created user **works immediately** (no manual apply).
+
+- **Safe create + auto-apply.** Reading the Hiddify **v12 `hiddifypanel` source**, the v2 admin
+  `POST /api/v2/admin/user/` runs `user_driver.add_client()` + `hiddify.quick_apply_users()`, so the
+  user is pushed to the proxy core at creation. New `AdminApiClient.create_user(...)` authenticates
+  **as the reseller** (`Hiddify-API-Key: <admin_uuid>`), so the panel sets the user's `added_by_uuid`
+  to that reseller automatically (correctly billed/owned). We supply a client-side `uuid` so the
+  sub-link is known instantly.
+- **Flow.** Single/bulk → (bulk: count) → volume (GB) → duration (days) → name → a **confirm summary**
+  → create. Each created user gets a **QR image + the `auto` subscription link** (clickable +
+  tap-to-copy `<code>`) so the reseller can hand it to the customer. Bulk creates `<base>1..<base>N`
+  and sends one QR per user (paced for Telegram limits).
+- **Bounded + owner-editable.** Volume/day/bulk-count options come from owner-editable settings
+  (Settings → «ساخت کاربر»: `user_create_gb_options` 20/30/50/100, `user_create_day_options` 30/60,
+  `user_create_bulk_counts` 5/10/20, + a master `user_create_enabled` toggle). Every choice is
+  re-validated server-side against those lists.
+- **Capacity guard.** Creating beyond the reseller's `max_users` is blocked up-front with a pointer to
+  the capacity-increase request; the panel's own server-side `max_users` is the hard backstop (a
+  mid-bulk rejection stops and reports "K of N created"). Auto sub-link:
+  `https://<host>/<proxy_path>/<uuid>/auto/` via new `Panel.user_sub_link`. Owner gets a ping per batch.
+- **Gating:** offered only to **top-level resellers**; `start_date` is left to Hiddify's default
+  (starts on first connect). Server-side QR via the already-bundled `qrcode`/`Pillow`. Regression
+  tests in `backend/tests/test_usercreate.py` (create POST shape/headers/limit-error, sub-link,
+  settings list validation, capacity guard, bulk loop incl. mid-bulk limit). 193 backend tests pass;
+  ruff + mypy clean; frontend tsc + build clean. No DB schema change.
+
 ## 1.37.100 - 2026-06-19
 
 ### Changed / Added (portal follow-ups)

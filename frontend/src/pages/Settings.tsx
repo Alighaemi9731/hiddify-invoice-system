@@ -275,6 +275,23 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "usercreate",
+    title: "ساخت کاربر",
+    icon: <PersonIcon fontSize="small" />,
+    note:
+      "نماینده‌های اصلی می‌توانند از ربات، کاربر بسازند. گزینه‌های زیر (با کاما جدا شوند) منوی انتخابِ نماینده را می‌سازند.",
+    subs: [
+      {
+        fields: [
+          { key: "user_create_enabled", label: "فعال‌سازی ساخت کاربر از ربات" },
+          { key: "user_create_gb_options", label: "حجم‌های مجاز (گیگ، با کاما)", help: "مثلاً: 20, 30, 50, 100", type: "csv", dir: "ltr" },
+          { key: "user_create_day_options", label: "مدت‌های مجاز (روز، با کاما)", help: "مثلاً: 30, 60", type: "csv", dir: "ltr" },
+          { key: "user_create_bulk_counts", label: "تعدادهای گروهی مجاز (با کاما)", help: "مثلاً: 5, 10, 20", type: "csv", dir: "ltr" },
+        ],
+      },
+    ],
+  },
+  {
     id: "templates",
     title: "متن پیام‌ها",
     icon: <ChatBubbleOutlineIcon fontSize="small" />,

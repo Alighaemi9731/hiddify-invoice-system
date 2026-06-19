@@ -90,6 +90,11 @@ class Panel(Base, TimestampMixin):
         base = f"https://{host or self.host}/{self.proxy_path}/{admin_uuid}/"
         return base + (f"#{tag}" if tag else "")
 
+    def user_sub_link(self, user_uuid: str, *, auto: bool = True) -> str:
+        """An end-user's subscription URL: https://<host>/<proxy_path>/<uuid>/auto/ (auto-detect the
+        right config for the client app) or .../sub/. This is the link a customer imports."""
+        return f"{self.proxy_base}/{user_uuid}/{'auto' if auto else 'sub'}/"
+
     # ---- derived URLs ----
     @property
     def proxy_base(self) -> str:

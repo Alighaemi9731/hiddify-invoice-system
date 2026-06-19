@@ -36,6 +36,7 @@ RESELLER_COMMANDS = [
     BotCommand(command="interim", description="📄 فاکتور علی‌الحساب (ماه جاری)"),
     BotCommand(command="panels", description="🖥 پنل‌های من"),
     BotCommand(command="subs", description="👥 زیرمجموعه‌ها"),
+    BotCommand(command="newuser", description="➕ ساخت کاربر"),
     BotCommand(command="portal", description="🌐 ورود به پنلِ تحتِ وب"),
     BotCommand(command="support", description="💬 پیام به پشتیبانی"),
     BotCommand(command="removelink", description="🗑 حذف لینک‌ها"),

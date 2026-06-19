@@ -12,7 +12,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import func, or_, select
 
 from app.bot import keyboards, texts
@@ -73,6 +73,13 @@ class OwnerSearchState(StatesGroup):
     """The owner is typing a reseller name/uuid to look up (admin-bot search)."""
 
     waiting = State()
+
+
+class CreateUserState(StatesGroup):
+    """A top-level reseller is creating end-user(s). Choices (reseller_id, mode, count, gb, days)
+    are collected via inline buttons into FSM data; `name` waits for the typed user/base name."""
+
+    name = State()
 
 
 log = logging.getLogger("bot.handlers")
@@ -365,7 +372,30 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     name = user.first_name or user.username or ""
     welcome = await texts.render(session, "tpl_welcome", name=name)
     menu = await texts.render(session, "tpl_menu")
-    await answer(f"{welcome}\n\n{menu}", reply_markup=keyboards.reseller_menu_keyboard())
+    can_create = await _can_create_users(session, user.id)
+    await answer(
+        f"{welcome}\n\n{menu}",
+        reply_markup=keyboards.reseller_menu_keyboard(show_create_user=can_create),
+    )
+
+
+async def _top_level_resellers(session, chat_id: int) -> list[Reseller]:
+    """The chat's reseller rows that are TOP-LEVEL on their panel (eligible to create users)."""
+    out = []
+    for r in await _resellers_for_chat(session, chat_id):
+        if await _is_top_level_reseller(session, r):
+            out.append(r)
+    return out
+
+
+async def _can_create_users(session, chat_id: int) -> bool:
+    """True if the user-creation feature is on AND this chat has at least one top-level reseller."""
+    from app.services import usercreate
+
+    opts = await usercreate.load_options(session)
+    if not opts.enabled or not (opts.gb and opts.days):
+        return False
+    return bool(await _top_level_resellers(session, chat_id))
 
 
 # --------------------------- /commands ---------------------------
@@ -422,6 +452,7 @@ async def cmd_help(message: Message) -> None:
                 "/interim — فاکتور علی‌الحساب (ماه جاری)\n"
                 "/panels — پنل‌های من\n"
                 "/subs — مدیریت زیرمجموعه‌ها\n"
+                "/newuser — ساخت کاربر (نماینده‌های اصلی)\n"
                 "/support — پیام به پشتیبانی\n"
                 "/removelink — حذف لینک‌ها\n\n"
                 "برای ثبت‌نام، کافی است لینک پنل خود را همین‌جا ارسال کنید.\n"
@@ -885,6 +916,259 @@ async def on_owner_cap_bump_text(message: Message, state: FSMContext) -> None:
             bot=message.bot,
         )
     await message.answer(f"✅ ظرفیت «{rname}» {amount}+ شد (سقف جدید: {new_mu}).")
+
+
+# --------------------------- create user (top-level resellers) ---------------------------
+async def _begin_create_user(answer, chat_id: int, session, state: FSMContext) -> None:
+    """Entry point for «ساخت کاربر»: validate eligibility, then ask for the panel (if >1) or the mode."""
+    from app.services import usercreate
+
+    await state.clear()
+    opts = await usercreate.load_options(session)
+    if not opts.enabled:
+        await answer("ساخت کاربر در حال حاضر غیرفعال است.")
+        return
+    if not (opts.gb and opts.days):
+        await answer("گزینه‌های حجم/روز پیکربندی نشده‌اند؛ به پشتیبانی اطلاع دهید.")
+        return
+    roots = await _top_level_resellers(session, chat_id)
+    if not roots:
+        await answer("فقط نماینده‌های اصلی می‌توانند کاربر بسازند.")
+        return
+    if len(roots) == 1:
+        await state.update_data(cu_reseller_id=roots[0].id)
+        await answer(
+            f"➕ ساخت کاربر روی پنلِ «{_iso(roots[0].name)}»\nنوعِ ساخت را انتخاب کنید:",
+            reply_markup=keyboards.create_user_mode_keyboard(),
+        )
+        return
+    items = []
+    for r in roots:
+        panel = await session.get(Panel, r.panel_id)
+        items.append((r.id, _iso(f"{(panel.name or panel.key) if panel else '?'} — {r.name}")))
+    await answer("➕ ساخت کاربر\nروی کدام پنل؟", reply_markup=keyboards.create_user_panels_keyboard(items))
+
+
+@router.message(Command("newuser"))
+async def cmd_newuser(message: Message, state: FSMContext) -> None:
+    async with SessionLocal() as s:
+        await _begin_create_user(message.answer, message.from_user.id, s, state)
+
+
+@router.callback_query(F.data == "menu:newuser")
+async def cb_menu_newuser(cb: CallbackQuery, state: FSMContext) -> None:
+    async with SessionLocal() as s:
+        await _begin_create_user(cb.message.answer, cb.from_user.id, s, state)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "cucancel")
+async def cb_cu_cancel(cb: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await cb.message.answer("لغو شد.")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cupanel:"))
+async def cb_cu_panel(cb: CallbackQuery, state: FSMContext) -> None:
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        r = await s.get(Reseller, rid)
+        if r is None or r.bot_chat_id != cb.from_user.id or not await _is_top_level_reseller(s, r):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        name = r.name
+    await state.update_data(cu_reseller_id=rid)
+    await cb.message.answer(
+        f"➕ ساخت کاربر روی پنلِ «{_iso(name)}»\nنوعِ ساخت را انتخاب کنید:",
+        reply_markup=keyboards.create_user_mode_keyboard(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cumode:"))
+async def cb_cu_mode(cb: CallbackQuery, state: FSMContext) -> None:
+    mode = cb.data.split(":")[1]
+    data = await state.get_data()
+    if "cu_reseller_id" not in data:
+        await cb.answer("از ابتدا شروع کنید.", show_alert=True)
+        return
+    async with SessionLocal() as s:
+        from app.services import usercreate
+        opts = await usercreate.load_options(s)
+    if mode == "bulk":
+        await state.update_data(cu_mode="bulk")
+        await cb.message.answer(
+            "تعدادِ کاربر را انتخاب کنید:",
+            reply_markup=keyboards.create_user_count_keyboard(opts.counts),
+        )
+    else:
+        await state.update_data(cu_mode="single", cu_count=1)
+        await cb.message.answer(
+            "حجم را انتخاب کنید:", reply_markup=keyboards.create_user_gb_keyboard(opts.gb)
+        )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cucount:"))
+async def cb_cu_count(cb: CallbackQuery, state: FSMContext) -> None:
+    count = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        from app.services import usercreate
+        opts = await usercreate.load_options(s)
+    if count not in opts.counts:
+        await cb.answer("نامعتبر.", show_alert=True)
+        return
+    await state.update_data(cu_count=count)
+    await cb.message.answer(
+        "حجم را انتخاب کنید:", reply_markup=keyboards.create_user_gb_keyboard(opts.gb)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cugb:"))
+async def cb_cu_gb(cb: CallbackQuery, state: FSMContext) -> None:
+    gb = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        from app.services import usercreate
+        opts = await usercreate.load_options(s)
+    if gb not in opts.gb:
+        await cb.answer("نامعتبر.", show_alert=True)
+        return
+    await state.update_data(cu_gb=gb)
+    await cb.message.answer(
+        "مدت را انتخاب کنید:", reply_markup=keyboards.create_user_days_keyboard(opts.days)
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("cudays:"))
+async def cb_cu_days(cb: CallbackQuery, state: FSMContext) -> None:
+    days = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        from app.services import usercreate
+        opts = await usercreate.load_options(s)
+    if days not in opts.days:
+        await cb.answer("نامعتبر.", show_alert=True)
+        return
+    data = await state.get_data()
+    if not all(k in data for k in ("cu_reseller_id", "cu_gb", "cu_count")):
+        await cb.answer("از ابتدا شروع کنید.", show_alert=True)
+        return
+    await state.update_data(cu_days=days)
+    await state.set_state(CreateUserState.name)
+    is_bulk = data.get("cu_mode") == "bulk"
+    prompt = (
+        "یک نامِ پایه برای کاربران بفرستید (به انتهای آن شماره اضافه می‌شود):"
+        if is_bulk else "یک نام برای کاربر بفرستید:"
+    )
+    await cb.message.answer(f"{prompt}\n(برای لغو: /cancel)")
+    await cb.answer()
+
+
+@router.message(CreateUserState.name)
+async def on_cu_name(message: Message, state: FSMContext) -> None:
+    name = " ".join((message.text or "").split())  # collapse whitespace
+    if not name or len(name) > 40:
+        await message.answer("نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید یا /cancel.")
+        return
+    await state.update_data(cu_name=name)
+    data = await state.get_data()
+    if not all(k in data for k in ("cu_reseller_id", "cu_gb", "cu_days", "cu_count")):
+        await state.clear()
+        await message.answer("اطلاعات ناقص است؛ از «➕ ساخت کاربر» دوباره شروع کنید.")
+        return
+    count = int(data["cu_count"])
+    gb = int(data["cu_gb"])
+    days = int(data["cu_days"])
+    if data.get("cu_mode") == "bulk":
+        summary = (
+            "تأیید ساخت کاربرِ گروهی؟\n"
+            f"• تعداد: {count} (با نام {_iso(f'{name}1')} تا {_iso(f'{name}{count}')})\n"
+            f"• حجم: {gb} گیگ\n• مدت: {days} روز"
+        )
+    else:
+        summary = f"تأیید ساخت کاربر؟\n• نام: {_iso(name)}\n• حجم: {gb} گیگ\n• مدت: {days} روز"
+    await message.answer(summary, reply_markup=keyboards.create_user_confirm_keyboard())
+
+
+@router.callback_query(F.data == "cuok")
+async def cb_cu_confirm(cb: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.clear()
+    if not all(k in data for k in ("cu_reseller_id", "cu_gb", "cu_days", "cu_name", "cu_count")):
+        await cb.answer("اطلاعات ناقص است؛ از ابتدا شروع کنید.", show_alert=True)
+        return
+    await cb.answer("در حال ساخت…")
+    await _finish_create_user(cb.message, cb.from_user.id, data)
+
+
+async def _finish_create_user(message: Message, chat_id: int, data: dict) -> None:
+    from app.services import usercreate
+
+    rid = int(data["cu_reseller_id"])
+    gb = int(data["cu_gb"])
+    days = int(data["cu_days"])
+    count = int(data.get("cu_count", 1))
+    base = str(data["cu_name"])
+    async with SessionLocal() as s:
+        reseller = await s.get(Reseller, rid)
+        if reseller is None or reseller.bot_chat_id != chat_id or not await _is_top_level_reseller(s, reseller):
+            await message.answer("دسترسی ندارید.")
+            return
+        result = await usercreate.create_for_reseller(
+            s, reseller, count=count, gb=gb, days=days, base_name=base
+        )
+        rname = reseller.name
+        panel = await s.get(Panel, reseller.panel_id)
+        pname = panel.key if panel else "?"
+
+    if result.capacity_blocked:
+        remaining = result.remaining if result.remaining is not None else 0
+        await message.answer(
+            f"⛔️ ظرفیتِ شما اجازهٔ ساختِ {count} کاربر را نمی‌دهد "
+            f"(باقی‌مانده: {remaining} از {result.max_users}).\n"
+            "از «👥 زیرمجموعه‌ها» یا پشتیبانی، افزایشِ ظرفیت درخواست کنید."
+        )
+        return
+
+    for u in result.created:
+        link_attr = html.escape(u.sub_link, quote=True)
+        link_text = html.escape(u.sub_link)
+        caption = rtl(
+            f"✅ کاربر «{html.escape(u.name)}» ساخته شد — {gb} گیگ · {days} روز\n\n"
+            f"🔗 لینکِ اشتراک (auto):\n<a href=\"{link_attr}\">{link_text}</a>\n<code>{link_text}</code>"
+        )
+        try:
+            png = usercreate.qr_png(u.sub_link)
+            await message.bot.send_photo(
+                chat_id, BufferedInputFile(png, filename="sub.png"),
+                caption=caption, parse_mode="HTML",
+            )
+        except Exception:  # noqa: BLE001 — fall back to a text message if the photo fails
+            log.warning("failed to send created-user QR", exc_info=True)
+            await message.bot.send_message(
+                chat_id, caption, parse_mode="HTML", disable_web_page_preview=True
+            )
+        await asyncio.sleep(0.4)  # gentle pacing for Telegram's per-chat rate limit
+
+    made = len(result.created)
+    if result.limit_hit:
+        await message.answer(
+            f"⚠️ {made} از {count} کاربر ساخته شد؛ بقیه به‌خاطرِ سقفِ ظرفیتِ پنل ناموفق بود. "
+            "افزایشِ ظرفیت درخواست کنید."
+        )
+    elif result.error:
+        await message.answer(f"⚠️ {made} از {count} کاربر ساخته شد؛ ادامه با خطا متوقف شد.")
+    elif made:
+        await message.answer(f"✅ {made} کاربر ساخته شد و بلافاصله فعال است.")
+
+    if made:
+        async with SessionLocal() as s:
+            await owner_notify.notify_owner(
+                s, f"➕ نمایندهٔ «{rname}» روی پنل {pname} تعداد {made} کاربر ساخت "
+                   f"({gb} گیگ، {days} روز)."
+            )
 
 
 @router.callback_query(F.data == "menu:support")

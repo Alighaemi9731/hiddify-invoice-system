@@ -13,12 +13,17 @@ from __future__ import annotations
 import html
 import logging
 import re
+import uuid as uuidlib
 
 import httpx
 
 from app.services.panel_client.base import PanelClient, PanelData, parse_backup
 
 log = logging.getLogger("panel.admin_api")
+
+
+class UserLimitError(RuntimeError):
+    """Raised when the panel rejects a create because the admin's max_users is reached."""
 
 
 class AdminApiClient(PanelClient):
@@ -56,6 +61,44 @@ class AdminApiClient(PanelClient):
             # rarely enough to diagnose why a disable was rejected).
             if resp.status_code >= 400:
                 raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
+
+    async def create_user(  # noqa: ANN001
+        self, panel, *, name: str, gb: float, days: int, api_key: str | None = None,
+        user_uuid: str | None = None,
+    ) -> str:
+        """Create ONE end-user via the v2 admin API and return its uuid.
+
+        Authenticate AS the reseller (api_key = their admin_uuid): the panel then sets the new
+        user's `added_by_uuid` to that admin automatically, so it's billed/owned correctly. The
+        POST runs `quick_apply_users` server-side, so the user works immediately (no manual apply).
+        We supply our own uuid4 so we know the sub-link without parsing the response. A panel
+        rejection for the admin's max_users is surfaced as `UserLimitError`."""
+        uid = user_uuid or str(uuidlib.uuid4())
+        url = f"{panel.admin_api_base}/user/"
+        body = {
+            "uuid": uid,
+            "name": name,
+            "usage_limit_GB": float(gb),
+            "package_days": int(days),
+            "enable": True,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, headers=self._headers(panel, api_key), json=body)
+        if resp.status_code < 400:
+            try:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("uuid"):
+                    return str(data["uuid"])
+            except Exception:  # noqa: BLE001 — response may not be JSON; our uuid is authoritative
+                pass
+            return uid
+        text = resp.text[:300]
+        low = text.lower()
+        if resp.status_code in (400, 403) and any(
+            k in low for k in ("max", "limit", "quota", "exceed", "ظرفیت", "حداکثر")
+        ):
+            raise UserLimitError(text)
+        raise RuntimeError(f"POST user {resp.status_code}: {text}")
 
     async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
         """Return Hiddify's internal numeric id for every visible user.

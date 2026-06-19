@@ -17,20 +17,24 @@ def membership_keyboard(targets: list[dict] | str | None) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def reseller_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
-             InlineKeyboardButton(text="💳 پرداخت فاکتور", callback_data="menu:pay")],
-            [InlineKeyboardButton(text="📄 فاکتور علی‌الحساب (ماه جاری)", callback_data="menu:interim")],
-            [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
-             InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],
-            [InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", callback_data="menu:portal")],
-            [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
-            [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support"),
-             InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],
-        ]
-    )
+def reseller_menu_keyboard(*, show_create_user: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
+         InlineKeyboardButton(text="💳 پرداخت فاکتور", callback_data="menu:pay")],
+        [InlineKeyboardButton(text="📄 فاکتور علی‌الحساب (ماه جاری)", callback_data="menu:interim")],
+    ]
+    # «ساخت کاربر» is offered only to top-level resellers (and only when the feature is enabled).
+    if show_create_user:
+        rows.append([InlineKeyboardButton(text="➕ ساخت کاربر", callback_data="menu:newuser")])
+    rows += [
+        [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
+         InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],
+        [InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", callback_data="menu:portal")],
+        [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
+        [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support"),
+         InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def sub_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
@@ -85,6 +89,55 @@ def broadcast_panel_keyboard(panels: list[tuple[int, str]]) -> InlineKeyboardMar
     return InlineKeyboardMarkup(
         inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )
+
+
+def create_user_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Pick which top-level reseller/panel to create the user under. data: cupanel:<reseller_id>."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"cupanel:{rid}")] for rid, label in items]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
+    )
+
+
+def create_user_mode_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👤 تکی", callback_data="cumode:single"),
+        InlineKeyboardButton(text="👥 گروهی", callback_data="cumode:bulk"),
+    ], [InlineKeyboardButton(text="« انصراف", callback_data="cucancel")]])
+
+
+def _num_grid(prefix: str, values: list[int], *, unit: str = "") -> InlineKeyboardMarkup:
+    """A compact grid (2 per row) of numeric choices → data: <prefix>:<value>."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for v in values:
+        row.append(InlineKeyboardButton(text=f"{v}{unit}", callback_data=f"{prefix}:{v}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="« انصراف", callback_data="cucancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def create_user_count_keyboard(counts: list[int]) -> InlineKeyboardMarkup:
+    return _num_grid("cucount", counts, unit=" تا")
+
+
+def create_user_gb_keyboard(gbs: list[int]) -> InlineKeyboardMarkup:
+    return _num_grid("cugb", gbs, unit=" گیگ")
+
+
+def create_user_days_keyboard(days: list[int]) -> InlineKeyboardMarkup:
+    return _num_grid("cudays", days, unit=" روزه")
+
+
+def create_user_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ بله، بساز", callback_data="cuok"),
+        InlineKeyboardButton(text="❌ لغو", callback_data="cucancel"),
+    ]])
 
 
 def capacity_request_keyboard(reseller_id: int, amount: int) -> InlineKeyboardMarkup:
