@@ -5,12 +5,23 @@ import {
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/esm/ContentCopy";
 import UploadFileIcon from "@mui/icons-material/esm/UploadFile";
+import { QRCodeSVG } from "qrcode.react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   portalPayOptions, portalPayTxid, portalPayScreenshot, PortalInvoice,
 } from "./portalClient";
 import { useToast, errMsg } from "../components/Toast";
 import { fmtToman } from "../format";
+
+function QrBox({ value }: { value: string }) {
+  return (
+    <Box sx={{ mt: 1, display: "flex", justifyContent: "center" }}>
+      <Box sx={{ p: 1, bgcolor: "#fff", borderRadius: 2, lineHeight: 0 }}>
+        <QRCodeSVG value={value} size={132} level="M" />
+      </Box>
+    </Box>
+  );
+}
 
 function CopyRow({ label, value, show }: { label: string; value: string; show: (m: string, s?: any) => void }) {
   return (
@@ -130,6 +141,7 @@ export default function PayDialog({
                   — ⚠️ فقط شبکهٔ BEP-20؛ واریز از شبکهٔ دیگر = از‌دست‌رفتن وجه.
                 </Typography>
                 <CopyRow label="آدرس کیف پول USDT" value={m!.wallet} show={show} />
+                <QrBox value={m!.wallet} />
               </Box>
             )}
             {m!.ton && (
@@ -141,6 +153,7 @@ export default function PayDialog({
                   </Typography>
                 )}
                 <CopyRow label="آدرس کیف پول TON" value={m!.ton_address} show={show} />
+                <QrBox value={m!.ton_address} />
               </Box>
             )}
             {m!.card && (

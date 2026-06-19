@@ -11,6 +11,7 @@ const Payments = lazy(() => import("./pages/Payments"));
 const Subs = lazy(() => import("./pages/Subs"));
 const Panels = lazy(() => import("./pages/Panels"));
 const Support = lazy(() => import("./pages/Support"));
+const Help = lazy(() => import("./pages/Help"));
 
 function RequirePortalAuth({ children }: { children: ReactNode }) {
   const { authed, loading } = usePortalAuth();
@@ -44,6 +45,7 @@ export default function PortalApp() {
           <Route path="/portal/subs" element={<Subs />} />
           <Route path="/portal/panels" element={<Panels />} />
           <Route path="/portal/support" element={<Support />} />
+          <Route path="/portal/help" element={<Help />} />
         </Route>
         <Route path="/portal/*" element={<Navigate to="/portal" replace />} />
       </Routes>

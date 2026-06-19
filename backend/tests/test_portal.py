@@ -257,11 +257,12 @@ async def _seed_with_sub(s):
     p = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o")
     s.add(p)
     await s.flush()
-    ali = Reseller(panel_id=p.id, admin_uuid="A", name="Ali", bot_chat_id=111)
+    ali = Reseller(panel_id=p.id, admin_uuid="A", name="Ali", bot_chat_id=111, panel_max_users=500)
     bita = Reseller(panel_id=p.id, admin_uuid="B", name="Bita", bot_chat_id=222)
     s.add_all([ali, bita])
     await s.flush()
-    sara = Reseller(panel_id=p.id, admin_uuid="S", name="Sara", parent_admin_uuid="A")
+    sara = Reseller(panel_id=p.id, admin_uuid="S", name="Sara", parent_admin_uuid="A",
+                    panel_max_users=100, can_add_admin=False)
     other = Reseller(panel_id=p.id, admin_uuid="O", name="Other", parent_admin_uuid="B")
     s.add_all([sara, other])
     await s.commit()
@@ -320,4 +321,142 @@ def test_support_validation_and_relay(monkeypatch):
         monkeypatch.setattr("app.services.owner_notify.notify_owner", _ok)
         out = await portal.support(portal.SupportBody(text="سلام"), ctx=ctx_a, session=s)
         assert out["ok"] is True
+    _run(body)
+
+
+# ===================== feature batch v2 =====================
+def test_subs_response_has_capacity_and_months():
+    async def body(s):
+        await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        rows = await portal.subs(ctx=ctx_a, session=s)
+        assert len(rows) == 1  # only Ali's direct sub (Sara), not Bita's
+        sara = rows[0]
+        assert sara["max_users"] == 100
+        assert sara["can_add_admin"] is False
+        assert isinstance(sara["months"], list) and len(sara["months"]) == 6
+        assert {"label", "amount_toman", "gb"} <= set(sara["months"][0])
+    _run(body)
+
+
+def test_sub_pdf_ownership_and_no_sales(monkeypatch):
+    async def _none(*a, **k):
+        return None
+    monkeypatch.setattr("app.services.invoice_pdf.render_sub_invoice_pdf", _none)
+
+    async def body(s):
+        _ali, sara, other = await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        # foreign sub → 404 (before any render)
+        with pytest.raises(HTTPException) as ei:
+            await portal.sub_pdf(sub_id=other.id, period="2026-06", ctx=ctx_a, session=s)
+        assert ei.value.status_code == 404
+        # own sub but no sales (render→None) → 404
+        with pytest.raises(HTTPException) as no_sales:
+            await portal.sub_pdf(sub_id=sara.id, period="2026-06", ctx=ctx_a, session=s)
+        assert no_sales.value.status_code == 404
+    _run(body)
+
+
+def test_sub_bump_limits(monkeypatch):
+    calls = {}
+
+    async def _bump(session, reseller, amount):
+        calls["amount"] = amount
+        return (100 + amount, 100 + amount)
+    monkeypatch.setattr("app.services.admin_capacity.bump_limits", _bump)
+
+    async def body(s):
+        _ali, sara, other = await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        # invalid amounts → 400
+        for amt in (0, -5, 6000):
+            with pytest.raises(HTTPException) as bad:
+                await portal.sub_bump_limits(sub_id=sara.id, body=portal.BumpBody(amount=amt), ctx=ctx_a, session=s)
+            assert bad.value.status_code == 400
+        # foreign sub → 404
+        with pytest.raises(HTTPException) as ei:
+            await portal.sub_bump_limits(sub_id=other.id, body=portal.BumpBody(amount=100), ctx=ctx_a, session=s)
+        assert ei.value.status_code == 404
+        # valid → calls the shared service
+        out = await portal.sub_bump_limits(sub_id=sara.id, body=portal.BumpBody(amount=100), ctx=ctx_a, session=s)
+        assert out["max_users"] == 200 and calls["amount"] == 100
+    _run(body)
+
+
+def test_sub_can_add_admin(monkeypatch):
+    async def _set(session, reseller, enabled):
+        reseller.can_add_admin = enabled
+    monkeypatch.setattr("app.services.admin_capacity.set_can_add_admin", _set)
+
+    async def body(s):
+        _ali, sara, other = await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        with pytest.raises(HTTPException) as ei:
+            await portal.sub_can_add_admin(sub_id=other.id, body=portal.CanAddAdminBody(enabled=True), ctx=ctx_a, session=s)
+        assert ei.value.status_code == 404
+        out = await portal.sub_can_add_admin(sub_id=sara.id, body=portal.CanAddAdminBody(enabled=True), ctx=ctx_a, session=s)
+        assert out["ok"] and out["can_add_admin"] is True
+    _run(body)
+
+
+def test_capacity_and_request(monkeypatch):
+    async def body(s):
+        ali, _sara, _other = await _seed_with_sub(s)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        cap = await portal.capacity(ctx=ctx_a, session=s)
+        assert len(cap) == 1 and cap[0]["reseller_id"] == ali.id
+        assert cap[0]["max"] == 500 and cap[0]["used"] == 0
+
+        # request for a reseller not owned by the caller → 404
+        with pytest.raises(HTTPException) as ei:
+            await portal.capacity_request(
+                portal.CapacityRequestBody(reseller_id=99999, amount=100), ctx=ctx_a, session=s)
+        assert ei.value.status_code == 404
+
+        # owner unreachable (no bot) → 503
+        with pytest.raises(HTTPException) as down:
+            await portal.capacity_request(
+                portal.CapacityRequestBody(reseller_id=ali.id, amount=100), ctx=ctx_a, session=s)
+        assert down.value.status_code == 503
+
+        async def _ok(*a, **k):
+            return True
+        monkeypatch.setattr("app.services.owner_notify.notify_owner", _ok)
+        out = await portal.capacity_request(
+            portal.CapacityRequestBody(reseller_id=ali.id, amount=100, note="نیاز دارم"),
+            ctx=ctx_a, session=s)
+        assert out["ok"] is True
+    _run(body)
+
+
+def test_payment_proof_ownership():
+    async def body(s):
+        a, _b, _ia, _ib = await _seed(s)  # seeds a pending payment per reseller, no proof file
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        own = (await s.execute(select(Payment).where(Payment.reseller_id == a.id))).scalar_one()
+        bita_pay = (await s.execute(select(Payment).where(Payment.txid == "bbb"))).scalar_one()
+        # own payment but no proof image on disk → 404
+        with pytest.raises(HTTPException) as no_img:
+            await portal.payment_proof(payment_id=own.id, ctx=ctx_a, session=s)
+        assert no_img.value.status_code == 404
+        # another reseller's payment → 404 (ownership)
+        with pytest.raises(HTTPException) as foreign:
+            await portal.payment_proof(payment_id=bita_pay.id, ctx=ctx_a, session=s)
+        assert foreign.value.status_code == 404
+    _run(body)
+
+
+def test_notifications_scoped_and_sorted():
+    async def body(s):
+        await _seed(s)  # Ali: one sent invoice + one pending payment
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        out = await portal.notifications(ctx=ctx_a, session=s)
+        evs = out["events"]
+        assert len(evs) >= 2 and len(evs) <= 20
+        types = {e["type"] for e in evs}
+        assert "invoice" in types and "payment" in types
+        # none of Bita's events leak in (only keys for Ali's invoice/payment ids)
+        keys = " ".join(e["key"] for e in evs)
+        assert "bbb" not in keys  # Bita's txid never surfaces
     _run(body)

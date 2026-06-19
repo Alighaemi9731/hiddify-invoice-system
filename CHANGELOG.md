@@ -8,6 +8,42 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.99 - 2026-06-19
+
+### Added (Reseller portal — feature batch v2) + Subs ratio fix
+
+Eight reseller-portal enhancements (all scoped to `/api/portal/*` under `get_current_reseller`,
+sub actions gated by `_owns_sub`; no DB schema change), plus a fix to the sub-reseller user ratio.
+
+- **Fix — Subs «کاربران» ratio.** The sub card showed `enabled/total` (e.g. "۱/۱") which was
+  meaningless; it now shows **created-users (whole subtree) / max_users** via the same `CapacityBar`
+  the owner panel uses (`/subs` now returns `max_users`, `can_add_admin`, and recent `months`).
+- **#1 Payment QR codes** — the pay dialog renders a scannable QR of the USDT/TON wallet address
+  next to the tap-to-copy row (`qrcode.react`).
+- **#2 Payment timeline + receipt** — the Payments page shows a 3-step review timeline
+  (ثبت → بررسی → نتیجه) and a «مشاهدهٔ رسید» button for screenshot payments
+  (`GET /api/portal/payments/{id}/proof`, scoped + path-traversal-guarded; `has_proof`/`verified_at` added).
+- **#6 Per-sub PDF** — download a sub-reseller's GB-only invoice PDF for any recent month from the
+  portal (`GET /api/portal/subs/{id}/pdf?period=`, reusing `invoice_pdf.render_sub_invoice_pdf`).
+- **#7 Manage sub capacity** — increase a sub's `max_users`/`max_active_users` (+۵۰/۱۰۰/۲۰۰/۵۰۰ or
+  custom, capped at 5000) and toggle «اجازهٔ ساختِ زیرمجموعه», reusing `admin_capacity.bump_limits` /
+  `set_can_add_admin` (`POST /api/portal/subs/{id}/bump-limits` / `…/can-add-admin`).
+- **#8 «ظرفیتِ من»** — a capacity meter per reseller on the «پنل‌ها و ظرفیت» page + a «درخواستِ
+  افزایشِ ظرفیت» button that pings the owner on Telegram (`GET /api/portal/capacity`,
+  `POST /api/portal/capacity/request`).
+- **#9 Sub monthly-trend** — a compact 6-month sale sparkline on each sub card (inline, no chart lib
+  per card).
+- **#11 In-portal notifications** — a bell in the portal header with a popover of recent events
+  (invoice issued, payment confirmed/rejected/pending, sub at GB cap, reseller blocked), derived live
+  from existing data (`GET /api/portal/notifications`, no new table; unread tracked client-side).
+- **#15 Onboarding/help** — a Persian «راهنما» page describing each portal section + a one-time
+  dismissible welcome banner on the portal dashboard.
+
+**Shared payment core unchanged** — the bot and portal still both call `payments.submit_reseller_payment`.
+Regression coverage extended in `backend/tests/test_portal.py` (capacity/can-add-admin/sub-PDF
+ownership + validation, `/capacity` scoping, capacity-request relay, proof ownership, notifications
+scoping). 182 backend tests pass; ruff + mypy clean; frontend tsc + build clean (bundle budget OK).
+
 ## 1.37.98 - 2026-06-19
 
 ### Added (Reseller web portal — standalone site, Telegram one-time login)

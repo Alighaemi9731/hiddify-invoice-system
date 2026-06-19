@@ -88,6 +88,7 @@ export async function openPortalInvoicePdf(invoiceId: number) {
 
 // ---- payments ----
 export interface PortalPayment {
+  id: number;
   number: string;
   method: string;
   status: string;
@@ -95,7 +96,9 @@ export interface PortalPayment {
   txid: string | null;
   amount_toman: number;
   invoice_period: string | null;
+  has_proof: boolean;
   created_at: string | null;
+  verified_at: string | null;
 }
 export const portalPayments = () =>
   portalApi.get("/api/portal/payments").then((r) => r.data as PortalPayment[]);
@@ -120,14 +123,66 @@ export interface PortalSub {
   parent_name: string;
   users: number;
   enabled_users: number;
+  max_users: number | null;
+  can_add_admin: boolean;
   enforcement_state: string;
   gb_cap: number | null;
   current_gb: number;
   cap_pct: number | null;
   this_month_amount: number;
+  months: { label: string; amount_toman: number; gb: number }[];
 }
 export const portalSubs = () =>
   portalApi.get("/api/portal/subs").then((r) => r.data as PortalSub[]);
+
+// Download a sub-reseller's GB-only invoice PDF for a period (auth header required → fetch as blob).
+export async function openPortalSubPdf(subId: number, period: string) {
+  const res = await portalApi.get(`/api/portal/subs/${subId}/pdf`, {
+    params: { period }, responseType: "blob",
+  });
+  const url = URL.createObjectURL(res.data as Blob);
+  window.open(url, "_blank");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+export const portalBumpSub = (subId: number, amount: number) =>
+  portalApi.post(`/api/portal/subs/${subId}/bump-limits`, { amount })
+    .then((r) => r.data as { max_users: number; max_active_users: number });
+export const portalSubCanAddAdmin = (subId: number, enabled: boolean) =>
+  portalApi.post(`/api/portal/subs/${subId}/can-add-admin`, { enabled })
+    .then((r) => r.data as { ok: boolean; can_add_admin: boolean });
+
+// ---- my capacity ----
+export interface PortalCapacity {
+  reseller_id: number;
+  name: string;
+  panel_key: string;
+  used: number;
+  max: number | null;
+  can_add_admin: boolean;
+}
+export const portalCapacity = () =>
+  portalApi.get("/api/portal/capacity").then((r) => r.data as PortalCapacity[]);
+export const portalRequestCapacity = (body: { reseller_id: number; amount?: number; note?: string }) =>
+  portalApi.post("/api/portal/capacity/request", body).then((r) => r.data as { ok: boolean });
+
+// ---- payment proof ----
+export async function openPortalPaymentProof(paymentId: number) {
+  const res = await portalApi.get(`/api/portal/payments/${paymentId}/proof`, { responseType: "blob" });
+  const url = URL.createObjectURL(res.data as Blob);
+  window.open(url, "_blank");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// ---- notifications (derived feed) ----
+export interface PortalNotification {
+  key: string;
+  type: string;
+  at: string | null;
+  title: string;
+  severity: "info" | "success" | "warning" | "error";
+}
+export const portalNotifications = () =>
+  portalApi.get("/api/portal/notifications").then((r) => r.data as { events: PortalNotification[] });
 
 // ---- actions (P2) ----
 export interface PayOptions {

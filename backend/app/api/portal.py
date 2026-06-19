@@ -202,14 +202,36 @@ async def list_payments(
     )).all()
     return [
         {
+            "id": pmt.id,
             "number": payment_code(pmt.id), "method": pmt.method.value, "status": pmt.status.value,
             "chain": pmt.chain, "txid": pmt.txid,
             "amount_toman": float(pmt.amount_toman or 0),
             "invoice_period": period,
+            "has_proof": bool(pmt.proof_path),
             "created_at": pmt.created_at.isoformat() if pmt.created_at else None,
+            "verified_at": pmt.verified_at.isoformat() if pmt.verified_at else None,
         }
         for pmt, period in rows
     ]
+
+
+@router.get("/payments/{payment_id}/proof")
+async def payment_proof(
+    payment_id: int,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    """Serve the caller's OWN deposit screenshot (scoped to their resellers). Same path-traversal
+    guard as the owner endpoint so a tampered proof_path can't disclose an arbitrary file."""
+    p = await session.get(Payment, payment_id)
+    if p is None or p.reseller_id not in ctx.ids:  # ownership: never trust the URL id
+        raise HTTPException(404, "Payment not found")
+    if not p.proof_path or not os.path.exists(p.proof_path):
+        raise HTTPException(404, "No proof image for this payment")
+    proof_dir = os.path.realpath("data/payment_proofs")
+    if not os.path.realpath(p.proof_path).startswith(proof_dir + os.sep):
+        raise HTTPException(404, "No proof image for this payment")
+    return FileResponse(p.proof_path, media_type="image/jpeg", filename=f"proof_{payment_id}.jpg")
 
 
 # ------------------------------ panels ------------------------------
@@ -255,7 +277,7 @@ async def subs(
             )
         )).scalars().all()
         for sub in children:
-            rep = await reseller_report.node_report(session, sub)
+            rep = await reseller_report.node_report(session, sub, months=6)
             this_month = next(
                 (m for m in rep["months"] if m["label"] == rep["current_period"]), None)
             out.append({
@@ -263,10 +285,19 @@ async def subs(
                 "panel_key": pmap[sub.panel_id].key if sub.panel_id in pmap else "?",
                 "parent_name": root.name,
                 "users": rep["total_users"], "enabled_users": rep["enabled_users"],
+                # created-users-of-subtree (rep["total_users"]) over the sub's panel quota — matches
+                # the owner panel's capacity meter (replaces the meaningless active/total ratio).
+                "max_users": sub.panel_max_users,
+                "can_add_admin": sub.can_add_admin,
                 "enforcement_state": rep["enforcement_state"],
                 "gb_cap": rep["gb_cap"], "current_gb": rep["current_gb"],
                 "cap_pct": rep["cap_pct"],
                 "this_month_amount": this_month["amount_toman"] if this_month else 0,
+                # Oldest→newest monthly sale, for the per-card trend sparkline.
+                "months": [
+                    {"label": m["label"], "amount_toman": m["amount_toman"], "gb": m["gb"]}
+                    for m in rep["months"]
+                ],
             })
     return out
 
@@ -493,3 +524,213 @@ async def support(
     if not sent:
         raise HTTPException(503, "در حال حاضر پشتیبانی در دسترس نیست؛ بعداً تلاش کنید.")
     return {"ok": True}
+
+
+# ------------------------------ sub-reseller PDF + capacity ------------------------------
+@router.get("/subs/{sub_id}/pdf")
+async def sub_pdf(
+    sub_id: int,
+    period: str | None = None,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    """A GB-only invoice PDF for one of the caller's sub-resellers (sub + its subtree) for a month
+    — so a reseller can bill their sub. Reuses the bot's `render_sub_invoice_pdf`."""
+    sub = await session.get(Reseller, sub_id)
+    if sub is None or not await _owns_sub(session, ctx, sub):
+        raise HTTPException(404, "Sub-reseller not found")
+    try:
+        p = parse_period(period) if period else current_month()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "دورهٔ نامعتبر است.") from exc
+    issuer = next((r.name for r in ctx.resellers if r.panel_id == sub.panel_id), ctx.resellers[0].name)
+    result = await invoice_pdf_service.render_sub_invoice_pdf(session, sub, p, issuer_name=issuer or "")
+    if result is None:
+        raise HTTPException(404, "برای این دوره فروشی ثبت نشده است.")
+    path, filename = result
+    return FileResponse(path, media_type="application/pdf", filename=filename)
+
+
+class BumpBody(BaseModel):
+    amount: int
+
+
+@router.post("/subs/{sub_id}/bump-limits")
+async def sub_bump_limits(
+    sub_id: int,
+    body: BumpBody,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Increase a sub-reseller's max_users / max_active_users on the panel (reseller-initiated)."""
+    sub = await session.get(Reseller, sub_id)
+    if sub is None or not await _owns_sub(session, ctx, sub):
+        raise HTTPException(404, "Sub-reseller not found")
+    if not (0 < body.amount <= 5000):
+        raise HTTPException(400, "مقدار باید بین ۱ تا ۵۰۰۰ باشد.")
+    from app.services import admin_capacity
+
+    try:
+        new_mu, new_mau = await admin_capacity.bump_limits(session, sub, body.amount)
+    except Exception as exc:  # noqa: BLE001 — surface a clean panel-API error to the client
+        raise HTTPException(502, f"خطا در ارتباط با پنل: {exc}") from exc
+    return {"max_users": new_mu, "max_active_users": new_mau}
+
+
+class CanAddAdminBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/subs/{sub_id}/can-add-admin")
+async def sub_can_add_admin(
+    sub_id: int,
+    body: CanAddAdminBody,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Toggle a sub-reseller's ability to create its own sub-admins on the panel."""
+    sub = await session.get(Reseller, sub_id)
+    if sub is None or not await _owns_sub(session, ctx, sub):
+        raise HTTPException(404, "Sub-reseller not found")
+    from app.services import admin_capacity
+
+    try:
+        await admin_capacity.set_can_add_admin(session, sub, body.enabled)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"خطا در ارتباط با پنل: {exc}") from exc
+    return {"ok": True, "can_add_admin": body.enabled}
+
+
+# ------------------------------ my capacity ------------------------------
+@router.get("/capacity")
+async def capacity(
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """How full each of the caller's OWN reseller quotas is — created users (whole subtree) over the
+    panel max_users, same definition as the owner panel's capacity meter."""
+    pmap = await _panel_keys(session, {r.panel_id for r in ctx.resellers})
+    out = []
+    for r in ctx.resellers:
+        rep = await reseller_report.node_report(session, r, months=1)
+        out.append({
+            "reseller_id": r.id, "name": r.name,
+            "panel_key": pmap[r.panel_id].key if r.panel_id in pmap else "?",
+            "used": rep["total_users"], "max": r.panel_max_users,
+            "can_add_admin": r.can_add_admin,
+        })
+    return out
+
+
+class CapacityRequestBody(BaseModel):
+    reseller_id: int
+    amount: int | None = None
+    note: str | None = None
+
+
+@router.post("/capacity/request")
+async def capacity_request(
+    body: CapacityRequestBody,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Ask the owner (via Telegram) to raise this reseller's capacity. Nothing is stored."""
+    if body.reseller_id not in ctx.ids:
+        raise HTTPException(404, "Reseller not found")
+    r = next(x for x in ctx.resellers if x.id == body.reseller_id)
+    pmap = await _panel_keys(session, {r.panel_id})
+    panel = pmap.get(r.panel_id)
+    rep = await reseller_report.node_report(session, r, months=1)
+    name = _html.escape(r.name or str(ctx.chat_id))
+    max_txt = str(r.panel_max_users) if r.panel_max_users is not None else "∞"
+    amount_txt = (
+        f"\nمقدارِ درخواستی: {int(body.amount)}" if body.amount and body.amount > 0 else ""
+    )
+    note_txt = f"\nیادداشت: {_html.escape(body.note[:500])}" if body.note else ""
+    msg = (
+        "📈 درخواستِ افزایشِ ظرفیت (از پنلِ وب)\n"
+        f"نماینده: <a href='tg://user?id={ctx.chat_id}'>{name}</a> (id: <code>{ctx.chat_id}</code>)\n"
+        f"پنل: {_html.escape(panel.key if panel else '—')}\n"
+        f"ظرفیتِ فعلی: {rep['total_users']}/{max_txt}{amount_txt}{note_txt}"
+    )
+    from app.bot import keyboards as kb
+
+    sent = await owner_notify.notify_owner(
+        session, msg, html=True, reply_markup=kb.support_reply_keyboard(ctx.chat_id, 0))
+    if not sent:
+        raise HTTPException(503, "در حال حاضر در دسترس نیست؛ بعداً تلاش کنید.")
+    return {"ok": True}
+
+
+# ------------------------------ notifications (derived, no table) ------------------------------
+@router.get("/notifications")
+async def notifications(
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """A merged, newest-first feed of recent events for the caller — derived live from existing data
+    (no notifications table). The client tracks 'seen' via a localStorage timestamp."""
+    events: list[dict] = []
+
+    invs = (await session.execute(
+        select(Invoice)
+        .where(Invoice.reseller_id.in_(ctx.ids), Invoice.status != InvoiceStatus.draft)
+        .order_by(Invoice.id.desc()).limit(10)
+    )).scalars().all()
+    for i in invs:
+        at = i.sent_at or i.created_at
+        events.append({
+            "key": f"inv-{i.id}", "type": "invoice",
+            "at": at.isoformat() if at else None,
+            "title": f"فاکتور دورهٔ {i.period_label} صادر شد",
+            "severity": "info",
+        })
+
+    pays = (await session.execute(
+        select(Payment).where(Payment.reseller_id.in_(ctx.ids))
+        .order_by(Payment.id.desc()).limit(10)
+    )).scalars().all()
+    for p in pays:
+        st = p.status.value
+        if st == "confirmed":
+            title, sev = f"پرداختِ #{payment_code(p.id)} تأیید شد", "success"
+        elif st == "rejected":
+            title, sev = f"پرداختِ #{payment_code(p.id)} رد شد", "error"
+        else:
+            title, sev = f"پرداختِ #{payment_code(p.id)} در انتظارِ تأیید است", "info"
+        at = p.verified_at or p.created_at
+        events.append({
+            "key": f"pay-{p.id}", "type": "payment",
+            "at": at.isoformat() if at else None, "title": title, "severity": sev,
+        })
+
+    for r in ctx.resellers:
+        if r.enforcement_state.value == "enforced":
+            events.append({
+                "key": f"enf-{r.id}", "type": "enforcement", "at": None,
+                "title": f"نمایندگیِ «{r.name}» مسدود است", "severity": "error",
+            })
+
+    # Direct subs that hit their monthly GB cap this period.
+    cur = current_month().label
+    my_uuids = {r.admin_uuid for r in ctx.resellers}
+    my_panels = {r.panel_id for r in ctx.resellers}
+    valid_pairs = {(r.panel_id, r.admin_uuid) for r in ctx.resellers}
+    if my_uuids and my_panels:
+        cap_subs = (await session.execute(
+            select(Reseller).where(
+                Reseller.panel_id.in_(my_panels),
+                Reseller.parent_admin_uuid.in_(my_uuids),
+                Reseller.gb_cap_alerted_period == cur,
+            )
+        )).scalars().all()
+        for s in cap_subs:
+            if (s.panel_id, s.parent_admin_uuid) in valid_pairs:
+                events.append({
+                    "key": f"cap-{s.id}", "type": "cap", "at": None,
+                    "title": f"زیرمجموعهٔ «{s.name}» به سقفِ حجمِ ماهانه رسید",
+                    "severity": "warning",
+                })
+
+    events.sort(key=lambda e: (e["at"] or ""), reverse=True)
+    return {"events": events[:20]}

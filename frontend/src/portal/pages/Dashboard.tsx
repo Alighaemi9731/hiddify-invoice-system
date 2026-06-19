@@ -83,8 +83,17 @@ export default function PortalDashboard() {
     }],
   };
 
+  const [welcome, setWelcome] = useState(() => !localStorage.getItem("portal_welcome_dismissed"));
+  const dismissWelcome = () => { localStorage.setItem("portal_welcome_dismissed", "1"); setWelcome(false); };
+
   return (
     <Box>
+      {welcome && (
+        <Alert severity="info" onClose={dismissWelcome} sx={{ mb: 2.5 }}>
+          به پنلِ نماینده خوش آمدید! اینجا می‌توانید فاکتورها را ببینید و پرداخت کنید، زیرمجموعه‌ها و
+          ظرفیتتان را مدیریت کنید و با پشتیبانی در تماس باشید. برای آشنایی، بخشِ «راهنما» را ببینید.
+        </Alert>
+      )}
       <Stack
         direction={{ xs: "column", sm: "row" }}
         justifyContent="space-between"

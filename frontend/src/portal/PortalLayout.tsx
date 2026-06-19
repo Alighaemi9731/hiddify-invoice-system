@@ -12,6 +12,7 @@ import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import GroupIcon from "@mui/icons-material/esm/Group";
 import DnsIcon from "@mui/icons-material/esm/Dns";
 import SupportAgentIcon from "@mui/icons-material/esm/SupportAgent";
+import HelpOutlineIcon from "@mui/icons-material/esm/HelpOutline";
 import LogoutIcon from "@mui/icons-material/esm/Logout";
 import MenuIcon from "@mui/icons-material/esm/Menu";
 import PersonOutlineIcon from "@mui/icons-material/esm/PersonOutline";
@@ -21,6 +22,7 @@ import { usePortalAuth } from "./PortalAuthContext";
 import { useColorMode } from "../colorMode";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { PageTransition } from "../components/motion";
+import NotificationsBell from "./NotificationsBell";
 
 const WIDTH = 248;
 
@@ -29,8 +31,9 @@ const NAV = [
   { to: "/portal/invoices", label: "فاکتورها", icon: <ReceiptLongIcon />, color: "#f59e0b" },
   { to: "/portal/payments", label: "پرداخت‌ها", icon: <PaymentsIcon />, color: "#10b981" },
   { to: "/portal/subs", label: "زیرمجموعه‌ها", icon: <GroupIcon />, color: "#22c55e" },
-  { to: "/portal/panels", label: "پنل‌های من", icon: <DnsIcon />, color: "#0ea5e9" },
+  { to: "/portal/panels", label: "پنل‌ها و ظرفیت", icon: <DnsIcon />, color: "#0ea5e9" },
   { to: "/portal/support", label: "پشتیبانی", icon: <SupportAgentIcon />, color: "#a855f7" },
+  { to: "/portal/help", label: "راهنما", icon: <HelpOutlineIcon />, color: "#06b6d4" },
 ];
 
 export default function PortalLayout() {
@@ -215,6 +218,7 @@ export default function PortalLayout() {
             <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 800 }}>
               {NAV.find((n) => n.to === loc.pathname)?.label || ""}
             </Typography>
+            <NotificationsBell />
             <Tooltip title={mode === "dark" ? "حالت روشن" : "حالت تیره"}>
               <IconButton onClick={toggle} sx={{ mr: 1 }}>
                 {mode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
