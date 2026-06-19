@@ -54,7 +54,7 @@ export const PAYMENT_STATUS_FA: Record<string, string> = {
 
 export const PAYMENT_METHOD_FA: Record<string, string> = {
   usdt_txid: "USDT (شناسهٔ تراکنش)",
-  ton_txid: "تون‌کوین (TON)",
+  ton_txid: "گرام (GRAM)",
   manual: "دستی",
   screenshot: "رسید تصویری",
 };

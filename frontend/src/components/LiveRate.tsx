@@ -54,11 +54,11 @@ export default function LiveRate() {
         </Tooltip>
         <Box sx={{ width: "1px", height: 16, bgcolor: "divider" }} />
         <Typography variant="body2" sx={{ fontWeight: 700, whiteSpace: "nowrap" }}>
-          تون: {ton ? fmtNum(ton) : "—"}
+          گرام: {ton ? fmtNum(ton) : "—"}
           <Typography component="span" variant="caption" color="text.secondary"> ت</Typography>
         </Typography>
       </Stack>
-      <Tooltip title="به‌روزرسانی نرخ‌ها (تتر و تون)">
+      <Tooltip title="به‌روزرسانی نرخ‌ها (تتر و گرام)">
         <span>
           <IconButton size="small" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
             <RefreshIcon fontSize="small" />

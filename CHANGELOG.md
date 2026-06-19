@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.103 - 2026-06-19
+
+### Changed (Toncoin → Gram rebrand)
+
+The TON token was renamed **Toncoin (TON) → Gram (GRAM)** on 2026-06-15 (name + ticker + logo only; the
+blockchain stays "The Open Network"/TON, no token swap, 1 TON = 1 GRAM).
+
+- **Fix (functional): the auto rate was broken.** Wallex relisted the Toman market as **`GRAMTMN`** and
+  removed `TONTMN`, so `rates.fetch_ton_toman` (querying `TONTMN`) returned nothing. It now reads
+  `GRAMTMN` (with a `TONTMN` fallback for safety). Rate semantics, plausibility band, and the
+  manual/auto split are unchanged.
+- **Display rebrand → «گرام (GRAM)».** The coin shown to resellers/customers is now «گرام (GRAM)» and the
+  amount unit is `GRAM`, across the bot pay instructions, owner payment review, the reseller portal pay
+  dialog, the Settings page (toggle/section/wallet/tolerance/rate-mode labels + the live-rate chip), the
+  header live-rate widget, and the Payments deposit-check display. The **deposit warning stays «فقط روی
+  شبکهٔ TON واریز شود»** because deposits still happen on the TON network.
+- **Unchanged (internal/blockchain):** `chain="ton"`, `PaymentMethod.ton_txid`, all setting keys
+  (`pay_ton_enabled`, `ton_wallet_address`, `ton_rate_mode`, `ton_toman_*`, `toncenter_api_key`,
+  `ton_amount_tolerance_pct`), API field names, the toncenter on-chain check, tonscan/tonviewer explorer
+  links, and wallet addresses — so existing settings/payments keep working with **no DB migration**.
+- Tests: `tests/test_rates_gram.py` (GRAMTMN + TONTMN-fallback + absent), and updated GRAM display
+  assertions in `test_payment_review.py`. 197 backend tests pass; ruff + mypy clean; frontend tsc + build
+  clean.
+
 ## 1.37.102 - 2026-06-19
 
 ### Fixed (bot-created user: correct subscription link + cleaner message)

@@ -31,7 +31,7 @@ def _equiv_str(method: str, toman: float | None, usdt: float | None, ton_rate: i
     if not toman:
         return ""
     if method == "ton_txid":
-        return f"{float(toman) / ton_rate:,.2f} TON" if ton_rate else ""
+        return f"{float(toman) / ton_rate:,.2f} GRAM" if ton_rate else ""
     if method == "usdt_txid":
         return f"{float(usdt or 0):,.2f} USDT"
     return ""

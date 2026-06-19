@@ -97,12 +97,13 @@ def instructions_text(
             b.append(f"👤 به نام: {holder}")
         blocks.append("\n".join(b))
     if opts.ton:
-        b = ["💎 تون‌کوین (TON):"]
+        # GRAM (ex-Toncoin). The coin/ticker is Gram now; the network is still TON.
+        b = ["💎 گرام (GRAM):"]
         if amount_ton:
-            b.append(f"💎 مبلغ: {amount_ton} TON")
+            b.append(f"💎 مبلغ: {amount_ton} GRAM")
         elif amount_toman:
-            # No live TON rate → tell them to send the Toman equivalent (header amount).
-            b.append(f"💎 معادلِ {amount_toman} تومان به TON")
+            # No live Gram rate → tell them to send the Toman equivalent (header amount).
+            b.append(f"💎 معادلِ {amount_toman} تومان به GRAM")
         b.append(copyable(opts.ton_address))
         b.append("⚠️ فقط روی شبکهٔ TON واریز شود.")
         blocks.append("\n".join(b))

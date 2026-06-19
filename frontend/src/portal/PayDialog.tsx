@@ -146,13 +146,13 @@ export default function PayDialog({
             )}
             {m!.ton && (
               <Box>
-                <Chip size="small" color="info" label="تون‌کوین (TON)" sx={{ fontWeight: 700 }} />
+                <Chip size="small" color="info" label="گرام (GRAM)" sx={{ fontWeight: 700 }} />
                 {m!.amount_ton != null && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
-                    مبلغ تقریبی: {m!.amount_ton.toLocaleString("en-US", { maximumFractionDigits: 2 })} TON — فقط روی شبکهٔ TON واریز شود.
+                    مبلغ تقریبی: {m!.amount_ton.toLocaleString("en-US", { maximumFractionDigits: 2 })} GRAM — فقط روی شبکهٔ TON واریز شود.
                   </Typography>
                 )}
-                <CopyRow label="آدرس کیف پول TON" value={m!.ton_address} show={show} />
+                <CopyRow label="آدرس کیف پول گرام (شبکهٔ TON)" value={m!.ton_address} show={show} />
                 <QrBox value={m!.ton_address} />
               </Box>
             )}
@@ -184,7 +184,7 @@ export default function PayDialog({
                     sx={{ mb: 1 }}
                   >
                     {m!.usdt && <ToggleButton value="bsc">USDT</ToggleButton>}
-                    {m!.ton && <ToggleButton value="ton">TON</ToggleButton>}
+                    {m!.ton && <ToggleButton value="ton">GRAM</ToggleButton>}
                   </ToggleButtonGroup>
                 )}
                 <TextField

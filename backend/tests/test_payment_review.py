@@ -63,8 +63,8 @@ def test_payment_review_html_is_complete(tmp_path, monkeypatch):
                 assert "4,480,000" in html and "2026-06" in html
                 # Clickable explorer link to the right chain.
                 assert f"https://tonscan.org/tx/{TXID}" in html
-                # TON on-chain status with the matched verdict.
-                assert "وضعیت شبکه" in html and "17.4 TON" in html and "مطابق فاکتور" in html
+                # Gram (TON network) on-chain status with the matched verdict.
+                assert "وضعیت شبکه" in html and "17.4 GRAM" in html and "مطابق فاکتور" in html
                 # Tracking number present.
                 assert "شمارهٔ پیگیری" in html
         finally:

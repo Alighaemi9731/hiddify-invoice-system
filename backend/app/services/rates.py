@@ -107,18 +107,22 @@ async def refresh_auto_rate(session: AsyncSession) -> int | None:
 
 
 async def fetch_ton_toman() -> int | None:
-    """Fetch the current TON (Toncoin) price in **Toman** from Wallex (TONTMN market). Tetherland
-    has no TON, so Wallex is the only source. Display-only (the TON amount shown to the customer);
-    a failure just hides the amount. Returns None on failure."""
+    """Fetch the current Gram (formerly Toncoin) price in **Toman** from Wallex. The token was renamed
+    TON→GRAM on 2026-06-15 and Wallex relisted the market as `GRAMTMN` (the old `TONTMN` is gone), so we
+    try GRAMTMN first and fall back to TONTMN for safety. 1 GRAM = 1 former TON, and the network is still
+    TON — only the ticker changed. Display-only; a failure just hides the amount. Returns None on failure."""
     try:
         async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "invoice-system/1"}) as client:
             r = await client.get(_WALLEX)
             r.raise_for_status()
             symbols = ((r.json().get("result") or {}).get("symbols") or {})
-            stats = (symbols.get("TONTMN") or {}).get("stats") or {}
-            return _pos_int(stats.get("bidPrice"))
+            for sym in ("GRAMTMN", "TONTMN"):
+                stats = (symbols.get(sym) or {}).get("stats") or {}
+                rate = _pos_int(stats.get("bidPrice"))
+                if rate:
+                    return rate
     except Exception:  # noqa: BLE001
-        log.warning("failed to fetch TON→Toman rate from Wallex", exc_info=True)
+        log.warning("failed to fetch Gram→Toman rate from Wallex", exc_info=True)
     return None
 
 

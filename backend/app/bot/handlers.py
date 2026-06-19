@@ -2589,13 +2589,13 @@ async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
         from app.services import rates
         rate = await rates.get_ton_toman(session)
         if rate:
-            return f"{toman} (≈ {float(invoice.amount_toman) / rate:,.2f} TON)"
+            return f"{toman} (≈ {float(invoice.amount_toman) / rate:,.2f} GRAM)"
         return toman
     return f"{toman} ({float(invoice.amount_usdt):,.2f} USDT)"
 
 
 _PAYMENT_METHOD_FA = {
-    "usdt_txid": "تتر (USDT)", "ton_txid": "تون‌کوین (TON)",
+    "usdt_txid": "تتر (USDT)", "ton_txid": "گرام (GRAM)",
     "screenshot": "رسید تصویری", "manual": "دستی",
 }
 
@@ -2612,7 +2612,7 @@ def _network_status_fa(chk: dict) -> str:
     if not chk.get("available"):
         return "⚪️ از زنجیره خوانده نشد — تراکنش را از روی لینک بررسی کنید."
     if chk.get("kind") == "ton":
-        recv = f"{chk['received_ton']} TON ≈ {chk['received_toman']:,.0f} تومان"
+        recv = f"{chk['received_ton']} GRAM ≈ {chk['received_toman']:,.0f} تومان"
         tol = f"±{chk['tolerance_pct']:.0f}٪"
     else:  # usdt
         recv = f"{chk['received_usdt']:,.2f} USDT"

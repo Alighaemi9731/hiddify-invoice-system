@@ -159,7 +159,7 @@ async def submit_reseller_payment(
         )
         owner_intro = "🧾 رسید پرداخت جدید — منتظر تأیید شماست."
     else:
-        label = "TON" if chain == "ton" else "USDT"
+        label = "GRAM" if chain == "ton" else "USDT"
         user_message = (
             f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
             "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"

@@ -61,7 +61,7 @@ export default function Payments() {
   // No auto-verify anywhere; this just reads the actual on-chain deposit (TON via toncenter, USDT
   // via a public BSC RPC node — both free) and reports it for the manual confirm decision.
   const depLabel = (r: any) => r.kind === "ton"
-    ? `${r.received_ton} TON ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}`
+    ? `${r.received_ton} GRAM ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}`
     : `${r.received_usdt} USDT${r.confirmations != null ? ` (${r.confirmations} تأیید)` : ""} | فاکتور: ${r.invoice_usdt} USDT`;
   const chainCheck = useMutation({
     mutationFn: (id: number) => depositCheck(id),
@@ -200,7 +200,7 @@ export default function Payments() {
                     {depChk.data.kind === "ton" ? (
                       <>
                         <Typography variant="body2">
-                          واریزی: <b dir="ltr">{depChk.data.received_ton} TON</b> ≈ <b>{fmtToman(depChk.data.received_toman)}</b>
+                          واریزی: <b dir="ltr">{depChk.data.received_ton} GRAM</b> ≈ <b>{fmtToman(depChk.data.received_toman)}</b>
                         </Typography>
                         <Typography variant="body2">فاکتور: <b>{fmtToman(depChk.data.invoice_toman)}</b></Typography>
                         {depChk.data.match === true && <Chip size="small" color="success" label={`✓ مطابق (±${depChk.data.tolerance_pct}٪)`} />}

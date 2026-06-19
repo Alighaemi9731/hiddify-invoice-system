@@ -102,7 +102,7 @@ const SECTIONS: Section[] = [
           { key: "pay_usdt_enabled", label: "USDT (کیف پول + شناسهٔ تراکنش)" },
           { key: "pay_screenshot_enabled", label: "ارسال تصویر رسید" },
           { key: "pay_card_enabled", label: "کارت‌به‌کارت" },
-          { key: "pay_ton_enabled", label: "تون‌کوین (TON)" },
+          { key: "pay_ton_enabled", label: "گرام (GRAM)" },
         ],
       },
       {
@@ -115,13 +115,13 @@ const SECTIONS: Section[] = [
         ],
       },
       {
-        title: "اطلاعات تون‌کوین (TON)",
+        title: "اطلاعات گرام (GRAM) — شبکهٔ TON",
         fields: [
-          { key: "ton_wallet_address", label: "آدرس کیف پول TON", help: "آدرس مقصدِ تون‌کوین. مبلغِ معادلِ TON به‌صورت آنلاین (والکس) محاسبه و به مشتری نشان داده می‌شود؛ تأیید به‌صورت دستی (با تصویر رسید) انجام می‌شود.", dir: "ltr", when: (v) => !!v("pay_ton_enabled") },
-          { key: "ton_amount_tolerance_pct", label: "اغماضِ مبلغِ TON (درصد)", type: "number", min: 0, max: 100,
-            help: "هنگام تأییدِ دستیِ پرداختِ TON، مبلغِ واقعیِ واریزشده از زنجیره خوانده و با مبلغِ فاکتور مقایسه می‌شود؛ اختلافِ تا این درصد «مطابق» در نظر گرفته می‌شود. پیش‌فرض ۵.", when: (v) => !!v("pay_ton_enabled") },
+          { key: "ton_wallet_address", label: "آدرس کیف پول گرام (شبکهٔ TON)", help: "آدرس مقصدِ گرام (GRAM) روی شبکهٔ TON. مبلغِ معادلِ GRAM به‌صورت آنلاین (والکس) محاسبه و به مشتری نشان داده می‌شود؛ تأیید به‌صورت دستی (با تصویر رسید) انجام می‌شود.", dir: "ltr", when: (v) => !!v("pay_ton_enabled") },
+          { key: "ton_amount_tolerance_pct", label: "اغماضِ مبلغِ گرام (درصد)", type: "number", min: 0, max: 100,
+            help: "هنگام تأییدِ دستیِ پرداختِ گرام، مبلغِ واقعیِ واریزشده از زنجیرهٔ TON خوانده و با مبلغِ فاکتور مقایسه می‌شود؛ اختلافِ تا این درصد «مطابق» در نظر گرفته می‌شود. پیش‌فرض ۵.", when: (v) => !!v("pay_ton_enabled") },
           { key: "toncenter_api_key", label: "کلید API تون‌سنتر (اختیاری)", advanced: true, dir: "ltr",
-            help: "برای خواندنِ واریزیِ TON از toncenter؛ بدون کلید هم کار می‌کند ولی با محدودیتِ نرخ. خالی بگذارید مگر به سقفِ درخواست بخورید.", when: (v) => !!v("pay_ton_enabled") },
+            help: "برای خواندنِ واریزیِ گرام از toncenter (شبکهٔ TON)؛ بدون کلید هم کار می‌کند ولی با محدودیتِ نرخ. خالی بگذارید مگر به سقفِ درخواست بخورید.", when: (v) => !!v("pay_ton_enabled") },
         ],
       },
       {
@@ -156,19 +156,19 @@ const SECTIONS: Section[] = [
             help: "«خودکار» نرخ تتر را آنلاین می‌خواند؛ «دستی» از نرخ پایین استفاده می‌کند.",
             options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار (آنلاین)" }] },
           { key: "rate_source", label: "منبعِ نرخِ آنلاین", type: "select",
-            help: "نرخ تتر از کدام صرافی خوانده شود (منبعِ دیگر به‌عنوان فالبک). تون فقط از والکس خوانده می‌شود.",
+            help: "نرخ تتر از کدام صرافی خوانده شود (منبعِ دیگر به‌عنوان فالبک). گرام فقط از والکس خوانده می‌شود.",
             options: [{ value: "wallex", label: "والکس" }, { value: "tetherland", label: "تترلند" }],
             when: (v) => v("rate_mode") === "auto" },
           { key: "toman_per_usdt", label: "نرخ تترِ دستی (تومان به ازای هر USDT)", type: "number", min: 0,
             help: "در حالت «دستی» این نرخ استفاده می‌شود؛ در حالت «خودکار» اگر دریافت آنلاین ناموفق بود، همین مقدار جایگزین می‌شود." },
           { key: "rate_max_age_hours", label: "کهنگی مجاز نرخ آنلاین (ساعت)", type: "number", min: 0, max: 8760, advanced: true,
             help: "در حالت «خودکار»، اگر آخرین نرخ آنلاین قدیمی‌تر از این مقدار باشد، موقع صدور فاکتور به نرخ دستی برمی‌گردد. ۰ = غیرفعال. پیش‌فرض ۴۸.", when: (v) => v("rate_mode") === "auto" },
-          { key: "ton_rate_mode", label: "حالت نرخ تون (TON→تومان)", type: "select",
-            help: "مثل تتر: «خودکار» نرخ تون را آنلاین از والکس می‌خواند؛ «دستی» از نرخ پایین استفاده می‌کند.",
+          { key: "ton_rate_mode", label: "حالت نرخ گرام (GRAM→تومان)", type: "select",
+            help: "مثل تتر: «خودکار» نرخ گرام را آنلاین از والکس (بازارِ GRAMTMN) می‌خواند؛ «دستی» از نرخ پایین استفاده می‌کند.",
             options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار (آنلاین)" }],
             when: (v) => !!v("pay_ton_enabled") },
-          { key: "ton_toman_manual", label: "نرخ تونِ دستی (تومان به ازای هر TON)", type: "number", min: 0,
-            help: "در حالت دستیِ تون این نرخ استفاده می‌شود؛ در حالت خودکار به‌عنوان فالبک.",
+          { key: "ton_toman_manual", label: "نرخ گرامِ دستی (تومان به ازای هر GRAM)", type: "number", min: 0,
+            help: "در حالت دستیِ گرام این نرخ استفاده می‌شود؛ در حالت خودکار به‌عنوان فالبک.",
             when: (v) => !!v("pay_ton_enabled") },
           { key: "free_under_gb", label: "آستانهٔ کانفیگ رایگان (گیگ)", help: "کانفیگ‌هایی با حجم کوچک‌تر یا مساوی این مقدار، تستی و رایگان حساب می‌شوند (مثلاً ۱ → هم ۰٫۵ و هم ۱ گیگ رایگان، ۱٫۵ به بالا محاسبه می‌شود).", type: "number", min: 0 },
           { key: "min_sale_toman", label: "حداقل فروش هر نماینده (تومان)", help: "۰ = غیرفعال. اگر مبلغ فاکتور از این کمتر شد، همین مبلغ لحاظ می‌شود.", type: "number", min: 0 },
@@ -473,8 +473,8 @@ export default function Settings() {
               {!!getVal("pay_ton_enabled") && (
                 Number(byKey["ton_toman_auto"]?.value) > 0
                   ? <Chip color={getVal("ton_rate_mode") === "auto" ? "success" : "default"} size="small"
-                      label={`نرخ آنلاین تون: ${Number(byKey["ton_toman_auto"].value).toLocaleString("fa-IR")} تومان`} />
-                  : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین تون هنوز دریافت نشده" />
+                      label={`نرخ آنلاین گرام: ${Number(byKey["ton_toman_auto"].value).toLocaleString("fa-IR")} تومان`} />
+                  : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین گرام هنوز دریافت نشده" />
               )}
               <Button size="small" variant="outlined" disabled={refreshRateM.isPending} onClick={() => refreshRateM.mutate()}>
                 به‌روزرسانی نرخ
