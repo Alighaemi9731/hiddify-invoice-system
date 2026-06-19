@@ -1161,7 +1161,7 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict) -> Non
     elif result.error:
         await message.answer(f"⚠️ {made} از {count} کاربر ساخته شد؛ ادامه با خطا متوقف شد.")
     elif made:
-        await message.answer(f"✅ {made} کاربر ساخته شد و بلافاصله فعال است.")
+        await message.answer(f"✅ {made} کاربر ساخته شد.")
 
     if made:
         async with SessionLocal() as s:

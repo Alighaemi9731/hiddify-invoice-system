@@ -50,6 +50,11 @@ async def sync_panel(
         await _upsert_resellers(session, panel, data, now)
         await _upsert_users(session, panel, data, now)
 
+        # Capture/refresh the end-user (client) secret path used to build customers' sub links
+        # (differs from the admin proxy path in Hiddify v12).
+        if data.client_proxy_path and data.client_proxy_path != panel.client_proxy_path:
+            panel.client_proxy_path = data.client_proxy_path
+
         panel.last_synced_at = now
         panel.status = PanelStatus.ok
         panel.last_error = None

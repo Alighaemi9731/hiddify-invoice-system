@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
+import unicodedata
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, String, Text
@@ -16,6 +18,19 @@ if TYPE_CHECKING:
     from app.models.reseller import Reseller
 
 
+def _name_slug(name: str) -> str:
+    """Approximate Hiddify's `unicode_slug` (slugify(name, lowercase=False, allow_unicode=True)) for
+    the subscription link's #fragment: keep unicode letters/digits, turn spaces/separators into a
+    single hyphen, strip the rest. The fragment is a cosmetic label (not sent to the server), so an
+    exact byte-match isn't required, but this matches normal names ("milad store33" → "milad-store33",
+    "تکی اول تست" → "تکی-اول-تست")."""
+    s = unicodedata.normalize("NFKC", name or "").strip()
+    s = re.sub(r"[\s_]+", "-", s)            # whitespace / underscores → hyphen
+    s = re.sub(r"[^\w\-]", "", s)            # drop anything that isn't a word char or hyphen (unicode)
+    s = re.sub(r"-{2,}", "-", s).strip("-")  # collapse + trim hyphens
+    return s
+
+
 class Panel(Base, TimestampMixin):
     __tablename__ = "panels"
 
@@ -25,7 +40,10 @@ class Panel(Base, TimestampMixin):
 
     # Connection details. `proxy_path` and `admin_api_key` are stored encrypted.
     host: Mapped[str] = mapped_column(String(255))            # e.g. panel-01.example.com
-    proxy_path_enc: Mapped[str] = mapped_column(String(512))  # the secret URL path
+    proxy_path_enc: Mapped[str] = mapped_column(String(512))  # the ADMIN secret URL path
+    # The CLIENT (end-user) secret path — DIFFERENT from the admin path in Hiddify v12. Captured from
+    # the panel's hconfigs during sync; used to build customers' subscription links. Nullable.
+    client_proxy_path_enc: Mapped[str | None] = mapped_column(String(512), nullable=True)
     owner_uuid: Mapped[str] = mapped_column(String(64))       # panel super-admin uuid
     admin_api_key_enc: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Old/alternate hosts (comma-separated, normalized). ONLY used to keep matching a reseller's
@@ -59,6 +77,14 @@ class Panel(Base, TimestampMixin):
         self.proxy_path_enc = crypto.encrypt(value) or ""
 
     @property
+    def client_proxy_path(self) -> str | None:
+        return crypto.decrypt(self.client_proxy_path_enc) if self.client_proxy_path_enc else None
+
+    @client_proxy_path.setter
+    def client_proxy_path(self, value: str | None) -> None:
+        self.client_proxy_path_enc = crypto.encrypt(value) if value else None
+
+    @property
     def admin_api_key(self) -> str | None:
         return crypto.decrypt(self.admin_api_key_enc)
 
@@ -90,10 +116,13 @@ class Panel(Base, TimestampMixin):
         base = f"https://{host or self.host}/{self.proxy_path}/{admin_uuid}/"
         return base + (f"#{tag}" if tag else "")
 
-    def user_sub_link(self, user_uuid: str, *, auto: bool = True) -> str:
-        """An end-user's subscription URL: https://<host>/<proxy_path>/<uuid>/auto/ (auto-detect the
-        right config for the client app) or .../sub/. This is the link a customer imports."""
-        return f"{self.proxy_base}/{user_uuid}/{'auto' if auto else 'sub'}/"
+    def user_sub_link(self, user_uuid: str, *, name: str | None = None) -> str:
+        """An end-user's subscription URL exactly as the Hiddify panel shares it:
+        https://<host>/<CLIENT_proxy_path>/<uuid>/[#<name-slug>]. The client path differs from the
+        admin `proxy_path` in v12; fall back to the admin path only if it hasn't been captured yet."""
+        path = self.client_proxy_path or self.proxy_path
+        base = f"https://{self.host}/{path}/{user_uuid}/"
+        return base + (f"#{_name_slug(name)}" if name else "")
 
     # ---- derived URLs ----
     @property

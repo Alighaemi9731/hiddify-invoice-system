@@ -102,9 +102,27 @@ def test_create_user_other_error_is_runtime(monkeypatch):
 
 # ---------------- sub link ----------------
 def test_user_sub_link_shape():
-    p = SimpleNamespace(proxy_base="https://h.example/secret")
-    assert PanelModel.user_sub_link(p, "UUID") == "https://h.example/secret/UUID/auto/"
-    assert PanelModel.user_sub_link(p, "UUID", auto=False) == "https://h.example/secret/UUID/sub/"
+    # Uses the CLIENT proxy path + a #name slug (matches the Hiddify panel's share link).
+    p = SimpleNamespace(host="h.example", client_proxy_path="CLIENT", proxy_path="ADMIN")
+    assert PanelModel.user_sub_link(p, "U", name="milad store33") == "https://h.example/CLIENT/U/#milad-store33"
+    assert PanelModel.user_sub_link(p, "U", name="تکی اول تست") == "https://h.example/CLIENT/U/#تکی-اول-تست"
+    assert PanelModel.user_sub_link(p, "U") == "https://h.example/CLIENT/U/"
+    # falls back to the admin path only when the client path isn't captured yet
+    p2 = SimpleNamespace(host="h.example", client_proxy_path=None, proxy_path="ADMIN")
+    assert PanelModel.user_sub_link(p2, "U") == "https://h.example/ADMIN/U/"
+
+
+def test_parse_backup_extracts_client_proxy_path():
+    from app.services.panel_client.base import parse_backup
+    pd = parse_backup({"users": [], "admin_users": [], "hconfigs": [
+        {"key": "proxy_path_admin", "value": "ADM", "child_unique_id": ""},
+        {"key": "proxy_path_client", "value": "CLI", "child_unique_id": ""},
+    ]})
+    assert pd.client_proxy_path == "CLI"
+    # tolerate the enum-repr key form + strip slashes
+    pd2 = parse_backup({"hconfigs": [{"key": "ConfigEnum.proxy_path_client", "value": "/CLI2/"}]})
+    assert pd2.client_proxy_path == "CLI2"
+    assert parse_backup({"users": []}).client_proxy_path is None
 
 
 # ---------------- settings list validation ----------------
@@ -133,6 +151,7 @@ def _run(body):
 
 async def _seed(s, *, max_users, existing):
     p = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o")
+    p.client_proxy_path = "clientpath"  # encrypts; avoids the on-demand backup fetch
     s.add(p)
     await s.flush()
     r = Reseller(panel_id=p.id, admin_uuid="A", name="Ali", bot_chat_id=111, panel_max_users=max_users)
@@ -163,7 +182,7 @@ def test_create_loop_success(monkeypatch):
         res = await usercreate.create_for_reseller(s, r, count=3, gb=50, days=60, base_name="bob")
         assert not res.capacity_blocked and not res.limit_hit and res.error is None
         assert [u.name for u in res.created] == ["bob1", "bob2", "bob3"]
-        assert res.created[0].sub_link.endswith("/uuid-bob1/auto/")
+        assert res.created[0].sub_link == "https://p1.invalid/clientpath/uuid-bob1/#bob1"
     _run(body)
 
 

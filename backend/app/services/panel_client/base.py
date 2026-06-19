@@ -96,6 +96,25 @@ class PanelUser:
 class PanelData:
     admins: list[PanelAdmin] = field(default_factory=list)
     users: list[PanelUser] = field(default_factory=list)
+    # The end-user (client) secret path from the panel's hconfigs — DIFFERENT from the admin
+    # proxy path in Hiddify v12. Needed to build a customer's subscription link. None if absent.
+    client_proxy_path: str | None = None
+
+
+def _extract_client_proxy_path(payload: dict) -> str | None:
+    """Pull `proxy_path_client` out of the backup's hconfigs (each entry is
+    {"key": str(ConfigEnum), "value": ..., "child_unique_id": ...}; the key serializes to the enum
+    name, e.g. "proxy_path_client"). Returns the first non-empty value. (Single-domain panels have
+    one; multi-child panels could have several — we take the first, which is fine here.)"""
+    for e in (payload.get("hconfigs") or []):
+        if not isinstance(e, dict):
+            continue
+        key = str(e.get("key") or "")
+        if key == "proxy_path_client" or key.endswith(".proxy_path_client"):
+            value = e.get("value")
+            if value:
+                return str(value).strip().strip("/")
+    return None
 
 
 def parse_backup(payload: dict) -> PanelData:
@@ -148,7 +167,10 @@ def parse_backup(payload: dict) -> PanelData:
         except Exception:  # noqa: BLE001 — skip a bad user row, keep the rest
             log.warning("parse_backup: skipping malformed user entry", exc_info=True)
 
-    return PanelData(admins=admins, users=users)
+    return PanelData(
+        admins=admins, users=users,
+        client_proxy_path=_extract_client_proxy_path(payload),
+    )
 
 
 class PanelClient(abc.ABC):

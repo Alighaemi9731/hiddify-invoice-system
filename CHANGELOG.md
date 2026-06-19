@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.102 - 2026-06-19
+
+### Fixed (bot-created user: correct subscription link + cleaner message)
+
+- **The customer subscription link was wrong.** It used the panel's **admin** secret path; Hiddify v12
+  serves end-users on a **separate client path**, so the link (and QR) the bot sent didn't match the
+  panel's actual share link. Now the bot produces exactly the panel's link:
+  `https://<host>/<client_proxy_path>/<uuid>/#<name-slug>` (and the QR encodes the same). We capture the
+  client path (`proxy_path_client`) from the panel backup's `hconfigs` during every sync and cache it on
+  the panel (`Panel.client_proxy_path`, new nullable encrypted column + Alembic migration); the first
+  create after deploy fetches it on-demand if a panel hasn't re-synced yet. The `#<name>` fragment is
+  slugified like Hiddify's `unicode_slug` (spaces→hyphens, unicode preserved). `Panel.user_sub_link`
+  rebuilt accordingly (drops the `/auto/` form; falls back to the admin path only if the client path
+  isn't known yet).
+- **Dropped the extra “و بلافاصله فعال است”** from the create success message → just “✅ N کاربر ساخته شد.”
+- Tests: `parse_backup` client-path extraction, `Panel.user_sub_link` (client path + slug + fallback),
+  and the create flow's link. 194 backend tests pass; ruff + mypy + pip clean; the migration applies on a
+  fresh and an adopted pre-Alembic DB.
+
 ## 1.37.101 - 2026-06-19
 
 ### Added (Bot: top-level resellers create Hiddify end-users — single + bulk)

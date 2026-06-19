@@ -95,6 +95,11 @@ async def create_for_reseller(
     if panel is None:
         res.error = "panel not found"
         return res
+    # The customer sub-link needs the CLIENT proxy path (v12 separates it from the admin path). It's
+    # captured during sync; if a panel hasn't been re-synced since the feature shipped, fetch it once
+    # now so the very first create still produces the correct link.
+    if not panel.client_proxy_path:
+        await _ensure_client_proxy_path(session, panel)
     if reseller.panel_max_users:
         current = await current_user_count(session, reseller)
         res.remaining = max(0, reseller.panel_max_users - current)
@@ -116,6 +121,20 @@ async def create_for_reseller(
             res.error = str(exc)
             break
         res.created.append(
-            CreatedUser(name=name, uuid=uid, sub_link=panel.user_sub_link(uid, auto=True))
+            CreatedUser(name=name, uuid=uid, sub_link=panel.user_sub_link(uid, name=name))
         )
     return res
+
+
+async def _ensure_client_proxy_path(session: AsyncSession, panel: Panel) -> None:
+    """Best-effort one-off fetch of the panel's client proxy path from its backup (when sync hasn't
+    captured it yet). Never raises — a failure just leaves `user_sub_link` on the admin-path fallback."""
+    from app.services.panel_client import BackupJsonClient
+
+    try:
+        data = await BackupJsonClient().fetch_backup(panel)
+        if data.client_proxy_path:
+            panel.client_proxy_path = data.client_proxy_path
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("could not fetch client proxy path for panel %s", panel.key, exc_info=True)

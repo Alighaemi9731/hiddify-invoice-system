@@ -28,7 +28,9 @@ _MIGRATION_LOCK = 734_137_043
 # the baseline schema and legitimately lacks these — they're created by `upgrade` right after the
 # baseline is stamped — so the adoption validator must not treat them as "missing". Append the
 # fully-qualified "table.column" for every post-baseline column-add migration.
-_POST_BASELINE_COLUMNS = {"usage_meters.renew_used_gb", "panels.host_aliases"}
+_POST_BASELINE_COLUMNS = {
+    "usage_meters.renew_used_gb", "panels.host_aliases", "panels.client_proxy_path_enc",
+}
 
 
 def run_migrations_offline() -> None:
