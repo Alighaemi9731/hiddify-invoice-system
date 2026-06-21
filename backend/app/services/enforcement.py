@@ -13,9 +13,10 @@ import logging
 from copy import deepcopy
 
 from sqlalchemy import case, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.core.db import SessionLocal
 from app.models import EndUserSnapshot, EnforcementAction, Panel, Reseller
 from app.models.enums import (
     EnforcementActionStatus,
@@ -917,43 +918,41 @@ async def _process_restore_action(
     return result
 
 
-async def process_enforcement_queue(
-    session: AsyncSession,
-    *,
-    action_limit: int | None = None,
-    user_chunk_size: int | None = None,
-    admin_chunk_size: int | None = None,
+def _empty_queue_result() -> dict:
+    return {
+        "picked": 0,
+        "done": 0, "partial": 0, "failed": 0, "skipped": 0,
+        "patched_users": 0, "failed_users": 0, "patched_admins": 0,
+        "restored_users": 0, "restored_admins": 0, "restore_queued": 0,
+    }
+
+
+_PENDING_ACTION_FILTER = (
+    EnforcementAction.action.in_(
+        [EnforcementActionType.disable_users, EnforcementActionType.restore]
+    ),
+    EnforcementAction.dry_run.is_(False),
+    EnforcementAction.status.in_(
+        [EnforcementActionStatus.planned, EnforcementActionStatus.partial]
+    ),
+)
+
+
+async def _process_panel_queue(
+    session: AsyncSession, panel_id: int, *, limit: int, chunk: int, para: int
 ) -> dict:
-    """Pick up to `action_limit` pending enforcement/restore actions and process each.
-
-    `admin_chunk_size` controls the maximum number of concurrent admin-limit API calls
-    (semaphore size). All remaining admins for an action are attempted in one worker
-    invocation — this parameter only bounds parallelism, not batch count.
-    """
-    cfg = await settings_service.get_many(
-        session,
-        [
-            "enforcement_action_batch_limit",
-            "enforcement_user_chunk_size",
-            "enforcement_admin_chunk_size",
-        ],
-    )
-    limit = max(1, int(action_limit or cfg.get("enforcement_action_batch_limit") or 1))
-    chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 500))
-    para = max(1, int(admin_chunk_size or cfg.get("enforcement_admin_chunk_size") or 10))
-
-    # Retention of terminal enforcement_action rows (incl. their large JSON snapshots) is
-    # handled centrally by the daily maintenance job — see app.services.maintenance.
+    """Process up to `limit` pending actions for ONE panel, sequentially (restores first), on a
+    dedicated session. One lane per panel; lanes run concurrently (see process_enforcement_queue).
+    Each panel is processed serially so we never hammer a single panel's API in parallel."""
     actions = (
         await session.execute(
             select(EnforcementAction)
             .where(
-                EnforcementAction.action.in_(
-                    [EnforcementActionType.disable_users, EnforcementActionType.restore]
-                ),
-                EnforcementAction.dry_run.is_(False),
-                EnforcementAction.status.in_(
-                    [EnforcementActionStatus.planned, EnforcementActionStatus.partial]
+                *_PENDING_ACTION_FILTER,
+                # Scope to this panel only. A scalar subquery keeps the row-lock on
+                # EnforcementAction (not the joined Reseller rows).
+                EnforcementAction.reseller_id.in_(
+                    select(Reseller.id).where(Reseller.panel_id == panel_id)
                 ),
             )
             .order_by(
@@ -970,24 +969,16 @@ async def process_enforcement_queue(
         )
     ).scalars().all()
 
-    result: dict = {
-        "picked": len(actions),
-        "done": 0, "partial": 0, "failed": 0, "skipped": 0,
-        "patched_users": 0, "failed_users": 0, "patched_admins": 0,
-        "restored_users": 0, "restored_admins": 0, "restore_queued": 0,
-    }
+    result = _empty_queue_result()
+    result["picked"] = len(actions)
     for action in actions:
         if action.action == EnforcementActionType.restore:
             step = await _process_restore_action(
-                session, action,
-                user_chunk_size=chunk,
-                admin_parallelism=para,
+                session, action, user_chunk_size=chunk, admin_parallelism=para,
             )
         else:
             step = await _process_enforcement_action(
-                session, action,
-                user_chunk_size=chunk,
-                admin_parallelism=para,
+                session, action, user_chunk_size=chunk, admin_parallelism=para,
             )
         # A hard failure (exhausted retries) is no longer silent: ping the owner so a stuck
         # suspension/restore is visible instead of leaving debt uncollected.
@@ -997,6 +988,81 @@ async def process_enforcement_queue(
             if key != "picked":
                 result[key] += int(step.get(key, 0) or 0)
     return result
+
+
+async def process_enforcement_queue(
+    session: AsyncSession,
+    *,
+    action_limit: int | None = None,
+    user_chunk_size: int | None = None,
+    admin_chunk_size: int | None = None,
+) -> dict:
+    """Process pending enforcement/restore actions, **one lane per panel running in parallel** so
+    suspensions/restores on different panels progress simultaneously instead of one-at-a-time.
+
+    Each panel lane gets its OWN session (an AsyncSession is not concurrency-safe) and processes up
+    to `enforcement_action_batch_limit` of that panel's actions sequentially (restores first). The
+    number of panels processed concurrently is bounded by `enforcement_panel_concurrency`. Per-action
+    chunking/resumability is unchanged, so a large reseller still resumes across ticks — now without
+    blocking other panels. `admin_chunk_size` bounds concurrent admin-limit calls within one action.
+    """
+    cfg = await settings_service.get_many(
+        session,
+        [
+            "enforcement_action_batch_limit",
+            "enforcement_user_chunk_size",
+            "enforcement_admin_chunk_size",
+            "enforcement_panel_concurrency",
+        ],
+    )
+    limit = max(1, int(action_limit or cfg.get("enforcement_action_batch_limit") or 1))
+    chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 500))
+    para = max(1, int(admin_chunk_size or cfg.get("enforcement_admin_chunk_size") or 10))
+    panel_para = max(1, int(cfg.get("enforcement_panel_concurrency") or 6))
+
+    # Retention of terminal enforcement_action rows (incl. their large JSON snapshots) is
+    # handled centrally by the daily maintenance job — see app.services.maintenance.
+    panel_ids = list((
+        await session.execute(
+            select(Reseller.panel_id)
+            .join(EnforcementAction, EnforcementAction.reseller_id == Reseller.id)
+            .where(*_PENDING_ACTION_FILTER)
+            .distinct()
+        )
+    ).scalars().all())
+    panel_ids = [p for p in panel_ids if p is not None]
+
+    agg = _empty_queue_result()
+    agg["panels"] = len(panel_ids)
+    if not panel_ids:
+        return agg
+
+    # Each lane needs its OWN session (an AsyncSession is NOT safe to share across tasks). Derive the
+    # factory from the caller's bind so it uses the same engine in production AND in tests; fall back
+    # to the app-wide SessionLocal if the session isn't engine-bound.
+    bind = session.bind
+    lane_factory = (
+        async_sessionmaker(bind, expire_on_commit=False, autoflush=False) if bind is not None
+        else SessionLocal
+    )
+    sem = asyncio.Semaphore(panel_para)
+
+    async def _lane(pid: int) -> dict:
+        async with sem:
+            try:
+                async with lane_factory() as lane_session:
+                    return await _process_panel_queue(
+                        lane_session, pid, limit=limit, chunk=chunk, para=para
+                    )
+            except Exception:  # noqa: BLE001 — one panel's failure must not abort the others
+                log.exception("enforcement queue lane failed for panel %s", pid)
+                return {}
+
+    steps = await asyncio.gather(*[_lane(pid) for pid in panel_ids])
+    for step in steps:
+        for key, val in step.items():
+            agg[key] = agg.get(key, 0) + int(val or 0)
+    return agg
 
 
 # ── public API (thin wrappers) ───────────────────────────────────────────────

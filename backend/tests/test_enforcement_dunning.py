@@ -297,6 +297,9 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         )
         assert first["partial"] == 1
         assert first["restored_users"] == 1
+        # The worker now runs each panel on its OWN session (parallel lanes), so refresh the
+        # test's cached objects before asserting on worker-mutated state.
+        await s.refresh(r)
         assert r.enforcement_state == EnforcementState.enforced
         assert r.max_users_snapshot == 100  # snapshot NOT cleared yet
 
@@ -306,6 +309,7 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         )
         assert second["partial"] == 1
         await s.refresh(res)
+        await s.refresh(r)
         assert res.status == EnforcementActionStatus.partial
         assert r.enforcement_state == EnforcementState.enforced
 
@@ -316,6 +320,7 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         )
         assert third["done"] == 1
         await s.refresh(res)
+        await s.refresh(r)
         assert res.status == EnforcementActionStatus.done
         assert r.enforcement_state == EnforcementState.active
         assert r.max_users_snapshot is None

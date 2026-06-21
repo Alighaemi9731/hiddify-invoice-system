@@ -61,12 +61,14 @@ async def render_node_usage_pdf(
 ) -> tuple[str, str] | None:
     """Render a volume-only usage PDF for a node + its whole subtree (the same bundle the
     real monthly invoice covers), for any period. Used for the reseller's own interim
-    invoice. Returns None if there's zero billable usage in the period."""
-    from app.services.reseller_report import node_invoice
+    invoice. Includes the abuse-metered extra so it matches the text + the real invoice.
+    Returns None if there's zero billable usage in the period."""
+    from app.services.reseller_report import node_invoice_pdf_lines
 
-    bundle = await node_invoice(session, node, period)
-    if bundle is None or bundle.total_gb <= 0:
+    result = await node_invoice_pdf_lines(session, node, period, own_only=False)
+    if result is None:
         return None
+    lines, total_gb = result
     panel = await session.get(Panel, node.panel_id)
     owner_name = issuer_name or (await settings_service.get(session, "owner_name", "") or "")
     safe = _safe_name(node.name)
@@ -75,13 +77,8 @@ async def render_node_usage_pdf(
         out_path,
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
-        lines=[
-            {"name": line.name, "uuid": line.user_uuid, "start_date": line.start_date,
-             "usage_gb": float(line.usage_gb),
-             "sub_reseller_name": line.sub_reseller_name or node.name}
-            for line in bundle.lines
-        ],
-        total_gb=float(bundle.total_gb),
+        lines=lines,
+        total_gb=total_gb,
         owner_name=owner_name, invoice_title=title,
     )
     return out_path, f"{title.replace(' ', '_')}_{safe}_{period.label}.pdf"
@@ -92,13 +89,15 @@ async def render_own_usage_pdf(
 ) -> tuple[str, str] | None:
     """Render a volume-only usage PDF for a node's OWN users only (just `node.admin_uuid`,
     NOT its subtree) — so a top reseller's interim invoice lists only the users they created
-    themselves, exactly like each sub-reseller gets its own separate PDF. Returns None if
-    there's zero billable own usage in the period."""
-    from app.services.reseller_report import node_invoice_own
+    themselves, exactly like each sub-reseller gets its own separate PDF. Includes the
+    abuse-metered extra so it matches the text + the real invoice. Returns None if there's
+    zero billable own usage in the period."""
+    from app.services.reseller_report import node_invoice_pdf_lines
 
-    bundle = await node_invoice_own(session, node, period)
-    if bundle is None or bundle.total_gb <= 0:
+    result = await node_invoice_pdf_lines(session, node, period, own_only=True)
+    if result is None:
         return None
+    lines, total_gb = result
     panel = await session.get(Panel, node.panel_id)
     owner_name = issuer_name or (await settings_service.get(session, "owner_name", "") or "")
     safe = _safe_name(node.name)
@@ -107,13 +106,8 @@ async def render_own_usage_pdf(
         out_path,
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
-        lines=[
-            {"name": line.name, "uuid": line.user_uuid, "start_date": line.start_date,
-             "usage_gb": float(line.usage_gb),
-             "sub_reseller_name": line.sub_reseller_name or node.name}
-            for line in bundle.lines
-        ],
-        total_gb=float(bundle.total_gb),
+        lines=lines,
+        total_gb=total_gb,
         owner_name=owner_name, invoice_title=title,
     )
     return out_path, f"{title.replace(' ', '_')}_own_{safe}_{period.label}.pdf"
@@ -123,14 +117,15 @@ async def render_sub_invoice_pdf(
     session: AsyncSession, node: Reseller, period, *, issuer_name: str = ""
 ) -> tuple[str, str] | None:
     """Render an on-demand invoice PDF for ONE sub-reseller (node + its own subtree) for
-    a period, so a reseller can bill their sub-resellers. NOT persisted as an Invoice
-    (the owner's invoice already covers the subtree). Returns None if zero billable usage.
-    """
-    from app.services.reseller_report import node_invoice
+    a period, so a reseller can bill their sub-resellers. Includes the abuse-metered extra so
+    it matches the text + the real invoice. NOT persisted as an Invoice (the owner's invoice
+    already covers the subtree). Returns None if zero billable usage."""
+    from app.services.reseller_report import node_invoice_pdf_lines
 
-    bundle = await node_invoice(session, node, period)
-    if bundle is None or bundle.total_gb <= 0:
+    result = await node_invoice_pdf_lines(session, node, period, own_only=False)
+    if result is None:
         return None
+    lines, total_gb = result
 
     panel = await session.get(Panel, node.panel_id)
     safe = _safe_name(node.name)
@@ -139,13 +134,8 @@ async def render_sub_invoice_pdf(
         out_path,
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
-        lines=[
-            {"name": line.name, "uuid": line.user_uuid, "start_date": line.start_date,
-             "usage_gb": float(line.usage_gb),
-             "sub_reseller_name": line.sub_reseller_name or node.name}
-            for line in bundle.lines
-        ],
-        total_gb=float(bundle.total_gb),
+        lines=lines,
+        total_gb=total_gb,
         owner_name=issuer_name,  # the issuing reseller, not the panel owner
     )
     return out_path, f"factor_{safe}_{period.label}.pdf"

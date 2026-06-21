@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.104 - 2026-06-19
+
+### Fixed
+
+- **Interim invoice («فاکتور علی‌الحساب») PDF now matches its text + the real invoice.** The interim
+  TEXT already included the abuse-metered extra (overage + renew-by-edit), but the PDF rendered base
+  snapshot lines only, so its total disagreed. A shared helper
+  (`reseller_report.node_invoice_pdf_lines`) now composes base lines + the per-user metering-extra lines
+  (labelled «… — مصرف اضافه/تمدید», and removed-from-panel users labelled «… — مصرف حذف‌شده از پنل»),
+  exactly mirroring how the real end-of-month invoice persists its lines. The own/sub/interim PDFs
+  (`render_own_usage_pdf`, `render_node_usage_pdf`, `render_sub_invoice_pdf`) render from it, so the PDF
+  total == the interim text == the eventual real invoice.
+
+### Changed
+
+- **Enforcement queue runs one lane per panel, in parallel.** The worker previously processed a single
+  global action per ~5-minute tick, serializing suspensions/restores across panels. It now groups pending
+  actions by panel and processes panels concurrently (bounded by the new `enforcement_panel_concurrency`,
+  default 6), each panel on its own session and still sequential within the panel (so a single panel is
+  never hammered). `enforcement_action_batch_limit` is now **per panel** per tick (default raised 1→3).
+  Per-action chunking/resumability is unchanged, so large resellers still resume across ticks — now
+  without blocking other panels. No DB schema change; in-flight queued actions resume normally.
+- Tests in `tests/test_invoice_enforcement_fixes.py` (PDF↔text parity with metering; multi-panel
+  processed in one tick; setting range). 200 backend tests pass; ruff + mypy + pip clean; frontend
+  tsc + build clean.
+
 ## 1.37.103 - 2026-06-19
 
 ### Changed (Toncoin → Gram rebrand)

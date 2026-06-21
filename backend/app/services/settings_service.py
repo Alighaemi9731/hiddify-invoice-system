@@ -212,9 +212,13 @@ DEFS: list[SettingDef] = [
     # Live enforcement is queued and chunked. The dunning job only plans work; this worker
     # processes a small, resumable slice at a time so large panels never block a scheduler tick.
     SettingDef("enforcement_worker_interval_minutes", 5, False, "dunning"),
-    SettingDef("enforcement_action_batch_limit", 1, False, "dunning"),
+    # Actions processed PER PANEL per worker tick (panels run in parallel — see below).
+    SettingDef("enforcement_action_batch_limit", 3, False, "dunning"),
     SettingDef("enforcement_user_chunk_size", 500, False, "dunning"),
     SettingDef("enforcement_admin_chunk_size", 10, False, "dunning"),
+    # How many panels are processed concurrently per tick. Panels are independent, so cross-panel
+    # suspensions/restores run in parallel; each panel stays sequential (never hammered).
+    SettingDef("enforcement_panel_concurrency", 6, False, "dunning"),
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
     # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
     # so a stale, never-reviewed proof can't shield a debt forever. Default 7.
@@ -287,6 +291,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "enforcement_action_batch_limit": (1, 20),
     "enforcement_user_chunk_size": (1, 500),
     "enforcement_admin_chunk_size": (1, 50),
+    "enforcement_panel_concurrency": (1, 20),
     "pending_payment_hold_days": (1, 365),
     "kick_grace_minutes": (0, 24 * 60),
     "min_confirmations": (0, 10_000),

@@ -111,6 +111,43 @@ async def node_invoice_own(
     return next((b for b in bundles if b.root.id == node.id), None)
 
 
+async def node_invoice_pdf_lines(
+    session: AsyncSession, node: Reseller, period: Period, *, own_only: bool
+) -> tuple[list[dict], float] | None:
+    """The PDF line items + total for a node's interim/sub invoice, INCLUDING the abuse-metered
+    extra (overage + renew-by-edit) — so the PDF matches the interim text AND the real end-of-month
+    invoice (which adds the same extras in `invoicing._persist_bundle`). Mirrors that merge exactly:
+    base snapshot lines (deleted users flagged) + per-user metering-extra lines. `own_only` → just the
+    node's own users (`node_invoice_own`); else the whole subtree (`node_invoice`). Returns
+    (lines, total_gb) or None when there's nothing billable."""
+    bundle = await (node_invoice_own if own_only else node_invoice)(session, node, period)
+    if bundle is None:
+        return None
+    free_threshold = await pricing.get_free_threshold_gb(session)
+    extra = await metering.bundle_extra(
+        session, node.panel_id, bundle.admin_uuids, period.label, free_threshold
+    )
+    lines: list[dict] = [
+        {
+            "name": ((ln.name or "")[:235] + " — مصرف حذف‌شده از پنل") if ln.from_deleted else ln.name,
+            "uuid": ln.user_uuid, "start_date": ln.start_date, "usage_gb": float(ln.usage_gb),
+            "sub_reseller_name": ln.sub_reseller_name or node.name,
+        }
+        for ln in bundle.lines
+    ]
+    # The metered extra as explicit per-user lines (same label/convention as the real invoice).
+    for el in extra.get("lines", []):
+        lines.append({
+            "name": ((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
+            "uuid": el.get("user_uuid", ""), "start_date": None,
+            "usage_gb": float(el.get("usage_gb", 0) or 0), "sub_reseller_name": node.name,
+        })
+    total_gb = round(float(bundle.total_gb) + float(extra.get("gb", 0) or 0), 3)
+    if total_gb <= 0:
+        return None
+    return lines, total_gb
+
+
 async def _panel_synced_at(session: AsyncSession, panel_id: int) -> dt.datetime | None:
     """The panel's latest sync time — a user whose snapshot is older than this is gone from
     the panel, so it's billed on consumption (mirrors the real invoice)."""
