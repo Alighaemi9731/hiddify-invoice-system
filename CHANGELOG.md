@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.106 - 2026-06-21
+
+### Added
+
+- **Owner can disconnect a reseller's Telegram account** (Resellers page). When a reseller registers
+  their panel to a Telegram account and later loses access to it, they were stuck — bot registration
+  refuses to re-bind a row already tied to a different account, and `/removelink` needs the lost account.
+  A new owner-only **«قطع اتصالِ تلگرام»** action (a `LinkOff` icon, shown only on connected resellers,
+  behind a **confirmation dialog** that names the reseller + the currently-bound account) releases the
+  binding so the reseller can re-register from any account. It clears exactly what the bot's `/removelink`
+  clears — `bot_chat_id`, `link_tag`, `registered_at` — for that one reseller row; it does **not** touch
+  the Hiddify panel, users, or invoices. New `POST /api/resellers/{id}/unbind-telegram` (owner JWT,
+  idempotent). No schema change. Tests in `tests/test_unbind_telegram.py`. 205 backend tests pass; ruff +
+  mypy + pip clean; frontend tsc + build clean.
+
 ## 1.37.105 - 2026-06-21
 
 ### Changed (enforcement is now much lighter on the panels)

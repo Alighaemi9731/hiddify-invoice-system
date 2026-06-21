@@ -160,6 +160,8 @@ export const bumpResellerLimits = (id: number, amount: number) =>
   api.post(`/api/resellers/${id}/bump-limits`, { amount }).then((r) => r.data);
 export const setResellerCanAddAdmin = (id: number, enabled: boolean) =>
   api.post(`/api/resellers/${id}/can-add-admin`, { enabled }).then((r) => r.data);
+export const unbindResellerTelegram = (id: number) =>
+  api.post(`/api/resellers/${id}/unbind-telegram`).then((r) => r.data);
 
 // ---- invoices ----
 export interface InvoiceListItem {

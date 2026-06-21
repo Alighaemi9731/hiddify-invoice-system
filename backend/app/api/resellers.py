@@ -576,3 +576,24 @@ async def set_can_add_admin(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"اعمال روی پنل ناموفق بود: {exc}") from exc
     return {"reseller_id": reseller_id, "can_add_admin": body.enabled}
+
+
+@router.post("/{reseller_id}/unbind-telegram")
+async def unbind_telegram(
+    reseller_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Release this reseller's Telegram binding so they can re-register from a NEW account.
+
+    Owner-only escape hatch for when a reseller loses access to the Telegram account they
+    registered with (bot registration otherwise refuses to re-bind a row already tied to a
+    different chat). Clears exactly what the bot's own `/removelink` clears — bot_chat_id,
+    link_tag, registered_at — for THIS reseller row only. DB-only: nothing on the Hiddify panel
+    changes. Idempotent."""
+    r = await session.get(Reseller, reseller_id)
+    if not r:
+        raise HTTPException(404, "Reseller not found")
+    r.bot_chat_id = None
+    r.link_tag = None
+    r.registered_at = None
+    await session.commit()
+    return {"reseller_id": reseller_id, "name": r.name, "registered": False}
