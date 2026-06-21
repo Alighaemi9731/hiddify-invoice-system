@@ -31,6 +31,8 @@ from app.services.periods import today as tehran_today
 log = logging.getLogger("enforcement")
 
 _MAX_RETRIES = 5
+# How many per-user id lookups to run concurrently against ONE panel — small, to stay gentle.
+_ID_LOOKUP_CONCURRENCY = 8
 
 
 # ── low-level helpers ────────────────────────────────────────────────────────
@@ -172,49 +174,79 @@ async def _run_user_chunks(
     if not remaining:
         return 0, False
 
-    # Resolve UUID → Hiddify numeric-ID mapping, cached in the snapshot so retries
-    # don't re-fetch.
-    panel_user_ids: dict[str, int] = {
-        str(uuid): int(uid)
-        for uuid, uid in (snapshot.get("panel_user_ids") or {}).items()
-    }
-    if any(uuid not in panel_user_ids for uuid in remaining):
-        try:
-            fetched = await client.get_user_ids(panel)
-            panel_user_ids.update(
-                {uuid: fetched[uuid] for uuid in users_map if uuid in fetched}
-            )
-            snapshot["panel_user_ids"] = panel_user_ids
-        except Exception as exc:  # noqa: BLE001
-            user_attempts["__lookup__"] = user_attempts.get("__lookup__", 0) + 1
-            action.error = f"bulk user id lookup failed: {str(exc)[:900]}"
-            progress["user_attempts"] = user_attempts
-            if user_attempts["__lookup__"] >= _MAX_RETRIES:
-                action.status = EnforcementActionStatus.failed
-            action.snapshot = snapshot
-            flag_modified(action, "snapshot")
-            await session.commit()
-            return 0, True
-
-    for uuid in list(remaining):
-        if uuid not in panel_user_ids:
-            missing_users.add(uuid)
-            done_users.add(uuid)
-    remaining = [u for u in remaining if u in panel_user_ids and u not in missing_users]
-
-    snapshot_rows: dict[str, EndUserSnapshot] = {}
-    if remaining:
-        snapshot_rows = {
-            r.user_uuid: r
-            for r in (
-                await session.execute(
-                    select(EndUserSnapshot).where(
-                        EndUserSnapshot.panel_id == panel.id,
-                        EndUserSnapshot.user_uuid.in_(remaining),
-                    )
+    # Snapshot rows for all targets up front: they hold the cached numeric id (panel_user_id) and
+    # we flip their `enable` flag after a successful chunk.
+    snapshot_rows: dict[str, EndUserSnapshot] = {
+        r.user_uuid: r
+        for r in (
+            await session.execute(
+                select(EndUserSnapshot).where(
+                    EndUserSnapshot.panel_id == panel.id,
+                    EndUserSnapshot.user_uuid.in_(remaining),
                 )
-            ).scalars().all()
-        }
+            )
+        ).scalars().all()
+    }
+
+    # Resolve UUID → Hiddify numeric id for ONLY the target users (NEVER the whole panel list,
+    # which 503s on large panels). Order: in-memory resume cache → durable per-user cache
+    # (panel_user_id) → a per-user API lookup for whatever's left, cached for next time.
+    panel_user_ids: dict[str, int] = {
+        str(uuid): int(uid) for uuid, uid in (snapshot.get("panel_user_ids") or {}).items()
+    }
+    for uuid in remaining:
+        if uuid not in panel_user_ids:
+            row = snapshot_rows.get(uuid)
+            if row is not None and row.panel_user_id is not None:
+                panel_user_ids[uuid] = int(row.panel_user_id)
+
+    to_lookup = [u for u in remaining if u not in panel_user_ids]
+    lookup_failed = False
+    if to_lookup:
+        sem = asyncio.Semaphore(_ID_LOOKUP_CONCURRENCY)
+
+        async def _resolve(uuid: str) -> tuple[str, int | None, str | None]:
+            async with sem:
+                try:
+                    return uuid, await client.get_user_id(panel, uuid), None
+                except Exception as exc:  # noqa: BLE001 — a single user's lookup failed
+                    return uuid, None, str(exc)[:300]
+
+        for uuid, uid, err in await asyncio.gather(*[_resolve(u) for u in to_lookup]):
+            if err is not None:
+                user_attempts[uuid] = user_attempts.get(uuid, 0) + 1
+                failed_users[uuid] = err
+                action.error = f"user id lookup failed (will retry): {err}"
+                if user_attempts[uuid] >= _MAX_RETRIES:
+                    # Give up on this one user (skip) so it can't block the batch forever.
+                    missing_users.add(uuid)
+                    done_users.add(uuid)
+                else:
+                    lookup_failed = True
+                continue
+            failed_users.pop(uuid, None)
+            if uid is None:
+                # 404 → user absent on the panel; skip it (we only act on present users).
+                missing_users.add(uuid)
+                done_users.add(uuid)
+            else:
+                panel_user_ids[uuid] = uid
+                row = snapshot_rows.get(uuid)
+                if row is not None:
+                    row.panel_user_id = uid  # cache durably → next time zero lookups
+        # Persist resolved ids + progress so a restart resumes without re-looking-up.
+        snapshot["panel_user_ids"] = panel_user_ids
+        progress["users_done"] = sorted(done_users)
+        progress["users_missing"] = sorted(missing_users)
+        progress["users_failed"] = failed_users
+        progress["user_attempts"] = user_attempts
+        action.snapshot = snapshot
+        flag_modified(action, "snapshot")
+        await session.commit()
+
+    # Act only on users we resolved an id for; 404-missing and not-yet-retried lookup errors are
+    # skipped this run (the latter keep the action partial → retried next tick).
+    remaining = [u for u in remaining if u in panel_user_ids and u not in missing_users]
 
     total_patched = 0
     verb = "enable" if enable else "disable"
@@ -262,7 +294,9 @@ async def _run_user_chunks(
         await session.commit()
         remaining = [u for u in remaining if u not in done_users]
 
-    return total_patched, False
+    # `lookup_failed` (a transient per-user id lookup error, not yet retry-exhausted) keeps the
+    # action partial so the unresolved users are retried next tick.
+    return total_patched, lookup_failed
 
 
 async def _run_admin_limits(

@@ -95,8 +95,8 @@ def test_enforcement_processes_multiple_panels_in_one_tick(tmp_path, monkeypatch
         for r in rows:
             await enforcement.queue_enforcement(s, r, dry_run=False)
 
-        async def fake_user_ids(self, panel):
-            return {f"u{panel.id}": 100 + panel.id}
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return 100 + panel.id if user_uuid == f"u{panel.id}" else None
 
         async def fake_bulk(self, panel, user_ids, enabled):
             return None
@@ -107,7 +107,7 @@ def test_enforcement_processes_multiple_panels_in_one_tick(tmp_path, monkeypatch
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)

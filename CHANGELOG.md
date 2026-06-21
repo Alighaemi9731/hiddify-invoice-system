@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.105 - 2026-06-21
+
+### Changed (enforcement is now much lighter on the panels)
+
+- **Suspend/restore no longer downloads the entire panel user list.** Previously every enforcement
+  action called `GET /api/v2/admin/user/` (the WHOLE panel — 10k+ users, hundreds of KB) just to map the
+  reseller's target uuids → the numeric ids the bulk action needs; on a large/busy panel that is slow and
+  **503s**, and it repeated per-action during a suspension burst (it helped overwhelm a panel). Enforcement
+  now resolves ids for **only the reseller's target users** via the single-user endpoint
+  `GET /api/v2/admin/user/{uuid}/` (its `UserSchema` includes the numeric `id`), with bounded concurrency
+  to stay gentle, and **caches** each id on `EndUserSnapshot.panel_user_id` so subsequent suspensions do
+  **zero** id lookups. A user absent on the panel (404) is skipped (we only act on users still present).
+  The bulk enable/disable + single `quick_apply_users`-per-batch is unchanged. New
+  `AdminApiClient.get_user_id`; `get_user_ids` (whole-list) stays only as an ad-hoc/fallback helper.
+- New nullable column `end_user_snapshots.panel_user_id` (Alembic migration `b7f1c0a9d2e4`, runs on boot;
+  registered in the post-baseline column allowlist). No data backfill — populated lazily on first use.
+- Tests: `tests/test_enforcement_lighten.py` (per-target resolution, id caching → zero lookups, 404
+  skipped, whole-list never called) + `get_user_id` unit test; existing enforcement tests switched to mock
+  the per-user lookup. 203 backend tests pass; ruff + mypy + pip clean; frontend tsc + build clean.
+
 ## 1.37.104 - 2026-06-19
 
 ### Fixed

@@ -100,11 +100,32 @@ class AdminApiClient(PanelClient):
             raise UserLimitError(text)
         raise RuntimeError(f"POST user {resp.status_code}: {text}")
 
-    async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
-        """Return Hiddify's internal numeric id for every visible user.
+    async def get_user_id(  # noqa: ANN001
+        self, panel, user_uuid: str, *, api_key: str | None = None
+    ) -> int | None:
+        """Hiddify's numeric id for ONE user via `GET /user/{uuid}/`.
 
-        The REST API exposes the ids but only supports single-user PATCH. The numeric ids
-        are required by Hiddify's own Flask-Admin bulk action endpoint.
+        Used by enforcement to resolve only the reseller's TARGET users' ids (the bulk action
+        needs numeric rowids) instead of downloading the entire panel user list — far gentler on
+        large panels. Returns the int id, or None if the user is absent on the panel (404) so the
+        caller skips it. Other HTTP errors raise so the caller's retry path handles them."""
+        url = f"{panel.admin_api_base}/user/{user_uuid}/"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, headers=self._headers(panel, api_key))
+        if resp.status_code == 404:
+            return None
+        if resp.status_code >= 400:
+            raise RuntimeError(f"GET user {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        uid = data.get("id") if isinstance(data, dict) else None
+        return int(uid) if isinstance(uid, int) else None
+
+    async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
+        """Return Hiddify's internal numeric id for every visible user (WHOLE panel — heavy).
+
+        NOTE: no longer on the enforcement hot path (it 503s on large panels); enforcement now
+        resolves ids per-target via `get_user_id`. Kept for ad-hoc use / fallback.
+        The numeric ids are required by Hiddify's own Flask-Admin bulk action endpoint.
         """
         url = f"{panel.admin_api_base}/user/"
         async with httpx.AsyncClient(timeout=self.timeout) as client:

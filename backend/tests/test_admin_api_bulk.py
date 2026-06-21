@@ -55,6 +55,27 @@ def test_get_user_ids_maps_only_valid_rows(monkeypatch):
     assert result == {"u1": 11, "u2": 12}
 
 
+def test_get_user_id_single(monkeypatch):
+    """Per-user id lookup: returns the int id on 200, None on 404 (absent), used by enforcement
+    instead of fetching the whole panel."""
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, headers):
+            if url.endswith("/user/present-uuid/"):
+                return _Response(200, json_data={"uuid": "present-uuid", "id": 77})
+            return _Response(404, text="not found")
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    c = admin_api.AdminApiClient()
+    assert asyncio.run(c.get_user_id(_panel(), "present-uuid")) == 77
+    assert asyncio.run(c.get_user_id(_panel(), "gone-uuid")) is None
+
+
 def test_bulk_set_users_enabled_posts_native_hiddify_action(monkeypatch):
     captured = {}
 

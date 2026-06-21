@@ -30,6 +30,7 @@ _MIGRATION_LOCK = 734_137_043
 # fully-qualified "table.column" for every post-baseline column-add migration.
 _POST_BASELINE_COLUMNS = {
     "usage_meters.renew_used_gb", "panels.host_aliases", "panels.client_proxy_path_enc",
+    "end_user_snapshots.panel_user_id",
 }
 
 

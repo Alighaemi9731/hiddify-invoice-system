@@ -37,6 +37,10 @@ class EndUserSnapshot(Base, TimestampMixin):
     )
 
     user_uuid: Mapped[str] = mapped_column(String(64), index=True)
+    # Hiddify's numeric primary-key id for this user, cached lazily during enforcement (the bulk
+    # enable/disable action needs numeric rowids). Lets us avoid the heavy whole-panel user-list
+    # fetch — see app.services.enforcement. Nullable: unknown until first resolved.
+    panel_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(255), default="")
     added_by_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 

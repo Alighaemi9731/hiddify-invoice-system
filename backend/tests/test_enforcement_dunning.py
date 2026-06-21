@@ -91,8 +91,8 @@ def test_enforcement_completes_in_one_tick(tmp_path, monkeypatch):
 
         calls: list[tuple] = []
 
-        async def fake_user_ids(self, panel):
-            return {"u0": 10, "u1": 11, "u2": 12}
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return {"u0": 10, "u1": 11, "u2": 12}.get(user_uuid)
 
         async def fake_bulk(self, panel, user_ids, enabled):
             calls.append(("bulk", tuple(sorted(user_ids)), enabled))
@@ -104,7 +104,7 @@ def test_enforcement_completes_in_one_tick(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             calls.append(("set_limits", admin_uuid, mu, mau))
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
@@ -155,8 +155,8 @@ def test_enforcement_partial_on_user_chunk_failure(tmp_path, monkeypatch):
 
         call_count = [0]
 
-        async def fake_user_ids(self, panel):
-            return {"u0": 10, "u1": 11, "u2": 12}
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return {"u0": 10, "u1": 11, "u2": 12}.get(user_uuid)
 
         async def fake_bulk(self, panel, user_ids, enabled):
             call_count[0] += 1
@@ -169,7 +169,7 @@ def test_enforcement_partial_on_user_chunk_failure(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             pass
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
@@ -277,15 +277,15 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        async def fake_user_ids(self, panel):
-            return {"u1": 1, "u2": 2}
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return {"u1": 1, "u2": 2}.get(user_uuid)
 
         async def fake_bulk(self, panel, user_ids, enabled):
             if 2 in user_ids and fail_uuid["u"] == "u2":
                 raise RuntimeError("panel rejected")
 
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
         res = await enforcement.queue_restore(s, r)
@@ -353,8 +353,8 @@ def test_restore_cancels_partial_disable_and_only_undoes_completed_work(
         calls: list[tuple] = []
         call_count = [0]
 
-        async def fake_user_ids(self, panel):
-            return {"u0": 10, "u1": 11, "u2": 12}
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return {"u0": 10, "u1": 11, "u2": 12}.get(user_uuid)
 
         async def fake_bulk(self, panel, user_ids, enabled):
             call_count[0] += 1
@@ -363,7 +363,7 @@ def test_restore_cancels_partial_disable_and_only_undoes_completed_work(
                 raise RuntimeError("panel error during disable")
             calls.append((enabled, tuple(sorted(user_ids))))
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_ids", fake_user_ids)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
         disable = await enforcement.queue_enforcement(
