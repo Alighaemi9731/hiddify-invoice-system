@@ -23,6 +23,7 @@ const Broadcast = lazy(() => import("./pages/Broadcast"));
 const AccountBackup = lazy(() => import("./pages/AccountBackup"));
 const Help = lazy(() => import("./pages/Help"));
 const Settings = lazy(() => import("./pages/Settings"));
+const Tools = lazy(() => import("./pages/Tools"));
 import { ReactNode } from "react";
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -106,6 +107,7 @@ export default function App() {
         <Route path="/account" element={<AccountBackup />} />
         <Route path="/help" element={<Help />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/tools" element={<Tools />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

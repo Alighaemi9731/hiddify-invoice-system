@@ -197,6 +197,9 @@ DEFS: list[SettingDef] = [
     # rows — an owed invoice's reminder logs, in-flight enforcement queue work — are never
     # pruned. Default 90 days; minimum 7. Does NOT touch the financial ledger or invoices.
     SettingDef("log_retention_days", 90, False, "schedule"),
+    # usage_meters older than this many months are pruned by the daily maintenance (old periods are
+    # already locked into invoices + the financial ledger). Keeps the metering table bounded. 0 = off.
+    SettingDef("meter_retention_months", 6, False, "schedule"),
     # Daily owner digest to the owner's Telegram PV (KPIs + health). On by default at 09:00.
     SettingDef("daily_digest_enabled", True, False, "schedule"),
     SettingDef("daily_digest_hour", 9, False, "schedule"),
@@ -282,6 +285,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "guard_interval_minutes": (1, 60),
     "backup_interval_hours": (1, 24),
     "log_retention_days": (7, 3650),
+    "meter_retention_months": (0, 120),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),

@@ -163,6 +163,26 @@ export const setResellerCanAddAdmin = (id: number, enabled: boolean) =>
 export const unbindResellerTelegram = (id: number) =>
   api.post(`/api/resellers/${id}/unbind-telegram`).then((r) => r.data);
 
+// ---- tools (rare/special owner operations) ----
+export interface ToolsEndUser {
+  id: number;
+  panel_id: number;
+  panel_key: string;
+  user_uuid: string;
+  name: string;
+  added_by_uuid: string | null;
+  reseller_name: string;
+  usage_limit_gb: number;
+  current_usage_gb: number;
+  start_date: string | null;
+  enable: boolean;
+  present_on_panel: boolean;
+}
+export const searchEndUsers = (q: string) =>
+  api.get("/api/tools/end-users", { params: { q } }).then((r) => r.data as ToolsEndUser[]);
+export const removeEndUser = (id: number) =>
+  api.post(`/api/tools/end-users/${id}/remove`).then((r) => r.data);
+
 // ---- invoices ----
 export interface InvoiceListItem {
   id: number;

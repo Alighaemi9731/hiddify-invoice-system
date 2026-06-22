@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.107 - 2026-06-23
+
+### Added — owner «ابزارها» (Tools) page for rare/special operations
+
+- **Manually remove a mistaken end-user from billing.** Search end-users by **name or UUID**, see their
+  panel/reseller/sold-quota/consumption/«روی پنل موجود است؟», and remove one with a confirmation dialog.
+  Removal deletes the user's `EndUserSnapshot` **and** its `usage_meters` rows, so it drops out of BOTH the
+  sold-quota base and the metering (overage/consumption) extras — fixing the case where a wrongly-created
+  huge-quota user keeps inflating the invoice. DB-only: the Hiddify panel, sent invoices, and the financial
+  ledger are untouched (regenerate the draft / «بازمحاسبه» a sent invoice to apply). New owner endpoints
+  `GET /api/tools/end-users` + `POST /api/tools/end-users/{id}/remove`.
+- **Relocated «قطع اتصالِ تلگرام»** (reseller Telegram-unbind) from the Resellers list to this Tools page
+  (with its own reseller search) — both are rare actions, so they no longer clutter the main list.
+
+### Added — DB retention
+
+- `usage_meters` now has bounded retention: the daily maintenance prunes meter rows for periods older than
+  `meter_retention_months` (default 6; 0 disables) — old periods are already locked into invoices + the
+  financial ledger. Closes the one slow-growth vector (the live DB is ~39 MB; all other log/snapshot tables
+  were already pruned daily).
+
+Tests: `tests/test_tools.py` (search by name/uuid, remove deletes snapshot+meters, 404),
+`tests/test_meter_retention.py`. 208 backend tests pass; ruff + mypy + pip clean; frontend tsc + build clean.
+No schema migration.
+
 ## 1.37.106 - 2026-06-21
 
 ### Added

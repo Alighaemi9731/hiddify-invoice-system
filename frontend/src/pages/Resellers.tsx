@@ -38,7 +38,6 @@ import PersonOffIcon from "@mui/icons-material/esm/PersonOff";
 import FormatListBulletedIcon from "@mui/icons-material/esm/FormatListBulleted";
 import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
 import KeyboardArrowLeftIcon from "@mui/icons-material/esm/KeyboardArrowLeft";
-import LinkOffIcon from "@mui/icons-material/esm/LinkOff";
 import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
@@ -56,7 +55,6 @@ import {
   ResellerTreeRow,
   restoreReseller,
   setResellerCanAddAdmin,
-  unbindResellerTelegram,
   updateReseller,
 } from "../api/client";
 import CapacityBar from "../components/CapacityBar";
@@ -185,7 +183,6 @@ export default function Resellers() {
   const [form, setForm] = useState<ResellerRow | null>(null);
   const [bumpRow, setBumpRow] = useState<ResellerRow | null>(null);
   const [bumpAmount, setBumpAmount] = useState(100);
-  const [unbindRow, setUnbindRow] = useState<ResellerRow | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const { data: panels = [] } = useQuery({
@@ -270,15 +267,6 @@ export default function Resellers() {
     onSuccess: (result) => {
       show(`ظرفیت افزایش یافت → سقف کاربران: ${result.max_users}`);
       setBumpRow(null);
-      refresh();
-    },
-    onError: (error) => show(errMsg(error), "error"),
-  });
-  const unbind = useMutation({
-    mutationFn: (id: number) => unbindResellerTelegram(id),
-    onSuccess: () => {
-      show("اتصالِ تلگرام قطع شد؛ نماینده می‌تواند با حسابِ جدید دوباره ثبت کند.");
-      setUnbindRow(null);
       refresh();
     },
     onError: (error) => show(errMsg(error), "error"),
@@ -377,13 +365,6 @@ export default function Resellers() {
             }}
           >
             <BlockIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      )}
-      {reseller.registered && (
-        <Tooltip title="قطع اتصالِ تلگرام (برای ثبتِ دوباره با حسابِ جدید)">
-          <IconButton size="small" color="warning" onClick={() => setUnbindRow(reseller)}>
-            <LinkOffIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       )}
@@ -728,39 +709,6 @@ export default function Resellers() {
         )}
       </Dialog>
 
-      <Dialog open={!!unbindRow} onClose={() => setUnbindRow(null)} fullWidth maxWidth="xs">
-        {unbindRow && (
-          <>
-            <DialogTitle>قطع اتصالِ تلگرام — {unbindRow.name}</DialogTitle>
-            <DialogContent>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                اتصالِ این نماینده به حسابِ تلگرامِ فعلی
-                {unbindRow.username
-                  ? <> (<b dir="ltr">@{unbindRow.username}</b>)</>
-                  : unbindRow.bot_chat_id
-                    ? <> (<b dir="ltr">{unbindRow.bot_chat_id}</b>)</>
-                    : null}
-                {" "}آزاد می‌شود تا بتواند با یک حسابِ تلگرامِ <b>جدید</b> دوباره پنلش را ثبت کند.
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                این کار فقط اتصالِ تلگرام را پاک می‌کند؛ هیچ تغییری روی پنلِ هیدیفای، کاربران یا فاکتورها
-                ایجاد نمی‌شود. برای ثبتِ دوباره، نماینده لینکِ پنلش را در ربات می‌فرستد.
-              </Typography>
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setUnbindRow(null)}>انصراف</Button>
-              <Button
-                variant="contained"
-                color="warning"
-                disabled={unbind.isPending}
-                onClick={() => unbind.mutate(unbindRow.id)}
-              >
-                قطعِ اتصال
-              </Button>
-            </DialogActions>
-          </>
-        )}
-      </Dialog>
       {toastNode}
     </Box>
   );

@@ -18,6 +18,7 @@ import HistoryIcon from "@mui/icons-material/esm/History";
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import ManageAccountsIcon from "@mui/icons-material/esm/ManageAccounts";
 import HelpOutlineIcon from "@mui/icons-material/esm/HelpOutline";
+import BuildIcon from "@mui/icons-material/esm/Build";
 import SettingsIcon from "@mui/icons-material/esm/Settings";
 import LogoutIcon from "@mui/icons-material/esm/Logout";
 import MenuIcon from "@mui/icons-material/esm/Menu";
@@ -46,6 +47,7 @@ const NAV = [
   { to: "/broadcast", label: "پیام همگانی", icon: <CampaignIcon />, color: "#ec4899" },
   { to: "/logs", label: "گزارش‌ها", icon: <HistoryIcon />, color: "#0891b2" },
   { to: "/account", label: "حساب و پشتیبان", icon: <ManageAccountsIcon />, color: "#3b82f6" },
+  { to: "/tools", label: "ابزارها", icon: <BuildIcon />, color: "#8b5cf6" },
   { to: "/settings", label: "تنظیمات", icon: <SettingsIcon />, color: "#64748b" },
   { to: "/help", label: "راهنما", icon: <HelpOutlineIcon />, color: "#06b6d4" },
 ];

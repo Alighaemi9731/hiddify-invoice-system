@@ -187,7 +187,7 @@ def test_prune_stale_snapshots(tmp_path):
         await s.commit()
 
         counts = await maintenance.prune_stale_snapshots(s)
-        assert counts == {"stale_snapshots": 2, "orphan_meters": 2}
+        assert counts == {"stale_snapshots": 2, "orphan_meters": 2, "old_meters": 0}
 
         remaining = {u for (u,) in await s.execute(select(EndUserSnapshot.user_uuid))}
         assert remaining == {"present", "stale_recent", "stale_prev"}

@@ -44,7 +44,16 @@ from app.models import (
 )
 from app.models.enums import EnforcementActionStatus, InvoiceStatus, PanelStatus
 from app.services import settings_service
-from app.services.periods import previous_month
+from app.services.periods import current_month, previous_month
+
+
+def _months_ago_label(months: int) -> str:
+    """The 'YYYY-MM' label `months` before the current month (lexicographically comparable to
+    UsageMeter.period_label)."""
+    start = current_month().start
+    total = start.year * 12 + (start.month - 1) - months
+    y, m = divmod(total, 12)
+    return f"{y:04d}-{m + 1:02d}"
 
 log = logging.getLogger("services.maintenance")
 
@@ -161,9 +170,23 @@ async def prune_stale_snapshots(session: AsyncSession) -> dict[str, int]:
         EndUserSnapshot.user_uuid == UsageMeter.user_uuid,
     )
     meters = await _delete(delete(UsageMeter).where(~orphan_meter))
+
+    # usage_meters keeps one row per active user per month forever, so old periods accumulate even
+    # for present users. Those periods are already locked into invoices + the financial ledger, so
+    # drop meters older than `meter_retention_months` (keep the current + recent months). 0 disables.
+    try:
+        keep_months = int(await settings_service.get(session, "meter_retention_months", 6))
+    except (TypeError, ValueError):
+        keep_months = 6
+    old_meters = 0
+    if keep_months > 0:
+        cutoff_label = _months_ago_label(keep_months)
+        old_meters = await _delete(
+            delete(UsageMeter).where(UsageMeter.period_label < cutoff_label)
+        )
     await session.commit()
 
-    counts = {"stale_snapshots": snapshots, "orphan_meters": meters}
-    if snapshots or meters:
+    counts = {"stale_snapshots": snapshots, "orphan_meters": meters, "old_meters": old_meters}
+    if snapshots or meters or old_meters:
         log.info("Stale-snapshot retention sweep (keep >= %s): %s", keep_from, counts)
     return counts
