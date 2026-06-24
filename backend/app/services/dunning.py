@@ -100,11 +100,12 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
     ).scalars().all()
 
     # A pending payment means the customer paid and is waiting on the OWNER's review — don't
-    # punish that invoice in the meantime. Scope is PER-INVOICE (payments are per-invoice since
-    # B03): a pending proof for invoice A pauses dunning ONLY on invoice A, never on the
-    # customer's unrelated debts (other invoices / other panels). And the hold EXPIRES after
-    # `pending_payment_hold_days` so a stale, never-reviewed proof can't shield a debt forever.
-    # The hold also lifts as soon as the owner confirms (→ paid, leaves _ACTIVE) or rejects.
+    # punish those invoices in the meantime. Scope is the payment's invoice SET: a pending proof
+    # covering invoices {A,B} pauses dunning on BOTH A and B (a payment may cover several
+    # invoices), but never the customer's unrelated debts (other invoices / other panels). And
+    # the hold EXPIRES after `pending_payment_hold_days` so a stale, never-reviewed proof can't
+    # shield a debt forever. The hold also lifts as soon as the owner confirms (→ paid, leaves
+    # _ACTIVE) or rejects.
     hold_days = int(cfg.get("pending_payment_hold_days") or 7)
     cutoff = now - dt.timedelta(days=hold_days)
 
@@ -113,16 +114,18 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
             return ts.replace(tzinfo=dt.timezone.utc)
         return ts
 
-    pending_rows = (
+    from app.services.payments import _settled_ids
+
+    pending_payments = (
         await session.execute(
-            select(Payment.invoice_id, Payment.created_at)
-            .where(Payment.status == PaymentStatus.pending)
+            select(Payment).where(Payment.status == PaymentStatus.pending)
         )
-    ).all()
-    held_invoice_ids = {
-        iid for iid, created in pending_rows
-        if iid is not None and (created is None or (_aware(created) or cutoff) >= cutoff)
-    }
+    ).scalars().all()
+    held_invoice_ids: set[int] = set()
+    for p in pending_payments:
+        if p.created_at is not None and (_aware(p.created_at) or cutoff) < cutoff:
+            continue  # hold expired
+        held_invoice_ids.update(_settled_ids(p))
 
     counts = {"reminder1": 0, "reminder2": 0, "warning": 0,
               "reminder1_sent": 0, "reminder2_sent": 0, "warning_sent": 0,

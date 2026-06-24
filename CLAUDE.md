@@ -56,8 +56,11 @@ docs/      ARCHITECTURE.md + Mermaid diagrams
 - **DB:** PostgreSQL 16 (prod/docker). `sqlite+aiosqlite` is supported for quick local runs/tests via `DATABASE_URL`.
 - **Bot:** aiogram v3.
 - **PDF:** reportlab + arabic-reshaper + python-bidi (Persian/RTL). **Dates:** Gregorian for billing periods; Jalali (`jdatetime`) for display.
-- **Payments:** every proof is tied to one explicitly selected invoice and confirmed manually.
-  USDT/BSC has an optional BscScan check; TON hashes use explorer links.
+- **Payments:** every proof is tied to one OR MORE explicitly selected invoices (a customer can pay a
+  single invoice or settle «همهٔ بدهی» with one transfer) and confirmed manually. The set is stored in
+  `Payment.settled_invoice_ids` (amount = the SUM); validation is atomic (any non-payable invoice in the
+  set rejects the whole batch), one pending payment per invoice, confirm/reject act on the whole set.
+  USDT/BSC has an optional BscScan check (deposit must cover the set's total); TON hashes use explorer links.
 - **Frontend:** React + Vite + TS + MUI (RTL theme, Vazirmatn) + ECharts.
 
 ## Data model essentials

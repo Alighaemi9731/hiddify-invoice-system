@@ -249,10 +249,16 @@ def my_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     )
 
 
-def pay_invoices_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+def pay_invoices_keyboard(
+    items: list[tuple[int, str]], *, pay_all_label: str | None = None
+) -> InlineKeyboardMarkup:
     """One button per UNPAID invoice (data: payinv:<invoice_id>) — tapping starts paying THAT
-    invoice on its own (separate from the others)."""
-    rows = [[InlineKeyboardButton(text=label, callback_data=f"payinv:{iid}")] for iid, label in items]
+    invoice on its own. When `pay_all_label` is given (2+ payable invoices), a «pay all» button
+    (data: payall) is prepended to settle every payable invoice with one transfer."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if pay_all_label:
+        rows.append([InlineKeyboardButton(text=pay_all_label, callback_data="payall")])
+    rows += [[InlineKeyboardButton(text=label, callback_data=f"payinv:{iid}")] for iid, label in items]
     return InlineKeyboardMarkup(
         inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )

@@ -82,12 +82,13 @@ export default function Payments() {
   const del = useMutation({ mutationFn: deletePayment, onSuccess: (r: any) => { show(r?.message || "حذف شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
 
   const doReject = (p: any) => {
-    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ رد آن فاکتورِ تسویه‌شده را دوباره «پرداخت‌نشده» می‌کند.)" : "";
+    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ رد آن فاکتورهای تسویه‌شده را دوباره «پرداخت‌نشده» می‌کند.)" : "";
     if (window.confirm(`پرداخت «${p.reseller_name || ""}» رد شود؟${extra}`)) reject.mutate(p.id);
   };
   const doDelete = (p: any) => {
-    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ با حذف، فاکتورِ مرتبط دوباره «پرداخت‌نشده» می‌شود.)" : "";
-    if (window.confirm(`پرداختِ «${p.reseller_name || ""}» (دوره ${p.invoice_period || "—"}) برای همیشه حذف شود؟${extra}`)) del.mutate(p.id);
+    const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ با حذف، فاکتورهای مرتبط دوباره «پرداخت‌نشده» می‌شوند.)" : "";
+    const scope = p.invoice_count > 1 ? `${p.invoice_count} فاکتور` : `دوره ${p.invoice_period || "—"}`;
+    if (window.confirm(`پرداختِ «${p.reseller_name || ""}» (${scope}) برای همیشه حذف شود؟${extra}`)) del.mutate(p.id);
   };
 
   return (
@@ -118,7 +119,7 @@ export default function Payments() {
               <SortTh id="invoice_period" label="فاکتور (دوره)" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="method" label="روش" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell>TXID</TableCell>
-              <SortTh id="invoice_amount_toman" label="مبلغ" sortKey={key} dir={dir} onSort={toggle} />
+              <SortTh id="total_amount_toman" label="مبلغ" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="confirmations" label="تأییدها" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="status" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="created_at" label="تاریخ" sortKey={key} dir={dir} onSort={toggle} />
@@ -137,7 +138,13 @@ export default function Payments() {
                       ? <Tooltip title="باز کردن گفتگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
                       : p.reseller_name}
                 </TableCell>
-                <TableCell data-label="فاکتور (دوره)">{p.invoice_period || "—"}</TableCell>
+                <TableCell data-label="فاکتور (دوره)">
+                  {p.invoice_count > 1
+                    ? <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{(p.invoices || []).map((iv: any) => `دورهٔ ${iv.period}: ${fmtToman(iv.amount_toman)}`).join("\n")}</span>}>
+                        <span style={{ cursor: "help" }}>{p.invoice_count} فاکتور ({(p.invoices || []).map((iv: any) => iv.period).join("، ")})</span>
+                      </Tooltip>
+                    : (p.invoice_period || "—")}
+                </TableCell>
                 <TableCell data-label="روش">{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
                 <TableCell data-label="TXID" dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
                   {/* Click the hash → open it on the matching explorer (TON → tonscan, else bscscan)
@@ -151,11 +158,13 @@ export default function Payments() {
                 <TableCell data-label="مبلغ" dir="ltr">
                   <Tooltip title={
                     <span style={{ whiteSpace: "pre-line" }}>
-                      {`فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}${p.invoice_equiv ? "\nمعادل: " + p.invoice_equiv : ""}`}
+                      {p.invoice_count > 1
+                        ? (p.invoices || []).map((iv: any) => `دورهٔ ${iv.period}: ${fmtToman(iv.amount_toman)}`).join("\n")
+                        : `فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}${p.invoice_equiv ? "\nمعادل: " + p.invoice_equiv : ""}`}
                     </span>
                   }>
                     <span style={{ cursor: "help" }}>
-                      {p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}
+                      {p.total_amount_toman ? fmtToman(p.total_amount_toman) : "—"}
                     </span>
                   </Tooltip>
                 </TableCell>
@@ -187,10 +196,26 @@ export default function Payments() {
             <Typography variant="body2" sx={{ mb: 1 }}>
               نماینده: <b>{confirmRow.reseller_name}</b>
             </Typography>
-            <Typography variant="body2" sx={{ mb: 1 }}>
-              فاکتور دوره: <b>{confirmRow.invoice_period || "—"}</b>
-              {confirmRow.invoice_amount_toman ? <> — {fmtToman(confirmRow.invoice_amount_toman)}</> : null}
-            </Typography>
+            {confirmRow.invoice_count > 1 ? (
+              <Box sx={{ mb: 1 }}>
+                <Typography variant="body2">فاکتورها ({confirmRow.invoice_count}):</Typography>
+                <Stack component="ul" sx={{ m: 0, pr: 2.5 }} spacing={0.2}>
+                  {(confirmRow.invoices || []).map((iv: any) => (
+                    <Typography key={iv.id} component="li" variant="body2">
+                      دورهٔ {iv.period} — {fmtToman(iv.amount_toman)}
+                    </Typography>
+                  ))}
+                </Stack>
+                <Typography variant="body2" sx={{ mt: 0.5 }}>
+                  مبلغ کل: <b>{fmtToman(confirmRow.total_amount_toman)}</b>
+                </Typography>
+              </Box>
+            ) : (
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                فاکتور دوره: <b>{confirmRow.invoice_period || "—"}</b>
+                {confirmRow.invoice_amount_toman ? <> — {fmtToman(confirmRow.invoice_amount_toman)}</> : null}
+              </Typography>
+            )}
             {confirmRow.txid && (
               <Box sx={{ mb: 1, p: 1, borderRadius: 2, bgcolor: "action.hover" }}>
                 {depChk.isFetching ? (
@@ -226,7 +251,9 @@ export default function Payments() {
               </Box>
             )}
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              با تأیید، فقط همین فاکتور «پرداخت‌شده» می‌شود.
+              {confirmRow.invoice_count > 1
+                ? `با تأیید، همهٔ این ${confirmRow.invoice_count} فاکتور «پرداخت‌شده» می‌شوند.`
+                : "با تأیید، فقط همین فاکتور «پرداخت‌شده» می‌شود."}
             </Typography>
             {confirmRow.has_proof && (
               <Button size="small" startIcon={<ImageIcon />} onClick={() => openPaymentProof(confirmRow.id)}>

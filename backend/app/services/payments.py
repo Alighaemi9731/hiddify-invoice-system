@@ -46,44 +46,102 @@ class SubmitResult:
     status: str  # ok | reopened | dup_confirmed | dup_pending | wrong_owner | not_payable | pending_exists
     user_message: str
     payment: Payment | None = None
-    invoice: Invoice | None = None
+    invoice: Invoice | None = None  # the primary/first invoice (back-compat single-invoice views)
+    invoices: list[Invoice] | None = None  # the full set this payment covers (>=1)
     notify: bool = False
     owner_intro: str = ""
 
 
+# A payment may now cover SEVERAL invoices (one transfer settles all of them). The set is
+# stored comma-joined in settled_invoice_ids; keep this many below the String(255) column width.
+_MAX_INVOICES_PER_PAYMENT = 25
+
+
+async def _pending_payments_for_resellers(
+    session: AsyncSession, reseller_ids: set[int] | list[int]
+) -> list[Payment]:
+    """All PENDING payments belonging to these resellers (so callers can expand each one's
+    invoice SET — a payment can cover several invoices)."""
+    if not reseller_ids:
+        return []
+    return list(
+        (
+            await session.execute(
+                select(Payment).where(
+                    Payment.reseller_id.in_(list(reseller_ids)),
+                    Payment.status == PaymentStatus.pending,
+                )
+            )
+        ).scalars().all()
+    )
+
+
+async def _pending_invoice_ids_in_sets(
+    session: AsyncSession, candidate_ids: set[int], reseller_ids: set[int] | list[int]
+) -> set[int]:
+    """Which of `candidate_ids` already belong to ANY pending payment's invoice set — used to
+    block a duplicate submission. One invoice may never sit in two pending payments at once."""
+    if not candidate_ids:
+        return set()
+    held: set[int] = set()
+    for p in await _pending_payments_for_resellers(session, reseller_ids):
+        held.update(_settled_ids(p))
+    return {i for i in candidate_ids if i in held}
+
+
 async def _pending_payment_for_invoice(session: AsyncSession, invoice_id: int | None) -> Payment | None:
-    """The PENDING payment already submitted for this invoice (if any) — used to block a
-    duplicate submission so one invoice never spawns several pending payments."""
+    """The PENDING payment whose invoice SET contains this invoice (if any) — used to block a
+    duplicate submission so one invoice never sits in several pending payments. Matches both the
+    primary `invoice_id` link and membership of `settled_invoice_ids` (multi-invoice payments)."""
     if not invoice_id:
         return None
-    return (
+    pending = (
         await session.execute(
-            select(Payment).where(
-                Payment.invoice_id == invoice_id, Payment.status == PaymentStatus.pending
-            ).limit(1)
+            select(Payment).where(Payment.status == PaymentStatus.pending)
         )
-    ).scalar_one_or_none()
+    ).scalars().all()
+    for p in pending:
+        if invoice_id in _settled_ids(p):
+            return p
+    return None
 
 
 async def submit_reseller_payment(
     session: AsyncSession,
     *,
     reseller_ids: set[int],
-    invoice_id: int | None,
+    invoice_ids: list[int] | None = None,
+    invoice_id: int | None = None,
     txid: str | None = None,
     chain: str = "bsc",
     screenshot: bool = False,
 ) -> SubmitResult:
-    """Validate + create a PENDING payment for one OWED invoice the caller owns. Shared by the
-    Telegram bot and the web portal so the safety rules are identical on both surfaces:
+    """Validate + create a PENDING payment for one or more OWED invoices the caller owns. Shared
+    by the Telegram bot and the web portal so the safety rules are identical on both surfaces:
       * a tx hash already in the system is never duplicated (confirmed/pending blocked; a
         REJECTED one is re-opened only for the reseller it belongs to);
-      * the invoice is re-checked under a row lock — must still belong to the caller, be OWED,
-        and not be deferred to a future date (no mis-attributing money to a stale selection);
-      * one pending payment per invoice (no 2–3 rows for one transfer).
-    Never auto-confirms — the owner decides. The file save for a screenshot proof is done by the
-    caller (it needs the new payment id)."""
+      * EVERY chosen invoice is re-checked under a row lock — must still belong to the caller, be
+        OWED, and not be deferred to a future date. If ANY chosen invoice is no longer payable the
+        WHOLE batch is rejected (atomic) — never silently pay a subset / mis-attribute money;
+      * no invoice may already sit in another pending payment's set (one pending per invoice).
+    A multi-invoice payment stores the full set in `settled_invoice_ids` (the first id is also the
+    primary `invoice_id` for display/back-compat) and its amount is the SUM of the set. Never
+    auto-confirms — the owner decides. The file save for a screenshot proof is done by the caller
+    (it needs the new payment id). `invoice_id` is a legacy single-id alias for `invoice_ids`."""
     from app.services.periods import today as tehran_today
+
+    # Normalize the requested ids: explicit set wins; fall back to the legacy single alias.
+    raw = list(invoice_ids) if invoice_ids else ([invoice_id] if invoice_id else [])
+    ids: list[int] = []
+    for i in raw:  # dedup, preserve order
+        if i and i not in ids:
+            ids.append(i)
+    if len(ids) > _MAX_INVOICES_PER_PAYMENT:
+        return SubmitResult(
+            "not_payable",
+            f"حداکثر {_MAX_INVOICES_PER_PAYMENT} فاکتور را می‌توان یکجا پرداخت کرد؛ "
+            "تعداد کمتری انتخاب کنید.",
+        )
 
     if txid:
         existing = (
@@ -95,7 +153,9 @@ async def submit_reseller_payment(
             if existing.status == PaymentStatus.pending:
                 return SubmitResult("dup_pending", "این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
             # Rejected → re-open the SAME row (txid is unique), but only for its real owner so
-            # nobody who happens to know a tx hash can resurrect/claim another's payment.
+            # nobody who happens to know a tx hash can resurrect/claim another's payment. Its
+            # original invoice set is preserved (the hash identifies one real transfer; its
+            # coverage was already decided) — a new selection does not absorb it.
             if existing.reseller_id not in reseller_ids:
                 return SubmitResult("wrong_owner", "این شناسهٔ تراکنش به حساب شما مربوط نیست.")
             existing.status = PaymentStatus.pending
@@ -110,49 +170,71 @@ async def submit_reseller_payment(
                 owner_intro="🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.",
             )
 
-    # Re-validate the chosen invoice under lock. It could have been paid/canceled/reverted/
-    # re-deadlined between the button tap and the proof arriving.
-    fresh = await session.get(Invoice, invoice_id, with_for_update=True) if invoice_id else None
-    if (
-        fresh is None
-        or fresh.reseller_id not in reseller_ids
-        or fresh.status not in _OWED
-        or (fresh.deferred_until and fresh.deferred_until > tehran_today())
-    ):
+    if not ids:
         return SubmitResult(
             "not_payable",
-            "این فاکتور دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
-            "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید.",
+            "فاکتوری برای پرداخت انتخاب نشده است؛ از منوی «💳 پرداخت فاکتور» دوباره اقدام کنید.",
         )
 
-    if await _pending_payment_for_invoice(session, fresh.id) is not None:
+    # Re-validate EVERY chosen invoice under lock. Any could have been paid/canceled/reverted/
+    # re-deadlined between the button tap and the proof arriving — if so, reject the whole batch.
+    today = tehran_today()
+    fresh_list: list[Invoice] = []
+    for iid in ids:
+        fresh = await session.get(Invoice, iid, with_for_update=True)
+        if (
+            fresh is None
+            or fresh.reseller_id not in reseller_ids
+            or fresh.status not in _OWED
+            or (fresh.deferred_until and fresh.deferred_until > today)
+        ):
+            return SubmitResult(
+                "not_payable",
+                "یک یا چند فاکتورِ انتخاب‌شده دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
+                "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید.",
+            )
+        fresh_list.append(fresh)
+
+    held = await _pending_invoice_ids_in_sets(session, {i.id for i in fresh_list}, reseller_ids)
+    if held:
         msg = (
-            "برای این فاکتور قبلاً رسید فرستاده‌اید که در انتظار تأیید است؛ "
+            "برای یک یا چند فاکتورِ انتخاب‌شده قبلاً رسید فرستاده‌اید که در انتظار تأیید است؛ "
             "لطفاً منتظر بررسیِ پشتیبانی بمانید. (نیازی به ارسال دوباره نیست.)"
             if screenshot else
-            "برای این فاکتور قبلاً پرداختی ثبت کرده‌اید که در انتظار تأیید است؛ "
+            "برای یک یا چند فاکتورِ انتخاب‌شده قبلاً پرداختی ثبت کرده‌اید که در انتظار تأیید است؛ "
             "لطفاً منتظر بررسیِ پشتیبانی بمانید."
         )
         return SubmitResult("pending_exists", msg)
 
+    primary = fresh_list[0]
+    settled_ids = ",".join(str(i.id) for i in fresh_list)
+    total_usdt = float(sum(Decimal(str(i.amount_usdt or 0)) for i in fresh_list))
+    total_toman = float(sum(Decimal(str(i.amount_toman or 0)) for i in fresh_list))
     if screenshot:
         payment = Payment(
-            reseller_id=fresh.reseller_id, invoice_id=fresh.id,
+            reseller_id=primary.reseller_id, invoice_id=primary.id,
+            settled_invoice_ids=settled_ids, amount_usdt=total_usdt, amount_toman=total_toman,
             method=PaymentMethod.screenshot, status=PaymentStatus.pending,
             note="رسید تصویری (در انتظار بررسی مالک)",
         )
     else:
         method = PaymentMethod.ton_txid if chain == "ton" else PaymentMethod.usdt_txid
         payment = Payment(
-            reseller_id=fresh.reseller_id, invoice_id=fresh.id,
+            reseller_id=primary.reseller_id, invoice_id=primary.id,
+            settled_invoice_ids=settled_ids, amount_usdt=total_usdt, amount_toman=total_toman,
             method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
         )
     session.add(payment)
     await session.commit()
 
+    n = len(fresh_list)
+    scope_fa = (
+        "این فاکتور" if n == 1
+        else f"این {n} فاکتور (مبلغ کل: {total_toman:,.0f} تومان)"
+    )
     if screenshot:
         user_message = (
-            "✅ رسید شما دریافت شد و در انتظار تأیید پشتیبانی است.\n"
+            f"✅ رسید شما برای {scope_fa} دریافت شد و در انتظار تأیید پشتیبانی است.\n"
             "لطفاً منتظر بمانید؛ نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود. "
             "(نیازی به ارسال دوباره نیست.)\n"
             f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
@@ -161,22 +243,26 @@ async def submit_reseller_payment(
     else:
         label = "GRAM" if chain == "ton" else "USDT"
         user_message = (
-            f"✅ شناسهٔ تراکنش ({label}) دریافت شد و در انتظار تأیید پشتیبانی است.\n"
+            f"✅ شناسهٔ تراکنش ({label}) برای {scope_fa} دریافت شد و در انتظار تأیید پشتیبانی است.\n"
             "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
             f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
         )
         owner_intro = "💳 پرداخت جدید ثبت شد و منتظر تأیید شماست."
-    return SubmitResult("ok", user_message, payment=payment, invoice=fresh, notify=True, owner_intro=owner_intro)
+    return SubmitResult(
+        "ok", user_message, payment=payment, invoice=primary, invoices=fresh_list,
+        notify=True, owner_intro=owner_intro,
+    )
 
 
 async def _reseller_has_other_due(
-    session: AsyncSession, reseller_id: int, exclude_invoice_id: int | None
+    session: AsyncSession, reseller_id: int, exclude_invoice_ids: set[int] | None
 ) -> bool:
-    """True if the reseller still has another OWED, non-deferred invoice. Used to avoid
-    restoring a suspended reseller while they still owe on a different invoice — paying one
-    invoice must not lift enforcement when other debts remain."""
+    """True if the reseller still has another OWED, non-deferred invoice OUTSIDE the excluded
+    set. Used to avoid restoring a suspended reseller while they still owe on a different invoice
+    — paying some invoices must not lift enforcement when other debts remain."""
     from app.services.periods import today as tehran_today
 
+    exclude = exclude_invoice_ids or set()
     today = tehran_today()  # Tehran-local, matching enforcement/dunning deadline checks
     rows = (
         await session.execute(
@@ -186,7 +272,7 @@ async def _reseller_has_other_due(
         )
     ).scalars().all()
     for inv in rows:
-        if exclude_invoice_id is not None and inv.id == exclude_invoice_id:
+        if inv.id in exclude:
             continue
         if inv.deferred_until and inv.deferred_until > today:
             continue  # deadline in the future → not currently due
@@ -195,14 +281,21 @@ async def _reseller_has_other_due(
 
 
 async def _maybe_restore(
-    session: AsyncSession, reseller: Reseller | None, *, exclude_invoice_id: int | None = None
+    session: AsyncSession,
+    reseller: Reseller | None,
+    *,
+    exclude_invoice_ids: set[int] | None = None,
+    exclude_invoice_id: int | None = None,  # legacy single-id alias
 ) -> None:
     if reseller is None:
         return
     if not await settings_service.get(session, "auto_restore_on_payment", True):
         return
+    exclude = set(exclude_invoice_ids or set())
+    if exclude_invoice_id is not None:
+        exclude.add(exclude_invoice_id)
     # Only lift enforcement when NO other due (non-deferred) invoice remains for this reseller.
-    if await _reseller_has_other_due(session, reseller.id, exclude_invoice_id):
+    if await _reseller_has_other_due(session, reseller.id, exclude):
         log.info("restore held for reseller %s: other due invoice(s) remain", reseller.id)
         return
     try:
@@ -324,8 +417,7 @@ async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         return {"available": False}
     ton_rate = await rates.get_ton_toman(session)  # int, 0 if unavailable
     received_toman = float(received) * ton_rate if ton_rate else 0.0
-    inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-    invoice_toman = float(inv.amount_toman) if inv else 0.0
+    invoice_toman = await _settled_amount_toman(session, payment)
     tol_pct = float(await settings_service.get(session, "ton_amount_tolerance_pct", 5) or 0)
     match: bool | None = None
     if invoice_toman > 0 and received_toman > 0:
@@ -417,8 +509,7 @@ async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
     )
     if received is None:
         return {"available": False}
-    inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-    invoice_usdt = float(inv.amount_usdt) if inv else 0.0
+    invoice_usdt = await _settled_amount_usdt(session, payment)
     tol = float(cfg.get("payment_amount_tolerance_usdt") or 0)
     match: bool | None = None
     if invoice_usdt > 0:
@@ -507,8 +598,6 @@ async def verify_payment(
             "بررسی خودکار فقط برای USDT است؛ این پرداخت را به‌صورت دستی بررسی و تأیید کنید.",
         )
 
-    invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-
     cfg = await settings_service.get_many(
         session,
         ["bscscan_api_key", "bscscan_api_url", "usdt_bep20_address", "usdt_bep20_contract",
@@ -575,22 +664,27 @@ async def verify_payment(
         return PaymentResult("pending", False,
                              f"تراکنش یافت شد اما هنوز تأییدیه کافی ندارد ({check.confirmations}/{min_conf}).")
 
-    # Settle ONLY the invoice this payment is for — payments are per-invoice now (no lumping
-    # several invoices into one transfer), which keeps confirmation simple and unambiguous.
-    target = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else invoice
-    if target is None or target.status not in _OWED:
+    # Settle the WHOLE set this payment covers — one transfer can pay several invoices. The
+    # deposit must cover the SUM of the still-owed invoices in the set.
+    set_ids = _settled_ids(payment) or ([payment.invoice_id] if payment.invoice_id else [])
+    all_in_set = (
+        (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
+        if set_ids else []
+    )
+    targets = [t for t in all_in_set if t.status in _OWED]
+    if not targets:
         payment.status = PaymentStatus.confirmed
         payment.verified_at = dt.datetime.now(dt.timezone.utc)
         await session.commit()
         return PaymentResult("confirmed", True,
-                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای این فاکتور نبود."
+                             "✅ پرداخت دریافت شد؛ بدهی فعالی برای این فاکتور(ها) نبود."
                              + _ref_line(payment.id))
 
-    target_amt = Decimal(str(target.amount_usdt or 0))
-    # Safety net: never AUTO-confirm a zero-amount invoice. If the conversion rate was 0 when
+    target_amt = sum((Decimal(str(t.amount_usdt or 0)) for t in targets), Decimal(0))
+    # Safety net: never AUTO-confirm when the total is zero. If the conversion rate was 0 when
     # the invoice was generated (e.g. auto mode before a live rate was fetched), amount_usdt is
     # 0 and the "amount too low" floor below (anything < 0) could never fire — so a dust
-    # transfer would clear the whole Toman invoice. Hold it for the owner's manual review.
+    # transfer would clear the whole Toman debt. Hold it for the owner's manual review.
     if target_amt <= 0:
         payment.status = PaymentStatus.pending
         if "[needs manual review: zero invoice amount]" not in (payment.note or ""):
@@ -598,7 +692,7 @@ async def verify_payment(
         await session.commit()
         return PaymentResult(
             "pending", False,
-            "مبلغ این فاکتور نامشخص است؛ پرداخت برای بررسیِ دستی ثبت شد.",
+            "مبلغ این فاکتور(ها) نامشخص است؛ پرداخت برای بررسیِ دستی ثبت شد.",
         )
     if check.amount_usdt + tolerance < target_amt:
         payment.status = PaymentStatus.rejected
@@ -606,23 +700,28 @@ async def verify_payment(
         await session.commit()
         return PaymentResult(
             "rejected", False,
-            f"❌ مبلغ واریزی ({check.amount_usdt:.2f} USDT) کمتر از مبلغ این فاکتور "
+            f"❌ مبلغ واریزی ({check.amount_usdt:.2f} USDT) کمتر از مبلغ کلِ فاکتورها "
             f"({target_amt:.2f} USDT) است.",
         )
 
-    await _mark_invoices_paid(session, [target], payment)
+    await _mark_invoices_paid(session, targets, payment)
     payment.status = PaymentStatus.confirmed
     payment.verified_at = dt.datetime.now(dt.timezone.utc)
-    payment.invoice_id = target.id
-    payment.settled_invoice_ids = str(target.id)
+    # Keep the full submission-time set in settled_invoice_ids (don't narrow it to the still-owed
+    # subset); just keep the primary id pointing at a covered invoice.
+    if set_ids:
+        payment.invoice_id = set_ids[0]
+        payment.settled_invoice_ids = ",".join(str(i) for i in set_ids)
     await session.commit()
     await _maybe_restore(
-        session, await session.get(Reseller, target.reseller_id), exclude_invoice_id=target.id
+        session, await session.get(Reseller, targets[0].reseller_id),
+        exclude_invoice_ids={t.id for t in targets},
     )
 
-    msg = await _payment_received_text(session, target.period_label, payment.id)
+    period = _periods_label([t.period_label for t in targets])
+    msg = await _payment_received_text(session, period, payment.id)
     if notify_reseller:
-        r = await session.get(Reseller, target.reseller_id)
+        r = await session.get(Reseller, targets[0].reseller_id)
         if r is not None:
             await notifier.send_to_reseller(session, r, msg, kind=DeliveryKind.payment_ack)
     return PaymentResult("confirmed", True, msg)
@@ -635,6 +734,13 @@ def _ref_line(payment_id: int | None) -> str:
     from app.core.codes import payment_code
 
     return f"\n🔖 شمارهٔ پیگیری: #{payment_code(payment_id)}" if payment_id else ""
+
+
+def _periods_label(periods: list[str]) -> str:
+    """A readable label for the period(s) a payment settled: a single «2026-02», or
+    «2026-01، 2026-02» for several — used in the customer's confirm/reject acknowledgements."""
+    clean = [p.strip() for p in periods if p and p.strip()]
+    return "، ".join(clean)
 
 
 async def _payment_received_text(session: AsyncSession, period: str, code: int | None = None) -> str:
@@ -654,10 +760,28 @@ async def _payment_rejected_text(session: AsyncSession, period: str, code: int |
 
 
 def _settled_ids(payment: Payment) -> list[int]:
-    """The invoice ids a payment has settled (from settled_invoice_ids, else invoice_id)."""
+    """The invoice ids a payment covers/has settled (from settled_invoice_ids, else invoice_id)."""
     if payment.settled_invoice_ids:
         return [int(x) for x in payment.settled_invoice_ids.split(",") if x.strip().isdigit()]
     return [payment.invoice_id] if payment.invoice_id else []
+
+
+async def _settled_amount_toman(session: AsyncSession, payment: Payment) -> float:
+    """Sum of Toman across every invoice this payment covers (for the on-chain decision aid)."""
+    ids = _settled_ids(payment)
+    if not ids:
+        return 0.0
+    rows = (await session.execute(select(Invoice).where(Invoice.id.in_(ids)))).scalars().all()
+    return float(sum(Decimal(str(inv.amount_toman or 0)) for inv in rows))
+
+
+async def _settled_amount_usdt(session: AsyncSession, payment: Payment) -> float:
+    """Sum of USDT across every invoice this payment covers (for the on-chain decision aid)."""
+    ids = _settled_ids(payment)
+    if not ids:
+        return 0.0
+    rows = (await session.execute(select(Invoice).where(Invoice.id.in_(ids)))).scalars().all()
+    return float(sum(Decimal(str(inv.amount_usdt or 0)) for inv in rows))
 
 
 async def _settled_by_other_confirmed(
@@ -721,8 +845,8 @@ async def _mark_invoices_paid(
 
 
 async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentResult:
-    """Owner override: mark a payment confirmed (without on-chain verification) for the SINGLE
-    invoice it's linked to — payments are per-invoice, so there's nothing to choose.
+    """Owner override: mark a payment confirmed (without on-chain verification) for ALL the
+    invoices it covers — a payment may settle several invoices (one transfer for several debts).
 
     Reversible: works on a previously rejected payment too (recovers a mis-click). The reseller
     is notified only when the status actually CHANGES to confirmed (re-confirming an already-
@@ -733,35 +857,43 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
         return PaymentResult("rejected", False, "Payment not found")
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
-    inv = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
-    # Don't "confirm" a payment whose invoice can't actually be settled (it was reverted to
-    # draft or canceled) — that would leave the payment marked confirmed while the invoice stays
-    # unpaid, misleading the owner. Tell them to fix the invoice first; leave the payment pending.
-    if inv is not None and inv.status in (InvoiceStatus.draft, InvoiceStatus.canceled):
+    set_ids = _settled_ids(payment)
+    all_in_set = (
+        (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
+        if set_ids else []
+    )
+    # Don't "confirm" a payment whose invoices can't actually be settled (any reverted to draft
+    # or canceled) — that would leave the payment marked confirmed while an invoice stays unpaid,
+    # misleading the owner. Tell them to fix the invoice first; leave the payment pending.
+    if any(inv.status in (InvoiceStatus.draft, InvoiceStatus.canceled) for inv in all_in_set):
         return PaymentResult(
             "pending", False,
-            "فاکتورِ مرتبط در وضعیتِ پیش‌نویس/لغوشده است؛ ابتدا آن را صادر یا اصلاح کنید.",
+            "یک یا چند فاکتورِ مرتبط در وضعیتِ پیش‌نویس/لغوشده است؛ ابتدا آن را صادر یا اصلاح کنید.",
         )
-    targets = [inv] if inv is not None else []
+    targets = [inv for inv in all_in_set if inv.status in _OWED]
 
     await _mark_invoices_paid(session, targets, payment)
     payment.status = PaymentStatus.confirmed
     payment.verified_at = dt.datetime.now(dt.timezone.utc)
-    if inv is not None:
-        payment.settled_invoice_ids = str(inv.id)
+    if all_in_set:
+        payment.invoice_id = all_in_set[0].id
+        payment.settled_invoice_ids = ",".join(str(inv.id) for inv in all_in_set)
         if not payment.amount_usdt:
-            payment.amount_usdt = float(inv.amount_usdt or 0)
+            payment.amount_usdt = float(
+                sum(Decimal(str(inv.amount_usdt or 0)) for inv in all_in_set)
+            )
     if "[manually confirmed]" not in (payment.note or ""):
         payment.note = (payment.note or "") + " [manually confirmed]"
     await session.commit()
 
-    if inv is not None:
+    if all_in_set:
         await _maybe_restore(
-            session, await session.get(Reseller, inv.reseller_id), exclude_invoice_id=inv.id
+            session, await session.get(Reseller, all_in_set[0].reseller_id),
+            exclude_invoice_ids={inv.id for inv in all_in_set},
         )
 
     if reseller is not None and not was_confirmed:
-        period = inv.period_label if inv is not None else ""
+        period = _periods_label([inv.period_label for inv in all_in_set])
         await notifier.send_to_reseller(
             session, reseller, await _payment_received_text(session, period, payment.id),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
@@ -783,7 +915,11 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     was_rejected = payment.status == PaymentStatus.rejected
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
-    invoice = await session.get(Invoice, payment.invoice_id) if payment.invoice_id else None
+    set_ids = _settled_ids(payment)
+    invoices = (
+        (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
+        if set_ids else []
+    )
     payment.status = PaymentStatus.rejected
     payment.verified_at = None
     if was_confirmed:
@@ -792,7 +928,7 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     # Tell the customer their payment wasn't accepted — but only on a real state change
     # (so toggling reject→confirm→reject, or a double-click, doesn't spam them).
     if reseller is not None and not was_rejected:
-        period = invoice.period_label if invoice else ""
+        period = _periods_label([inv.period_label for inv in invoices])
         await notifier.send_to_reseller(
             session, reseller, await _payment_rejected_text(session, period, payment.id),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,

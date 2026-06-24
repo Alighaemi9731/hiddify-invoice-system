@@ -82,7 +82,9 @@ export default function PortalPayments() {
                     <TableRow key={p.number} hover>
                       <TableCell dir="ltr" sx={{ fontWeight: 700, fontFamily: "monospace" }}>{p.number}</TableCell>
                       <TableCell>{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
-                      <TableCell dir="ltr">{p.invoice_period || "—"}</TableCell>
+                      <TableCell dir="ltr">
+                        {p.invoice_count > 1 ? `${p.invoice_count} فاکتور: ${p.invoice_period}` : (p.invoice_period || "—")}
+                      </TableCell>
                       <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>
                         {p.amount_toman ? fmtToman(p.amount_toman) : "—"}
                       </TableCell>

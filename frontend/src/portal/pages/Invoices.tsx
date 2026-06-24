@@ -24,6 +24,8 @@ export default function PortalInvoices() {
     queryFn: portalInvoices,
   });
   const [payInvoice, setPayInvoice] = useState<PortalInvoice | null>(null);
+  const [payAll, setPayAll] = useState(false);
+  const owedCount = data.filter((inv) => inv.owed).length;
 
   return (
     <Box>
@@ -31,6 +33,18 @@ export default function PortalInvoices() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
         فاکتورهای صادرشدهٔ شما — فاکتورهای پرداخت‌نشده با نشانِ «بدهکار»
       </Typography>
+
+      {owedCount > 1 && (
+        <Button
+          variant="contained"
+          color="success"
+          startIcon={<PaymentsIcon sx={{ fontSize: 16 }} />}
+          onClick={() => setPayAll(true)}
+          sx={{ mb: 2 }}
+        >
+          پرداخت همهٔ بدهی ({owedCount} فاکتور)
+        </Button>
+      )}
 
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch} rows={6}>
         {data.length === 0 ? (
@@ -100,6 +114,7 @@ export default function PortalInvoices() {
       </DataState>
 
       <PayDialog invoice={payInvoice} onClose={() => setPayInvoice(null)} />
+      <PayDialog invoice={null} payAll={payAll} onClose={() => setPayAll(false)} />
     </Box>
   );
 }

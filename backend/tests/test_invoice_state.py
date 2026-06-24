@@ -209,13 +209,13 @@ def test_restore_held_when_other_due_invoice_remains(tmp_path):
         await s.commit()
 
         # Another non-deferred owed invoice remains → restore must be HELD.
-        assert await payments._reseller_has_other_due(s, r.id, exclude_invoice_id=paid.id) is True
+        assert await payments._reseller_has_other_due(s, r.id, {paid.id}) is True
 
         # Pay it off too; now only deferred (future) remains → no current debt → restore allowed.
         owed.status = S.paid
         owed.paid_at = dt.datetime.now(dt.timezone.utc)
         await s.commit()
-        assert await payments._reseller_has_other_due(s, r.id, exclude_invoice_id=paid.id) is False
+        assert await payments._reseller_has_other_due(s, r.id, {paid.id}) is False
 
     _run(body, tmp_path, "p3.db")
 
@@ -273,10 +273,214 @@ def test_stale_payment_selection_never_falls_back_to_another_invoice(tmp_path):
             answer=answer,
         )
         await handlers._handle_txid(
-            message, s, "0x" + "a" * 64, invoice=stale, chain="bsc"
+            message, s, "0x" + "a" * 64, invoices=[stale], chain="bsc"
         )
         payments = (await s.execute(select(Payment))).scalars().all()
         assert payments == []
         assert "دوباره انتخاب کنید" in answers[-1]
 
     _run(body, tmp_path, "p5.db")
+
+
+# ============================ multi-invoice payments =========================
+def test_submit_multi_creates_one_payment_with_set(tmp_path):
+    """Paying two invoices with one transfer → ONE pending payment, primary = first id,
+    settled_invoice_ids = the full set, amount = the SUM."""
+    async def body(s):
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.sent, label="2026-01")  # 10000 T / 1 USDT
+        b = _invoice(r.id, status=S.sent, label="2026-02")
+        s.add_all([a, b])
+        await s.commit()
+
+        res = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_ids=[a.id, b.id], txid="0x" + "b" * 64)
+        assert res.status == "ok"
+        p = res.payment
+        assert p.invoice_id == a.id
+        assert payments._settled_ids(p) == [a.id, b.id]
+        assert float(p.amount_usdt) == 2.0          # 1 + 1
+        assert float(p.amount_toman) == 20000.0     # 10000 + 10000
+
+    _run(body, tmp_path, "m1.db")
+
+
+def test_confirm_multi_marks_all_paid_and_restores(tmp_path):
+    """Confirming a multi-invoice payment marks EVERY covered invoice paid and lifts enforcement
+    only once no due invoice outside the set remains."""
+    async def body(s):
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.sent, label="2026-01")
+        b = _invoice(r.id, status=S.sent, label="2026-02")
+        s.add_all([a, b])
+        await s.commit()
+        res = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_ids=[a.id, b.id], screenshot=True)
+        await payments.confirm_manually(s, res.payment.id)
+        await s.refresh(a)
+        await s.refresh(b)
+        assert a.status == S.paid and b.status == S.paid
+        assert a.paid_at is not None and b.paid_at is not None
+
+    _run(body, tmp_path, "m2.db")
+
+
+def test_verify_multi_amount_floor_is_the_sum(tmp_path):
+    """On-chain verify must require the deposit to cover the SUM of the set: a deposit between one
+    invoice and the total is rejected and NEITHER invoice is marked paid."""
+    async def body(s):
+        from decimal import Decimal
+
+        from app.services import payments, settings_service
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.sent, label="2026-01")  # 1 USDT
+        b = _invoice(r.id, status=S.sent, label="2026-02")  # 1 USDT  → sum = 2
+        s.add_all([a, b])
+        await s.commit()
+        res = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_ids=[a.id, b.id], txid="0x" + "c" * 64)
+        pid = res.payment.id
+
+        # Stub config + the on-chain lookup: a deposit of only 1 USDT (covers one, not both).
+        orig_get_many = settings_service.get_many
+        orig_lookup = payments._bscscan_tokentx
+
+        async def fake_get_many(_s, _keys):
+            return {"bscscan_api_key": "k", "bscscan_api_url": "u",
+                    "usdt_bep20_address": "0xwallet", "usdt_bep20_contract": "0xtoken",
+                    "min_confirmations": 0, "payment_amount_tolerance_usdt": 0}
+
+        async def fake_lookup(_url, _key, _wallet, _contract, _txid):
+            return payments._ChainCheck(
+                found=True, to_address="0xwallet", from_address="0xfrom",
+                amount_usdt=Decimal("1"), confirmations=10, contract_address="0xtoken")
+
+        settings_service.get_many = fake_get_many
+        payments._bscscan_tokentx = fake_lookup
+        try:
+            result = await payments.verify_payment(s, pid)
+        finally:
+            settings_service.get_many = orig_get_many
+            payments._bscscan_tokentx = orig_lookup
+        assert result.status == "rejected"
+        await s.refresh(a)
+        await s.refresh(b)
+        assert a.status == S.sent and b.status == S.sent  # neither settled by a short deposit
+
+    _run(body, tmp_path, "m3.db")
+
+
+def test_reject_multi_reverts_whole_set_but_protects_overlap(tmp_path):
+    """Rejecting a multi-invoice payment reverts every invoice it settled — unless another
+    confirmed payment still settles one of them (overlap stays paid)."""
+    async def body(s):
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.paid, label="2026-01")
+        b = _invoice(r.id, status=S.paid, label="2026-02")
+        for inv in (a, b):
+            inv.paid_at = dt.datetime.now(dt.timezone.utc)
+        s.add_all([a, b])
+        await s.flush()
+        # P1 covers {a, b}; a second confirmed payment P2 also covers {b}.
+        p1 = Payment(reseller_id=r.id, invoice_id=a.id, method=PaymentMethod.manual,
+                     status=PaymentStatus.confirmed, settled_invoice_ids=f"{a.id},{b.id}")
+        p2 = Payment(reseller_id=r.id, invoice_id=b.id, method=PaymentMethod.manual,
+                     status=PaymentStatus.confirmed, settled_invoice_ids=str(b.id))
+        s.add_all([p1, p2])
+        await s.commit()
+
+        await payments.reject_payment(s, p1.id)
+        await s.refresh(a)
+        await s.refresh(b)
+        assert a.status == S.sent and a.paid_at is None     # only P1 settled a → reverts
+        assert b.status == S.paid                            # P2 still settles b → stays paid
+
+    _run(body, tmp_path, "m4.db")
+
+
+def test_pending_set_blocks_overlapping_submission(tmp_path):
+    """No invoice may sit in two pending payments: a submission that includes an invoice already
+    in a pending payment's set is rejected, and _pending_invoice_ids reports it held."""
+    async def body(s):
+        from app.bot import handlers
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.sent, label="2026-01")
+        b = _invoice(r.id, status=S.sent, label="2026-02")
+        c = _invoice(r.id, status=S.sent, label="2026-03")
+        s.add_all([a, b, c])
+        await s.commit()
+
+        # First payment covers {a, b}.
+        await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_ids=[a.id, b.id], txid="0x" + "d" * 64)
+        held = await handlers._pending_invoice_ids(s, [r.id])
+        assert a.id in held and b.id in held
+
+        # A second submission including b (already pending) is blocked entirely.
+        res = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_ids=[b.id, c.id], txid="0x" + "e" * 64)
+        assert res.status == "pending_exists"
+
+    _run(body, tmp_path, "m5.db")
+
+
+def test_submit_multi_partial_stale_rejects_whole_batch(tmp_path):
+    """If any selected invoice is no longer payable, the whole batch is rejected and NO payment
+    row is created (never silently pay a subset)."""
+    async def body(s):
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.sent, label="2026-01")
+        b = _invoice(r.id, status=S.paid, label="2026-02")   # already paid → stale
+        s.add_all([a, b])
+        await s.commit()
+
+        res = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_ids=[a.id, b.id], txid="0x" + "f" * 64)
+        assert res.status == "not_payable"
+        rows = (await s.execute(select(Payment))).scalars().all()
+        assert rows == []
+
+    _run(body, tmp_path, "m6.db")
+
+
+def test_backcompat_single_id_row(tmp_path):
+    """A legacy payment with settled_invoice_ids=None and a single invoice_id confirms/reverts
+    correctly via the _settled_ids fallback."""
+    async def body(s):
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        inv = _invoice(r.id, status=S.sent, label="2026-01")
+        s.add(inv)
+        await s.flush()
+        p = Payment(reseller_id=r.id, invoice_id=inv.id, method=PaymentMethod.manual,
+                    status=PaymentStatus.pending, settled_invoice_ids=None)
+        s.add(p)
+        await s.commit()
+        assert payments._settled_ids(p) == [inv.id]
+        await payments.confirm_manually(s, p.id)
+        await s.refresh(inv)
+        assert inv.status == S.paid
+        await payments.reject_payment(s, p.id)
+        await s.refresh(inv)
+        assert inv.status == S.sent and inv.paid_at is None
+
+    _run(body, tmp_path, "m7.db")

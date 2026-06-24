@@ -63,8 +63,8 @@ class OwnerCapBumpState(StatesGroup):
 
 
 class PayState(StatesGroup):
-    """A reseller chose ONE invoice to pay and is now sending its TXID / receipt photo
-    (the chosen invoice id is held in FSM data as `pay_invoice_id`)."""
+    """A reseller chose one or more invoices to pay and is now sending the TXID / receipt photo
+    (the chosen invoice ids are held in FSM data as `pay_invoice_ids`, a list)."""
 
     waiting = State()
 
@@ -448,7 +448,7 @@ async def cmd_help(message: Message) -> None:
                 "📖 راهنما\n\n"
                 "/menu — منوی اصلی\n"
                 "/invoices — فاکتورهای پرداخت‌نشده\n"
-                "/pay — پرداخت فاکتور (هر فاکتور جداگانه)\n"
+                "/pay — پرداخت فاکتور (می‌توانید همهٔ بدهی را یکجا پرداخت کنید)\n"
                 "/interim — فاکتور علی‌الحساب (ماه جاری)\n"
                 "/panels — پنل‌های من\n"
                 "/subs — مدیریت زیرمجموعه‌ها\n"
@@ -1227,20 +1227,69 @@ async def cb_pay(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
 
 
+async def _load_pay_invoices(session, data: dict) -> list[Invoice]:
+    """The Invoice rows chosen in the pay flow, from FSM data. Reads the new `pay_invoice_ids`
+    list and falls back to the legacy single `pay_invoice_id` (for any in-flight state)."""
+    ids = list(data.get("pay_invoice_ids") or [])
+    if not ids and data.get("pay_invoice_id"):
+        ids = [int(data["pay_invoice_id"])]
+    invs: list[Invoice] = []
+    for iid in ids:
+        inv = await session.get(Invoice, int(iid))
+        if inv is not None:
+            invs.append(inv)
+    return invs
+
+
+async def _start_pay_flow(cb: CallbackQuery, state: FSMContext, invoices: list[Invoice]) -> None:
+    """Show the payable total + tap-to-copy instructions for the chosen invoice(s) and lock the
+    customer into PayState.waiting with the chosen ids — the TXID/receipt they send next is
+    attributed to exactly this set."""
+    from app.services import payment_methods
+
+    total_toman = float(sum(float(i.amount_toman or 0) for i in invoices))
+    total_usdt = float(sum(float(i.amount_usdt or 0) for i in invoices))
+    n = len(invoices)
+    async with SessionLocal() as s:
+        opts = await payment_methods.load_options(s)
+        amount_ton = None
+        if opts.ton:
+            from app.services import rates
+            ton_rate = await rates.get_ton_toman(s)
+            if ton_rate:
+                amount_ton = f"{total_toman / ton_rate:,.2f}"
+    if n == 1:
+        header = f"💳 پرداخت فاکتور دوره {invoices[0].period_label}\n"
+        footer = ("\n\nℹ️ این مبلغ فقط برای همین فاکتور است. پس از واریز، شناسهٔ تراکنش (TXID) یا "
+                  "تصویر رسید را همین‌جا بفرستید (برای لغو: /cancel).")
+    else:
+        periods = "، ".join(i.period_label for i in invoices)
+        header = f"💳 پرداخت {n} فاکتور (دوره‌های {periods})\n"
+        footer = (f"\n\nℹ️ این مبلغ برای {n} فاکتورِ انتخاب‌شده است. پس از واریز، شناسهٔ تراکنش "
+                  "(TXID) یا تصویر رسید را همین‌جا بفرستید (برای لغو: /cancel).")
+    text = (
+        header
+        + f"مبلغ کل: {total_toman:,.0f} تومان\n\n"
+        + payment_methods.instructions_text(
+            opts, amount_usdt=f"{total_usdt:,.2f}",
+            amount_toman=f"{total_toman:,.0f}", amount_ton=amount_ton, html=True)
+        + footer
+    )
+    await state.set_state(PayState.waiting)
+    await state.update_data(pay_invoice_ids=[i.id for i in invoices])
+    await cb.message.answer(rtl(text), parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("payinv:"))
 async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
     """Start paying ONE chosen invoice: show its amount + instructions and wait for the
     customer's TXID / receipt photo, which is then attributed to exactly this invoice."""
-    from app.services import payment_methods
-
-    # Already mid-payment → don't start another flow. Tapping an invoice button repeatedly
-    # used to re-send the payment details every time (the duplicates the user saw). The flow
-    # stays locked on the chosen invoice until they send a proof or /cancel; to switch
-    # invoices they re-open the «💳 پرداخت فاکتور» list (cb_pay, which clears the state).
+    # Already mid-payment → don't start another flow. The flow stays locked on the chosen
+    # invoice(s) until they send a proof or /cancel; to switch they re-open «💳 پرداخت فاکتور».
     if await state.get_state() == PayState.waiting.state:
         await cb.answer(
-            "شما در حال پرداخت یک فاکتور هستید. رسید یا شناسهٔ تراکنش (TXID) همین فاکتور را "
-            "بفرستید، یا برای انتخاب فاکتور دیگر ابتدا /cancel را بزنید.",
+            "شما در حال پرداخت هستید. رسید یا شناسهٔ تراکنش (TXID) را بفرستید، "
+            "یا برای انتخاب دوباره ابتدا /cancel را بزنید.",
             show_alert=True,
         )
         return
@@ -1261,33 +1310,52 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
         if inv is None or inv.reseller_id not in owned or inv.status not in _OWED or deferred:
             await cb.answer("این فاکتور در حال حاضر قابل پرداخت نیست.", show_alert=True)
             return
-        # Already submitted a payment for this invoice → don't let them pay again (one pending
-        # per invoice); tell them it's under review.
+        # Already submitted a payment covering this invoice → don't let them pay again (one
+        # pending per invoice); tell them it's under review.
         if await _pending_payment_for_invoice(s, inv.id) is not None:
             await cb.answer(
                 "برای این فاکتور قبلاً رسید فرستاده‌اید و در انتظار تأیید است؛ لطفاً منتظر بمانید.",
                 show_alert=True,
             )
             return
-        opts = await payment_methods.load_options(s)
-        amount_ton = None
-        if opts.ton:
-            from app.services import rates
-            ton_rate = await rates.get_ton_toman(s)
-            if ton_rate:
-                amount_ton = f"{float(inv.amount_toman) / ton_rate:,.2f}"
-        text = (
-            f"💳 پرداخت فاکتور دوره {inv.period_label}\n"
-            f"مبلغ: {float(inv.amount_toman):,.0f} تومان\n\n"
-            + payment_methods.instructions_text(
-                opts, amount_usdt=f"{float(inv.amount_usdt):,.2f}",
-                amount_toman=f"{float(inv.amount_toman):,.0f}", amount_ton=amount_ton, html=True)
-            + "\n\nℹ️ این مبلغ فقط برای همین فاکتور است. پس از واریز، شناسهٔ تراکنش (TXID) یا "
-              "تصویر رسید را همین‌جا بفرستید (برای لغو: /cancel)."
+        await _start_pay_flow(cb, state, [inv])
+    await cb.answer()
+
+
+@router.callback_query(F.data == "payall")
+async def cb_pay_all(cb: CallbackQuery, state: FSMContext) -> None:
+    """Pay ALL the customer's payable invoices with one transfer. Gathers every owed, due-now
+    invoice not already inside a pending payment and locks the customer into one combined pay
+    flow whose proof settles the whole set."""
+    if await state.get_state() == PayState.waiting.state:
+        await cb.answer(
+            "شما در حال پرداخت هستید. رسید یا شناسهٔ تراکنش (TXID) را بفرستید، "
+            "یا برای انتخاب دوباره ابتدا /cancel را بزنید.",
+            show_alert=True,
         )
-        await state.set_state(PayState.waiting)
-        await state.update_data(pay_invoice_id=inv_id)
-        await cb.message.answer(rtl(text), parse_mode="HTML")
+        return
+    async with SessionLocal() as s:
+        resellers = await _resellers_for_chat(s, cb.from_user.id)
+        if not resellers:
+            await cb.answer("این فاکتورها در حال حاضر قابل پرداخت نیستند.", show_alert=True)
+            return
+        ids = [r.id for r in resellers]
+        owed = (
+            await s.execute(
+                select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
+                .order_by(Invoice.period_start.asc())
+            )
+        ).scalars().all()
+        today = tehran_today()
+        pending = await _pending_invoice_ids(s, ids)
+        payable = [
+            i for i in owed
+            if not (i.deferred_until and i.deferred_until > today) and i.id not in pending
+        ]
+        if not payable:
+            await cb.answer("بدهی قابل پرداختی ندارید.", show_alert=True)
+            return
+        await _start_pay_flow(cb, state, payable)
     await cb.answer()
 
 
@@ -1308,10 +1376,10 @@ async def pay_state_photo(message: Message, state: FSMContext) -> None:
             )
             return
         data = await state.get_data()
-        inv = await s.get(Invoice, int(data["pay_invoice_id"])) if data.get("pay_invoice_id") else None
+        invs = await _load_pay_invoices(s, data)
         await state.clear()
         await _track_user(s, message.from_user)
-        await _handle_payment_proof(message, s, invoice=inv)
+        await _handle_payment_proof(message, s, invoices=invs)
 
 
 @router.message(PayState.waiting, F.text)
@@ -1340,9 +1408,9 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
             return
         chain, txid = parsed
         data = await state.get_data()
-        inv = await s.get(Invoice, int(data["pay_invoice_id"])) if data.get("pay_invoice_id") else None
+        invs = await _load_pay_invoices(s, data)
         await state.clear()
-        await _handle_txid(message, s, txid, invoice=inv, chain=chain)
+        await _handle_txid(message, s, txid, invoices=invs, chain=chain)
 
 
 @router.message(PayState.waiting)
@@ -1903,34 +1971,26 @@ async def _owner_pending_payments(answer, session) -> None:
 
 # --------------------------- shared reseller views ---------------------------
 async def _pending_payment_for_invoice(session, invoice_id: int | None):
-    """The PENDING payment already submitted for this invoice (if any) — used to block a
-    duplicate submission so one invoice never spawns several pending payments."""
-    if not invoice_id:
-        return None
-    return (
-        await session.execute(
-            select(Payment).where(
-                Payment.invoice_id == invoice_id, Payment.status == PaymentStatus.pending
-            ).limit(1)
-        )
-    ).scalar_one_or_none()
+    """The PENDING payment whose invoice SET contains this invoice (if any) — used to block a
+    duplicate submission so one invoice never sits in several pending payments. Delegates to the
+    service helper so the bot and the web portal share identical rules."""
+    from app.services import payments
+
+    return await payments._pending_payment_for_invoice(session, invoice_id)
 
 
 async def _pending_invoice_ids(session, reseller_ids: list[int]) -> set[int]:
-    """Invoice ids that already have a PENDING payment awaiting the owner's review — so the bot
-    shows «در انتظار تأیید» and blocks a duplicate submission for the same invoice."""
+    """Invoice ids that already belong to a PENDING payment's set (awaiting the owner's review) —
+    so the bot shows «در انتظار تأیید» and blocks a duplicate submission. Expands each pending
+    payment's invoice SET (a payment may cover several invoices)."""
+    from app.services import payments
+
     if not reseller_ids:
         return set()
-    rows = (
-        await session.execute(
-            select(Payment.invoice_id).where(
-                Payment.reseller_id.in_(reseller_ids),
-                Payment.status == PaymentStatus.pending,
-                Payment.invoice_id.is_not(None),
-            )
-        )
-    ).scalars().all()
-    return {i for i in rows if i}
+    held: set[int] = set()
+    for p in await payments._pending_payments_for_resellers(session, set(reseller_ids)):
+        held.update(payments._settled_ids(p))
+    return held
 
 
 async def _send_invoices(answer, chat_id: int, session) -> None:
@@ -2076,9 +2136,9 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
 
 
 async def _send_pay(answer, chat_id: int, session) -> None:
-    """«پرداخت فاکتور» — list each UNPAID, due-now invoice as its OWN button so the customer
-    pays them SEPARATELY (no lumping into one transfer). Tapping a button (payinv:<id>) starts
-    paying just that invoice."""
+    """«پرداخت فاکتور» — list each UNPAID, due-now invoice as its OWN button, plus a «پرداخت
+    همهٔ بدهی» button (when 2+ are payable) that settles them all with one transfer. Tapping a
+    button starts the locked pay flow for that invoice (payinv:<id>) or all of them (payall)."""
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
@@ -2116,12 +2176,21 @@ async def _send_pay(answer, chat_id: int, session) -> None:
          f"💳 دوره {i.period_label} — {float(i.amount_toman):,.0f} تومان")
         for i in payable
     ]
-    msg = "💳 کدام فاکتور را می‌خواهید پرداخت کنید؟\nهر فاکتور را جداگانه پرداخت می‌کنید — روی آن بزنید:"
+    pay_all_label = None
+    if len(payable) > 1:
+        total_toman = float(sum(float(i.amount_toman or 0) for i in payable))
+        pay_all_label = f"✅ پرداخت همهٔ بدهی ({len(payable)} فاکتور — {total_toman:,.0f} تومان)"
+        msg = (
+            "💳 می‌توانید همهٔ فاکتورها را یکجا پرداخت کنید (دکمهٔ بالا)، "
+            "یا هر فاکتور را جداگانه با زدن روی آن:"
+        )
+    else:
+        msg = "💳 کدام فاکتور را می‌خواهید پرداخت کنید؟ روی آن بزنید:"
     if in_review:
         msg += f"\n\n⏳ {len(in_review)} فاکتور دیگر در انتظار تأیید است (لازم نیست دوباره بفرستید)."
     if deferred:
         msg += f"\n\n📅 {len(deferred)} فاکتور مهلت‌دار فعلاً لازم نیست پرداخت شود."
-    await answer(msg, reply_markup=keyboards.pay_invoices_keyboard(items))
+    await answer(msg, reply_markup=keyboards.pay_invoices_keyboard(items, pay_all_label=pay_all_label))
 
 
 async def _send_removelink(answer, chat_id: int, session) -> None:
@@ -2627,17 +2696,27 @@ def _network_status_fa(chk: dict) -> str:
     return f"🟢 واریزی یافت شد: {recv}"
 
 
-async def _payment_review_html(session, pay, *, reseller=None, inv=None) -> str:
+async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=None) -> str:
     """Rich, owner-facing HTML summary of a pending payment — shared by the submit notification
     and the «پرداخت‌های در انتظار» detail view so both are complete and identical. Includes the
-    tracking number, a CLICKABLE reseller name (opens their Telegram profile), method, the exact
-    invoice amount with its paid-currency equivalent, a clickable explorer link, and — for TON — a
-    best-effort on-chain deposit read (actual TON received ≈ Toman, matched against the invoice
-    within tolerance) so the owner can decide before confirming."""
+    tracking number, a CLICKABLE reseller name (opens their Telegram profile), method, EVERY
+    invoice the payment covers (a payment may settle several) with its paid-currency equivalent
+    plus a grand total, a clickable explorer link, and — for TON — a best-effort on-chain deposit
+    read (actual received ≈ Toman, matched against the total) so the owner can decide."""
+    from app.services import payments as _payments
+
     if reseller is None:
         reseller = await session.get(Reseller, pay.reseller_id)
-    if inv is None and pay.invoice_id:
-        inv = await session.get(Invoice, pay.invoice_id)
+    # The full set this payment covers. Prefer an explicitly passed list; else load from the
+    # payment's stored set (settled_invoice_ids → invoice_id fallback).
+    invoices = list(invs) if invs else ([inv] if inv else [])
+    if not invoices:
+        set_ids = _payments._settled_ids(pay)
+        if set_ids:
+            invoices = list(
+                (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids))))
+                .scalars().all()
+            )
     chain = pay.chain or ("ton" if pay.method == PaymentMethod.ton_txid else "bsc")
     name_link = owner_notify.user_link(reseller) if reseller else "—"
     lines = [
@@ -2645,16 +2724,23 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None) -> str:
         f"👤 نماینده: {name_link}",
         f"📤 روش: {_PAYMENT_METHOD_FA.get(pay.method.value, pay.method.value)}",
     ]
-    if inv:
-        lines.append(f"🧾 فاکتور: دورهٔ {inv.period_label}")
-        lines.append(f"💰 مبلغ فاکتور: {await _invoice_amount_for_chain(session, inv, chain)}")
-    else:
+    if not invoices:
         lines.append("🧾 فاکتور: —")
+    elif len(invoices) == 1:
+        only = invoices[0]
+        lines.append(f"🧾 فاکتور: دورهٔ {only.period_label}")
+        lines.append(f"💰 مبلغ فاکتور: {await _invoice_amount_for_chain(session, only, chain)}")
+    else:
+        lines.append(f"🧾 فاکتورها ({len(invoices)}):")
+        for one in invoices:
+            amt = await _invoice_amount_for_chain(session, one, chain)
+            lines.append(_iso(f"• دورهٔ {one.period_label}: {amt}"))
+        total_toman = float(sum(float(i.amount_toman or 0) for i in invoices))
+        lines.append(f"💰 مبلغ کل: {total_toman:,.0f} تومان")
     if pay.txid:
         lines.append(f"🔗 تراکنش: {_explorer_link(chain, pay.txid)}")
         lines.append(_iso(f"TXID: {pay.txid}"))
         # Best-effort on-chain read (free): TON via toncenter, USDT via a public BSC RPC node.
-        from app.services import payments as _payments
         chk = await _payments.deposit_check(session, pay)
         lines.append(f"🔍 وضعیت شبکه: {_network_status_fa(chk)}")
     return "\n".join(lines)
@@ -2665,12 +2751,12 @@ async def _handle_txid(
     session,
     txid: str,
     *,
-    invoice: Invoice | None,
+    invoices: list[Invoice] | None,
     chain: str = "bsc",
 ) -> None:
     """Record a submitted tx hash (USDT/BSC or TON) as a PENDING payment for MANUAL review —
     no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
-    confirms/rejects."""
+    confirms/rejects. A payment may cover several invoices (one transfer for several debts)."""
     from app.services import payments
 
     resellers = await _resellers_for_chat(session, message.from_user.id)
@@ -2680,23 +2766,23 @@ async def _handle_txid(
     # Shared validation + creation (identical rules on the bot and the web portal).
     result = await payments.submit_reseller_payment(
         session, reseller_ids={r.id for r in resellers},
-        invoice_id=invoice.id if invoice else None, txid=txid, chain=chain,
+        invoice_ids=[i.id for i in (invoices or [])], txid=txid, chain=chain,
     )
     await message.answer(rtl(result.user_message))
     if result.notify and result.payment is not None:
         review = await _payment_review_html(
-            session, result.payment, reseller=resellers[0], inv=result.invoice)
+            session, result.payment, reseller=resellers[0], invs=result.invoices)
         await owner_notify.notify_owner(
             session, result.owner_intro + "\n\n" + review,
             html=True, reply_markup=keyboards.owner_payment_detail_keyboard(result.payment.id))
 
 
 async def _handle_payment_proof(
-    message: Message, session, *, invoice: Invoice | None
+    message: Message, session, *, invoices: list[Invoice] | None
 ) -> None:
     """A reseller sent a deposit screenshot as proof of payment. Store it, link it to the
-    exact invoice chosen in «پرداخت فاکتور» as a PENDING payment, and forward it to the
-    owner for manual confirmation."""
+    exact invoice(s) chosen in «پرداخت فاکتور» as a PENDING payment, and forward it to the
+    owner for manual confirmation. A payment may cover several invoices."""
     from app.services import payments
 
     resellers = await _resellers_for_chat(session, message.from_user.id)
@@ -2707,13 +2793,13 @@ async def _handle_payment_proof(
     # Shared validation + creation (identical rules on the bot and the web portal).
     result = await payments.submit_reseller_payment(
         session, reseller_ids={r.id for r in resellers},
-        invoice_id=invoice.id if invoice else None, screenshot=True,
+        invoice_ids=[i.id for i in (invoices or [])], screenshot=True,
     )
     if result.status != "ok" or result.payment is None:
         await message.answer(rtl(result.user_message))
         return
     payment = result.payment
-    invoice = result.invoice
+    result_invoices = result.invoices
 
     # Download the largest rendition of the photo to disk for the panel to display.
     photo = message.photo[-1]
@@ -2734,7 +2820,8 @@ async def _handle_payment_proof(
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
     if owner_chat:
-        review = await _payment_review_html(session, payment, reseller=resellers[0], inv=invoice)
+        review = await _payment_review_html(
+            session, payment, reseller=resellers[0], invs=result_invoices)
         caption = rtl("🧾 رسید پرداخت جدید — منتظر تأیید شماست.\n\n" + review)
         kb = keyboards.owner_payment_detail_keyboard(payment.id)
         try:

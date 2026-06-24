@@ -95,7 +95,8 @@ export interface PortalPayment {
   chain: string | null;
   txid: string | null;
   amount_toman: number;
-  invoice_period: string | null;
+  invoice_period: string | null;   // joined «دوره۱، دوره۲» when the payment covers several
+  invoice_count: number;
   has_proof: boolean;
   created_at: string | null;
   verified_at: string | null;
@@ -203,12 +204,26 @@ export const portalPayOptions = (invoiceId: number) =>
   portalApi.get("/api/portal/pay/options", { params: { invoice_id: invoiceId } })
     .then((r) => r.data as PayOptions);
 
+// All payable invoices + summed totals + methods, for the «pay all» dialog (one transfer
+// settles every payable invoice). Shaped like PayOptions but with a list + totals.
+export interface PayOptionsAll {
+  invoices: { id: number; number: string; period_label: string; amount_toman: number; amount_usdt: number }[];
+  invoice_ids: number[];
+  count: number;
+  total_amount_toman: number;
+  total_amount_usdt: number;
+  methods: PayOptions["methods"];
+}
+export const portalPayOptionsAll = () =>
+  portalApi.get("/api/portal/pay/options-all").then((r) => r.data as PayOptionsAll);
+
 export interface PaySubmitResult { status: string; message: string; number: string | null }
-export const portalPayTxid = (body: { invoice_id: number; txid: string; chain: string }) =>
-  portalApi.post("/api/portal/pay/txid", body).then((r) => r.data as PaySubmitResult);
-export const portalPayScreenshot = (invoiceId: number, file: File) => {
+export const portalPayTxid = (
+  body: { invoice_id?: number; invoice_ids?: number[]; txid: string; chain: string },
+) => portalApi.post("/api/portal/pay/txid", body).then((r) => r.data as PaySubmitResult);
+export const portalPayScreenshot = (invoiceIds: number[], file: File) => {
   const fd = new FormData();
-  fd.append("invoice_id", String(invoiceId));
+  fd.append("invoice_ids", invoiceIds.join(","));
   fd.append("file", file);
   return portalApi
     .post("/api/portal/pay/screenshot", fd, { headers: { "Content-Type": "multipart/form-data" } })

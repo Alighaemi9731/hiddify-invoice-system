@@ -14,6 +14,7 @@ from app.core.security import get_current_subject
 from app.models import BotUser, Invoice, Payment, Reseller
 from app.models.enums import PaymentStatus
 from app.schemas.payment import (
+    InvoiceBrief,
     PaymentActionResult,
     PaymentOut,
 )
@@ -37,23 +38,58 @@ def _equiv_str(method: str, toman: float | None, usdt: float | None, ton_rate: i
     return ""
 
 
+def _briefs_for(
+    p: Payment, inv_map: dict[int, Invoice], ton_rate: int
+) -> list[InvoiceBrief]:
+    """The covered invoices of a payment, in stored order (the first is the primary)."""
+    briefs: list[InvoiceBrief] = []
+    for iid in payments_service._settled_ids(p):
+        inv = inv_map.get(iid)
+        if inv is None:
+            continue
+        briefs.append(InvoiceBrief(
+            id=inv.id, period=inv.period_label,
+            amount_toman=float(inv.amount_toman or 0),
+            equiv=_equiv_str(p.method.value, float(inv.amount_toman or 0),
+                             float(inv.amount_usdt or 0), ton_rate),
+        ))
+    return briefs
+
+
 def _to_out(
     p: Payment, reseller_name: str | None,
-    invoice_period: str | None = None, invoice_amount_toman: float = 0,
+    *, briefs: list[InvoiceBrief],
     reseller_chat_id: int | None = None, reseller_username: str | None = None,
-    invoice_equiv: str = "",
 ) -> PaymentOut:
+    primary = briefs[0] if briefs else None
     return PaymentOut(
         id=p.id, number=payment_code(p.id),
         reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
         reseller_chat_id=reseller_chat_id, reseller_username=reseller_username,
-        invoice_period=invoice_period, invoice_amount_toman=float(invoice_amount_toman or 0),
-        invoice_equiv=invoice_equiv,
+        invoice_period=primary.period if primary else None,
+        invoice_amount_toman=primary.amount_toman if primary else 0,
+        invoice_equiv=primary.equiv if primary else "",
+        invoices=briefs, invoice_ids=[b.id for b in briefs],
+        invoice_count=len(briefs) or 1,
+        total_amount_toman=float(sum(b.amount_toman for b in briefs)),
         method=p.method.value, status=p.status.value, chain=p.chain, txid=p.txid,
         from_address=p.from_address, to_address=p.to_address, amount_usdt=float(p.amount_usdt),
         confirmations=p.confirmations, verified_at=p.verified_at, created_at=p.created_at, note=p.note,
         has_proof=bool(p.proof_path),
     )
+
+
+async def _load_invoice_map(
+    session: AsyncSession, payments_list: list[Payment]
+) -> dict[int, Invoice]:
+    """Batch-load every invoice referenced by any payment's set, in one query."""
+    ids: set[int] = set()
+    for p in payments_list:
+        ids.update(payments_service._settled_ids(p))
+    if not ids:
+        return {}
+    rows = (await session.execute(select(Invoice).where(Invoice.id.in_(ids)))).scalars().all()
+    return {inv.id: inv for inv in rows}
 
 
 @router.get("", response_model=list[PaymentOut])
@@ -64,12 +100,8 @@ async def list_payments(
     session: AsyncSession = Depends(get_session),
 ) -> list[PaymentOut]:
     q = (
-        select(
-            Payment, Reseller.name, Invoice.period_label, Invoice.amount_toman,
-            Reseller.bot_chat_id, BotUser.username, Invoice.amount_usdt,
-        )
+        select(Payment, Reseller.name, Reseller.bot_chat_id, BotUser.username)
         .outerjoin(Reseller, Payment.reseller_id == Reseller.id)
-        .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
         .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
         .order_by(Payment.created_at.desc())
         .limit(limit)
@@ -82,10 +114,11 @@ async def list_payments(
     from app.services import rates
 
     ton_rate = await rates.get_ton_toman(session)
+    inv_map = await _load_invoice_map(session, [p for p, *_ in rows])
     return [
-        _to_out(p, name, period, toman, chat_id, username,
-                _equiv_str(p.method.value, toman, usdt, ton_rate))
-        for p, name, period, toman, chat_id, username, usdt in rows
+        _to_out(p, name, briefs=_briefs_for(p, inv_map, ton_rate),
+                reseller_chat_id=chat_id, reseller_username=username)
+        for p, name, chat_id, username in rows
     ]
 
 
@@ -109,7 +142,6 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
     if not p:
         raise HTTPException(404, "Payment not found")
     reseller = await session.get(Reseller, p.reseller_id)
-    inv = await session.get(Invoice, p.invoice_id) if p.invoice_id else None
     username = None
     if reseller and reseller.bot_chat_id:
         bu = (await session.execute(
@@ -119,11 +151,11 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
     from app.services import rates
 
     ton_rate = await rates.get_ton_toman(session)
-    equiv = _equiv_str(p.method.value, float(inv.amount_toman) if inv else 0,
-                       float(inv.amount_usdt) if inv else 0, ton_rate)
+    inv_map = await _load_invoice_map(session, [p])
     return _to_out(p, reseller.name if reseller else None,
-                   inv.period_label if inv else None, float(inv.amount_toman) if inv else 0,
-                   reseller.bot_chat_id if reseller else None, username, equiv)
+                   briefs=_briefs_for(p, inv_map, ton_rate),
+                   reseller_chat_id=reseller.bot_chat_id if reseller else None,
+                   reseller_username=username)
 
 
 @router.post("/{payment_id}/verify", response_model=PaymentActionResult)
@@ -136,7 +168,7 @@ async def verify(payment_id: int, session: AsyncSession = Depends(get_session)) 
 
 @router.post("/{payment_id}/confirm", response_model=PaymentActionResult)
 async def confirm(payment_id: int, session: AsyncSession = Depends(get_session)) -> PaymentActionResult:
-    """Confirm the payment for the single invoice it's linked to (payments are per-invoice)."""
+    """Confirm the payment for ALL invoices it covers (a payment may settle several at once)."""
     if not await session.get(Payment, payment_id):
         raise HTTPException(404, "Payment not found")
     r = await payments_service.confirm_manually(session, payment_id)

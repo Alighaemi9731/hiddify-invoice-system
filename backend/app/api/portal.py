@@ -193,26 +193,40 @@ async def list_payments(
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    rows = (await session.execute(
-        select(Payment, Invoice.period_label)
-        .outerjoin(Invoice, Payment.invoice_id == Invoice.id)
+    pmts = (await session.execute(
+        select(Payment)
         .where(Payment.reseller_id.in_(ctx.ids))
         .order_by(Payment.created_at.desc())
         .limit(60)
-    )).all()
-    return [
-        {
+    )).scalars().all()
+    # Batch-load every covered invoice (a payment may settle several) for the period label(s).
+    all_ids: set[int] = set()
+    for pmt in pmts:
+        all_ids.update(payments._settled_ids(pmt))
+    inv_map = {}
+    if all_ids:
+        inv_map = {
+            inv.id: inv for inv in
+            (await session.execute(select(Invoice).where(Invoice.id.in_(all_ids)))).scalars().all()
+        }
+    out = []
+    for pmt in pmts:
+        periods = [
+            inv_map[i].period_label for i in payments._settled_ids(pmt)
+            if i in inv_map and inv_map[i].period_label
+        ]
+        out.append({
             "id": pmt.id,
             "number": payment_code(pmt.id), "method": pmt.method.value, "status": pmt.status.value,
             "chain": pmt.chain, "txid": pmt.txid,
             "amount_toman": float(pmt.amount_toman or 0),
-            "invoice_period": period,
+            "invoice_period": "، ".join(periods) if periods else None,
+            "invoice_count": len(periods) or 1,
             "has_proof": bool(pmt.proof_path),
             "created_at": pmt.created_at.isoformat() if pmt.created_at else None,
             "verified_at": pmt.verified_at.isoformat() if pmt.verified_at else None,
-        }
-        for pmt, period in rows
-    ]
+        })
+    return out
 
 
 @router.get("/payments/{payment_id}/proof")
@@ -323,7 +337,7 @@ async def _notify_owner_new_payment(session: AsyncSession, result: payments.Subm
     from app.bot import keyboards as kb
     from app.bot.handlers import _payment_review_html
 
-    review = await _payment_review_html(session, result.payment, inv=result.invoice)
+    review = await _payment_review_html(session, result.payment, invs=result.invoices)
     await owner_notify.notify_owner(
         session, result.owner_intro + "\n\n" + review,
         html=True, reply_markup=kb.owner_payment_detail_keyboard(result.payment.id))
@@ -368,10 +382,71 @@ async def pay_options(
     }
 
 
+@router.get("/pay/options-all")
+async def pay_options_all(
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """All payable invoices (owed, not future-deferred, not already in a pending payment) plus
+    the SUMMED amounts and enabled payment methods — so the portal can render a «pay all»
+    dialog and submit the whole set in one payment."""
+    today = tehran_today()
+    owed = (
+        await session.execute(
+            select(Invoice).where(Invoice.reseller_id.in_(ctx.ids), Invoice.status.in_(_OWED))
+            .order_by(Invoice.period_start.asc())
+        )
+    ).scalars().all()
+    held = await payments._pending_invoice_ids_in_sets(
+        session, {i.id for i in owed}, set(ctx.ids))
+    payable = [
+        i for i in owed
+        if not (i.deferred_until and i.deferred_until > today) and i.id not in held
+    ]
+    total_toman = float(sum((i.amount_toman or 0) for i in payable))
+    total_usdt = float(sum((i.amount_usdt or 0) for i in payable))
+    opts = await payment_methods.load_options(session)
+    amount_ton = None
+    if opts.ton:
+        from app.services import rates
+        rate = await rates.get_ton_toman(session)
+        if rate:
+            amount_ton = round(total_toman / rate, 2)
+    return {
+        "invoices": [
+            {"id": i.id, "number": invoice_code(i.id), "period_label": i.period_label,
+             "amount_toman": float(i.amount_toman), "amount_usdt": float(i.amount_usdt)}
+            for i in payable
+        ],
+        "invoice_ids": [i.id for i in payable],
+        "count": len(payable),
+        "total_amount_toman": total_toman, "total_amount_usdt": total_usdt,
+        "methods": {
+            "usdt": opts.usdt, "card": opts.card, "ton": opts.ton, "screenshot": opts.screenshot,
+            "wallet": opts.wallet if opts.usdt else "",
+            "card_number": opts.card_number if opts.card else "",
+            "card_holder": opts.card_holder if opts.card else "",
+            "ton_address": opts.ton_address if opts.ton else "",
+            "amount_ton": amount_ton,
+        },
+    }
+
+
 class PayTxidBody(BaseModel):
-    invoice_id: int
+    invoice_id: int | None = None          # legacy single-invoice alias
+    invoice_ids: list[int] | None = None   # pay several invoices with one transfer
     txid: str
     chain: str = "bsc"  # "bsc" (USDT/BEP-20) | "ton"
+
+
+def _form_invoice_ids(invoice_id: int | None, invoice_ids: str | None) -> list[int]:
+    """Parse the multipart pay-set: a comma-separated `invoice_ids` field, else single `invoice_id`."""
+    ids: list[int] = []
+    if invoice_ids:
+        ids = [int(x) for x in invoice_ids.split(",") if x.strip().isdigit()]
+    if not ids and invoice_id:
+        ids = [invoice_id]
+    return ids
 
 
 @router.post("/pay/txid")
@@ -380,14 +455,15 @@ async def pay_txid(
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Submit a tx hash (USDT/BSC or TON) as a PENDING payment for one owed invoice. Same shared
-    validation as the bot — never auto-confirms; the owner reviews."""
+    """Submit a tx hash (USDT/BSC or TON) as a PENDING payment for one OR MORE owed invoices.
+    Same shared validation as the bot — never auto-confirms; the owner reviews."""
     txid = (body.txid or "").strip()
     if not txid:
         raise HTTPException(400, "شناسهٔ تراکنش خالی است.")
     chain = "ton" if body.chain == "ton" else "bsc"
+    ids = body.invoice_ids or ([body.invoice_id] if body.invoice_id else [])
     result = await payments.submit_reseller_payment(
-        session, reseller_ids=set(ctx.ids), invoice_id=body.invoice_id, txid=txid, chain=chain)
+        session, reseller_ids=set(ctx.ids), invoice_ids=ids, txid=txid, chain=chain)
     await _notify_owner_new_payment(session, result)
     return {
         "status": result.status, "message": result.user_message,
@@ -397,13 +473,14 @@ async def pay_txid(
 
 @router.post("/pay/screenshot")
 async def pay_screenshot(
-    invoice_id: int = Form(...),
+    invoice_id: int | None = Form(None),
+    invoice_ids: str | None = Form(None),
     file: UploadFile = File(...),
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Submit a deposit screenshot as a PENDING payment for one owed invoice, forwarded to the
-    owner for manual confirmation (same as the bot's photo path)."""
+    """Submit a deposit screenshot as a PENDING payment for one OR MORE owed invoices, forwarded
+    to the owner for manual confirmation (same as the bot's photo path)."""
     if file.content_type and not file.content_type.startswith("image/"):
         raise HTTPException(400, "فقط تصویر قابل قبول است.")
     data = await file.read(_MAX_PROOF_BYTES + 1)
@@ -411,8 +488,9 @@ async def pay_screenshot(
         raise HTTPException(413, "حجم تصویر بیش از حد مجاز است.")
     if not data:
         raise HTTPException(400, "فایل خالی است.")
+    ids = _form_invoice_ids(invoice_id, invoice_ids)
     result = await payments.submit_reseller_payment(
-        session, reseller_ids=set(ctx.ids), invoice_id=invoice_id, screenshot=True)
+        session, reseller_ids=set(ctx.ids), invoice_ids=ids, screenshot=True)
     if result.status != "ok" or result.payment is None:
         return {"status": result.status, "message": result.user_message, "number": None}
     payment = result.payment
@@ -429,7 +507,7 @@ async def pay_screenshot(
     from app.bot import keyboards as kb
     from app.bot.handlers import _payment_review_html
 
-    review = await _payment_review_html(session, payment, inv=result.invoice)
+    review = await _payment_review_html(session, payment, invs=result.invoices)
     await owner_notify.notify_owner_photo(
         session, proof_path, result.owner_intro + "\n\n" + review,
         reply_markup=kb.owner_payment_detail_keyboard(payment.id))

@@ -8,7 +8,7 @@ import UploadFileIcon from "@mui/icons-material/esm/UploadFile";
 import { QRCodeSVG } from "qrcode.react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  portalPayOptions, portalPayTxid, portalPayScreenshot, PortalInvoice,
+  portalPayOptions, portalPayOptionsAll, portalPayTxid, portalPayScreenshot, PortalInvoice,
 } from "./portalClient";
 import { useToast, errMsg } from "../components/Toast";
 import { fmtToman } from "../format";
@@ -53,9 +53,9 @@ function CopyRow({ label, value, show }: { label: string; value: string; show: (
 }
 
 export default function PayDialog({
-  invoice, onClose,
-}: { invoice: PortalInvoice | null; onClose: () => void }) {
-  const open = !!invoice;
+  invoice, payAll, onClose,
+}: { invoice: PortalInvoice | null; payAll?: boolean; onClose: () => void }) {
+  const open = !!invoice || !!payAll;
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
   const [chain, setChain] = useState<"bsc" | "ton">("bsc");
@@ -63,11 +63,34 @@ export default function PayDialog({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { data: opts, isLoading, isError } = useQuery({
-    queryKey: ["portal-pay-options", invoice?.id],
-    queryFn: () => portalPayOptions(invoice!.id),
+  // Single-invoice options OR all-payable options (one transfer settles them all).
+  const { data: raw, isLoading, isError } = useQuery({
+    queryKey: payAll ? ["portal-pay-options-all"] : ["portal-pay-options", invoice?.id],
+    queryFn: (): Promise<any> => (payAll ? portalPayOptionsAll() : portalPayOptions(invoice!.id)),
     enabled: open,
   });
+  // Normalize both shapes into one: amounts, methods, the target invoice ids, and gating.
+  const opts = raw
+    ? payAll
+      ? {
+          amount_toman: (raw as any).total_amount_toman,
+          amount_usdt: (raw as any).total_amount_usdt,
+          methods: (raw as any).methods,
+          invoice_ids: (raw as any).invoice_ids as number[],
+          count: (raw as any).count as number,
+          pending: false,
+          payable: (raw as any).count > 0,
+        }
+      : {
+          amount_toman: (raw as any).invoice.amount_toman,
+          amount_usdt: (raw as any).invoice.amount_usdt,
+          methods: (raw as any).methods,
+          invoice_ids: [(raw as any).invoice.id] as number[],
+          count: 1,
+          pending: (raw as any).pending as boolean,
+          payable: (raw as any).payable as boolean,
+        }
+    : null;
 
   const m = opts?.methods;
   const canTxid = !!(m?.usdt || m?.ton);
@@ -84,15 +107,16 @@ export default function PayDialog({
     qc.invalidateQueries({ queryKey: ["portal-invoices"] });
     qc.invalidateQueries({ queryKey: ["portal-payments"] });
     qc.invalidateQueries({ queryKey: ["portal-pay-options"] });
+    qc.invalidateQueries({ queryKey: ["portal-pay-options-all"] });
     setTxid(""); setFile(null);
     setTimeout(onClose, 800);
   };
 
   const submitTxid = async () => {
-    if (!invoice || !txid.trim()) { show("شناسهٔ تراکنش را وارد کنید", "warning"); return; }
+    if (!opts || !txid.trim()) { show("شناسهٔ تراکنش را وارد کنید", "warning"); return; }
     setBusy(true);
     try {
-      const r = await portalPayTxid({ invoice_id: invoice.id, txid: txid.trim(), chain: effChain });
+      const r = await portalPayTxid({ invoice_ids: opts.invoice_ids, txid: txid.trim(), chain: effChain });
       if (r.status === "ok" || r.status === "reopened") finish(r.message);
       else show(r.message, "warning");
     } catch (e) { show(errMsg(e), "error"); }
@@ -100,10 +124,10 @@ export default function PayDialog({
   };
 
   const submitReceipt = async () => {
-    if (!invoice || !file) { show("یک تصویر رسید انتخاب کنید", "warning"); return; }
+    if (!opts || !file) { show("یک تصویر رسید انتخاب کنید", "warning"); return; }
     setBusy(true);
     try {
-      const r = await portalPayScreenshot(invoice.id, file);
+      const r = await portalPayScreenshot(opts.invoice_ids, file);
       if (r.status === "ok") finish(r.message);
       else show(r.message, "warning");
     } catch (e) { show(errMsg(e), "error"); }
@@ -114,7 +138,9 @@ export default function PayDialog({
     <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="sm" fullWidth>
       {toast}
       <DialogTitle sx={{ fontWeight: 800 }}>
-        پرداخت فاکتور {invoice?.period_label}
+        {payAll
+          ? `پرداخت همهٔ بدهی${opts && opts.count > 1 ? ` (${opts.count} فاکتور)` : ""}`
+          : `پرداخت فاکتور ${invoice?.period_label ?? ""}`}
       </DialogTitle>
       <DialogContent dividers>
         {isLoading ? (
@@ -124,12 +150,16 @@ export default function PayDialog({
         ) : opts.pending ? (
           <Alert severity="info">برای این فاکتور قبلاً پرداختی ثبت شده و در انتظار تأیید است.</Alert>
         ) : !opts.payable ? (
-          <Alert severity="warning">این فاکتور در حال حاضر قابل پرداخت نیست.</Alert>
+          <Alert severity="warning">
+            {payAll ? "بدهی قابل پرداختی ندارید." : "این فاکتور در حال حاضر قابل پرداخت نیست."}
+          </Alert>
         ) : (
           <Stack spacing={1.5}>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
-              <Typography color="text.secondary">مبلغ قابل پرداخت:</Typography>
-              <Typography sx={{ fontWeight: 850, fontSize: 18 }}>{fmtToman(opts.invoice.amount_toman)}</Typography>
+              <Typography color="text.secondary">
+                {payAll ? `مبلغ کل (${opts.count} فاکتور):` : "مبلغ قابل پرداخت:"}
+              </Typography>
+              <Typography sx={{ fontWeight: 850, fontSize: 18 }}>{fmtToman(opts.amount_toman)}</Typography>
             </Stack>
             <Divider />
 
@@ -137,7 +167,7 @@ export default function PayDialog({
               <Box>
                 <Chip size="small" color="success" label="USDT — شبکهٔ BEP-20 (BSC)" sx={{ fontWeight: 700 }} />
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
-                  مبلغ: {opts.invoice.amount_usdt.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT
+                  مبلغ: {opts.amount_usdt.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT
                   — ⚠️ فقط شبکهٔ BEP-20؛ واریز از شبکهٔ دیگر = از‌دست‌رفتن وجه.
                 </Typography>
                 <CopyRow label="آدرس کیف پول USDT" value={m!.wallet} show={show} />

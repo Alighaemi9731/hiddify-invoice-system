@@ -8,6 +8,34 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.108 - 2026-06-24
+
+### Added — pay several invoices with one transfer («پرداخت همهٔ بدهی»)
+
+A customer can now settle **one OR many** invoices with a single payment (TXID or receipt), instead of
+one-per-transfer. Reviewed end-to-end (payment↔invoice attribution is the project's most sensitive logic)
+and covered by new tests.
+
+- **Bot**: «💳 پرداخت فاکتور» now shows a **«پرداخت همهٔ بدهی»** button (when ≥2 payable) alongside the
+  per-invoice buttons; the locked pay flow holds an invoice-id **set** (`pay_invoice_ids`) and the
+  TXID/receipt is attributed to exactly that set.
+- **Reseller portal**: a «پرداخت همهٔ بدهی» button + a `PayDialog` that loads the payable set
+  (`GET /api/portal/pay/options-all`), shows the summed amount, and submits `invoice_ids`.
+- **Owner panel (Payments)**: the «فاکتور (دوره)» cell lists every covered invoice (with a per-invoice
+  breakdown tooltip), «مبلغ» shows the total, and confirm/reject act on the whole set.
+- **Shared safety rules** (`payments.submit_reseller_payment`, used by bot + portal): EVERY chosen invoice
+  is re-validated under a row lock (owned, OWED, not future-deferred) — if any isn't payable the **whole
+  batch is rejected atomically** (never silently pay a subset); **one pending payment per invoice** (an
+  invoice already in a pending set blocks the submission); the set is stored in `settled_invoice_ids` with
+  the payment amount = the **SUM**. On-chain `verify_payment` requires the deposit to cover the set's total;
+  `confirm_manually`/`reject_payment`/`delete_payment` settle/revert the **whole set** (reject keeps an
+  invoice paid if another confirmed payment still covers it); auto-restore lifts enforcement only when no
+  due invoice **outside** the set remains; the dunning pending-payment hold covers the whole set. Capped at
+  25 invoices per payment (fits `settled_invoice_ids`); legacy single-`invoice_id` rows keep working.
+- New `tests/test_invoice_state.py` cases (multi-invoice submit/confirm/verify-floor/reject-with-overlap/
+  pending-dedup/atomic-stale-reject/back-compat). 215 backend tests pass; ruff + mypy + pip clean; frontend
+  tsc + build clean. Help page + CLAUDE.md updated.
+
 ## 1.37.107 - 2026-06-23
 
 ### Added — owner «ابزارها» (Tools) page for rare/special operations
