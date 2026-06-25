@@ -68,6 +68,7 @@ class DeliveryStatus(str, enum.Enum):
 class EnforcementActionType(str, enum.Enum):
     disable_users = "disable_users"
     restore = "restore"
+    delete_admin = "delete_admin"  # cascade-delete a reseller + subtree (users, sub-admins) from panel
 
 
 class EnforcementActionStatus(str, enum.Enum):

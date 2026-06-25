@@ -183,6 +183,20 @@ export const searchEndUsers = (q: string) =>
 export const removeEndUser = (id: number) =>
   api.post(`/api/tools/end-users/${id}/remove`).then((r) => r.data);
 
+export interface AdminDeleteScope {
+  reseller_id: number;
+  name: string;
+  admin_uuid: string;
+  panel_key: string;
+  is_owner: boolean;
+  sub_reseller_count: number;
+  user_count: number;
+}
+export const previewAdminDelete = (id: number) =>
+  api.get(`/api/tools/admin/${id}/delete-preview`).then((r) => r.data as AdminDeleteScope);
+export const deleteAdminCascade = (id: number) =>
+  api.post(`/api/tools/admin/${id}/delete`).then((r) => r.data as AdminDeleteScope & { queued: boolean; action_id: number });
+
 // ---- invoices ----
 export interface InvoiceListItem {
   id: number;

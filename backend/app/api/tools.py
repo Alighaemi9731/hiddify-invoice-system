@@ -11,13 +11,15 @@ from __future__ import annotations
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import CursorResult, or_, select
+from sqlalchemy import CursorResult, func, or_, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import EndUserSnapshot, Panel, Reseller, UsageMeter
+from app.services import enforcement
+from app.services.reseller_report import node_descendants
 
 router = APIRouter(
     prefix="/api/tools", tags=["tools"], dependencies=[Depends(get_current_subject)]
@@ -104,3 +106,57 @@ async def remove_end_user(
     )
     await session.commit()
     return {"user_uuid": user_uuid, "name": name, "meters_deleted": int(meters)}
+
+
+async def _delete_scope(session: AsyncSession, reseller: Reseller) -> dict:
+    """The cascade footprint of deleting `reseller`: its whole sub-tree of admins + the count of
+    end-users created across that sub-tree (what would be removed from the panel + our DB)."""
+    descendants = await node_descendants(session, reseller)
+    uuids = [(d.admin_uuid or "").lower() for d in descendants if d.admin_uuid]
+    user_count = 0
+    if uuids:
+        user_count = int((await session.execute(
+            select(func.count(EndUserSnapshot.id)).where(
+                EndUserSnapshot.panel_id == reseller.panel_id,
+                func.lower(EndUserSnapshot.added_by_uuid).in_(uuids),
+            )
+        )).scalar_one() or 0)
+    panel = await session.get(Panel, reseller.panel_id)
+    return {
+        "reseller_id": reseller.id,
+        "name": reseller.name,
+        "admin_uuid": reseller.admin_uuid,
+        "panel_key": panel.key if panel else "?",
+        "is_owner": bool(getattr(reseller, "is_owner", False)),
+        "sub_reseller_count": max(0, len(descendants) - 1),
+        "user_count": user_count,
+    }
+
+
+@router.get("/admin/{reseller_id}/delete-preview")
+async def delete_admin_preview(
+    reseller_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """How much deleting this admin would remove (sub-resellers + users) — for the confirm dialog."""
+    reseller = await session.get(Reseller, reseller_id)
+    if reseller is None:
+        raise HTTPException(404, "Reseller not found")
+    return await _delete_scope(session, reseller)
+
+
+@router.post("/admin/{reseller_id}/delete")
+async def delete_admin_cascade(
+    reseller_id: int, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Queue a full cascade deletion of this admin + its sub-tree (users + sub-admins) from the
+    Hiddify panel AND our DB. Runs in the background (queued, chunked, panel-paced, resumable) like
+    suspend/restore. The financial ledger is kept. Refuses the panel owner."""
+    reseller = await session.get(Reseller, reseller_id)
+    if reseller is None:
+        raise HTTPException(404, "Reseller not found")
+    scope = await _delete_scope(session, reseller)
+    try:
+        action = await enforcement.queue_admin_deletion(session, reseller)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"queued": True, "action_id": action.id, **scope}

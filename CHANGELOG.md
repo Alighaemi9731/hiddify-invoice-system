@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.37.109 - 2026-06-25
+
+### Fixed
+
+- **Changing the owner's Telegram id in Settings now reaches the bot.** `owner_chat_id` was pinned once
+  and `_is_owner_user` ignored the editable `owner_telegram` afterwards, so a changed id never took effect.
+  Now a **numeric** `owner_telegram` is authoritative — it re-pins `owner_chat_id` and the new account
+  becomes owner immediately (old one loses access), no restart; an **@username** unpins so that account's
+  next `/start` re-binds. The owner command menu is moved to the new chat (best-effort). Channel/group ids
+  were checked — they read fresh and are editable, so they had no such staleness bug; their Settings help
+  now notes a direct edit applies immediately.
+
+### Added — Tools › «حذف ادمین از پنل هیدیفای» (queued cascade deletion)
+
+- One owner action deletes an admin (reseller) **plus its whole sub-tree** — all sub-resellers and every
+  user they created — from the **Hiddify panel** AND our DB, instead of the manual bottom-up grind. It runs
+  through the existing enforcement **queue**: per-panel, **chunked**, **resumable**, panel-paced and
+  apply-aware (users are removed via Hiddify's native bulk **delete** action — one `quick_apply` per batch —
+  so a large admin doesn't overwhelm the panel), then the admin is deleted (Hiddify cascades its sub-admins),
+  then the sub-tree is purged from our DB. The durable **financial ledger is kept**. New
+  `EnforcementActionType.delete_admin` (VARCHAR enum → no migration), `AdminApiClient.bulk_delete_users` +
+  `delete_admin`, `enforcement.queue_admin_deletion` + `_process_delete_action`, `reseller_purge.purge_subtree`,
+  and Tools endpoints `GET /api/tools/admin/{id}/delete-preview` + `POST /api/tools/admin/{id}/delete`. The
+  panel owner / super-admin is refused. A confirmation dialog shows the sub-reseller + user counts and warns
+  it's irreversible. Tests in `tests/test_admin_delete.py` + `test_admin_api_bulk.py`. 219 backend tests
+  pass; ruff + mypy + pip clean; frontend tsc + build clean.
+
 ## 1.37.108 - 2026-06-24
 
 ### Added — pay several invoices with one transfer («پرداخت همهٔ بدهی»)

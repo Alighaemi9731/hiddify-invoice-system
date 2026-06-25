@@ -6,15 +6,17 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
+import DeleteForeverIcon from "@mui/icons-material/esm/DeleteForever";
 import LinkOffIcon from "@mui/icons-material/esm/LinkOff";
 import PersonRemoveIcon from "@mui/icons-material/esm/PersonRemove";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   searchEndUsers, removeEndUser, ToolsEndUser,
   listResellers, unbindResellerTelegram, ResellerRow,
+  previewAdminDelete, deleteAdminCascade,
 } from "../api/client";
 import { errMsg, useToast } from "../components/Toast";
-import { fmtGb, fmtDate } from "../format";
+import { fmtGb, fmtNum, fmtDate } from "../format";
 
 // ── Section 1: remove a mistaken end-user from billing ────────────────────────
 function RemoveUserTool() {
@@ -266,6 +268,134 @@ function UnbindTelegramTool() {
   );
 }
 
+// ── Section 3: cascade-delete an admin (reseller) from the Hiddify panel ──────
+function DeleteAdminTool() {
+  const qc = useQueryClient();
+  const { node: toast, show } = useToast();
+  const [input, setInput] = useState("");
+  const [term, setTerm] = useState("");
+  const [delRow, setDelRow] = useState<ResellerRow | null>(null);
+
+  const { data = [], isFetching } = useQuery({
+    queryKey: ["tools-del-resellers", term],
+    queryFn: () => listResellers({ q: term }),
+    enabled: term.length > 0,
+  });
+  // Subtree footprint of the selected reseller (sub-resellers + users), for the confirm dialog.
+  const { data: scope, isLoading: scopeLoading } = useQuery({
+    queryKey: ["tools-del-preview", delRow?.id],
+    queryFn: () => previewAdminDelete(delRow!.id),
+    enabled: !!delRow,
+  });
+  const del = useMutation({
+    mutationFn: (id: number) => deleteAdminCascade(id),
+    onSuccess: (r: any) => {
+      show(`حذفِ «${r?.name || ""}» در صف قرار گرفت — در پس‌زمینه و مرحله‌ای انجام می‌شود.`, "info");
+      setDelRow(null);
+      qc.invalidateQueries({ queryKey: ["tools-del-resellers"] });
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
+  const submit = () => setTerm(input.trim());
+
+  return (
+    <Card>
+      {toast}
+      <CardContent>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+          <DeleteForeverIcon color="error" />
+          <Typography variant="h6">حذفِ ادمین از پنلِ هیدیفای</Typography>
+        </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          یک ادمین به‌همراهِ <b>همهٔ زیرمجموعه‌ها و کاربرانِ آن‌ها</b> را به‌صورتِ خودکار از پنل و سامانه
+          حذف می‌کند (به‌جای حذفِ دستیِ تک‌تک). فرایند در پس‌زمینه، مرحله‌ای و با‌احتیاطِ فشار روی پنل
+          انجام می‌شود؛ تاریخچهٔ مالی حفظ می‌شود.
+        </Typography>
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+          <TextField
+            size="small" fullWidth placeholder="جستجوی نام یا شناسهٔ نماینده…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            InputProps={{ startAdornment: (
+              <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+            ) }}
+          />
+          <Button variant="contained" onClick={submit} disabled={!input.trim()}>جستجو</Button>
+        </Stack>
+
+        {term && (
+          <Box sx={{ overflowX: "auto" }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>نام</TableCell>
+                  <TableCell>پنل</TableCell>
+                  <TableCell align="left">کاربران</TableCell>
+                  <TableCell align="center">حذفِ کامل</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {data.map((r) => (
+                  <TableRow key={r.id} hover>
+                    <TableCell>{r.name}{r.is_owner && <Chip size="small" label="مالک" sx={{ ml: 0.5 }} />}</TableCell>
+                    <TableCell>{r.panel_key}</TableCell>
+                    <TableCell align="left">{fmtNum(r.users_count)}</TableCell>
+                    <TableCell align="center">
+                      <Tooltip title={r.is_owner ? "مالکِ پنل قابلِ حذف نیست" : "حذفِ کامل از پنل"}>
+                        <span>
+                          <IconButton size="small" color="error" disabled={r.is_owner}
+                            onClick={() => setDelRow(r)}>
+                            <DeleteForeverIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!isFetching && data.length === 0 && (
+                  <TableRow><TableCell colSpan={4} align="center" sx={{ color: "text.secondary", py: 3 }}>
+                    نماینده‌ای یافت نشد.
+                  </TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Box>
+        )}
+      </CardContent>
+
+      <Dialog open={!!delRow} onClose={() => setDelRow(null)} fullWidth maxWidth="xs">
+        {delRow && (
+          <>
+            <DialogTitle>حذفِ کاملِ ادمین — {delRow.name}</DialogTitle>
+            <DialogContent>
+              <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
+                ⚠️ این کار برگشت‌ناپذیر است.
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                این ادمین، <b>{scopeLoading ? "…" : fmtNum(scope?.sub_reseller_count ?? 0)}</b> زیرمجموعه و
+                <b> {scopeLoading ? "…" : fmtNum(scope?.user_count ?? 0)}</b> کاربر روی پنلِ
+                <b> {delRow.panel_key}</b> — همگی از <b>پنلِ هیدیفای</b> و از <b>سامانه</b> حذف می‌شوند.
+                فرایند در پس‌زمینه و مرحله‌ای انجام می‌شود (ممکن است برای ادمینِ بزرگ کمی طول بکشد).
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                تاریخچهٔ مالی (لجر) حفظ می‌شود. اتصالِ تلگرام و دسترسیِ این ادمین هم از بین می‌رود.
+              </Typography>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setDelRow(null)}>انصراف</Button>
+              <Button variant="contained" color="error"
+                disabled={del.isPending || scopeLoading || !!scope?.is_owner}
+                onClick={() => del.mutate(delRow.id)}>حذفِ کامل</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+    </Card>
+  );
+}
+
 export default function Tools() {
   return (
     <Box>
@@ -276,6 +406,7 @@ export default function Tools() {
       <Stack spacing={2} sx={{ maxWidth: 1000 }}>
         <RemoveUserTool />
         <UnbindTelegramTool />
+        <DeleteAdminTool />
       </Stack>
     </Box>
   );

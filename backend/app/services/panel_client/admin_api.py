@@ -144,15 +144,14 @@ class AdminApiClient(PanelClient):
                 result[str(uuid)] = user_id
         return result
 
-    async def bulk_set_users_enabled(  # noqa: ANN001
-        self, panel, user_ids: list[int], enabled: bool
-    ) -> None:
-        """Use Hiddify's native Flask-Admin bulk Enable/Disable action.
+    async def _user_bulk_action(self, panel, user_ids: list[int], action: str) -> None:  # noqa: ANN001
+        """Run Hiddify's native Flask-Admin user-list bulk `action` (enable/disable/delete) on the
+        given numeric rowids in ONE POST.
 
-        Hiddify has no bulk endpoint in its public v2 REST API. Its own user-list UI does
-        provide a bulk action that updates all selected rows in one SQL statement, updates
-        the core clients server-side, and invokes quick_apply_users only once per batch.
-        """
+        Hiddify has no bulk endpoint in its public v2 REST API. Its own user-list UI does provide
+        bulk actions that update all selected rows in one SQL statement, update the core clients
+        server-side, and invoke quick_apply_users only once per batch — so this is far gentler on
+        the panel than per-user REST calls (each of which quick_applies)."""
         if not user_ids:
             return
         list_url = f"{panel.proxy_base}/admin/user/"
@@ -181,7 +180,7 @@ class AdminApiClient(PanelClient):
                 data={
                     "csrf_token": csrf_token,
                     "url": list_url,
-                    "action": "enable" if enabled else "disable",
+                    "action": action,
                     "rowid": [str(user_id) for user_id in user_ids],
                 },
             )
@@ -189,6 +188,17 @@ class AdminApiClient(PanelClient):
                 raise RuntimeError(
                     f"Hiddify bulk user action {response.status_code}: {response.text[:300]}"
                 )
+
+    async def bulk_set_users_enabled(  # noqa: ANN001
+        self, panel, user_ids: list[int], enabled: bool
+    ) -> None:
+        """Bulk enable/disable users via Hiddify's native Flask-Admin action (one apply per batch)."""
+        await self._user_bulk_action(panel, user_ids, "enable" if enabled else "disable")
+
+    async def bulk_delete_users(self, panel, user_ids: list[int]) -> None:  # noqa: ANN001
+        """Bulk DELETE users via Hiddify's native Flask-Admin action (one quick_apply per batch).
+        Used by the cascade admin-deletion; far gentler than per-user REST deletes."""
+        await self._user_bulk_action(panel, user_ids, "delete")
 
     async def get_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None
@@ -248,3 +258,18 @@ class AdminApiClient(PanelClient):
             {"max_users": max_users, "max_active_users": max_active_users},
             api_key=api_key,
         )
+
+    async def delete_admin(  # noqa: ANN001
+        self, panel, admin_uuid: str, *, api_key: str | None = None
+    ) -> None:
+        """Delete an admin via `DELETE /api/v2/admin/admin_user/{uuid}/`. On the panel this also
+        deletes the admin's sub-admins recursively (and reassigns any LEFTOVER users to the caller
+        — so the cascade deletes all subtree users FIRST). 404 (already gone) is tolerated; the
+        panel refuses to delete the super-admin/self (we never target those)."""
+        url = f"{panel.admin_api_base}/admin_user/{admin_uuid}/"
+        async with httpx.AsyncClient(timeout=max(self.timeout, 120.0)) as client:
+            resp = await client.delete(url, headers=self._headers(panel, api_key))
+        if resp.status_code == 404:
+            return
+        if resp.status_code >= 400:
+            raise RuntimeError(f"DELETE admin_user {resp.status_code}: {resp.text[:300]}")

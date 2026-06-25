@@ -12,12 +12,13 @@ import asyncio
 import logging
 from copy import deepcopy
 
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
+from sqlalchemy import delete as _sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.db import SessionLocal
-from app.models import EndUserSnapshot, EnforcementAction, Panel, Reseller
+from app.models import EndUserSnapshot, EnforcementAction, Panel, Reseller, UsageMeter
 from app.models.enums import (
     EnforcementActionStatus,
     EnforcementActionType,
@@ -952,6 +953,215 @@ async def _process_restore_action(
     return result
 
 
+async def queue_admin_deletion(session: AsyncSession, reseller: Reseller) -> EnforcementAction:
+    """Queue a CASCADE deletion of a reseller (admin) + its whole sub-tree from the panel and our
+    DB. Always live (dry_run=False) — it's an explicit, confirmation-gated owner action, not the
+    automatic dunning path. Refuses the panel owner / an `is_owner` reseller. Idempotent: returns
+    an existing not-yet-finished delete action for the same reseller if one is queued."""
+    if getattr(reseller, "is_owner", False):
+        raise ValueError("cannot delete the panel owner")
+    panel = await session.get(Panel, reseller.panel_id)
+    if panel is not None and reseller.admin_uuid and panel.owner_uuid and \
+            reseller.admin_uuid.lower() == str(panel.owner_uuid).lower():
+        raise ValueError("cannot delete the panel owner")
+
+    existing = (
+        await session.execute(
+            select(EnforcementAction).where(
+                EnforcementAction.reseller_id == reseller.id,
+                EnforcementAction.action == EnforcementActionType.delete_admin,
+                EnforcementAction.status.in_(
+                    [EnforcementActionStatus.planned, EnforcementActionStatus.partial]
+                ),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    descendants = await _bundle(session, reseller)
+    snapshot: dict = {
+        "panel_id": reseller.panel_id,
+        "root_uuid": reseller.admin_uuid,
+        "admins": [d.admin_uuid for d in descendants],
+        "deleted_users": 0,
+    }
+    _progress(snapshot)
+    snapshot["progress"]["phase"] = "users"
+    action = EnforcementAction(
+        reseller_id=reseller.id,
+        action=EnforcementActionType.delete_admin,
+        dry_run=False,
+        affected_count=0,
+        snapshot=snapshot,
+        status=EnforcementActionStatus.planned,
+    )
+    session.add(action)
+    await session.commit()
+    log.info("queued cascade delete for reseller %s (%d admins in subtree)",
+             reseller.name, len(descendants))
+    return action
+
+
+async def _process_delete_action(
+    session: AsyncSession, action: EnforcementAction, *, user_chunk_size: int
+) -> dict:
+    """Resumable cascade deletion: (1) delete the subtree's users on the panel in bounded chunks
+    via the native bulk delete (one quick_apply per batch) and drop their DB rows as we go; then
+    (2) delete the admin on the panel (Hiddify cascades sub-admins); then (3) purge the subtree
+    from our DB (ledger kept). Progress phase is committed so a restart resumes mid-cascade."""
+    result = _empty_queue_result()
+    snapshot = action.snapshot or {}
+    progress = _progress(snapshot)
+    reseller = await session.get(Reseller, action.reseller_id)
+    if reseller is None:
+        # DB rows already gone (purge done) → finalize.
+        action.status = EnforcementActionStatus.done
+        progress["phase"] = "done"
+        flag_modified(action, "snapshot")
+        await session.commit()
+        result["done"] = 1
+        return result
+    panel = await session.get(Panel, reseller.panel_id)
+    if panel is None:
+        action.status = EnforcementActionStatus.failed
+        action.error = "panel not found"
+        await session.commit()
+        result["failed"] = 1
+        return result
+    client = AdminApiClient()
+    chunk = max(1, int(user_chunk_size or 500))
+
+    # ---- Phase 1: delete the subtree's users on the panel (bounded, resumable) ----
+    if progress.get("phase", "users") == "users":
+        descendants = await _bundle(session, reseller)
+        admin_uuids_lower = [(d.admin_uuid or "").lower() for d in descendants]
+        deleted_total = int(progress.get("deleted_users") or snapshot.get("deleted_users") or 0)
+        sem = asyncio.Semaphore(_ID_LOOKUP_CONCURRENCY)
+        while True:
+            batch = (
+                await session.execute(
+                    select(EndUserSnapshot).where(
+                        EndUserSnapshot.panel_id == panel.id,
+                        func.lower(EndUserSnapshot.added_by_uuid).in_(admin_uuids_lower),
+                    ).limit(chunk)
+                )
+            ).scalars().all()
+            if not batch:
+                break
+
+            async def _resolve(row):  # noqa: ANN001, ANN202
+                if row.panel_user_id is not None:
+                    return row, int(row.panel_user_id), None
+                async with sem:
+                    try:
+                        return row, await client.get_user_id(panel, row.user_uuid), None
+                    except Exception as exc:  # noqa: BLE001
+                        return row, None, str(exc)[:200]
+
+            resolved = await asyncio.gather(*[_resolve(r) for r in batch])
+            ids_on_panel: list[int] = []
+            removable_uuids: list[str] = []  # rows safe to drop from our DB this chunk
+            last_err: str | None = None
+            for row, uid, err in resolved:
+                if err is not None:
+                    last_err = err
+                    continue          # transient lookup error → leave for retry
+                if uid is not None:
+                    ids_on_panel.append(uid)
+                removable_uuids.append(row.user_uuid)   # resolved OR 404 (absent) → removable
+
+            if not removable_uuids:
+                # Whole batch errored (panel down) → stop; the worker retries next tick.
+                action.error = f"user id lookup failed (will retry): {last_err or ''}"
+                action.status = EnforcementActionStatus.partial
+                snapshot["deleted_users"] = deleted_total
+                progress["deleted_users"] = deleted_total
+                action.affected_count = deleted_total
+                flag_modified(action, "snapshot")
+                await session.commit()
+                result["partial"] = 1
+                result["failed_users"] = len(batch)
+                return result
+
+            try:
+                if ids_on_panel:
+                    await client.bulk_delete_users(panel, ids_on_panel)
+            except Exception as exc:  # noqa: BLE001
+                action.error = f"bulk delete failed (will retry): {str(exc)[:300]}"
+                action.status = EnforcementActionStatus.partial
+                snapshot["deleted_users"] = deleted_total
+                progress["deleted_users"] = deleted_total
+                flag_modified(action, "snapshot")
+                await session.commit()
+                result["partial"] = 1
+                return result
+
+            # Drop the just-deleted (or absent) users from our DB so the next batch shrinks.
+            await session.execute(
+                _sa_delete(UsageMeter).where(
+                    UsageMeter.panel_id == panel.id, UsageMeter.user_uuid.in_(removable_uuids)
+                )
+            )
+            await session.execute(
+                _sa_delete(EndUserSnapshot).where(
+                    EndUserSnapshot.panel_id == panel.id,
+                    EndUserSnapshot.user_uuid.in_(removable_uuids),
+                )
+            )
+            deleted_total += len(removable_uuids)
+            snapshot["deleted_users"] = deleted_total
+            progress["deleted_users"] = deleted_total
+            action.affected_count = deleted_total
+            action.error = None
+            flag_modified(action, "snapshot")
+            await session.commit()
+            result["patched_users"] += len(removable_uuids)
+        progress["phase"] = "panel_admin"
+        flag_modified(action, "snapshot")
+        await session.commit()
+
+    # ---- Phase 2: delete the admin on the panel (Hiddify cascades sub-admins) ----
+    if progress.get("phase") == "panel_admin":
+        try:
+            await client.delete_admin(panel, reseller.admin_uuid)
+        except Exception as exc:  # noqa: BLE001
+            action.error = f"delete admin failed (will retry): {str(exc)[:300]}"
+            action.status = EnforcementActionStatus.partial
+            await session.commit()
+            result["partial"] = 1
+            return result
+        progress["phase"] = "db"
+        action.error = None
+        flag_modified(action, "snapshot")
+        await session.commit()
+
+    # ---- Phase 3: purge the subtree from our DB (financial ledger kept) ----
+    if progress.get("phase") == "db":
+        descendants = await _bundle(session, reseller)
+        purge_ids = [d.id for d in descendants]
+        purge_uuids = [d.admin_uuid for d in descendants]
+        # Mark done FIRST while the action row is still valid: purging deletes the reseller, and
+        # the action's reseller_id FK is ondelete=CASCADE, so the action row itself disappears on
+        # Postgres once we purge — we must not try to update it afterwards.
+        progress["phase"] = "done"
+        action.status = EnforcementActionStatus.done
+        flag_modified(action, "snapshot")
+        await session.commit()
+        try:
+            from app.services import reseller_purge
+
+            await reseller_purge.purge_subtree(
+                session, panel_id=panel.id, reseller_ids=purge_ids, admin_uuids=purge_uuids,
+            )
+        except Exception:  # noqa: BLE001
+            # Panel deletion already succeeded; the DB rows are now "absent" and get cleaned by
+            # the daily prune / re-running the tool. Don't fail the action over a DB-purge hiccup.
+            log.warning("cascade DB purge failed for reseller %s", action.reseller_id, exc_info=True)
+        result["done"] = 1
+    return result
+
+
 def _empty_queue_result() -> dict:
     return {
         "picked": 0,
@@ -963,7 +1173,11 @@ def _empty_queue_result() -> dict:
 
 _PENDING_ACTION_FILTER = (
     EnforcementAction.action.in_(
-        [EnforcementActionType.disable_users, EnforcementActionType.restore]
+        [
+            EnforcementActionType.disable_users,
+            EnforcementActionType.restore,
+            EnforcementActionType.delete_admin,
+        ]
     ),
     EnforcementAction.dry_run.is_(False),
     EnforcementAction.status.in_(
@@ -1010,6 +1224,8 @@ async def _process_panel_queue(
             step = await _process_restore_action(
                 session, action, user_chunk_size=chunk, admin_parallelism=para,
             )
+        elif action.action == EnforcementActionType.delete_admin:
+            step = await _process_delete_action(session, action, user_chunk_size=chunk)
         else:
             step = await _process_enforcement_action(
                 session, action, user_chunk_size=chunk, admin_parallelism=para,

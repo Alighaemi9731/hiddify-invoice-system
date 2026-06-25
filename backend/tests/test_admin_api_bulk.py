@@ -112,3 +112,27 @@ def test_bulk_set_users_enabled_posts_native_hiddify_action(monkeypatch):
     assert data["action"] == "disable"
     assert data["rowid"] == ["11", "12"]
     assert captured["init"]["headers"]["Hiddify-API-Key"] == "owner-key"
+
+
+def test_bulk_delete_users_posts_delete_action(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url):
+            return _Response(200, text='<input name="csrf_token" value="tok">')
+        async def post(self, url, data):
+            captured["post"] = (url, data)
+            return _Response(302)
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    asyncio.run(admin_api.AdminApiClient().bulk_delete_users(_panel(), [21, 22]))
+    url, data = captured["post"]
+    assert url == "https://panel.example/proxy/admin/user/action/"
+    assert data["action"] == "delete"
+    assert data["rowid"] == ["21", "22"]

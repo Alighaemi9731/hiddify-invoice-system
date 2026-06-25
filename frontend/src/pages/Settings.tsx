@@ -66,7 +66,7 @@ const SECTIONS: Section[] = [
       {
         title: "کانال اطلاع‌رسانی",
         fields: [
-          { key: "announcement_channel_id", label: "شناسه کانال", help: "با فوروارد یک پیام از کانال خودکار پر می‌شود.", dir: "ltr" },
+          { key: "announcement_channel_id", label: "شناسه کانال", help: "با فوروارد یک پیام از کانال خودکار پر می‌شود — یا همین‌جا مستقیم ویرایش کنید؛ تغییر بلافاصله اعمال می‌شود.", dir: "ltr" },
           { key: "channel_membership_required", label: "الزام عضویت در کانال", help: "اگر روشن باشد، کاربر تا عضو کانال نشود نمی‌تواند از ربات استفاده کند." },
           { key: "announcement_channel_link", label: "لینک ثابت کانال", help: "اختیاری — برای کانال خصوصی لازم نیست؛ ربات خودش لینک عضویت یک‌بارمصرف می‌سازد.", advanced: true, dir: "ltr" },
         ],
@@ -74,7 +74,7 @@ const SECTIONS: Section[] = [
       {
         title: "گروه (اختیاری)",
         fields: [
-          { key: "announcement_group_id", label: "شناسه گروه", help: "اگر می‌خواهید علاوه بر کانال، عضویت در یک گروه هم اجباری باشد.", dir: "ltr" },
+          { key: "announcement_group_id", label: "شناسه گروه", help: "اگر می‌خواهید علاوه بر کانال، عضویت در یک گروه هم اجباری باشد. با فوروارد پیام از گروه پر می‌شود یا همین‌جا مستقیم ویرایش کنید؛ تغییر بلافاصله اعمال می‌شود.", dir: "ltr" },
           { key: "group_membership_required", label: "الزام عضویت در گروه", help: "اگر هم این و هم کانال روشن باشد، کاربر باید عضو هر دو باشد." },
           { key: "announcement_group_link", label: "لینک ثابت گروه", help: "اختیاری — برای گروه خصوصی لازم نیست.", advanced: true, dir: "ltr" },
         ],
@@ -255,7 +255,7 @@ const SECTIONS: Section[] = [
       {
         fields: [
           { key: "owner_name", label: "نام مالک" },
-          { key: "owner_telegram", label: "آیدی تلگرام مالک", help: "مثلاً @username — برای نمایش/پشتیبانی.", dir: "ltr" },
+          { key: "owner_telegram", label: "آیدی تلگرام مالک", help: "مالکِ ربات را تعیین می‌کند. آیدیِ عددی (مثلاً 123456789) بلافاصله اعمال می‌شود؛ @username در نخستین /start همان حساب اعمال می‌شود.", dir: "ltr" },
         ],
       },
     ],

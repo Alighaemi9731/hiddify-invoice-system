@@ -243,26 +243,33 @@ def _iso(value) -> str:
 async def _is_owner_user(session, user) -> bool:
     """Owner identification, hardened against @username takeover.
 
-    Once the owner's numeric chat id has been pinned (`owner_chat_id`), we trust ONLY that id
-    — a Telegram @username can be reassigned to someone else, so matching by username after
-    pinning would let an attacker who grabs the owner's old handle impersonate them. Username
-    (or a configured numeric id) is used ONLY for the first-ever match, which then pins the id."""
+    `owner_telegram` is the owner identity the admin sets in Settings; `owner_chat_id` is the
+    pinned numeric chat the bot reaches for menus/alerts. Rules:
+      * If `owner_telegram` is a NUMERIC id, it is AUTHORITATIVE — the owner is exactly that id, and
+        we (re-)pin `owner_chat_id` to it. So editing it in Settings to a new id takes effect on the
+        new owner's next interaction, and a stale pin never wins (fixes "changed the id but the bot
+        still knows the old owner").
+      * Otherwise (an @username, or unset): once `owner_chat_id` is pinned we trust ONLY that id (a
+        reassigned @username can't impersonate the owner); before pinning, a first match by the
+        configured @username pins the id."""
     owner_setting = str(await settings_service.get(session, "owner_telegram", "") or "").strip()
     owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
 
+    # Explicit numeric owner id is the source of truth (Settings change applies immediately).
+    if owner_setting.isdigit():
+        is_owner = str(user.id) == owner_setting
+        if is_owner and owner_chat != owner_setting:
+            await settings_service.set_value(session, "owner_chat_id", owner_setting)
+        return is_owner
+
     if owner_chat:
-        # Pinned: numeric id is the sole source of truth.
+        # Pinned (username-based identity): numeric id is the sole source of truth.
         return str(user.id) == owner_chat
 
-    # Not yet pinned — allow a first-time match by the configured numeric id or @username.
+    # Not yet pinned — allow a first-time match by the configured @username.
     uname = (user.username or "").lstrip("@").lower()
     owner_name = owner_setting.lstrip("@").lower()
-    is_owner = False
-    if owner_setting.isdigit() and str(user.id) == owner_setting:
-        is_owner = True
-    elif owner_name and uname and uname == owner_name:
-        is_owner = True
-
+    is_owner = bool(owner_name and uname and uname == owner_name)
     if is_owner:
         # Pin the owner's chat id so scheduled backups/alerts/logs can reach them, and so all
         # subsequent checks are id-only.
