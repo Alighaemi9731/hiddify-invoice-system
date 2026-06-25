@@ -6,12 +6,13 @@ import {
 import { useTheme } from "@mui/material/styles";
 import BlockIcon from "@mui/icons-material/esm/Block";
 import LockOpenIcon from "@mui/icons-material/esm/LockOpen";
+import PersonAddDisabledIcon from "@mui/icons-material/esm/PersonAddDisabled";
 import SpeedIcon from "@mui/icons-material/esm/Speed";
 import AddCircleOutlineIcon from "@mui/icons-material/esm/AddCircleOutline";
 import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  portalSubs, PortalSub, portalSetSubCap, portalSuspendSub, portalRestoreSub,
+  portalSubs, PortalSub, portalSetSubCap, portalSuspendSub, portalFreezeSub, portalRestoreSub,
   portalBumpSub, portalSubCanAddAdmin, openPortalSubPdf, portalSubSalesByDay,
 } from "../portalClient";
 import { DataState } from "../../components/DataState";
@@ -127,13 +128,16 @@ export default function PortalSubs() {
     finally { setBusy(false); }
   };
 
-  const toggleEnforce = async (sub: PortalSub) => {
-    const enforced = sub.enforcement_state === "enforced";
+  const runSubAction = async (
+    sub: PortalSub,
+    fn: (id: number) => Promise<{ status: string; error: string | null }>,
+    okMsg: string,
+  ) => {
     setBusy(true);
     try {
-      const r = enforced ? await portalRestoreSub(sub.id) : await portalSuspendSub(sub.id);
+      const r = await fn(sub.id);
       if (r.error) show(`عملیات با خطا: ${r.error}`, "error");
-      else show(enforced ? `آزادسازی «${sub.name}» در صف قرار گرفت` : `مسدودسازی «${sub.name}» در صف قرار گرفت`, "success");
+      else show(okMsg, "success");
       refresh();
     } catch (e) { show(errMsg(e), "error"); }
     finally { setBusy(false); }
@@ -163,6 +167,7 @@ export default function PortalSubs() {
           <Grid container spacing={2}>
             {data.map((sub) => {
               const enforced = sub.enforcement_state === "enforced";
+              const frozen = sub.enforcement_state === "frozen";
               return (
                 <Grid item xs={12} sm={6} lg={4} key={sub.id}>
                   <Card sx={{ height: "100%" }}>
@@ -176,9 +181,9 @@ export default function PortalSubs() {
                         </Box>
                         <Chip
                           size="small"
-                          label={enforced ? "مسدود" : "فعال"}
-                          color={enforced ? "error" : "success"}
-                          variant={enforced ? "filled" : "outlined"}
+                          label={enforced ? "مسدود" : frozen ? "محدود" : "فعال"}
+                          color={enforced ? "error" : frozen ? "warning" : "success"}
+                          variant={enforced || frozen ? "filled" : "outlined"}
                         />
                       </Stack>
 
@@ -216,12 +221,34 @@ export default function PortalSubs() {
                           onClick={() => openBump(sub)} disabled={busy}>افزایش ظرفیت</Button>
                         <Button size="small" variant="outlined" startIcon={<PictureAsPdfIcon sx={{ fontSize: 17 }} />}
                           onClick={(e) => setPdfMenu({ el: e.currentTarget, sub })} disabled={busy}>PDF</Button>
-                        <Button size="small" variant="outlined"
-                          color={enforced ? "success" : "error"}
-                          startIcon={enforced ? <LockOpenIcon sx={{ fontSize: 17 }} /> : <BlockIcon sx={{ fontSize: 17 }} />}
-                          onClick={() => toggleEnforce(sub)} disabled={busy}>
-                          {enforced ? "آزادسازی" : "مسدودسازی"}
-                        </Button>
+                        {enforced ? (
+                          <Button size="small" variant="outlined" color="success"
+                            startIcon={<LockOpenIcon sx={{ fontSize: 17 }} />}
+                            onClick={() => runSubAction(sub, portalRestoreSub, `آزادسازی «${sub.name}» در صف قرار گرفت`)}
+                            disabled={busy}>آزادسازی</Button>
+                        ) : frozen ? (
+                          <>
+                            <Button size="small" variant="outlined" color="success"
+                              startIcon={<LockOpenIcon sx={{ fontSize: 17 }} />}
+                              onClick={() => runSubAction(sub, portalRestoreSub, `رفع توقف ساخت کاربر «${sub.name}» در صف قرار گرفت`)}
+                              disabled={busy}>رفع توقف ساخت کاربر</Button>
+                            <Button size="small" variant="outlined" color="error"
+                              startIcon={<BlockIcon sx={{ fontSize: 17 }} />}
+                              onClick={() => runSubAction(sub, portalSuspendSub, `مسدودسازی «${sub.name}» در صف قرار گرفت`)}
+                              disabled={busy}>مسدودسازی کامل</Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button size="small" variant="outlined" color="warning"
+                              startIcon={<PersonAddDisabledIcon sx={{ fontSize: 17 }} />}
+                              onClick={() => runSubAction(sub, portalFreezeSub, `توقف ساخت کاربر برای «${sub.name}» در صف قرار گرفت`)}
+                              disabled={busy}>توقف ساخت کاربر</Button>
+                            <Button size="small" variant="outlined" color="error"
+                              startIcon={<BlockIcon sx={{ fontSize: 17 }} />}
+                              onClick={() => runSubAction(sub, portalSuspendSub, `مسدودسازی «${sub.name}» در صف قرار گرفت`)}
+                              disabled={busy}>مسدودسازی</Button>
+                          </>
+                        )}
                       </Stack>
                     </CardContent>
                   </Card>

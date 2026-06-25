@@ -795,6 +795,40 @@ async def cb_sub_enforce(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@router.callback_query(F.data.startswith("subf:"))
+async def cb_sub_freeze(cb: CallbackQuery) -> None:
+    """Limits-only freeze: block new-user creation (max_users→0) WITHOUT disabling existing users."""
+    sub_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sub = await s.get(Reseller, sub_id)
+        if not sub or not await _owns_sub(s, cb.from_user.id, sub):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await cb.message.answer(f"⏳ توقف ساخت کاربر برای «{sub.name}» در صف قرار می‌گیرد...")
+        from app.services import enforcement
+
+        # Reseller-initiated manual action → always a live write.
+        action = await enforcement.freeze_reseller(s, sub)
+        if action is None:
+            await cb.message.answer("این زیرمجموعه از قبل محدود یا مسدود است.")
+        elif action.status in (
+            EnforcementActionStatus.planned,
+            EnforcementActionStatus.partial,
+        ):
+            await cb.message.answer(
+                f"⏳ «{sub.name}»: توقف ساخت کاربر در صف ثبت شد. کاربرانِ فعلیِ او قطع نمی‌شوند؛ "
+                "فقط ساخت کاربرِ جدید و افزایش ظرفیت متوقف می‌شود."
+            )
+        elif action.status == EnforcementActionStatus.done:
+            await cb.message.answer(f"🚫 «{sub.name}» از قبل محدود است.")
+        else:
+            await cb.message.answer(
+                "❌ عملیات ناموفق بود. مطمئن شوید کلید API پنل در تنظیمات ثبت شده است.\n"
+                f"{action.error or ''}"
+            )
+    await cb.answer()
+
+
 @router.callback_query(F.data.startswith("subr:"))
 async def cb_sub_restore(cb: CallbackQuery) -> None:
     sub_id = int(cb.data.split(":")[1])
@@ -803,23 +837,29 @@ async def cb_sub_restore(cb: CallbackQuery) -> None:
         if not sub or not await _owns_sub(s, cb.from_user.id, sub):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        await cb.message.answer(f"⏳ آزادسازی «{sub.name}» در صف قرار می‌گیرد...")
+        # State-aware wording: lifting a freeze vs lifting a full suspension.
+        verb = (
+            "رفع توقف ساخت کاربر"
+            if sub.enforcement_state == EnforcementState.frozen
+            else "آزادسازی"
+        )
+        await cb.message.answer(f"⏳ {verb} «{sub.name}» در صف قرار می‌گیرد...")
         from app.services import enforcement
 
         action = await enforcement.queue_restore(s, sub, reason="bot")
         if action is None:
-            await cb.message.answer("این زیرمجموعه مسدود نیست.")
+            await cb.message.answer("این زیرمجموعه محدود یا مسدود نیست.")
         elif action.status in (
             EnforcementActionStatus.planned,
             EnforcementActionStatus.partial,
         ):
             await cb.message.answer(
-                f"⏳ آزادسازی «{sub.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
+                f"⏳ {verb} «{sub.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
             )
         elif action.status == EnforcementActionStatus.done:
             await cb.message.answer(f"✅ «{sub.name}» از قبل آزاد شده است.")
         else:
-            await cb.message.answer(f"❌ آزادسازی ناموفق بود.\n{action.error or ''}")
+            await cb.message.answer(f"❌ {verb} ناموفق بود.\n{action.error or ''}")
     await cb.answer()
 
 
@@ -2341,10 +2381,15 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
     from app.services import reseller_report
 
     rep = await reseller_report.node_report(session, sub, months=3)
-    enforced = sub.enforcement_state == EnforcementState.enforced
+    state = sub.enforcement_state.value
+    status_txt = (
+        "⛔️ مسدود" if state == "enforced"
+        else "🚫 ساخت کاربر متوقف (کاربرانِ فعلی آنلاین)" if state == "frozen"
+        else "🟢 فعال"
+    )
     lines = [
         f"👤 زیرمجموعه: {rep['name']}",
-        f"وضعیت: {'⛔️ مسدود' if enforced else '🟢 فعال'}",
+        f"وضعیت: {status_txt}",
         f"تعداد کاربران: {rep['total_users']} (فعال: {rep['enabled_users']})",
     ]
     if rep["sub_count"]:
@@ -2377,7 +2422,7 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
     months = [m["label"] for m in rep["months"]]
     await answer(
         "\n".join(lines),
-        reply_markup=keyboards.sub_detail_keyboard(sub.id, enforced, months, has_cap=cap > 0),
+        reply_markup=keyboards.sub_detail_keyboard(sub.id, state, months, has_cap=cap > 0),
     )
 
 

@@ -24,7 +24,9 @@ TypeScript checking must pass independently.
 
 ## 3. Version and commit
 
-Update these files to the same version:
+**Choose the next version number per `docs/VERSIONING.md`** (MAJOR = breaking / manual-upgrade,
+MINOR = new backward-compatible feature or capability, PATCH = fix / perf / refactor / dep bump / docs).
+Then update these files to the same version:
 
 - `VERSION`
 - `backend/app/__init__.py`

@@ -554,6 +554,25 @@ async def sub_suspend(
     return {"status": action.status.value, "error": action.error}
 
 
+@router.post("/subs/{sub_id}/freeze")
+async def sub_freeze(
+    sub_id: int,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Queue a limits-only freeze: block new-user creation (max_users→0) WITHOUT disabling existing
+    users. Reversible via /restore."""
+    sub = await session.get(Reseller, sub_id)
+    if sub is None or not await _owns_sub(session, ctx, sub):
+        raise HTTPException(404, "Sub-reseller not found")
+    from app.services import enforcement
+
+    action = await enforcement.freeze_reseller(session, sub)
+    if action is None:
+        return {"status": "not_applicable", "error": None}
+    return {"status": action.status.value, "error": action.error}
+
+
 @router.post("/subs/{sub_id}/restore")
 async def sub_restore(
     sub_id: int,

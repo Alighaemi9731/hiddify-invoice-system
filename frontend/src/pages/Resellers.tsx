@@ -164,11 +164,9 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
 }
 
 function EnforcementStatus({ state }: { state: string }) {
-  return state === "enforced" ? (
-    <StatusPill color="#f43f5e">مسدود</StatusPill>
-  ) : (
-    <StatusPill color="#10b981">فعال</StatusPill>
-  );
+  if (state === "enforced") return <StatusPill color="#f43f5e">مسدود</StatusPill>;
+  if (state === "frozen") return <StatusPill color="#f59e0b">محدود</StatusPill>;
+  return <StatusPill color="#10b981">فعال</StatusPill>;
 }
 
 export default function Resellers() {

@@ -53,8 +53,9 @@ def sub_list_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
 
 
 def sub_detail_keyboard(
-    sub_id: int, enforced: bool, months: list[str] | None = None, has_cap: bool = False
+    sub_id: int, state: str, months: list[str] | None = None, has_cap: bool = False
 ) -> InlineKeyboardMarkup:
+    """`state` is the sub's enforcement_state value: 'active' | 'frozen' | 'enforced'."""
     rows: list[list[InlineKeyboardButton]] = []
     # Per-month invoice PDFs the reseller can hand to this sub-reseller.
     for label in (months or [])[:3]:
@@ -64,9 +65,14 @@ def sub_detail_keyboard(
         text=("✏️ تغییر سقف حجم ماهانه" if has_cap else "🎯 تعیین سقف حجم ماهانه"),
         callback_data=f"subcap:{sub_id}",
     )])
-    if enforced:
+    if state == "enforced":
         rows.append([InlineKeyboardButton(text="✅ آزادسازی", callback_data=f"subr:{sub_id}")])
-    else:
+    elif state == "frozen":
+        # New-user creation is blocked; offer to lift it, or escalate to a full suspend.
+        rows.append([InlineKeyboardButton(text="✅ رفع توقف ساخت کاربر", callback_data=f"subr:{sub_id}")])
+        rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی کامل", callback_data=f"subx:{sub_id}")])
+    else:  # active
+        rows.append([InlineKeyboardButton(text="🚫 توقف ساخت کاربر", callback_data=f"subf:{sub_id}")])
         rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی", callback_data=f"subx:{sub_id}")])
     rows.append([InlineKeyboardButton(text="« بازگشت", callback_data="menu:subs")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

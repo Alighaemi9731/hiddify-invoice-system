@@ -189,9 +189,9 @@ def test_active_enum_contract_has_no_unimplemented_branches():
     assert {item.value for item in DeliveryStatus} == {
         "sent", "failed", "blocked", "unmatched",
     }
-    assert {item.value for item in EnforcementState} == {"active", "enforced"}
+    assert {item.value for item in EnforcementState} == {"active", "frozen", "enforced"}
     assert {item.value for item in EnforcementActionType} == {
-        "disable_users", "restore", "delete_admin",
+        "disable_users", "restore", "delete_admin", "freeze",
     }
     assert {item.value for item in EnforcementActionStatus} == {
         "planned", "running", "partial", "dry_run", "done", "failed", "reverted",

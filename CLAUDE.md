@@ -86,7 +86,7 @@ For each reseller **and its descendant sub-resellers** (bundle via `parent_admin
 
 ## Dunning & enforcement (real Admin-API actions; auto-suspend OFF by default)
 
-Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D+4** reminder, **D+5** hard warning + **enforcement** — via Hiddify's management endpoints: disable the reseller's + sub-resellers' end-users and set the reseller's `max_active_users`/`max_users` to 0 (snapshot prior values first). Hiddify's public v2 API only supports single-user PATCH and invokes `quick_apply_users` for every call, so user enable/disable uses Hiddify's own authenticated Flask-Admin bulk action (`/admin/user/action/`) instead: one SQL update, one server-side core update loop, and one `quick_apply_users` per bounded batch. The day-count anchors on `sent_at`, UNLESS a **payment deadline** (`deferred_until`) is set on the invoice — then the whole cycle **restarts from the deadline date** and queues restore for an already-suspended reseller. `enforcement_enabled` defaults **False** (dry-run logs intended actions). Live suspension and restore are both durable queue actions; API and bot requests only plan work. The `enforcement_queue` scheduler job processes actions in bounded, resumable chunks (`enforcement_action_batch_limit`, `enforcement_user_chunk_size`, `enforcement_admin_chunk_size`, `enforcement_worker_interval_minutes`) and records JSON progress in `enforcement_actions.snapshot`. Restore is limits-first/top-down, then native bulk user Enable. A payment/defer cancels any partial suspension and restores only work already applied; every invoice-linked suspension re-checks current debt before its next write.
+Per unpaid invoice (timings + texts editable in settings): **D+2** reminder, **D+4** reminder, **D+5** hard warning + **enforcement** — via Hiddify's management endpoints: disable the reseller's + sub-resellers' end-users and set the reseller's `max_active_users`/`max_users` to 0 (snapshot prior values first). Hiddify's public v2 API only supports single-user PATCH and invokes `quick_apply_users` for every call, so user enable/disable uses Hiddify's own authenticated Flask-Admin bulk action (`/admin/user/action/`) instead: one SQL update, one server-side core update loop, and one `quick_apply_users` per bounded batch. The day-count anchors on `sent_at`, UNLESS a **payment deadline** (`deferred_until`) is set on the invoice — then the whole cycle **restarts from the deadline date** and queues restore for an already-suspended reseller. `enforcement_enabled` defaults **False** (dry-run logs intended actions). Live suspension and restore are both durable queue actions; API and bot requests only plan work. The `enforcement_queue` scheduler job processes actions in bounded, resumable chunks (`enforcement_action_batch_limit`, `enforcement_user_chunk_size`, `enforcement_admin_chunk_size`, `enforcement_worker_interval_minutes`) and records JSON progress in `enforcement_actions.snapshot`. Restore is limits-first/top-down, then native bulk user Enable. A payment/defer cancels any partial suspension and restores only work already applied; every invoice-linked suspension re-checks current debt before its next write. A reseller can also **«freeze»** a sub-reseller (bot + portal) — a limits-only action (`EnforcementActionType.freeze`, `EnforcementState.frozen`) that zeros the sub-subtree's `max_users` (no new users/expansion) but **keeps `max_active_users`** so existing users stay online; it runs the admin-limits phase only (`_run_admin_limits(freeze=True)`), unfreeze reuses `queue_restore`, and escalating frozen→full-suspend recovers the real limits via `max_users_snapshot`.
 
 ## Security conventions
 
@@ -123,6 +123,17 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M67** Sub-reseller limits-only «freeze» + versioning policy (`v1.38.0`, first MINOR bump).
+  A reseller can now **«🚫 توقف ساخت کاربر»** a sub from BOTH the bot («مدیریت زیرمجموعه‌ها») and the
+  reseller portal (زیرمجموعه‌ها): zeros the sub-subtree's `max_users` (no new users / no expansion) while
+  **keeping `max_active_users`** so existing users stay online — alongside the existing full «مسدودسازی»
+  (which also disables users). Built on the same enforcement queue: new `freeze` action runs only the
+  admin-limits phase with `freeze=True`; unfreeze == `queue_restore` (re-applies the captured `max_users`,
+  empty user-set → no user writes); escalation frozen→suspend recovers the real pre-freeze limits via
+  `max_users_snapshot`. New `EnforcementState.frozen` + `EnforcementActionType.freeze` (VARCHAR → no
+  migration). Verified Part-1: the manual sub suspend/restore already used the optimized queued worker.
+  Added `docs/VERSIONING.md` (MAJOR/MINOR/PATCH rule, referenced from `RELEASE_PROCESS.md`) — a new feature
+  is now a MINOR bump, ending the long `1.37.x` run. Tests in `tests/test_freeze.py`.
 - [x] **M66** Queued and resumable restore (`v1.37.59`).
   Moved payment, defer, panel, and bot restore off request paths into the durable queue.
   Restore applies exact admin limits top-down in bounded chunks, then enables users through

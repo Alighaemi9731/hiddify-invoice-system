@@ -234,6 +234,8 @@ export const portalSetSubCap = (subId: number, gb: number) =>
   portalApi.post(`/api/portal/subs/${subId}/cap`, { gb }).then((r) => r.data as { ok: boolean; gb_cap: number | null });
 export const portalSuspendSub = (subId: number) =>
   portalApi.post(`/api/portal/subs/${subId}/suspend`).then((r) => r.data as { status: string; error: string | null });
+export const portalFreezeSub = (subId: number) =>
+  portalApi.post(`/api/portal/subs/${subId}/freeze`).then((r) => r.data as { status: string; error: string | null });
 export const portalRestoreSub = (subId: number) =>
   portalApi.post(`/api/portal/subs/${subId}/restore`).then((r) => r.data as { status: string; error: string | null });
 

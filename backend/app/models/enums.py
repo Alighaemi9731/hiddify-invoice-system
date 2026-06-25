@@ -23,6 +23,7 @@ class SyncStatus(str, enum.Enum):
 
 class EnforcementState(str, enum.Enum):
     active = "active"        # normal
+    frozen = "frozen"        # max_users zeroed (no new users) — existing users stay ONLINE
     enforced = "enforced"    # users disabled + limits zeroed
 
 
@@ -69,6 +70,7 @@ class EnforcementActionType(str, enum.Enum):
     disable_users = "disable_users"
     restore = "restore"
     delete_admin = "delete_admin"  # cascade-delete a reseller + subtree (users, sub-admins) from panel
+    freeze = "freeze"  # zero a reseller subtree's max_users (block new users) WITHOUT disabling users
 
 
 class EnforcementActionStatus(str, enum.Enum):

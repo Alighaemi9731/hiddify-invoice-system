@@ -316,10 +316,13 @@ async def _run_admin_limits(
     captured_limits: dict[str, dict],
     is_suspend: bool,
     parallelism: int,
+    freeze: bool = False,
 ) -> tuple[int, bool]:
     """Patch all remaining admin limits in parallel (bounded by parallelism).
 
-    For suspend: captures real current limits then zeros them.
+    For suspend: captures real current limits then zeros them (both, unless `freeze`).
+    For freeze (a kind of suspend): zeros ONLY max_users and keeps max_active_users, so existing
+    users stay online while new-user creation is blocked.
     For restore: reads saved limits from snapshot then restores them.
     Returns (admins_patched, had_error). Commits progress on any error so the next
     tick retries only the failed admins.
@@ -351,7 +354,8 @@ async def _run_admin_limits(
                     return admin_uuid, "current admin limits could not be captured", None
                 lim: dict = {"max_users": real_mu, "max_active_users": real_mau}
                 try:
-                    await _set_admin_limits(client, panel, admin, 0, 0)
+                    # Freeze keeps max_active_users (existing users stay online); full suspend zeros both.
+                    await _set_admin_limits(client, panel, admin, 0, real_mau if freeze else 0)
                     return admin_uuid, None, lim
                 except Exception as exc:  # noqa: BLE001
                     return admin_uuid, str(exc)[:300], None
@@ -555,7 +559,11 @@ async def queue_restore(
             select(EnforcementAction)
             .where(
                 EnforcementAction.reseller_id == reseller.id,
-                EnforcementAction.action == EnforcementActionType.disable_users,
+                # A restore reverts the latest live suspend OR freeze (unfreeze == restore: it
+                # re-applies the captured max_users and re-enables the — for freeze, empty — user set).
+                EnforcementAction.action.in_(
+                    [EnforcementActionType.disable_users, EnforcementActionType.freeze]
+                ),
                 EnforcementAction.dry_run.is_(False),
                 EnforcementAction.status.in_(
                     [
@@ -638,9 +646,61 @@ async def queue_restore(
         status=EnforcementActionStatus.planned,
     )
     session.add(restore)
-    reseller.enforcement_state = EnforcementState.enforced
+    # Keep a frozen reseller `frozen` while the unfreeze is queued (restore completion flips it to
+    # active); a suspended reseller stays `enforced` as before.
+    if reseller.enforcement_state != EnforcementState.frozen:
+        reseller.enforcement_state = EnforcementState.enforced
     await session.commit()
     return restore
+
+
+async def queue_freeze(session: AsyncSession, reseller: Reseller) -> EnforcementAction | None:
+    """Queue a limits-only «freeze»: zero the reseller subtree's `max_users` so they can't create new
+    users / expand, WITHOUT disabling existing users (they stay online). Reversible via `queue_restore`
+    (unfreeze == restore). Always live — an explicit, parent-initiated action. Returns None when the
+    reseller is not `active` (already frozen/enforced → the UI hides the button). Idempotent: returns an
+    in-flight freeze action if one is already queued for this reseller."""
+    if getattr(reseller, "is_owner", False):
+        raise ValueError("cannot freeze the panel owner")
+    if reseller.enforcement_state != EnforcementState.active:
+        return None
+
+    existing = (
+        await session.execute(
+            select(EnforcementAction)
+            .where(
+                EnforcementAction.reseller_id == reseller.id,
+                EnforcementAction.action == EnforcementActionType.freeze,
+                EnforcementAction.status.in_(
+                    [EnforcementActionStatus.planned, EnforcementActionStatus.partial]
+                ),
+            )
+            .order_by(EnforcementAction.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    descendants = await _bundle(session, reseller)
+    snapshot: dict = {
+        "limits": {},
+        "admins": [d.admin_uuid for d in descendants],
+        "users": {},
+    }
+    _progress(snapshot)["phase"] = "limits"
+    action = EnforcementAction(
+        reseller_id=reseller.id,
+        action=EnforcementActionType.freeze,
+        dry_run=False,
+        affected_count=0,
+        snapshot=snapshot,
+        status=EnforcementActionStatus.planned,
+    )
+    session.add(action)
+    await session.commit()
+    log.info("queued freeze for reseller %s (%d admins in subtree)", reseller.name, len(descendants))
+    return action
 
 
 async def _notify_owner_failed(session: AsyncSession, action: EnforcementAction) -> None:
@@ -953,6 +1013,82 @@ async def _process_restore_action(
     return result
 
 
+async def _process_freeze_action(
+    session: AsyncSession, action: EnforcementAction, *, admin_parallelism: int
+) -> dict:
+    """Process one queued «freeze» (limits-only) action: zero the subtree's max_users (keep
+    max_active_users → existing users stay ONLINE), then mark the reseller `frozen`. No user phase.
+    Resumable: admin progress is committed so a restart resumes with only the unfinished admins."""
+    if action.dry_run or action.action != EnforcementActionType.freeze:
+        return {"skipped": 1}
+    if action.status == EnforcementActionStatus.done:
+        return {"done": 1}
+
+    reseller = await session.get(Reseller, action.reseller_id)
+    if reseller is None:
+        action.status = EnforcementActionStatus.failed
+        action.error = "reseller not found"
+        await session.commit()
+        return {"failed": 1}
+    if reseller.enforcement_state == EnforcementState.enforced:
+        # A full suspension already covers (and supersedes) a freeze — nothing to do.
+        action.status = EnforcementActionStatus.done
+        await session.commit()
+        return {"done": 1}
+
+    panel = await session.get(Panel, reseller.panel_id)
+    if panel is None:
+        action.status = EnforcementActionStatus.failed
+        action.error = "panel not found"
+        await session.commit()
+        return {"failed": 1}
+
+    snapshot = action.snapshot or {}
+    progress = _progress(snapshot)
+    client = AdminApiClient()
+    descendants = await _bundle(session, reseller)
+    by_uuid = {d.admin_uuid: d for d in descendants}
+    # Bottom-up (leaf → root) so a child loses new-user capacity before its parent.
+    admin_order = list(reversed(snapshot.get("admins") or [d.admin_uuid for d in descendants]))
+    done_admins: set[str] = set(progress.get("admins_done") or [])
+    failed_admins: dict[str, str] = dict(progress.get("admins_failed") or {})
+    admin_attempts: dict[str, int] = dict(progress.get("admin_attempts") or {})
+    captured_limits: dict[str, dict] = dict(progress.get("captured_limits") or {})
+
+    action.status = EnforcementActionStatus.partial
+    flag_modified(action, "snapshot")
+    await session.commit()
+
+    patched_a, had_error = await _run_admin_limits(
+        session=session, action=action, client=client, panel=panel,
+        snapshot=snapshot, progress=progress,
+        by_uuid=by_uuid, admin_order=admin_order,
+        done_admins=done_admins, failed_admins=failed_admins,
+        admin_attempts=admin_attempts, captured_limits=captured_limits,
+        is_suspend=True, freeze=True, parallelism=admin_parallelism,
+    )
+    result = _empty_queue_result()
+    result["patched_admins"] = patched_a
+    if had_error:
+        result["partial"] = int(action.status == EnforcementActionStatus.partial)
+        result["failed"] = int(action.status == EnforcementActionStatus.failed)
+        return result
+
+    reseller.enforcement_state = EnforcementState.frozen
+    action.status = EnforcementActionStatus.done
+    action.error = None
+    progress["phase"] = "done"
+    action.affected_count = len(done_admins)
+    action.snapshot = snapshot
+    flag_modified(action, "snapshot")
+    await session.commit()
+    log.info(
+        "Freeze done for reseller %s: %d admins capped to max_users=0", reseller.name, len(done_admins)
+    )
+    result["done"] = 1
+    return result
+
+
 async def queue_admin_deletion(session: AsyncSession, reseller: Reseller) -> EnforcementAction:
     """Queue a CASCADE deletion of a reseller (admin) + its whole sub-tree from the panel and our
     DB. Always live (dry_run=False) — it's an explicit, confirmation-gated owner action, not the
@@ -1177,6 +1313,7 @@ _PENDING_ACTION_FILTER = (
             EnforcementActionType.disable_users,
             EnforcementActionType.restore,
             EnforcementActionType.delete_admin,
+            EnforcementActionType.freeze,
         ]
     ),
     EnforcementAction.dry_run.is_(False),
@@ -1226,6 +1363,8 @@ async def _process_panel_queue(
             )
         elif action.action == EnforcementActionType.delete_admin:
             step = await _process_delete_action(session, action, user_chunk_size=chunk)
+        elif action.action == EnforcementActionType.freeze:
+            step = await _process_freeze_action(session, action, admin_parallelism=para)
         else:
             step = await _process_enforcement_action(
                 session, action, user_chunk_size=chunk, admin_parallelism=para,
@@ -1328,3 +1467,11 @@ async def enforce_reseller(
     return await queue_enforcement(
         session, reseller, invoice_id=invoice_id, dry_run=dry_run
     )
+
+
+async def freeze_reseller(
+    session: AsyncSession, reseller: Reseller
+) -> EnforcementAction | None:
+    """Queue a limits-only freeze (block new-user creation; existing users stay online). Returns None
+    if the reseller isn't `active` (already frozen/enforced)."""
+    return await queue_freeze(session, reseller)

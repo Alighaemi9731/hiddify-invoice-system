@@ -8,6 +8,38 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.38.0 - 2026-06-25
+
+### Added — Sub-reseller «🚫 توقف ساخت کاربر» (limits-only freeze)
+
+- A reseller can now **freeze** a sub-reseller from the bot («مدیریت زیرمجموعه‌ها») AND the reseller web
+  portal (زیرمجموعه‌ها): it zeros the sub-subtree's **`max_users`** (they can't create new users or expand)
+  **without disabling existing users** — current customers stay online. This sits alongside the full
+  **مسدودسازی** (which also disables users). Reversible with «رفع توقف ساخت کاربر» (== restore). A frozen
+  sub can be escalated to a full suspend, and either is restored back to active.
+- Built on the proven enforcement **queue** (the same per-panel-parallel, per-target, resumable worker as
+  suspend/restore): a new `freeze` action runs only the admin-limits phase with `max_active_users` **kept**;
+  unfreeze reuses the restore path; escalation recovers the real pre-freeze limits via `max_users_snapshot`.
+  New `EnforcementState.frozen` + `EnforcementActionType.freeze` are VARCHAR enum values, so there is **no
+  database migration**. The GB-cap-reached alert to the parent now offers freeze as an option. Regression
+  tests in `tests/test_freeze.py`.
+
+### Verified
+
+- The bot/portal sub-reseller suspend & restore already route through the optimized queued enforcement
+  (`enforce_reseller` / `queue_restore` → `process_enforcement_queue`, per-panel-parallel + per-target id
+  resolution). No legacy synchronous suspend path remained — no change needed there.
+
+### Changed — versioning policy & repository hygiene
+
+- Added **`docs/VERSIONING.md`** — the rule for when to bump MAJOR / MINOR / PATCH — referenced from
+  `docs/RELEASE_PROCESS.md` so it's read before every release. This release applies it: a new
+  backward-compatible feature ⇒ **MINOR** ⇒ `1.38.0` (ending the long `1.37.x` patch run).
+- `.github/dependabot.yml`: removed the `/deploy` docker ecosystem (no Dockerfile there → that
+  "Dependabot Updates" run failed), **grouped** updates into one PR per ecosystem, lowered the open-PR
+  limits, and moved to monthly — keeping the repo near a single `main` while still surfacing security
+  updates.
+
 ## 1.37.109 - 2026-06-25
 
 ### Fixed
