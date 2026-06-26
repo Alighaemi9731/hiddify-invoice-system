@@ -7,10 +7,13 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/storefront.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
+from sqlalchemy import BigInteger  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
+from app.bot import keyboards  # noqa: E402
 from app.core import crypto  # noqa: E402
 from app.models import Panel, Reseller, StorefrontBot  # noqa: E402
+from app.models.storefront import StorefrontCustomer  # noqa: E402
 from app.services import storefront, storefront_wallet  # noqa: E402
 
 
@@ -103,6 +106,39 @@ def test_reject_topup_and_manual_adjust_floor(tmp_path):
         assert storefront_wallet.balance(cust) == Decimal(0)
 
     _run(body, tmp_path, "wallet2.db")
+
+
+def test_storefront_telegram_id_columns_are_bigint():
+    # Telegram bot/user ids exceed int32; the columns MUST be BigInteger or Postgres rejects them
+    # ("value out of int32 range"). SQLite has no int32 cap, so only a metadata check catches this.
+    assert isinstance(StorefrontBot.__table__.c.bot_telegram_id.type, BigInteger)
+    assert isinstance(StorefrontCustomer.__table__.c.telegram_id.type, BigInteger)
+
+
+def test_customer_with_id_above_int32_roundtrips(tmp_path):
+    async def body(s):
+        _r, bot, _c = await _seed(s)
+        big = 8_640_657_004  # a real-world Telegram id, > int32 max (2_147_483_647)
+        cust = await storefront.get_or_create_customer(
+            s, bot.id, SimpleNamespace(id=big, first_name="Big", username="b")
+        )
+        await s.commit()
+        assert cust.telegram_id == big
+        again = await storefront.get_or_create_customer(
+            s, bot.id, SimpleNamespace(id=big, first_name="Big", username="b")
+        )
+        assert again.id == cust.id  # same customer, no duplicate
+
+    _run(body, tmp_path, "bigid.db")
+
+
+def test_reseller_menu_keyboard_storefront_button():
+    on = keyboards.reseller_menu_keyboard(show_storefront=True)
+    cbs = [b.callback_data for row in on.inline_keyboard for b in row]
+    assert "menu:storefront" in cbs
+    off = keyboards.reseller_menu_keyboard(show_storefront=False)
+    cbs_off = [b.callback_data for row in off.inline_keyboard for b in row]
+    assert "menu:storefront" not in cbs_off
 
 
 def test_monthly_fee_active_only(tmp_path):

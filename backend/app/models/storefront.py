@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -43,8 +44,8 @@ class StorefrontBot(Base, TimestampMixin):
     bot_token_enc: Mapped[str] = mapped_column(String(512))          # Fernet-encrypted
     bot_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bot_telegram_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, index=True
-    )  # the bot's own Telegram id → tenant resolution
+        BigInteger, nullable=True, index=True
+    )  # the bot's own Telegram id (exceeds int32) → tenant resolution
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(16), default="active")
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
@@ -105,7 +106,7 @@ class StorefrontCustomer(Base, TimestampMixin):
     storefront_bot_id: Mapped[int] = mapped_column(
         ForeignKey("storefront_bots.id", ondelete="CASCADE"), index=True
     )
-    telegram_id: Mapped[int] = mapped_column(Integer, index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)  # exceeds int32
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     wallet_balance_toman: Mapped[float] = mapped_column(Numeric(18, 2), default=0)

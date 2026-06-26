@@ -41,7 +41,9 @@ def cancel_keyboard(label: str = "✖️ انصراف", target: str = "cancel") 
     return InlineKeyboardMarkup(inline_keyboard=[cancel_row(label, target)])
 
 
-def reseller_menu_keyboard(*, show_create_user: bool = False) -> InlineKeyboardMarkup:
+def reseller_menu_keyboard(
+    *, show_create_user: bool = False, show_storefront: bool = False
+) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
          InlineKeyboardButton(text="💳 پرداخت فاکتور", callback_data="menu:pay")],
@@ -50,6 +52,9 @@ def reseller_menu_keyboard(*, show_create_user: bool = False) -> InlineKeyboardM
     # «ساخت کاربر» is offered only to top-level resellers (and only when the feature is enabled).
     if show_create_user:
         rows.append([InlineKeyboardButton(text="➕ ساخت کاربر", callback_data="menu:newuser")])
+    if show_storefront:
+        rows.append([InlineKeyboardButton(
+            text="🏪 راه‌اندازی ربات فروشگاهی", callback_data="menu:storefront")])
     rows += [
         [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
          InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],

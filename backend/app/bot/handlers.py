@@ -12,7 +12,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy import func, or_, select
 
 from app.bot import keyboards, texts
@@ -365,9 +365,12 @@ async def _gate_or_menu(answer, bot: Bot, session, user) -> None:
 
 async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     if await _is_owner_user(session, user):
+        # Menu is inline again; clear any lingering docked reply keyboard (from the brief reply-menu
+        # era), then show the inline menu.
+        await answer("👑 پنل مدیریت", reply_markup=ReplyKeyboardRemove())
         await answer(
-            "👑 پنل مدیریت\nیک گزینه را انتخاب کنید:",
-            reply_markup=keyboards.owner_reply_keyboard(),
+            "یک گزینه را انتخاب کنید:",
+            reply_markup=keyboards.owner_menu_keyboard(),
         )
         return
     # A non-owner must pass the membership gate to see the menu. If `bot` is available we
@@ -386,12 +389,13 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     welcome = await texts.render(session, "tpl_welcome", name=name)
     menu = await texts.render(session, "tpl_menu")
     can_create = await _can_create_users(session, user.id)
+    can_storefront = await _can_setup_storefront(session, user.id)
+    # Clear any lingering docked reply keyboard, then show the inline menu (the docked menu didn't fit).
+    await answer(welcome, reply_markup=ReplyKeyboardRemove())
     await answer(
-        f"{welcome}\n\n{menu}",
-        reply_markup=keyboards.reseller_reply_keyboard(
-            show_create_user=can_create,
-            show_storefront=await _can_setup_storefront(session, user.id),
-        ),
+        menu,
+        reply_markup=keyboards.reseller_menu_keyboard(
+            show_create_user=can_create, show_storefront=can_storefront),
     )
 
 
@@ -1176,6 +1180,13 @@ async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMConte
         items.append((r.id, f"{r.name or '—'} — {panel.key if panel else '?'}"))
     await answer(rtl("🏪 رباتِ فروشگاهی روی کدام پنل؟"),
                  reply_markup=keyboards.storefront_setup_panels_keyboard(items))
+
+
+@router.callback_query(F.data == "menu:storefront")
+async def cb_menu_storefront(cb: CallbackQuery, state: FSMContext) -> None:
+    async with SessionLocal() as s:
+        await _begin_storefront_setup(cb.message.answer, cb.from_user.id, s, state)
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("sfsetup:"))

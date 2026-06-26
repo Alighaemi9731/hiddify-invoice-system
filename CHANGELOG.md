@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.41.2 - 2026-06-27
+
+### Fixed — main bot menu reverted to inline; storefront setup no longer fails on token
+
+- **Main bot menu is inline again.** v1.40.0 had moved the owner/reseller main menu to a persistent
+  docked **reply keyboard**; the buttons didn't fit on smaller screens. The menu now renders as the
+  previous **inline** keyboard (`owner_menu_keyboard` / `reseller_menu_keyboard`), and `_send_menu`
+  first sends a `ReplyKeyboardRemove` so any lingering docked keyboard is cleared. The storefront-setup
+  entry is now an inline button (`🏪 راه‌اندازی ربات فروشگاهی`, `menu:storefront`) shown only to
+  eligible resellers. The reply-keyboard label handlers remain as a harmless compatibility shim.
+- **Storefront setup no longer does nothing when a BotFather token is sent.** The storefront Telegram-id
+  columns (`storefront_bots.bot_telegram_id`, `storefront_customers.telegram_id`) were declared as
+  `Integer` (int32), but Telegram bot/user ids exceed int32 — Postgres raised
+  `DataError: value out of int32 range` in `get_bot_by_telegram_id`, which aborted the token handler with
+  no reply. Both columns are now `BigInteger` (mirroring `Reseller.bot_chat_id`); migration
+  `f2b9c7a1d3e8` widens them (the storefront tables are empty in production, so the type change is
+  trivially safe). SQLite has no int32 cap, which is why tests passed locally — a metadata regression
+  test now asserts both columns are `BigInteger`.
+
 ## 1.41.1 - 2026-06-27
 
 ### Fixed — storefront migration boolean default on Postgres
