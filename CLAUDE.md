@@ -123,6 +123,12 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M69** Persistent docked main menu (`v1.40.0`). The reseller & owner main menus are now a
+  persistent **reply keyboard** (`reseller_reply_keyboard`/`owner_reply_keyboard`, `is_persistent=True`)
+  docked at the bottom, replacing the inline main menu. A high-priority `on_menu_label` handler (registered
+  before all FSM text handlers) routes label taps via `_do_reseller_menu`/`_do_owner_menu` (reusing the
+  existing `_send_*`/`_dispatch_owner` helpers) and clears any in-progress flow first — so a main-menu tap
+  works from anywhere as a universal escape. Sub-screens stay inline. No schema/API change.
 - [x] **M68** Bulletproof bot UX (`v1.39.0`). Made the native Telegram bot mistake-proof: every FSM-entry
   prompt now carries a visible exit (a new global `cancel` callback, or «« بازگشت») and invalid input
   re-shows the prompt WITH that exit — fixing the locked pay-flow trap (malformed TXID kept the user stuck)

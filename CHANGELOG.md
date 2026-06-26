@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.40.0 - 2026-06-26
+
+### Changed — Main menu is now a persistent docked keyboard (reply keyboard)
+
+- The reseller and owner **main menus** are now a **persistent reply keyboard** docked at the bottom of
+  the chat (always visible above the text box), instead of inline buttons attached to one message. The
+  top-level actions are always one tap away and never scroll out of view.
+- Tapping a docked main-menu button is handled by a **high-priority** handler registered before every
+  FSM text handler, so it works **from anywhere** — it clears any in-progress flow and navigates, acting
+  as a universal escape (complements the per-prompt «انصراف» buttons from v1.39.0). Sub-screens (pay,
+  sub-management, etc.) stay inline since they need dynamic buttons.
+- Labels route to the same actions as before via shared dispatchers (`_do_reseller_menu` / `_do_owner_menu`
+  reusing the existing `_send_*` / `_dispatch_owner` helpers), so behavior is unchanged — only the menu's
+  presentation. No schema/API change. Contract test in `tests/test_bot_ux.py`.
+
 ## 1.39.0 - 2026-06-26
 
 ### Changed — Bulletproof bot UX (no dead-ends, no mistypes, always a tappable exit)

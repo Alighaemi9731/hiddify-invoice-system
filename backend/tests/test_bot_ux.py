@@ -83,6 +83,26 @@ class _Msg:
         self.sent.append((text, kw))
 
 
+def test_reply_menu_keyboards_and_label_maps_are_consistent():
+    """The docked main menu (reply keyboard) labels must each map to an action, and «ساخت کاربر»
+    appears only when enabled."""
+    def labels(kb):
+        return [b.text for row in kb.keyboard for b in row]
+
+    with_cu = labels(keyboards.reseller_reply_keyboard(show_create_user=True))
+    without_cu = labels(keyboards.reseller_reply_keyboard(show_create_user=False))
+    assert "➕ ساخت کاربر" in with_cu and "➕ ساخت کاربر" not in without_cu
+    for label in with_cu:
+        assert label in keyboards.RESELLER_LABEL_TO_ACTION
+    for label in labels(keyboards.owner_reply_keyboard()):
+        assert label in keyboards.OWNER_LABEL_TO_ACTION
+    assert keyboards.ALL_MENU_LABELS == (
+        set(keyboards.RESELLER_LABEL_TO_ACTION) | set(keyboards.OWNER_LABEL_TO_ACTION)
+    )
+    kb = keyboards.owner_reply_keyboard()
+    assert kb.is_persistent and kb.resize_keyboard  # always docked at the bottom
+
+
 def test_paystate_cancel_text_exits_cleanly():
     """Typing «cancel»/«لغو» in the locked pay flow clears the state (no DB needed)."""
     async def go():

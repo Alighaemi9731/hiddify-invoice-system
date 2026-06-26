@@ -1,7 +1,12 @@
 """Inline keyboards for the bot."""
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 
 def membership_keyboard(targets: list[dict] | str | None) -> InlineKeyboardMarkup:
@@ -54,6 +59,59 @@ def reseller_menu_keyboard(*, show_create_user: bool = False) -> InlineKeyboardM
          InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── persistent docked main menu (ReplyKeyboardMarkup) ────────────────────────
+# The main menu is a persistent reply keyboard so the top-level actions are ALWAYS visible at the
+# bottom and a tap on any of them works from anywhere (the handler treats it as a universal escape).
+# Sub-screens stay inline. Labels MUST match the maps below exactly so taps route correctly.
+RESELLER_MENU: list[tuple[str, str]] = [
+    ("🧾 فاکتورهای پرداخت‌نشده", "invoices"),
+    ("💳 پرداخت فاکتور", "pay"),
+    ("📄 فاکتور علی‌الحساب (ماه جاری)", "interim"),
+    ("➕ ساخت کاربر", "newuser"),
+    ("🖥 پنل‌های من", "panels"),
+    ("👥 زیرمجموعه‌ها", "subs"),
+    ("🌐 ورود به پنلِ تحتِ وب", "portal"),
+    ("🔗 ثبت لینک پنل من", "register"),
+    ("💬 پیام به پشتیبانی", "support"),
+    ("🗑 حذف لینک‌ها", "removelink"),
+]
+OWNER_MENU: list[tuple[str, str]] = [
+    ("📊 آمار", "stats"),
+    ("🩺 سلامت سامانه", "health"),
+    ("💳 پرداخت‌های در انتظار", "payments"),
+    ("💰 بدهکاران", "debtors"),
+    ("🔎 جستجوی نماینده", "search"),
+    ("📢 پیام همگانی", "broadcast"),
+    ("🔄 همگام‌سازی پنل‌ها", "sync"),
+    ("🗄 پشتیبان‌گیری اکنون", "backup"),
+]
+RESELLER_LABEL_TO_ACTION = dict(RESELLER_MENU)
+OWNER_LABEL_TO_ACTION = dict(OWNER_MENU)
+ALL_MENU_LABELS = set(RESELLER_LABEL_TO_ACTION) | set(OWNER_LABEL_TO_ACTION)
+
+
+def _reply_grid(labels: list[str]) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for label in labels:
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+
+
+def reseller_reply_keyboard(*, show_create_user: bool = False) -> ReplyKeyboardMarkup:
+    labels = [label for label, action in RESELLER_MENU if action != "newuser" or show_create_user]
+    return _reply_grid(labels)
+
+
+def owner_reply_keyboard() -> ReplyKeyboardMarkup:
+    return _reply_grid([label for label, _ in OWNER_MENU])
 
 
 def sub_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:

@@ -361,7 +361,7 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     if await _is_owner_user(session, user):
         await answer(
             "👑 پنل مدیریت\nیک گزینه را انتخاب کنید:",
-            reply_markup=keyboards.owner_menu_keyboard(),
+            reply_markup=keyboards.owner_reply_keyboard(),
         )
         return
     # A non-owner must pass the membership gate to see the menu. If `bot` is available we
@@ -382,7 +382,7 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     can_create = await _can_create_users(session, user.id)
     await answer(
         f"{welcome}\n\n{menu}",
-        reply_markup=keyboards.reseller_menu_keyboard(show_create_user=can_create),
+        reply_markup=keyboards.reseller_reply_keyboard(show_create_user=can_create),
     )
 
 
@@ -606,6 +606,70 @@ async def cb_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     async with SessionLocal() as s:
         await _send_menu(cb.message.answer, s, cb.from_user, bot=bot)
     await cb.answer("لغو شد.")
+
+
+# --------------------------- persistent docked main menu (reply keyboard) ---------------------------
+# Registered BEFORE every FSM text handler so a tap on a docked main-menu button ALWAYS works — it
+# clears any in-progress flow and navigates, acting as a universal escape (the user can never get stuck).
+@router.message(F.text.in_(keyboards.ALL_MENU_LABELS))
+async def on_menu_label(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = (message.text or "").strip()
+    async with SessionLocal() as s:
+        await _track_user(s, message.from_user)
+        is_owner = await _is_owner_user(s, message.from_user)
+        # A non-owner must still be a member; the message middleware already gates this.
+        await state.clear()
+        if is_owner:
+            action = keyboards.OWNER_LABEL_TO_ACTION.get(text)
+            if action:
+                await _do_owner_menu(action, message, state, s)
+                return
+        action = keyboards.RESELLER_LABEL_TO_ACTION.get(text)
+        if action:
+            await _do_reseller_menu(action, message, state, bot, s)
+            return
+        # A label that doesn't apply to this role → just (re)show their own menu.
+        await _send_menu(message.answer, s, message.from_user, bot=bot)
+
+
+async def _do_reseller_menu(action: str, message: Message, state: FSMContext, bot: Bot, s) -> None:  # noqa: ANN001
+    ans, cid = message.answer, message.from_user.id
+    if action == "invoices":
+        await _send_invoices(ans, cid, s)
+    elif action == "pay":
+        await _send_pay(ans, cid, s)
+    elif action == "interim":
+        await _send_self_interim(ans, cid, s, bot=bot)
+    elif action == "panels":
+        await _send_panels(ans, cid, s)
+    elif action == "subs":
+        await _send_sub_panels(ans, cid, s)
+    elif action == "portal":
+        await _send_portal_link(ans, cid, s)
+    elif action == "removelink":
+        await _send_removelink(ans, cid, s)
+    elif action == "support":
+        await state.set_state(SupportState.waiting)
+        await ans("پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.cancel_keyboard())
+    elif action == "register":
+        await ans(
+            "لطفاً لینک پنل خود را ارسال کنید (شامل دامنه و شناسه).",
+            reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+        )
+    elif action == "newuser":
+        await _begin_create_user(ans, cid, s, state)
+
+
+async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) -> None:  # noqa: ANN001
+    ans = message.answer
+    if action == "search":
+        await state.set_state(OwnerSearchState.waiting)
+        await ans(
+            "🔎 نام یا شناسهٔ نماینده را بفرستید.",
+            reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+        )
+    else:
+        await _dispatch_owner(action, ans, s)
 
 
 # --------------------------- support chat (no DB storage) ---------------------------
