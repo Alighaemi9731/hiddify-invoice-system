@@ -9,6 +9,7 @@ rejected here, and these reseller tokens are rejected by the owner's `get_curren
 """
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 
 import jwt
@@ -31,9 +32,13 @@ portal_oauth = OAuth2PasswordBearer(tokenUrl="api/portal/auth/exchange", auto_er
 
 
 def create_portal_login_token(chat_id: int) -> str:
-    """Short-lived signed token embedded in the bot's login link."""
-    return create_access_token(str(chat_id), extra={"typ": _LOGIN_TYP},
-                               expires_minutes=PORTAL_LOGIN_TTL_MIN)
+    """Short-lived signed token embedded in the bot's login link. Carries a random `jti` so the
+    exchange endpoint can make it strictly ONE-TIME (a second exchange of the same link is rejected)."""
+    return create_access_token(
+        str(chat_id),
+        extra={"typ": _LOGIN_TYP, "jti": secrets.token_urlsafe(16)},
+        expires_minutes=PORTAL_LOGIN_TTL_MIN,
+    )
 
 
 def create_portal_session_token(chat_id: int) -> str:
@@ -42,8 +47,9 @@ def create_portal_session_token(chat_id: int) -> str:
                                expires_minutes=PORTAL_SESSION_TTL_MIN)
 
 
-def verify_portal_login_token(token: str) -> int | None:
-    """Return the bot_chat_id from a valid one-time login token, else None."""
+def verify_portal_login_token(token: str) -> tuple[int, str] | None:
+    """Return (bot_chat_id, jti) from a valid login token, else None. The caller consumes the jti
+    so the link works exactly once. Legacy tokens minted before jti existed return jti=""."""
     try:
         payload = decode_token(token)
     except jwt.PyJWTError:
@@ -51,9 +57,10 @@ def verify_portal_login_token(token: str) -> int | None:
     if payload.get("typ") != _LOGIN_TYP:
         return None
     try:
-        return int(str(payload.get("sub")))
+        chat_id = int(str(payload.get("sub")))
     except (TypeError, ValueError):
         return None
+    return chat_id, str(payload.get("jti") or "")
 
 
 @dataclass

@@ -11,18 +11,21 @@ import os
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.codes import invoice_code, payment_code
 from app.core.db import get_session
 from app.core.portal_auth import (
+    PORTAL_LOGIN_TTL_MIN,
     ResellerContext,
     create_portal_session_token,
     get_current_reseller,
     verify_portal_login_token,
 )
-from app.models import Invoice, Panel, Payment, Reseller
+from app.models import Invoice, Panel, Payment, PortalLoginNonce, Reseller
 from app.models.enums import InvoiceStatus
 from app.services import invoice_pdf as invoice_pdf_service
 from app.services import owner_notify, payment_methods, payments, reseller_report
@@ -54,14 +57,30 @@ async def _panel_keys(session: AsyncSession, panel_ids: set[int]) -> dict[int, P
 async def exchange(body: ExchangeBody, session: AsyncSession = Depends(get_session)) -> dict:
     """Exchange a bot-issued one-time login token for a reseller session token. Public (the token
     itself is the credential). Only succeeds if the Telegram id still has reseller rows."""
-    chat_id = verify_portal_login_token(body.token)
-    if chat_id is None:
+    parsed = verify_portal_login_token(body.token)
+    if parsed is None:
         raise HTTPException(401, "لینکِ ورود نامعتبر یا منقضی شده است؛ از ربات دوباره وارد شوید.")
+    chat_id, jti = parsed
     has = (await session.execute(
         select(Reseller.id).where(Reseller.bot_chat_id == chat_id).limit(1)
     )).first()
     if has is None:
         raise HTTPException(403, "این حساب نماینده‌ای در سامانه ندارد.")
+    # Make the link strictly ONE-TIME: consume its jti. A second exchange of the same link collides
+    # on the primary key → rejected. (Legacy tokens without a jti skip this — they still expire in 15m.)
+    if jti:
+        now = dt.datetime.now(dt.timezone.utc)
+        await session.execute(sa_delete(PortalLoginNonce).where(PortalLoginNonce.expires_at < now))
+        session.add(PortalLoginNonce(
+            jti=jti, expires_at=now + dt.timedelta(minutes=PORTAL_LOGIN_TTL_MIN)))
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(
+                401, "این لینکِ ورود قبلاً استفاده شده است؛ از ربات یک لینکِ تازه بگیرید."
+            ) from None
+        await session.commit()
     return {"access_token": create_portal_session_token(chat_id), "token_type": "bearer"}
 
 
@@ -497,21 +516,37 @@ async def pay_screenshot(
     proof_dir = "data/payment_proofs"
     os.makedirs(proof_dir, exist_ok=True)
     proof_path = f"{proof_dir}/payment_{payment.id}.jpg"
+    saved = False
     try:
         with open(proof_path, "wb") as fh:
             fh.write(data)
         payment.proof_path = proof_path
         await session.commit()
+        saved = True
     except OSError:
-        pass  # keep the pending payment even if the file write fails (owner can re-request)
+        pass  # keep the pending payment even if the file write fails (see below)
     from app.bot import keyboards as kb
     from app.bot.handlers import _payment_review_html
 
     review = await _payment_review_html(session, payment, invs=result.invoices)
-    await owner_notify.notify_owner_photo(
-        session, proof_path, result.owner_intro + "\n\n" + review,
-        reply_markup=kb.owner_payment_detail_keyboard(payment.id))
-    return {"status": "ok", "message": result.user_message, "number": payment_code(payment.id)}
+    kbd = kb.owner_payment_detail_keyboard(payment.id)
+    if saved:
+        await owner_notify.notify_owner_photo(
+            session, proof_path, result.owner_intro + "\n\n" + review, reply_markup=kbd)
+        return {"status": "ok", "message": result.user_message, "number": payment_code(payment.id)}
+    # The proof file could not be stored → DON'T claim success with a photo that doesn't exist.
+    # Tell the owner (text-only) the image is missing, and ask the reseller to resend.
+    await owner_notify.notify_owner(
+        session,
+        result.owner_intro + "\n\n" + review
+        + "\n\n⚠️ تصویرِ رسید ذخیره نشد؛ از نماینده بخواهید دوباره ارسال کند.",
+        html=True, reply_markup=kbd,
+    )
+    return {
+        "status": "proof_not_saved",
+        "message": "پرداخت ثبت شد اما ذخیرهٔ تصویرِ رسید ناموفق بود؛ لطفاً تصویر را دوباره بفرستید.",
+        "number": payment_code(payment.id),
+    }
 
 
 # ------------------------------ sub-reseller management ------------------------------

@@ -123,6 +123,15 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M70** External-review security fixes (`v1.40.1`). Six verified findings fixed: BSC txids
+  canonicalized to lowercase + chain-format-validated in the shared `submit_reseller_payment`
+  (`BSC_TXID_RE`/`TON_TXID_RE`) so a transfer can't reuse casing or store junk (Critical/Medium); portal
+  login links made strictly one-time via a `jti` + new `portal_login_nonce` table consumed atomically on
+  exchange, + the login page strips the token from the URL (High); a warn (owner message + log) when
+  auto-backup runs without a passphrase, key kept for cross-server restore (High); portal screenshot
+  save-failure now notifies text-only + asks to resend instead of faking success (Medium); excluded GB
+  sizes kept as floats so `1.5` isn't truncated to `1` (Low). Migration `c8d2f1a4e6b9`. Tests in
+  `test_invoice_state.py` + `test_security_fixes.py`.
 - [x] **M69** Persistent docked main menu (`v1.40.0`). The reseller & owner main menus are now a
   persistent **reply keyboard** (`reseller_reply_keyboard`/`owner_reply_keyboard`, `is_persistent=True`)
   docked at the bottom, replacing the inline main menu. A high-priority `on_menu_label` handler (registered

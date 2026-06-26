@@ -26,10 +26,24 @@ async def send_backup_to_owner(session: AsyncSession) -> dict:
         path = await backup.save_backup_to_disk(session)
         await backup.mark_backup_done(session)
         return {"status": "no_bot", "saved": str(path)}
+    # The backup embeds the system's SECRET_KEY (so it can be restored on another server). When no
+    # backup passphrase is set the archive is UNENCRYPTED, so anyone who gets the file can read every
+    # secret. Nudge the owner to set a passphrase (we don't block — it would disable auto-backup).
+    passphrase = (await settings_service.get(session, "backup_passphrase", "") or "").strip()
+    caption = (
+        "🗄 پشتیبان خودکار سامانه\n"
+        "برای بازیابی، این فایل را در بخش «پشتیبان‌گیری» پنل بارگذاری کنید."
+    )
+    if not passphrase:
+        log.warning("auto-backup is delivered UNENCRYPTED (no backup_passphrase set)")
+        caption += (
+            "\n\n⚠️ این پشتیبان رمزنگاری‌نشده است و شاملِ کلیدِ رمزِ سامانه (رازها) می‌شود؛ "
+            "آن را جای امن نگه دارید. برای رمزنگاری، در «تنظیمات → زمان‌بندی» یک «عبارت عبور پشتیبان» "
+            "تعیین کنید."
+        )
     try:
         await bot.send_document(
-            int(chat_id), BufferedInputFile(data, filename=name),
-            caption="🗄 پشتیبان خودکار سامانه\nبرای بازیابی، این فایل را در بخش «پشتیبان‌گیری» پنل بارگذاری کنید.",
+            int(chat_id), BufferedInputFile(data, filename=name), caption=caption,
         )
     finally:
         await bot.session.close()

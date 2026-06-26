@@ -156,7 +156,7 @@ async def _panel_synced_at(session: AsyncSession, panel_id: int) -> dt.datetime 
 
 
 def _billable_gb_for_period(
-    users, period: Period, free_threshold: float, excluded: set[int] | None = None,
+    users, period: Period, free_threshold: float, excluded: set[float] | None = None,
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
 ) -> tuple[float, int]:
@@ -188,7 +188,7 @@ async def _billable_gb_with_metering(
     users,
     period: Period,
     free_threshold: float,
-    excluded: set[int],
+    excluded: set[float],
     panel_synced_at: dt.datetime | None,
     deleted_full_quota_over_gb: float = 0.0,
 ) -> tuple[float, int]:

@@ -115,7 +115,7 @@ def select_billable_roots(resellers: Sequence[Any]) -> list[Any]:
 
 
 # ----------------------------- billing -----------------------------
-def _excluded(usage_gb: float, excluded: set[int], free_threshold_gb: float) -> bool:
+def _excluded(usage_gb: float, excluded: set[float], free_threshold_gb: float) -> bool:
     """A config is a free test config when its quota is <= the free threshold
     (default 1 GB → 0.5 GB and 1 GB are free), OR it exactly matches an extra
     excluded size. Uses exact (not rounded) comparison so a real 1.3 GB package
@@ -132,7 +132,7 @@ def _excluded(usage_gb: float, excluded: set[int], free_threshold_gb: float) -> 
 def billable_gb_for_user(
     u: Any,
     period: Period,
-    excluded_usage_gb: set[int],
+    excluded_usage_gb: set[float],
     free_threshold_gb: float,
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
@@ -187,7 +187,7 @@ def compute_invoices(
     period: Period,
     *,
     default_price_per_gb: int,
-    excluded_usage_gb: set[int],
+    excluded_usage_gb: set[float],
     default_min_sale_toman: int = 0,
     free_threshold_gb: float = 1.0,
     panel_synced_at: dt.datetime | None = None,

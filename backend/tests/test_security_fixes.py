@@ -144,3 +144,36 @@ def test_get_current_subject_rejects_unknown_user(tmp_path):
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_txid_format_regexes():
+    from app.services.payments import BSC_TXID_RE, TON_TXID_RE
+
+    assert BSC_TXID_RE.fullmatch("0x" + "a" * 64)
+    assert not BSC_TXID_RE.fullmatch("0x" + "a" * 63)   # too short
+    assert not BSC_TXID_RE.fullmatch("0x" + "z" * 64)   # non-hex
+    assert not BSC_TXID_RE.fullmatch("a" * 64)          # missing 0x
+    assert TON_TXID_RE.fullmatch("A" * 44)              # base64-ish TON hash
+    assert not TON_TXID_RE.fullmatch("x" * 200)         # overlong (beyond the txid column)
+
+
+def test_excluded_usage_matches_decimal_sizes():
+    from app.services.invoice_engine import _excluded
+
+    # A configured 1.5 GB exclusion must match exactly 1.5 (not be truncated to 1 by int()).
+    assert _excluded(1.5, {1.5}, 1.0) is True
+    assert _excluded(1.5, {1.0}, 1.0) is False   # old int() bug would exclude 1, never 1.5
+    assert _excluded(1.3, {1.5}, 1.0) is False   # a real 1.3 GB package is still billed
+
+
+def test_portal_login_token_carries_jti():
+    from app.core.portal_auth import (
+        create_portal_login_token,
+        verify_portal_login_token,
+    )
+
+    parsed = verify_portal_login_token(create_portal_login_token(555))
+    assert parsed is not None
+    chat_id, jti = parsed
+    assert chat_id == 555 and jti        # a jti lets the exchange make the link one-time
+    assert verify_portal_login_token("garbage") is None

@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -31,6 +32,12 @@ from app.services import financial_archive, notifier, rates, settings_service
 log = logging.getLogger("payments")
 
 USDT_DECIMALS = 18
+
+# Tx-hash validation, shared by the bot and the web portal so both surfaces enforce the SAME format
+# (the portal previously accepted any string → overlong/garbage could 500 on Postgres / create junk
+# review rows). BSC = 0x + 64 hex; TON = hex or base64, bounded to the txid column width (80).
+BSC_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")
+TON_TXID_RE = re.compile(r"[A-Za-z0-9_\-/+=]{32,80}")
 
 # Owed = delivered but not yet paid.
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
@@ -144,6 +151,20 @@ async def submit_reseller_payment(
         )
 
     if txid:
+        # Canonicalize + validate on the shared path so the bot AND the portal enforce identical rules.
+        # BSC hashes are matched case-insensitively on-chain, so store them lowercase — otherwise
+        # 0xABC… and 0xabc… would be two rows for ONE transfer and could each settle invoices. TON
+        # hashes stay case-sensitive.
+        txid = txid.strip()
+        if chain == "bsc":
+            txid = txid.lower()
+            if not BSC_TXID_RE.fullmatch(txid):
+                return SubmitResult(
+                    "invalid_txid",
+                    "شناسهٔ تراکنش (TXID) نامعتبر است؛ باید با 0x شروع شود و ۶۴ رقمِ هگز باشد.",
+                )
+        elif not TON_TXID_RE.fullmatch(txid):
+            return SubmitResult("invalid_txid", "هشِ تراکنشِ TON نامعتبر است.")
         existing = (
             await session.execute(select(Payment).where(Payment.txid == txid))
         ).scalars().first()

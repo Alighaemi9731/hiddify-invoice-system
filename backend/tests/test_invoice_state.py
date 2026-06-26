@@ -242,11 +242,11 @@ def test_submit_revalidates_stale_invoice(tmp_path):
             return (await payments.submit_reseller_payment(
                 s, reseller_ids=ids_, invoice_id=inv_id, txid=tx)).status
 
-        assert await status(owed.id, ids, "t1") == "ok"
-        assert await status(paid.id, ids, "t2") == "not_payable"
-        assert await status(canceled.id, ids, "t3") == "not_payable"
-        assert await status(deferred.id, ids, "t4") == "not_payable"
-        assert await status(owed.id, {9999}, "t5") == "not_payable"  # not owner's
+        assert await status(owed.id, ids, "0x" + "a" * 64) == "ok"
+        assert await status(paid.id, ids, "0x" + "b" * 64) == "not_payable"
+        assert await status(canceled.id, ids, "0x" + "c" * 64) == "not_payable"
+        assert await status(deferred.id, ids, "0x" + "d" * 64) == "not_payable"
+        assert await status(owed.id, {9999}, "0x" + "e" * 64) == "not_payable"  # not owner's
 
     _run(body, tmp_path, "p4.db")
 
@@ -484,3 +484,59 @@ def test_backcompat_single_id_row(tmp_path):
         assert inv.status == S.sent and inv.paid_at is None
 
     _run(body, tmp_path, "m7.db")
+
+
+# ============================ external-review security fixes =========================
+def test_bsc_txid_canonicalized_and_validated(tmp_path):
+    """Bug 1/4: a BSC tx hash is stored lowercase (so 0xABC… and 0xabc… can't BOTH settle
+    invoices), and malformed/overlong hashes are rejected instead of stored."""
+    async def body(s):
+        from app.services import payments
+        r = _reseller()
+        s.add(r)
+        await s.flush()
+        a = _invoice(r.id, status=S.sent, label="2026-01")
+        b = _invoice(r.id, status=S.sent, label="2026-02")
+        s.add_all([a, b])
+        await s.commit()
+
+        res1 = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_id=a.id, txid="0x" + "A" * 64, chain="bsc")
+        assert res1.status == "ok"
+        assert res1.payment.txid == "0x" + "a" * 64  # stored canonical (lowercase)
+
+        # The SAME hash in different casing is caught as a duplicate, not a 2nd settling row.
+        res2 = await payments.submit_reseller_payment(
+            s, reseller_ids={r.id}, invoice_id=b.id, txid="0x" + "a" * 64, chain="bsc")
+        assert res2.status.startswith("dup")
+
+        # Malformed / non-hex BSC hashes are rejected (would otherwise 500 / create junk rows).
+        for bad in ("nothex", "0x" + "z" * 64, "0x" + "a" * 10):
+            res = await payments.submit_reseller_payment(
+                s, reseller_ids={r.id}, invoice_id=b.id, txid=bad, chain="bsc")
+            assert res.status == "invalid_txid"
+
+    _run(body, tmp_path, "txcanon.db")
+
+
+def test_portal_login_link_is_one_time(tmp_path):
+    """Bug 2: a portal login link can be exchanged only ONCE — a replay within its TTL is rejected."""
+    async def body(s):
+        from fastapi import HTTPException
+
+        from app.api import portal
+        from app.core.portal_auth import create_portal_login_token
+
+        r = _reseller(bot_chat_id=777)
+        s.add(r)
+        await s.commit()
+        token = create_portal_login_token(777)
+
+        out = await portal.exchange(portal.ExchangeBody(token=token), s)
+        assert out["access_token"]
+
+        with pytest.raises(HTTPException) as exc:
+            await portal.exchange(portal.ExchangeBody(token=token), s)
+        assert exc.value.status_code == 401
+
+    _run(body, tmp_path, "nonce.db")

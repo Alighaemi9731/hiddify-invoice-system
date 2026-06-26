@@ -24,6 +24,16 @@ from app.core.security import create_access_token, get_current_subject  # noqa: 
 from app.models import Invoice, Panel, Payment, Reseller  # noqa: E402
 from app.models.enums import InvoiceStatus, PaymentMethod, PaymentStatus  # noqa: E402
 
+# Payments now reject malformed tx hashes (payments.BSC_TXID_RE / TON_TXID_RE), so tests use
+# well-formed values: BSC = 0x + 64 hex, TON = a bounded base64/hex string.
+_TX_A = "A" * 44              # valid TON hash (Ali's seeded payment)
+_TX_B = "B" * 44              # valid TON hash (Bita's seeded payment)
+_TX_BSC1 = "0x" + "a" * 64
+_TX_BSC2 = "0x" + "b" * 64
+_TX_BSC3 = "0x" + "c" * 64
+_TX_BSC4 = "0x" + "d" * 64
+_TX_BSC5 = "0x" + "e" * 64
+
 
 def _run(body):
     async def go():
@@ -58,16 +68,16 @@ async def _seed(s, with_payments: bool = True):
     if with_payments:
         s.add_all([
             Payment(reseller_id=a.id, invoice_id=inv_a.id, method=PaymentMethod.ton_txid,
-                    chain="ton", status=PaymentStatus.pending, txid="aaa"),
+                    chain="ton", status=PaymentStatus.pending, txid=_TX_A),
             Payment(reseller_id=b.id, invoice_id=inv_b.id, method=PaymentMethod.ton_txid,
-                    chain="ton", status=PaymentStatus.pending, txid="bbb"),
+                    chain="ton", status=PaymentStatus.pending, txid=_TX_B),
         ])
     await s.commit()
     return a, b, inv_a, inv_b
 
 
 def test_login_token_roundtrip_and_expiry():
-    assert verify_portal_login_token(create_portal_login_token(111)) == 111
+    assert verify_portal_login_token(create_portal_login_token(111))[0] == 111
     assert verify_portal_login_token("garbage") is None
     # a session token is NOT a login token (wrong typ)
     assert verify_portal_login_token(create_portal_session_token(111)) is None
@@ -121,7 +131,7 @@ def test_invoices_payments_scoped_and_pdf_ownership():
         assert len(inv_rows) == 1 and inv_rows[0]["amount_toman"] == 100_000
 
         pay_rows = await portal.list_payments(ctx=ctx_a, session=s)
-        assert len(pay_rows) == 1 and pay_rows[0]["txid"] == "aaa"
+        assert len(pay_rows) == 1 and pay_rows[0]["txid"] == _TX_A
 
         # Ali cannot fetch Bita's invoice PDF (404 before any rendering)
         with pytest.raises(HTTPException) as ei:
@@ -160,12 +170,12 @@ def test_submit_payment_core_ok_and_one_pending():
     async def body(s):
         a, _b, inv_a, _ib = await _seed(s, with_payments=False)
         r1 = await payments_service.submit_reseller_payment(
-            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid="newtx", chain="bsc")
+            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid=_TX_BSC1, chain="bsc")
         assert r1.status == "ok" and r1.payment is not None and r1.notify
         assert r1.payment.invoice_id == inv_a.id and r1.payment.reseller_id == a.id
         # second submission for the SAME invoice is blocked (one pending per invoice)
         r2 = await payments_service.submit_reseller_payment(
-            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid="othertx", chain="bsc")
+            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid=_TX_BSC2, chain="bsc")
         assert r2.status == "pending_exists" and r2.payment is None
     _run(body)
 
@@ -174,20 +184,20 @@ def test_submit_payment_core_duplicate_and_reopen():
     async def body(s):
         a, b, inv_a, inv_b = await _seed(s)
         from app.models.enums import PaymentStatus
-        # the seeded pending TON payment for Ali used txid "aaa"
+        # the seeded pending TON payment for Ali used txid _TX_A
         dup = await payments_service.submit_reseller_payment(
-            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid="aaa", chain="ton")
+            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid=_TX_A, chain="ton")
         assert dup.status == "dup_pending"
-        # Bita's payment "bbb" → mark rejected, then Ali cannot re-open it (not his)
-        pay_b = (await s.execute(select(Payment).where(Payment.txid == "bbb"))).scalar_one()
+        # Bita's payment _TX_B → mark rejected, then Ali cannot re-open it (not his)
+        pay_b = (await s.execute(select(Payment).where(Payment.txid == _TX_B))).scalar_one()
         pay_b.status = PaymentStatus.rejected
         await s.commit()
         wrong = await payments_service.submit_reseller_payment(
-            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid="bbb", chain="ton")
+            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid=_TX_B, chain="ton")
         assert wrong.status == "wrong_owner"
         # Bita re-opens her own rejected txid
         reopen = await payments_service.submit_reseller_payment(
-            s, reseller_ids={b.id}, invoice_id=inv_b.id, txid="bbb", chain="ton")
+            s, reseller_ids={b.id}, invoice_id=inv_b.id, txid=_TX_B, chain="ton")
         assert reopen.status == "reopened" and reopen.payment.id == pay_b.id
     _run(body)
 
@@ -198,13 +208,13 @@ def test_submit_payment_core_not_payable():
         from app.models.enums import InvoiceStatus as _IS
         # Cannot pay another reseller's invoice
         cross = await payments_service.submit_reseller_payment(
-            s, reseller_ids={a.id}, invoice_id=inv_b.id, txid="x1", chain="bsc")
+            s, reseller_ids={a.id}, invoice_id=inv_b.id, txid=_TX_BSC3, chain="bsc")
         assert cross.status == "not_payable"
         # Cannot pay a paid invoice
         inv_a.status = _IS.paid
         await s.commit()
         paid = await payments_service.submit_reseller_payment(
-            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid="x2", chain="bsc")
+            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid=_TX_BSC4, chain="bsc")
         assert paid.status == "not_payable"
     _run(body)
 
@@ -244,10 +254,10 @@ def test_pay_options_ownership_and_pay_txid(monkeypatch):
         assert bad.value.status_code == 400
 
         out = await portal.pay_txid(
-            portal.PayTxidBody(invoice_id=inv_a.id, txid="portaltx", chain="bsc"),
+            portal.PayTxidBody(invoice_id=inv_a.id, txid=_TX_BSC5, chain="bsc"),
             ctx=ctx_a, session=s)
         assert out["status"] == "ok" and out["number"]
-        created = (await s.execute(select(Payment).where(Payment.txid == "portaltx"))).scalar_one()
+        created = (await s.execute(select(Payment).where(Payment.txid == _TX_BSC5))).scalar_one()
         assert created.reseller_id == a.id and created.invoice_id == inv_a.id
     _run(body)
 
@@ -435,7 +445,7 @@ def test_payment_proof_ownership():
         a, _b, _ia, _ib = await _seed(s)  # seeds a pending payment per reseller, no proof file
         ctx_a = await get_current_reseller(create_portal_session_token(111), s)
         own = (await s.execute(select(Payment).where(Payment.reseller_id == a.id))).scalar_one()
-        bita_pay = (await s.execute(select(Payment).where(Payment.txid == "bbb"))).scalar_one()
+        bita_pay = (await s.execute(select(Payment).where(Payment.txid == _TX_B))).scalar_one()
         # own payment but no proof image on disk → 404
         with pytest.raises(HTTPException) as no_img:
             await portal.payment_proof(payment_id=own.id, ctx=ctx_a, session=s)
@@ -458,7 +468,7 @@ def test_notifications_scoped_and_sorted():
         assert "invoice" in types and "payment" in types
         # none of Bita's events leak in (only keys for Ali's invoice/payment ids)
         keys = " ".join(e["key"] for e in evs)
-        assert "bbb" not in keys  # Bita's txid never surfaces
+        assert _TX_B not in keys  # Bita's txid never surfaces
     _run(body)
 
 

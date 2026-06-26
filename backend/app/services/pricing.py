@@ -41,14 +41,15 @@ async def get_default_min_sale(session: AsyncSession) -> int:
         return 0
 
 
-async def get_excluded_usage_gb(session: AsyncSession) -> set[int]:
-    """Extra exact package sizes (GB) treated as test configs and skipped."""
+async def get_excluded_usage_gb(session: AsyncSession) -> set[float]:
+    """Extra exact package sizes (GB) treated as test configs and skipped. Kept as floats so a
+    configured decimal size (e.g. 1.5) is matched exactly rather than truncated to 1."""
     value = await settings_service.get(session, "excluded_usage_gb", [1])
-    out: set[int] = set()
+    out: set[float] = set()
     if isinstance(value, (list, tuple)):
         for v in value:
             try:
-                out.add(int(v))
+                out.add(float(v))
             except (TypeError, ValueError):
                 continue
     return out

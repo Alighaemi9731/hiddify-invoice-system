@@ -32,6 +32,10 @@ _POST_BASELINE_COLUMNS = {
     "usage_meters.renew_used_gb", "panels.host_aliases", "panels.client_proxy_path_enc",
     "end_user_snapshots.panel_user_id",
 }
+# Whole TABLES introduced by a post-baseline migration. A pre-Alembic (baseline-era) database
+# legitimately lacks these — they're created by `upgrade` right after the baseline is stamped — so
+# the adoption validator must not treat them as "missing".
+_POST_BASELINE_TABLES = {"portal_login_nonce"}
 
 
 def run_migrations_offline() -> None:
@@ -90,7 +94,7 @@ def _adopt_existing_schema(connection) -> None:
     if not present_app_tables:
         return
 
-    missing_tables = sorted(expected_tables - existing_tables)
+    missing_tables = sorted(expected_tables - existing_tables - _POST_BASELINE_TABLES)
     missing_columns: list[str] = []
     for table in target_metadata.sorted_tables:
         if table.name not in existing_tables:

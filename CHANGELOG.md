@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.40.1 - 2026-06-26
+
+### Fixed — security & correctness (external review)
+
+- **Critical:** BSC tx hashes are canonicalized to lowercase before dedup/storage, so the same transfer
+  submitted as `0xABC…` and `0xabc…` can no longer bypass the unique index and settle multiple invoices.
+- **High:** portal login links are now strictly one-time — each carries a `jti` consumed atomically on
+  exchange (new `portal_login_nonce` table), so a leaked link can't be replayed for fresh sessions within
+  its 15-minute window. The login page also strips the token from the URL immediately.
+- **High:** when automatic backup is enabled without a passphrase, the owner's backup message + logs warn
+  that the (unencrypted) archive contains the system key and recommend setting a passphrase. The key stays
+  in the archive so cross-server restore keeps working (owner's choice).
+- **Medium:** the portal `/pay/txid` endpoint now enforces the same chain-specific tx-hash format as the
+  bot (shared validation in `submit_reseller_payment`), rejecting malformed/overlong values instead of
+  500ing on Postgres or storing junk review rows.
+- **Medium:** if a portal screenshot proof fails to save to disk, the owner is notified text-only (no
+  broken image) and the reseller is asked to resend, instead of a false success.
+- **Low:** decimal excluded package sizes (e.g. 1.5 GB) are matched exactly instead of being truncated to 1.
+
+Auto-applied migration `c8d2f1a4e6b9` adds `portal_login_nonce`. Regressions in `test_invoice_state.py`
+and `test_security_fixes.py`; full gate green (235 backend tests).
+
 ## 1.40.0 - 2026-06-26
 
 ### Changed — Main menu is now a persistent docked keyboard (reply keyboard)

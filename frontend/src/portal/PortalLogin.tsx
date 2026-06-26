@@ -19,6 +19,8 @@ export default function PortalLogin() {
     if (ran.current) return;
     ran.current = true;
     const t = params.get("t");
+    // Drop the one-time token from the URL immediately so it can't linger in history/referrer logs.
+    if (t) window.history.replaceState({}, "", "/portal/login");
     if (!t) {
       // No token in the URL: if already logged in, go in; otherwise prompt to use the bot.
       if (authed) nav("/portal", { replace: true });

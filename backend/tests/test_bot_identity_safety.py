@@ -164,14 +164,14 @@ def test_payable_revalidation_uses_tehran_today(tmp_path, monkeypatch):
         await session.commit()
         # Deferred to a FUTURE date → not payable yet.
         res = await payments.submit_reseller_payment(
-            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="d1")
+            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="0x" + "a" * 64)
         assert res.status == "not_payable"
 
         # Deadline reached today → payable.
         invoice.deferred_until = local_today
         await session.commit()
         res2 = await payments.submit_reseller_payment(
-            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="d2")
+            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="0x" + "b" * 64)
         assert res2.status == "ok"
 
     _run(body, tmp_path, "date.db")

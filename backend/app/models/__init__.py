@@ -20,6 +20,7 @@ from app.models.invoice import Invoice, InvoiceLine
 from app.models.logs import DeliveryLog, EnforcementAction, SyncRun
 from app.models.panel import Panel
 from app.models.payment import Payment
+from app.models.portal_login_nonce import PortalLoginNonce
 from app.models.reseller import Reseller
 from app.models.setting import Setting
 from app.models.usage_meter import UsageMeter
@@ -36,6 +37,7 @@ __all__ = [
     "InvoiceLine",
     "FinancialRecord",
     "Payment",
+    "PortalLoginNonce",
     "Setting",
     "UsageMeter",
     "DeliveryLog",
