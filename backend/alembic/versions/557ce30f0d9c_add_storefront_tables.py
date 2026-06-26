@@ -135,8 +135,10 @@ def upgrade() -> None:
     with op.batch_alter_table('resellers', schema=None) as batch_op:
         # server_default backfills existing reseller rows; the model has only a Python default, and
         # alembic check does not compare server defaults, so leaving it here causes no drift.
+        # Use sa.false() (NOT text("0")) — it renders a real BOOLEAN literal on Postgres (`false`)
+        # while still compiling to 0 on SQLite. A raw "0" is rejected by Postgres for a BOOLEAN column.
         batch_op.add_column(sa.Column(
-            "storefront_enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+            "storefront_enabled", sa.Boolean(), nullable=False, server_default=sa.false()))
         batch_op.add_column(sa.Column("storefront_monthly_fee_toman", sa.Integer(), nullable=True))
 
     # ### end Alembic commands ###

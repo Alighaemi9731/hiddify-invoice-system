@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.41.1 - 2026-06-27
+
+### Fixed — storefront migration boolean default on Postgres
+
+- The storefront migration (`557ce30f0d9c`) added `resellers.storefront_enabled` with
+  `server_default=text("0")`, which SQLite accepts but **Postgres rejects** for a BOOLEAN column
+  (`DatatypeMismatchError`), so the v1.41.0 deploy's startup migration failed. Switched to
+  `server_default=sa.false()`, which renders `false` on Postgres and `0` on SQLite. Verified the
+  compiled DDL on both dialects. (v1.41.0 rolled back cleanly — transactional DDL — so no data was
+  affected; production was restored to v1.40.1 in the interim.)
+
 ## 1.41.0 - 2026-06-27
 
 ### Added — Per-reseller VPN storefront bots (Phase 1)
