@@ -17,6 +17,25 @@ def membership_keyboard(targets: list[dict] | str | None) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def cancel_row(label: str = "✖️ انصراف", target: str = "cancel") -> list[InlineKeyboardButton]:
+    """A single visible-exit button row, appended to every FSM-entry keyboard so a prompt is
+    never a button-less dead-end. `target` defaults to the global `cancel` callback (clears the
+    FSM state and returns the role-aware main menu)."""
+    return [InlineKeyboardButton(text=label, callback_data=target)]
+
+
+def with_cancel(
+    rows: list[list[InlineKeyboardButton]], *, label: str = "✖️ انصراف", target: str = "cancel"
+) -> InlineKeyboardMarkup:
+    """Wrap keyboard rows and append a visible exit button."""
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, cancel_row(label, target)])
+
+
+def cancel_keyboard(label: str = "✖️ انصراف", target: str = "cancel") -> InlineKeyboardMarkup:
+    """A keyboard that is ONLY a visible-exit button — for free-text prompts (TXID, support, etc.)."""
+    return InlineKeyboardMarkup(inline_keyboard=[cancel_row(label, target)])
+
+
 def reseller_menu_keyboard(*, show_create_user: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
@@ -75,6 +94,49 @@ def sub_detail_keyboard(
         rows.append([InlineKeyboardButton(text="🚫 توقف ساخت کاربر", callback_data=f"subf:{sub_id}")])
         rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی", callback_data=f"subx:{sub_id}")])
     rows.append([InlineKeyboardButton(text="« بازگشت", callback_data="menu:subs")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+SUB_CAP_PRESETS = [50, 100, 250, 500, 1000]
+
+
+def sub_cap_keyboard(sub_id: int) -> InlineKeyboardMarkup:
+    """Set a sub-reseller's monthly GB cap WITHOUT typing: preset taps set it directly
+    (data: setcap:<sub_id>:<gb>), «نامحدود» clears it (gb=0), «مقدار دلخواه» opens the text path
+    (data: capcustom:<sub_id>), and «بازگشت» returns to the sub's detail (data: subv:<sub_id>)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for gb in SUB_CAP_PRESETS:
+        row.append(InlineKeyboardButton(text=f"{gb} گیگ", callback_data=f"setcap:{sub_id}:{gb}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="♾ حذف سقف (نامحدود)", callback_data=f"setcap:{sub_id}:0")])
+    rows.append([InlineKeyboardButton(text="✏️ مقدار دلخواه", callback_data=f"capcustom:{sub_id}")])
+    rows.append([InlineKeyboardButton(text="« بازگشت", callback_data=f"subv:{sub_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+CAP_BUMP_PRESETS = [100, 200, 500, 1000]
+
+
+def cap_bump_keyboard(reseller_id: int) -> InlineKeyboardMarkup:
+    """Approve a capacity-increase request by a preset amount WITHOUT typing (data:
+    capok:<reseller_id>:<n>, which bumps + notifies the reseller), «مقدار دلخواه» opens the text
+    path (data: bumptype:<reseller_id>), and «انصراف» exits."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for n in CAP_BUMP_PRESETS:
+        row.append(InlineKeyboardButton(text=f"➕{n}", callback_data=f"capok:{reseller_id}:{n}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✏️ مقدار دلخواه", callback_data=f"bumptype:{reseller_id}")])
+    rows.append(cancel_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

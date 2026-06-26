@@ -21,6 +21,7 @@ from aiogram.types import (
     BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
     BotCommandScopeDefault,
+    MenuButtonCommands,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +63,13 @@ async def apply_command_menus(bot: Bot, session: AsyncSession) -> None:
     owner menu in the owner's private chat."""
     # Reseller menu only in private chats (the bot is a PRIVATE-chat assistant).
     await bot.set_my_commands(RESELLER_COMMANDS, scope=BotCommandScopeAllPrivateChats())
+    # Make the chat input's menu button (the grid icon) reliably open the curated `/` command
+    # list — a clean, always-available, mistype-proof entry point. (Default behavior, set
+    # explicitly so it can never be left as a stale WebApp/other button.)
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception:  # noqa: BLE001
+        log.warning("setting default menu button failed", exc_info=True)
     # Remove any `/` menu in GROUP chats so it doesn't pop up where the bot is just a
     # member/admin for the membership gate. Also clear the legacy default scope (older
     # installs registered the reseller menu there, which leaks into groups).

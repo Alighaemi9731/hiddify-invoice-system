@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.39.0 - 2026-06-26
+
+### Changed — Bulletproof bot UX (no dead-ends, no mistypes, always a tappable exit)
+
+- Every prompt that puts a user into an FSM state now carries a **visible exit button** («✖️ انصراف» →
+  the new global `cancel` callback, or «« بازگشت»), and invalid input **re-shows the prompt with that
+  exit** — so the user can always tap their way out and is never forced to remember `/cancel`. This fixes
+  the locked **pay flow** trap (a malformed TXID / stray text used to keep the user stuck) and the
+  GB-cap / capacity-bump / new-user-name / reseller-search prompts that previously errored with no button.
+- **Presets over typing:** setting a sub-reseller's monthly GB cap and approving a capacity-increase
+  request are now preset-button taps (`setcap:` / `capok:`) with a «مقدار دلخواه» fallback, mirroring the
+  existing user-creation pickers — far less room to mistype.
+- The Telegram **menu button** (the input-bar grid icon) is explicitly set to the curated `/` command
+  list (`MenuButtonCommands`), giving a clean, always-available entry point.
+- No schema change, no API change. New regressions in `tests/test_bot_ux.py`; full gate green (229 tests).
+
 ## 1.38.0 - 2026-06-25
 
 ### Added — Sub-reseller «🚫 توقف ساخت کاربر» (limits-only freeze)

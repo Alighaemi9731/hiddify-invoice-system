@@ -123,6 +123,13 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M68** Bulletproof bot UX (`v1.39.0`). Made the native Telegram bot mistake-proof: every FSM-entry
+  prompt now carries a visible exit (a new global `cancel` callback, or «« بازگشت») and invalid input
+  re-shows the prompt WITH that exit — fixing the locked pay-flow trap (malformed TXID kept the user stuck)
+  and the GB-cap/capacity-bump/new-user-name/reseller-search prompts that errored with no button. Numeric
+  inputs became preset-button taps (`setcap:` for the sub GB cap, `capok:` for capacity-request approval)
+  with a «مقدار دلخواه» fallback, mirroring the user-creation pickers. The Telegram menu button is set to
+  the curated `/` command list (`MenuButtonCommands`). No schema/API change. Tests in `tests/test_bot_ux.py`.
 - [x] **M67** Sub-reseller limits-only «freeze» + versioning policy (`v1.38.0`, first MINOR bump).
   A reseller can now **«🚫 توقف ساخت کاربر»** a sub from BOTH the bot («مدیریت زیرمجموعه‌ها») and the
   reseller portal (زیرمجموعه‌ها): zeros the sub-subtree's `max_users` (no new users / no expansion) while

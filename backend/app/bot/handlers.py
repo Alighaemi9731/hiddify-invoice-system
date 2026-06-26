@@ -501,7 +501,9 @@ async def cmd_interim(message: Message, bot: Bot) -> None:
 @router.message(Command("support"))
 async def cmd_support(message: Message, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
-    await message.answer("پیام خود را برای پشتیبانی بنویسید (یا /cancel برای لغو):")
+    await message.answer(
+        "پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.cancel_keyboard()
+    )
 
 
 @router.message(Command("removelink"))
@@ -584,7 +586,8 @@ async def cb_broadcast_audience(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(audience=audience, panel_id=panel_id)
     await cb.message.answer(
         f"📢 گیرنده: «{label}»\n"
-        f"اکنون متن پیام را ارسال کنید (یا /cancel برای لغو):"
+        f"اکنون متن پیام را ارسال کنید:",
+        reply_markup=keyboards.cancel_keyboard(),
     )
     await cb.answer()
 
@@ -593,6 +596,16 @@ async def cb_broadcast_audience(cb: CallbackQuery, state: FSMContext) -> None:
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("لغو شد.")
+
+
+@router.callback_query(F.data == "cancel")
+async def cb_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Universal exit button carried by every FSM prompt: clear the state and return the role-aware
+    main menu, so a user can ALWAYS tap their way out (never forced to remember /cancel)."""
+    await state.clear()
+    async with SessionLocal() as s:
+        await _send_menu(cb.message.answer, s, cb.from_user, bot=bot)
+    await cb.answer("لغو شد.")
 
 
 # --------------------------- support chat (no DB storage) ---------------------------
@@ -645,8 +658,8 @@ async def cb_support_reply(cb: CallbackQuery, state: FSMContext) -> None:
     reply_to = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
     await state.set_state(OwnerReplyState.waiting)
     await state.update_data(target=target, reply_to=reply_to)
-    await cb.message.answer(f"پاسخ خود را برای کاربر <code>{target}</code> بنویسید (یا /cancel):",
-                            parse_mode="HTML")
+    await cb.message.answer(f"پاسخ خود را برای کاربر <code>{target}</code> بنویسید:",
+                            parse_mode="HTML", reply_markup=keyboards.cancel_keyboard())
     await cb.answer()
 
 
@@ -721,7 +734,10 @@ async def cb_check_membership(cb: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data == "menu:register")
 async def cb_register(cb: CallbackQuery) -> None:
-    await cb.message.answer("لطفاً لینک پنل خود را ارسال کنید (شامل دامنه و شناسه).")
+    await cb.message.answer(
+        "لطفاً لینک پنل خود را ارسال کنید (شامل دامنه و شناسه).",
+        reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+    )
     await cb.answer()
 
 
@@ -876,8 +892,8 @@ async def cb_sub_invoice(cb: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("subcap:"))
-async def cb_sub_cap(cb: CallbackQuery, state: FSMContext) -> None:
-    """Ask the reseller for a new monthly GB cap for this sub-reseller."""
+async def cb_sub_cap(cb: CallbackQuery) -> None:
+    """Show preset GB-cap buttons for this sub-reseller (no typing needed; «مقدار دلخواه» for custom)."""
     sub_id = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         sub = await s.get(Reseller, sub_id)
@@ -886,64 +902,93 @@ async def cb_sub_cap(cb: CallbackQuery, state: FSMContext) -> None:
             return
         cur = int(sub.gb_cap or 0)
         name = sub.name
+    cur_txt = f"سقف فعلی: {cur:g} گیگ" if cur > 0 else "سقف فعلی: تعیین‌نشده"
+    await cb.message.answer(
+        f"🎯 سقف حجم ماهانه برای «{name}»\n{cur_txt}\n\n"
+        "یک مقدار را انتخاب کنید (یا «مقدار دلخواه»). این سقف فقط برای هشدار است و هر ماه ریست می‌شود.",
+        reply_markup=keyboards.sub_cap_keyboard(sub_id),
+    )
+    await cb.answer()
+
+
+async def _apply_sub_cap(answer, session, chat_id: int, sub_id: int | None, gb: int) -> None:
+    sub = await session.get(Reseller, sub_id) if sub_id else None
+    if not sub or not await _owns_sub(session, chat_id, sub):
+        await answer("دسترسی ندارید.")
+        return
+    sub.gb_cap = gb or None
+    sub.gb_cap_alerted_period = None  # re-arm the alert for the new ceiling
+    await session.commit()
+    if gb > 0:
+        await answer(f"✅ سقف حجم ماهانهٔ «{sub.name}» روی {gb:g} گیگ تنظیم شد.")
+    else:
+        await answer(f"✅ سقف حجم «{sub.name}» حذف شد (بدون محدودیت).")
+
+
+@router.callback_query(F.data.startswith("setcap:"))
+async def cb_set_cap(cb: CallbackQuery) -> None:
+    """A preset GB-cap tap → set it directly, no typing (gb=0 clears the cap)."""
+    parts = cb.data.split(":")
+    sub_id, gb = int(parts[1]), int(parts[2])
+    async with SessionLocal() as s:
+        await _apply_sub_cap(cb.message.answer, s, cb.from_user.id, sub_id, gb)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("capcustom:"))
+async def cb_cap_custom(cb: CallbackQuery, state: FSMContext) -> None:
+    """«مقدار دلخواه» → enter the text path, with a tappable «انصراف»."""
+    sub_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sub = await s.get(Reseller, sub_id)
+        if not sub or not await _owns_sub(s, cb.from_user.id, sub):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
     await state.set_state(SubCapState.waiting)
     await state.update_data(sub_id=sub_id)
-    cur_txt = f"سقف فعلی: {cur:g} گیگ\n" if cur > 0 else "سقف فعلی: تعیین‌نشده\n"
     await cb.message.answer(
-        f"🎯 تعیین سقف حجم ماهانه برای «{name}»\n{cur_txt}"
-        "عدد سقف را به گیگابایت بفرستید (مثلاً 500). برای حذف سقف، عدد 0 را بفرستید.\n"
-        "این سقف هر ماه ریست می‌شود و فقط برای هشدار است (مسدودسازی خودکار نمی‌کند).\n"
-        "برای لغو: /cancel"
+        "عدد سقف را به گیگابایت بفرستید (مثلاً 500). برای حذف سقف، عدد 0 را بفرستید.",
+        reply_markup=keyboards.cancel_keyboard(),
     )
     await cb.answer()
 
 
 @router.message(SubCapState.waiting)
 async def on_sub_cap_text(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    sub_id = data.get("sub_id")
-    await state.clear()
     raw = (message.text or "").strip().replace("٬", "").replace(",", "")
     # Accept Persian digits too.
     raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
     if not raw.isdigit():
-        await message.answer("عدد نامعتبر بود. یک عدد صحیح (گیگابایت) بفرستید یا /cancel.")
+        # Invalid → stay in the state with a tappable exit (never a button-less dead-end).
+        await message.answer(
+            "عدد نامعتبر بود. یک عددِ صحیح (گیگابایت) بفرستید.",
+            reply_markup=keyboards.cancel_keyboard(),
+        )
         return
-    gb = int(raw)
+    data = await state.get_data()
+    sub_id = data.get("sub_id")
+    await state.clear()
     async with SessionLocal() as s:
-        sub = await s.get(Reseller, sub_id) if sub_id else None
-        if not sub or not await _owns_sub(s, message.from_user.id, sub):
-            await message.answer("دسترسی ندارید.")
-            return
-        sub.gb_cap = gb or None
-        sub.gb_cap_alerted_period = None  # re-arm the alert for the new ceiling
-        await s.commit()
-        if gb > 0:
-            await message.answer(
-                f"✅ سقف حجم ماهانهٔ «{sub.name}» روی {gb:g} گیگ تنظیم شد.\n"
-                "از "
-                "«مدیریت زیرمجموعه‌ها» می‌توانید میزان مصرف این ماه را ببینید."
-            )
-        else:
-            await message.answer(f"✅ سقف حجم «{sub.name}» حذف شد (بدون محدودیت).")
+        await _apply_sub_cap(message.answer, s, message.from_user.id, sub_id, int(raw))
 
 
 @router.message(OwnerCapBumpState.waiting)
 async def on_owner_cap_bump_text(message: Message, state: FSMContext) -> None:
     """Owner typed a custom capacity-increase amount for a reseller that requested more from the
     web portal. Apply the bump and notify the reseller."""
+    raw = (message.text or "").strip().replace("٬", "").replace(",", "")
+    raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    if not raw.isdigit() or not (0 < int(raw) <= 5000):
+        # Invalid → stay in the state with a tappable exit (never a button-less dead-end).
+        await message.answer(
+            "عدد نامعتبر بود. یک عددِ صحیح بین ۱ تا ۵۰۰۰ بفرستید.",
+            reply_markup=keyboards.cancel_keyboard(),
+        )
+        return
+    amount = int(raw)
     data = await state.get_data()
     rid = data.get("cap_rid")
     await state.clear()
-    raw = (message.text or "").strip().replace("٬", "").replace(",", "")
-    raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
-    if not raw.isdigit():
-        await message.answer("عدد نامعتبر بود. یک عددِ صحیح بفرستید یا /cancel.")
-        return
-    amount = int(raw)
-    if not (0 < amount <= 5000):
-        await message.answer("مقدار باید بین ۱ تا ۵۰۰۰ باشد.")
-        return
     async with SessionLocal() as s:
         from app.services import admin_capacity, notifier
 
@@ -1109,7 +1154,9 @@ async def cb_cu_days(cb: CallbackQuery, state: FSMContext) -> None:
         "یک نامِ پایه برای کاربران بفرستید (به انتهای آن شماره اضافه می‌شود):"
         if is_bulk else "یک نام برای کاربر بفرستید:"
     )
-    await cb.message.answer(f"{prompt}\n(برای لغو: /cancel)")
+    await cb.message.answer(
+        prompt, reply_markup=keyboards.cancel_keyboard("« انصراف", "cucancel")
+    )
     await cb.answer()
 
 
@@ -1117,7 +1164,10 @@ async def cb_cu_days(cb: CallbackQuery, state: FSMContext) -> None:
 async def on_cu_name(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())  # collapse whitespace
     if not name or len(name) > 40:
-        await message.answer("نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید یا /cancel.")
+        await message.answer(
+            "نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید.",
+            reply_markup=keyboards.cancel_keyboard("« انصراف", "cucancel"),
+        )
         return
     await state.update_data(cu_name=name)
     data = await state.get_data()
@@ -1221,7 +1271,9 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict) -> Non
 @router.callback_query(F.data == "menu:support")
 async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
-    await cb.message.answer("پیام خود را برای پشتیبانی بنویسید (یا /cancel برای لغو):")
+    await cb.message.answer(
+        "پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.cancel_keyboard()
+    )
     await cb.answer()
 
 
@@ -1324,7 +1376,10 @@ async def _start_pay_flow(cb: CallbackQuery, state: FSMContext, invoices: list[I
     )
     await state.set_state(PayState.waiting)
     await state.update_data(pay_invoice_ids=[i.id for i in invoices])
-    await cb.message.answer(rtl(text), parse_mode="HTML")
+    await cb.message.answer(
+        rtl(text), parse_mode="HTML",
+        reply_markup=keyboards.cancel_keyboard("✖️ انصراف از پرداخت"),
+    )
 
 
 @router.callback_query(F.data.startswith("payinv:"))
@@ -1418,8 +1473,8 @@ async def pay_state_photo(message: Message, state: FSMContext) -> None:
         if not (opts.card or opts.screenshot):
             await message.answer(
                 "❌ پرداخت با «تصویر رسید» فعال نیست.\n"
-                f"لطفاً {_proof_wanted_fa(opts)} را بفرستید.\n"
-                "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
+                f"لطفاً {_proof_wanted_fa(opts)} را بفرستید.",
+                reply_markup=keyboards.cancel_keyboard("✖️ انصراف از پرداخت"),
             )
             return
         data = await state.get_data()
@@ -1446,12 +1501,15 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
         opts = await payment_methods.load_options(s)
         parsed = _parse_txid(text, usdt=opts.usdt, ton=opts.ton)
         if parsed is None:
-            # Invalid input → explain what's needed and STAY in the pay flow (no menu).
-            await message.answer(rtl(
-                "❌ ورودی نامعتبر است.\n"
-                f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید.\n"
-                "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
-            ))
+            # Invalid input → explain what's needed and STAY in the pay flow (no menu), with a
+            # tappable exit so the user is never stuck guessing /cancel.
+            await message.answer(
+                rtl(
+                    "❌ ورودی نامعتبر است.\n"
+                    f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید."
+                ),
+                reply_markup=keyboards.cancel_keyboard("✖️ انصراف از پرداخت"),
+            )
             return
         chain, txid = parsed
         data = await state.get_data()
@@ -1467,10 +1525,10 @@ async def pay_state_other(message: Message) -> None:
 
     async with SessionLocal() as s:
         opts = await payment_methods.load_options(s)
-    await message.answer(rtl(
-        f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید.\n"
-        "اگر نمی‌خواهی پرداخت کنی، /cancel را بزن."
-    ))
+    await message.answer(
+        rtl(f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید."),
+        reply_markup=keyboards.cancel_keyboard("✖️ انصراف از پرداخت"),
+    )
 
 
 @router.callback_query(F.data == "menu:removelink")
@@ -1561,7 +1619,10 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
             return
         if action == "search":
             await state.set_state(OwnerSearchState.waiting)
-            await cb.message.answer("🔎 نام یا شناسهٔ نماینده را بفرستید (برای لغو: /cancel).")
+            await cb.message.answer(
+                "🔎 نام یا شناسهٔ نماینده را بفرستید.",
+                reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+            )
             await cb.answer()
             return
         await _dispatch_owner(action, cb.message.answer, s)
@@ -1671,10 +1732,13 @@ async def on_owner_search(message: Message, state: FSMContext) -> None:
         if not await _is_owner_user(s, message.from_user):
             await state.clear()
             return
-        await state.clear()
         q = (message.text or "").strip()
         if len(q) < 2:
-            await message.answer("حداقل ۲ نویسه بفرستید.")
+            # Stay in the state with a tappable exit instead of a dead error.
+            await message.answer(
+                "حداقل ۲ نویسه بفرستید.",
+                reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+            )
             return
         rows = (
             await s.execute(
@@ -1688,8 +1752,12 @@ async def on_owner_search(message: Message, state: FSMContext) -> None:
             )
         ).scalars().all()
         if not rows:
-            await message.answer("نماینده‌ای پیدا نشد.")
+            await message.answer(
+                "نماینده‌ای پیدا نشد. نام یا UUID دیگری بفرستید.",
+                reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+            )
             return
+        await state.clear()
         if len(rows) == 1:
             await _send_reseller_card(message.answer, s, rows[0].id)
             return
@@ -1890,8 +1958,8 @@ async def cb_cap_reject(cb: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("capmore:"))
-async def cb_cap_more(cb: CallbackQuery, state: FSMContext) -> None:
-    """Owner wants to enter a custom capacity-increase amount for the requesting reseller."""
+async def cb_cap_more(cb: CallbackQuery) -> None:
+    """Owner wants a different capacity-increase amount → show preset buttons (no typing)."""
     rid = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         if not await _is_owner_user(s, cb.from_user):
@@ -1902,10 +1970,26 @@ async def cb_cap_more(cb: CallbackQuery, state: FSMContext) -> None:
             await cb.answer("نماینده پیدا نشد.", show_alert=True)
             return
         rname = r.name
+    await cb.message.answer(
+        f"➕ مقدارِ افزایشِ ظرفیت برای «{rname}» را انتخاب کنید (یا «مقدار دلخواه»):",
+        reply_markup=keyboards.cap_bump_keyboard(rid),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("bumptype:"))
+async def cb_bump_type(cb: CallbackQuery, state: FSMContext) -> None:
+    """«مقدار دلخواه» for a capacity bump → enter the text path with a tappable «انصراف»."""
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, cb.from_user):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
     await state.set_state(OwnerCapBumpState.waiting)
     await state.update_data(cap_rid=rid)
     await cb.message.answer(
-        f"➕ مقدارِ افزایشِ ظرفیت برای «{rname}» را به‌صورتِ عدد بفرستید (۱ تا ۵۰۰۰). برای لغو: /cancel"
+        "مقدارِ افزایش را به‌صورتِ عدد بفرستید (۱ تا ۵۰۰۰).",
+        reply_markup=keyboards.cancel_keyboard(),
     )
     await cb.answer()
 
