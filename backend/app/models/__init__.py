@@ -23,6 +23,13 @@ from app.models.payment import Payment
 from app.models.portal_login_nonce import PortalLoginNonce
 from app.models.reseller import Reseller
 from app.models.setting import Setting
+from app.models.storefront import (
+    StorefrontBot,
+    StorefrontCustomer,
+    StorefrontOrder,
+    StorefrontPlan,
+    StorefrontWalletTxn,
+)
 from app.models.usage_meter import UsageMeter
 from app.models.webauthn_credential import WebauthnCredential
 
@@ -39,6 +46,11 @@ __all__ = [
     "Payment",
     "PortalLoginNonce",
     "Setting",
+    "StorefrontBot",
+    "StorefrontPlan",
+    "StorefrontCustomer",
+    "StorefrontWalletTxn",
+    "StorefrontOrder",
     "UsageMeter",
     "DeliveryLog",
     "EnforcementAction",

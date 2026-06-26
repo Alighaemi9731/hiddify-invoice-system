@@ -117,6 +117,8 @@ export interface ResellerRow {
   panel_max_users: number | null;
   panel_max_active_users: number | null;
   can_add_admin: boolean;
+  storefront_enabled: boolean;
+  storefront_monthly_fee_toman: number | null;
   users_count: number;
   active_users_count: number;
   capacity_pct: number;

@@ -169,6 +169,9 @@ DEFS: list[SettingDef] = [
     # billed (e.g. 1 → both 0.5 GB and 1 GB are free; 1.5+ GB is billed).
     SettingDef("free_under_gb", 1, False, "pricing"),
     SettingDef("min_sale_toman", 0, False, "pricing"),  # 0 = no minimum-sale floor
+    # Default monthly fee billed to a reseller running a storefront bot (per-reseller override on
+    # the Reseller row wins; 0 = free).
+    SettingDef("storefront_monthly_fee_toman", 0, False, "pricing"),
     # Abuse-resistant metering (billing model "C"): bill usage beyond the paid quota
     # (daily-reset trick) + renew-by-edit that skips start_date. On by default.
     SettingDef("metering_enabled", True, False, "pricing"),

@@ -1,0 +1,172 @@
+"""Storefront-bot configuration & CRUD (the reseller↔customer subsystem).
+
+Owns the storefront bot record (token encrypted at rest), plans, customers, tenant resolution, and the
+owner's monthly-fee computation. Money movement lives in `storefront_wallet`; provisioning in
+`storefront_provision`.
+"""
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core import crypto
+from app.models import Reseller, StorefrontBot, StorefrontCustomer, StorefrontPlan
+from app.services import settings_service
+
+# ── bot record ────────────────────────────────────────────────────────────────
+
+async def get_bot_for_reseller(session: AsyncSession, reseller_id: int) -> StorefrontBot | None:
+    return (
+        await session.execute(
+            select(StorefrontBot).where(StorefrontBot.reseller_id == reseller_id)
+        )
+    ).scalar_one_or_none()
+
+
+async def get_bot_by_telegram_id(session: AsyncSession, bot_telegram_id: int) -> StorefrontBot | None:
+    """Tenant resolution: which storefront does this physical bot belong to?"""
+    return (
+        await session.execute(
+            select(StorefrontBot).where(StorefrontBot.bot_telegram_id == bot_telegram_id)
+        )
+    ).scalar_one_or_none()
+
+
+async def active_bots(session: AsyncSession) -> list[StorefrontBot]:
+    """Enabled storefront bots the manager should be polling."""
+    return list(
+        (
+            await session.execute(select(StorefrontBot).where(StorefrontBot.enabled.is_(True)))
+        ).scalars().all()
+    )
+
+
+def bot_token(bot: StorefrontBot) -> str | None:
+    return crypto.decrypt(bot.bot_token_enc)
+
+
+async def upsert_bot(
+    session: AsyncSession,
+    *,
+    reseller_id: int,
+    panel_id: int,
+    token: str,
+    bot_username: str | None,
+    bot_telegram_id: int | None,
+) -> StorefrontBot:
+    """Create or re-point the reseller's storefront bot (token encrypted). One per reseller."""
+    bot = await get_bot_for_reseller(session, reseller_id)
+    if bot is None:
+        bot = StorefrontBot(reseller_id=reseller_id, panel_id=panel_id)
+        session.add(bot)
+    bot.panel_id = panel_id
+    bot.bot_token_enc = crypto.encrypt(token) or ""
+    bot.bot_username = bot_username
+    bot.bot_telegram_id = bot_telegram_id
+    bot.enabled = True
+    bot.status = "active"
+    bot.last_error = None
+    await session.commit()
+    return bot
+
+
+async def mark_errored(session: AsyncSession, bot_id: int, error: str) -> None:
+    bot = await session.get(StorefrontBot, bot_id)
+    if bot is not None:
+        bot.status = "errored"
+        bot.last_error = (error or "")[:300]
+        await session.commit()
+
+
+# ── plans ───────────────────────────────────────────────────────────────────
+
+async def list_plans(
+    session: AsyncSession, storefront_bot_id: int, *, only_enabled: bool = False
+) -> list[StorefrontPlan]:
+    q = select(StorefrontPlan).where(StorefrontPlan.storefront_bot_id == storefront_bot_id)
+    if only_enabled:
+        q = q.where(StorefrontPlan.enabled.is_(True))
+    q = q.order_by(StorefrontPlan.sort_order, StorefrontPlan.id)
+    return list((await session.execute(q)).scalars().all())
+
+
+async def add_plan(
+    session: AsyncSession, storefront_bot_id: int, *, title: str, gb: int, days: int, price_toman: int
+) -> StorefrontPlan:
+    existing = await list_plans(session, storefront_bot_id)
+    plan = StorefrontPlan(
+        storefront_bot_id=storefront_bot_id, title=title[:128], gb=int(gb), days=int(days),
+        price_toman=int(price_toman), enabled=True, sort_order=len(existing),
+    )
+    session.add(plan)
+    await session.commit()
+    return plan
+
+
+async def delete_plan(session: AsyncSession, storefront_bot_id: int, plan_id: int) -> bool:
+    plan = await session.get(StorefrontPlan, plan_id)
+    if plan is None or plan.storefront_bot_id != storefront_bot_id:
+        return False
+    await session.delete(plan)
+    await session.commit()
+    return True
+
+
+# ── customers ─────────────────────────────────────────────────────────────────
+
+async def get_or_create_customer(
+    session: AsyncSession, storefront_bot_id: int, tg_user
+) -> StorefrontCustomer:  # noqa: ANN001
+    cust = (
+        await session.execute(
+            select(StorefrontCustomer).where(
+                StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+                StorefrontCustomer.telegram_id == tg_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    name = getattr(tg_user, "first_name", None) or getattr(tg_user, "username", None) or ""
+    username = getattr(tg_user, "username", None)
+    if cust is None:
+        cust = StorefrontCustomer(
+            storefront_bot_id=storefront_bot_id, telegram_id=tg_user.id,
+            name=name[:128] if name else None, username=username,
+        )
+        session.add(cust)
+        await session.commit()
+    elif (cust.name or "") != (name or "")[:128] or cust.username != username:
+        cust.name = name[:128] if name else None
+        cust.username = username
+        await session.commit()
+    return cust
+
+
+async def list_customers(session: AsyncSession, storefront_bot_id: int) -> list[StorefrontCustomer]:
+    return list(
+        (
+            await session.execute(
+                select(StorefrontCustomer)
+                .where(StorefrontCustomer.storefront_bot_id == storefront_bot_id)
+                .order_by(StorefrontCustomer.created_at.desc())
+            )
+        ).scalars().all()
+    )
+
+
+# ── owner monthly fee ──────────────────────────────────────────────────────────
+
+async def monthly_fee_for(session: AsyncSession, reseller: Reseller) -> int:
+    """The owner's monthly storefront fee to bill THIS reseller — only when they actually have an
+    active storefront bot. Per-reseller override falls back to the global default."""
+    if not getattr(reseller, "storefront_enabled", False):
+        return 0
+    bot = await get_bot_for_reseller(session, reseller.id)
+    if bot is None or not bot.enabled:
+        return 0  # enabled flag but no active bot → no fee (active-only billing)
+    fee = reseller.storefront_monthly_fee_toman
+    if fee is None:
+        fee = await settings_service.get(session, "storefront_monthly_fee_toman", 0)
+    try:
+        return max(0, int(fee or 0))
+    except (TypeError, ValueError):
+        return 0

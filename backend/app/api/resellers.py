@@ -84,6 +84,8 @@ def _to_out(
         registered=r.bot_chat_id is not None, enforcement_state=r.enforcement_state.value,
         panel_max_users=r.panel_max_users, panel_max_active_users=r.panel_max_active_users,
         can_add_admin=r.can_add_admin,
+        storefront_enabled=r.storefront_enabled,
+        storefront_monthly_fee_toman=r.storefront_monthly_fee_toman,
         users_count=total, active_users_count=active, capacity_pct=round(cap, 1),
         last_seen_at=r.last_seen_at,
     )
@@ -503,6 +505,11 @@ async def update_reseller(
         r.min_sale_toman = int(body.min_sale_toman)
     if body.exclude_from_billing is not None:
         r.exclude_from_billing = body.exclude_from_billing
+    if body.storefront_enabled is not None:
+        r.storefront_enabled = body.storefront_enabled
+    if body.storefront_monthly_fee_toman is not None:
+        # 0 = use the global default fee (NULL); a positive value overrides per-reseller.
+        r.storefront_monthly_fee_toman = body.storefront_monthly_fee_toman or None
     await session.commit()
     default_price = await pricing.get_default_price_per_gb(session)
     panel = await session.get(Panel, r.panel_id)

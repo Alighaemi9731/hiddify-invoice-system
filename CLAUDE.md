@@ -123,6 +123,19 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M71** Per-reseller VPN storefront bots — Phase 1 (`v1.41.0`). Multi-tenant: each top-level
+  reseller can run their own Telegram shop bot (own BotFather token, one of their panels) to sell VPN to
+  their customers. Runtime: a second aiogram Dispatcher + storefront router in the existing `bot`
+  container, with `app/bot/storefront/manager.py` reconciling active bots from the DB (~30s) and polling
+  one cancellable task per token; tenant resolved by `bot.id`. New tables (`storefront_*`) + services
+  (`storefront.py`, `storefront_wallet.py` ledger, `storefront_provision.py` reusing
+  `usercreate.create_for_reseller` + `qr_png`). Admin side (plans/payments/top-up review/customers+manual
+  wallet/broadcast/stats/support/preview) + customer side (buy→wallet→provision sub+QR→my services).
+  Wallet/crypto is **fully manual** (admin confirms each top-up and sets the credited Toman — no
+  rates/API). Owner enables per reseller + a monthly fee (panel Resellers edit; `Reseller.storefront_*`),
+  billed via `invoicing._persist_bundle` only when an active bot exists. Setup wizard in the main bot.
+  Migration `557ce30f0d9c`. Tests in `tests/test_storefront.py`. Deferred to later phases: customer
+  forced-join, dashboards, expiry notices, owner-bot toggle.
 - [x] **M70** External-review security fixes (`v1.40.1`). Six verified findings fixed: BSC txids
   canonicalized to lowercase + chain-format-validated in the shared `submit_reseller_payment`
   (`BSC_TXID_RE`/`TON_TXID_RE`) so a transfer can't reuse casing or store junk (Critical/Medium); portal

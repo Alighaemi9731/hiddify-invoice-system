@@ -376,7 +376,12 @@ async def _persist_bundle(
     base_amount = round(total_gb * price)
     min_sale = bundle.min_sale_toman
     floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
-    amount_toman = float(min_sale) if floor_applied else float(base_amount)
+    # A flat monthly storefront-bot fee (only when the reseller actually runs an active storefront)
+    # is added on TOP of the usage amount, after the floor — it is not usage, so usage_gb is untouched.
+    from app.services import storefront as _storefront
+
+    storefront_fee = await _storefront.monthly_fee_for(session, reseller)
+    amount_toman = (float(min_sale) if floor_applied else float(base_amount)) + float(storefront_fee)
     amount_usdt = float(pricing.toman_to_usdt(amount_toman, rate))
 
     existing = (
@@ -426,6 +431,13 @@ async def _persist_bundle(
     if existing is None or existing.status == InvoiceStatus.draft:
         invoice.status = InvoiceStatus.draft
     await session.flush()
+
+    if storefront_fee > 0:
+        session.add(InvoiceLine(
+            invoice_id=invoice.id, end_user_uuid=f"storefront_fee_{reseller.id}",
+            name="🏪 هزینهٔ ماهانهٔ ربات فروشگاهی", start_date=None, usage_gb=0,
+            added_by_uuid=None, sub_reseller_name="",
+        ))
 
     for line in bundle.lines:
         # A user removed from the panel is billed on consumption and flagged in its name (same

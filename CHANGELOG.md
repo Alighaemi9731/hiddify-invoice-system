@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.41.0 - 2026-06-27
+
+### Added — Per-reseller VPN storefront bots (Phase 1)
+
+- When the owner enables it, a top-level reseller can set up their OWN Telegram storefront bot from the
+  main bot («🏪 راه‌اندازی ربات فروشگاهی»): pick a panel → BotFather guidance → send the token → it's
+  validated, saved (token encrypted), and brought online immediately. All storefront bots run inside the
+  existing bot container via a second dispatcher + a manager that reconciles against the DB (~30s),
+  resolving the tenant by `bot.id`.
+- The storefront bot has an **admin side** (the reseller) and a **customer side**. Admin: define plans
+  (GB/days/price), set payment methods (card / USDT-BEP20 / GRAM-TON), review & confirm/reject top-ups,
+  manage customers + manually adjust wallets, broadcast, stats, support contact, customer preview.
+  Customer: buy from a wallet balance → the bot **auto-creates the config on the reseller's panel** and
+  sends the sub link + QR; wallet top-up → admin confirms and **sets the credited Toman manually** (fully
+  manual, no rates/API — even for crypto) → balance credited; «سرویس‌های من».
+- Owner controls per reseller (panel → Resellers → edit): enable the feature + an optional monthly fee
+  (global default in Settings). The fee is billed on the reseller's monthly invoice **only for months
+  they run an active storefront bot**. Sold configs are created under the reseller's admin, so they count
+  toward the reseller's own usage that the owner bills (the reseller keeps the retail markup).
+- RTL-correct Persian throughout. New tables (`storefront_bots/plans/customers/wallet_txns/orders`),
+  migration `557ce30f0d9c`; wallet-ledger + monthly-fee regressions in `tests/test_storefront.py`.
+
+Later phases: customer forced-join gate, richer dashboards, expiry notifications, and more.
+
 ## 1.40.1 - 2026-06-26
 
 ### Fixed — security & correctness (external review)

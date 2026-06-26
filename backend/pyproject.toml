@@ -29,6 +29,6 @@ module = [
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["app.bot.handlers"]
+module = ["app.bot.handlers", "app.bot.storefront.handlers"]
 # Aiogram callback/message properties remain optional in its stubs after router filters.
 disable_error_code = ["arg-type", "index", "union-attr"]

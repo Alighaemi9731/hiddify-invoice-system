@@ -70,6 +70,7 @@ RESELLER_MENU: list[tuple[str, str]] = [
     ("💳 پرداخت فاکتور", "pay"),
     ("📄 فاکتور علی‌الحساب (ماه جاری)", "interim"),
     ("➕ ساخت کاربر", "newuser"),
+    ("🏪 راه‌اندازی ربات فروشگاهی", "storefront"),
     ("🖥 پنل‌های من", "panels"),
     ("👥 زیرمجموعه‌ها", "subs"),
     ("🌐 ورود به پنلِ تحتِ وب", "portal"),
@@ -105,8 +106,15 @@ def _reply_grid(labels: list[str]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
-def reseller_reply_keyboard(*, show_create_user: bool = False) -> ReplyKeyboardMarkup:
-    labels = [label for label, action in RESELLER_MENU if action != "newuser" or show_create_user]
+def reseller_reply_keyboard(
+    *, show_create_user: bool = False, show_storefront: bool = False
+) -> ReplyKeyboardMarkup:
+    hidden = set()
+    if not show_create_user:
+        hidden.add("newuser")
+    if not show_storefront:
+        hidden.add("storefront")
+    labels = [label for label, action in RESELLER_MENU if action not in hidden]
     return _reply_grid(labels)
 
 
@@ -215,6 +223,13 @@ def broadcast_panel_keyboard(panels: list[tuple[int, str]]) -> InlineKeyboardMar
     return InlineKeyboardMarkup(
         inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )
+
+
+def storefront_setup_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Pick which top-level reseller/panel the storefront bot will sell from. data: sfsetup:<reseller_id>."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"sfsetup:{rid}")] for rid, label in items]
+    rows.append([InlineKeyboardButton(text="✖️ انصراف", callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def create_user_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:

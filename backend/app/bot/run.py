@@ -28,13 +28,7 @@ async def _current_token() -> str | None:
         return await get_token(session)
 
 
-async def main() -> None:
-    await run_bootstrap()
-    # Self-restart if a restore (here or in the backend) changed the DB / SECRET_KEY, so the
-    # bot never keeps a stale key or a pooled handle to the pre-restore database.
-    from app.services import restart_signal
-
-    restart_signal.start_watcher()
+async def _main_bot_loop() -> None:
     # Build the Dispatcher ONCE — a router can only be attached to one dispatcher,
     # so we reuse it across reconnects (only the Bot/session is recreated).
     dp = Dispatcher(storage=MemoryStorage())
@@ -64,6 +58,22 @@ async def main() -> None:
             await asyncio.sleep(15)
         finally:
             await bot.session.close()
+
+
+async def main() -> None:
+    await run_bootstrap()
+    # Self-restart if a restore (here or in the backend) changed the DB / SECRET_KEY, so the
+    # bot never keeps a stale key or a pooled handle to the pre-restore database.
+    from app.services import restart_signal
+
+    restart_signal.start_watcher()
+
+    # Run the owner/reseller main bot AND the per-reseller storefront-bot manager (which polls every
+    # active reseller storefront bot) concurrently in this one process. A crash in one must not kill
+    # the other.
+    from app.bot.storefront.manager import run_manager
+
+    await asyncio.gather(_main_bot_loop(), run_manager())
 
 
 if __name__ == "__main__":

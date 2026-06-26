@@ -28,6 +28,8 @@ class ResellerOut(BaseModel):
     panel_max_users: int | None
     panel_max_active_users: int | None
     can_add_admin: bool = False
+    storefront_enabled: bool = False
+    storefront_monthly_fee_toman: int | None = None
     users_count: int = 0          # users this admin created (panel snapshot)
     active_users_count: int = 0   # of those, currently enabled+active
     capacity_pct: float = 0       # users_count / max_users * 100 (0 when no limit)
@@ -53,6 +55,8 @@ class ResellerUpdate(BaseModel):
     price_per_gb: int | None = Field(default=None, ge=0)
     min_sale_toman: int | None = Field(default=None, ge=0)
     exclude_from_billing: bool | None = None
+    storefront_enabled: bool | None = None
+    storefront_monthly_fee_toman: int | None = Field(default=None, ge=0)
 
 
 class BumpLimitsBody(BaseModel):

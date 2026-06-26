@@ -82,6 +82,12 @@ class CreateUserState(StatesGroup):
     name = State()
 
 
+class StorefrontSetupState(StatesGroup):
+    """A reseller is setting up their VPN storefront bot — `token` waits for the BotFather token."""
+
+    token = State()
+
+
 log = logging.getLogger("bot.handlers")
 router = Router()
 
@@ -382,7 +388,10 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     can_create = await _can_create_users(session, user.id)
     await answer(
         f"{welcome}\n\n{menu}",
-        reply_markup=keyboards.reseller_reply_keyboard(show_create_user=can_create),
+        reply_markup=keyboards.reseller_reply_keyboard(
+            show_create_user=can_create,
+            show_storefront=await _can_setup_storefront(session, user.id),
+        ),
     )
 
 
@@ -403,6 +412,15 @@ async def _can_create_users(session, chat_id: int) -> bool:
     if not opts.enabled or not (opts.gb and opts.days):
         return False
     return bool(await _top_level_resellers(session, chat_id))
+
+
+async def _can_setup_storefront(session, chat_id: int) -> bool:
+    """True if the owner enabled the storefront feature for at least one of this chat's top-level
+    resellers."""
+    return any(
+        getattr(r, "storefront_enabled", False)
+        for r in await _top_level_resellers(session, chat_id)
+    )
 
 
 # --------------------------- /commands ---------------------------
@@ -646,6 +664,8 @@ async def _do_reseller_menu(action: str, message: Message, state: FSMContext, bo
         await _send_sub_panels(ans, cid, s)
     elif action == "portal":
         await _send_portal_link(ans, cid, s)
+    elif action == "storefront":
+        await _begin_storefront_setup(ans, cid, s, state)
     elif action == "removelink":
         await _send_removelink(ans, cid, s)
     elif action == "support":
@@ -1123,6 +1143,98 @@ async def cb_cu_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await cb.message.answer("لغو شد.")
     await cb.answer()
+
+
+# --------------------------- storefront-bot setup wizard ---------------------------
+_BOTFATHER_GUIDE = (
+    "🏪 راه‌اندازی ربات فروشگاهی\n\n"
+    "۱) در تلگرام به @BotFather بروید.\n"
+    "۲) دستور /newbot را بفرستید؛ یک نام و سپس یک یوزرنیم (که به bot ختم می‌شود) انتخاب کنید.\n"
+    "۳) توکنی که می‌دهد (مثلِ <code>123456789:AA...</code>) را کپی کنید.\n"
+    "۴) همان توکن را همین‌جا بفرستید تا رباتِ فروشگاهیِ شما ساخته و فعال شود.\n\n"
+    "برای لغو، «انصراف» را بزنید."
+)
+
+
+async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMContext) -> None:  # noqa: ANN001
+    roots = [
+        r for r in await _top_level_resellers(session, chat_id)
+        if getattr(r, "storefront_enabled", False)
+    ]
+    if not roots:
+        await answer(rtl("این قابلیت برای شما فعال نیست."))
+        return
+    if len(roots) == 1:
+        await state.set_state(StorefrontSetupState.token)
+        await state.update_data(sf_reseller_id=roots[0].id)
+        await answer(rtl(_BOTFATHER_GUIDE), parse_mode="HTML",
+                     reply_markup=keyboards.cancel_keyboard("« انصراف"))
+        return
+    items = []
+    for r in roots:
+        panel = await session.get(Panel, r.panel_id)
+        items.append((r.id, f"{r.name or '—'} — {panel.key if panel else '?'}"))
+    await answer(rtl("🏪 رباتِ فروشگاهی روی کدام پنل؟"),
+                 reply_markup=keyboards.storefront_setup_panels_keyboard(items))
+
+
+@router.callback_query(F.data.startswith("sfsetup:"))
+async def cb_sf_setup_panel(cb: CallbackQuery, state: FSMContext) -> None:
+    rid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        r = await s.get(Reseller, rid)
+        if r is None or r.bot_chat_id != cb.from_user.id or not getattr(r, "storefront_enabled", False):
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+    await state.set_state(StorefrontSetupState.token)
+    await state.update_data(sf_reseller_id=rid)
+    await cb.message.answer(rtl(_BOTFATHER_GUIDE), parse_mode="HTML",
+                            reply_markup=keyboards.cancel_keyboard("« انصراف"))
+    await cb.answer()
+
+
+@router.message(StorefrontSetupState.token, F.text)
+async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
+    token = (message.text or "").strip()
+    if ":" not in token or len(token) < 20:
+        await message.answer(rtl("توکن نامعتبر است؛ توکنِ BotFather را بفرستید."),
+                             reply_markup=keyboards.cancel_keyboard("« انصراف"))
+        return
+    probe = Bot(token=token)
+    try:
+        me = await probe.get_me()
+    except Exception:  # noqa: BLE001
+        await message.answer(rtl("این توکن کار نکرد؛ مطمئن شوید درست کپی شده و دوباره بفرستید."),
+                             reply_markup=keyboards.cancel_keyboard("« انصراف"))
+        return
+    finally:
+        await probe.session.close()
+    data = await state.get_data()
+    rid = int(data.get("sf_reseller_id") or 0)
+    await state.clear()
+    from app.services import storefront
+
+    async with SessionLocal() as s:
+        r = await s.get(Reseller, rid)
+        if r is None or r.bot_chat_id != message.from_user.id \
+                or not getattr(r, "storefront_enabled", False):
+            await message.answer(rtl("دسترسی ندارید."))
+            return
+        existing = await storefront.get_bot_by_telegram_id(s, me.id)
+        if existing is not None and existing.reseller_id != rid:
+            await message.answer(rtl("این ربات قبلاً برای حسابِ دیگری ثبت شده است."))
+            return
+        await storefront.upsert_bot(s, reseller_id=rid, panel_id=r.panel_id, token=token,
+                                    bot_username=me.username, bot_telegram_id=me.id)
+    try:  # start it now (the storefront manager runs in this same process)
+        from app.bot.storefront import manager
+
+        await manager.reconcile()
+    except Exception:  # noqa: BLE001
+        log.warning("storefront reconcile after setup failed", exc_info=True)
+    await message.answer(rtl(
+        f"✅ رباتِ فروشگاهیِ شما آماده شد: @{me.username}\n"
+        "اکنون واردِ رباتِ خودتان شوید و /start را بزنید تا پنلِ مدیریت را ببینید."))
 
 
 @router.callback_query(F.data.startswith("cupanel:"))

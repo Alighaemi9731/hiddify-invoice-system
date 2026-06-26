@@ -220,6 +220,11 @@ export default function Resellers() {
             ? null
             : Number(form.min_sale_toman),
         exclude_from_billing: form.exclude_from_billing,
+        storefront_enabled: form.storefront_enabled,
+        storefront_monthly_fee_toman:
+          form.storefront_monthly_fee_toman === ("" as any) || form.storefront_monthly_fee_toman == null
+            ? null
+            : Number(form.storefront_monthly_fee_toman),
       });
     },
     onSuccess: () => {
@@ -650,6 +655,28 @@ export default function Resellers() {
                 />
               }
               label="معاف از صدور فاکتور"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!form?.storefront_enabled}
+                  onChange={(event) => setForm(form ? {
+                    ...form,
+                    storefront_enabled: event.target.checked,
+                  } : null)}
+                />
+              }
+              label="ربات فروشگاهی (اجازهٔ راه‌اندازی)"
+            />
+            <TextField
+              label="هزینهٔ ماهانهٔ ربات فروشگاهی (تومان) — خالی = پیش‌فرض"
+              type="number"
+              value={form?.storefront_monthly_fee_toman ?? ""}
+              onChange={(event) => setForm(form ? {
+                ...form,
+                storefront_monthly_fee_toman: event.target.value as any,
+              } : null)}
+              helperText="فقط ماه‌هایی که نماینده ربات فروشگاهی فعال دارد به فاکتورش اضافه می‌شود"
             />
           </Stack>
         </DialogContent>

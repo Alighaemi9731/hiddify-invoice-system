@@ -39,6 +39,10 @@ class Reseller(Base, TimestampMixin):
             name="ck_resellers_min_sale_nonnegative",
         ),
         CheckConstraint("gb_cap IS NULL OR gb_cap >= 0", name="ck_resellers_gb_cap_nonnegative"),
+        CheckConstraint(
+            "storefront_monthly_fee_toman IS NULL OR storefront_monthly_fee_toman >= 0",
+            name="ck_resellers_storefront_fee_nonnegative",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -77,6 +81,12 @@ class Reseller(Base, TimestampMixin):
     panel_max_active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Whether this admin is allowed to create sub-admins (Hiddify `can_add_admin`).
     can_add_admin: Mapped[bool] = mapped_column(default=False)
+
+    # Storefront-bot feature (owner-controlled, like create-user). When enabled, the reseller can set
+    # up their own VPN storefront bot; the monthly fee (override, else global default) is billed only
+    # for months they actually have an active storefront bot.
+    storefront_enabled: Mapped[bool] = mapped_column(default=False)
+    storefront_monthly_fee_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Monthly SOLD-quota cap (GB) a PARENT reseller sets on this sub-reseller — a feature
     # Hiddify itself lacks (it only caps user COUNT). Purely informational/alerting: when
