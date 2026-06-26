@@ -11,10 +11,16 @@ from sqlalchemy import BigInteger  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.bot import keyboards  # noqa: E402
+from app.bot.storefront import keyboards as sfkb  # noqa: E402
 from app.core import crypto  # noqa: E402
-from app.models import Panel, Reseller, StorefrontBot  # noqa: E402
-from app.models.storefront import StorefrontCustomer  # noqa: E402
-from app.services import storefront, storefront_wallet  # noqa: E402
+from app.models import Panel, Reseller, StorefrontBot, StorefrontOrder  # noqa: E402
+from app.models.storefront import StorefrontCustomer, StorefrontPlan  # noqa: E402
+from app.services import (  # noqa: E402
+    storefront,
+    storefront_provision,
+    storefront_wallet,
+    usercreate,
+)
 
 
 def _run(body, tmp_path, name):
@@ -139,6 +145,78 @@ def test_reseller_menu_keyboard_storefront_button():
     off = keyboards.reseller_menu_keyboard(show_storefront=False)
     cbs_off = [b.callback_data for row in off.inline_keyboard for b in row]
     assert "menu:storefront" not in cbs_off
+
+
+def test_plan_label_is_gb_days_price_never_title():
+    p = StorefrontPlan(title="اقتصادی", gb=30, days=30, price_toman=120000)
+    label = sfkb.plan_label(p)
+    assert "اقتصادی" not in label          # owner: «عنوان نمی‌خواهیم»
+    assert "30 گیگ" in label and "30 روزه" in label and "120,000" in label
+
+
+def test_storefront_order_has_label_column(tmp_path):
+    async def body(s):
+        _r, _bot, cust = await _seed(s)
+        o = StorefrontOrder(customer_id=cust.id, label="گوشی", gb=30, days=30,
+                            price_toman=1000, status="provisioned")
+        s.add(o)
+        await s.commit()
+        await s.refresh(o)
+        assert o.label == "گوشی"
+
+    _run(body, tmp_path, "orderlabel.db")
+
+
+def test_provision_passes_customer_label_as_config_name(tmp_path, monkeypatch):
+    captured = {}
+
+    async def fake_create(session, reseller, *, count, gb, days, base_name):  # noqa: ANN001, ANN002
+        captured["base_name"] = base_name
+        captured["count"] = count
+        return SimpleNamespace(
+            created=[SimpleNamespace(name=base_name, uuid="u-1",
+                                     sub_link=f"https://h/p/u-1/#{base_name}")],
+            error=None, capacity_blocked=False, limit_hit=False)
+
+    monkeypatch.setattr(usercreate, "create_for_reseller", fake_create)
+
+    async def body(s):
+        _r, bot, cust = await _seed(s)
+        res = await storefront_provision.provision(s, bot, cust, gb=30, days=30, label="گوشی")
+        assert res.ok and res.uuid == "u-1"
+        assert captured["base_name"] == "گوشی"   # exactly the customer's text (Q1)
+        assert captured["count"] == 1
+
+    _run(body, tmp_path, "provlabel.db")
+
+
+def test_live_status_maps_panel_fields(tmp_path, monkeypatch):
+    from app.services.panel_client import admin_api
+
+    async def fake_get_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
+        return {"current_usage_GB": 3.5, "usage_limit_GB": 30, "remaining_day": 12}
+
+    monkeypatch.setattr(admin_api.AdminApiClient, "get_user", fake_get_user)
+
+    async def body(s):
+        _r, bot, cust = await _seed(s)
+        order = StorefrontOrder(customer_id=cust.id, label="x", gb=30, days=30,
+                                price_toman=1000, status="provisioned", panel_user_uuid="u-1")
+        s.add(order)
+        await s.commit()
+        st = await storefront_provision.live_status(s, bot, order)
+        assert st.ok and st.used_gb == 3.5 and st.limit_gb == 30.0 and st.remaining_days == 12
+
+        order.panel_user_uuid = None            # no uuid → best-effort failure, not a crash
+        st2 = await storefront_provision.live_status(s, bot, order)
+        assert st2.ok is False
+
+    _run(body, tmp_path, "livestatus.db")
+
+
+def test_wallet_kb_offers_topup_then_amount():
+    cbs = [b.callback_data for row in sfkb.wallet_kb().inline_keyboard for b in row]
+    assert "sftopup" in cbs                     # wallet screen offers top-up (not an immediate prompt)
 
 
 def test_monthly_fee_active_only(tmp_path):

@@ -166,3 +166,19 @@ async def pending_topups_for_bot(
         )
     ).scalars().all()
     return list(rows)
+
+
+async def pending_topups_for_customer(
+    session: AsyncSession, customer_id: int
+) -> list[StorefrontWalletTxn]:
+    """This customer's own pending top-ups (shown on their wallet screen)."""
+    rows = (
+        await session.execute(
+            select(StorefrontWalletTxn).where(
+                StorefrontWalletTxn.customer_id == customer_id,
+                StorefrontWalletTxn.kind == "topup",
+                StorefrontWalletTxn.status == "pending",
+            ).order_by(StorefrontWalletTxn.created_at)
+        )
+    ).scalars().all()
+    return list(rows)

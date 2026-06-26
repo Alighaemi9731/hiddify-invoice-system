@@ -8,6 +8,34 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.42.0 - 2026-06-27
+
+### Changed — Storefront bot UX redesign (customer + setup)
+
+A full pass over the per-reseller storefront flows after the owner's review:
+
+- **Plans show GB · days · price, no titles.** `buy_plans_kb`/`plans_manage_kb` now render
+  «N گیگ · M روزه — P تومان» via a shared `plan_label()`; the add-plan wizard no longer asks for a
+  title (goes straight to volume → days → price). The `StorefrontPlan.title` column is kept (unused) for
+  backward-compat.
+- **Each purchase gets a customer-chosen name.** Buying is now plan → **name** → confirm → charge →
+  provision: the customer sends a name (1–40 chars) for the service, a confirmation card shows the plan +
+  name + post-purchase balance, and the config is created on the panel with **exactly that name** (it's
+  also the sub-link label), so a customer who buys several can tell them apart. The name is stored on the
+  order (`storefront_orders.label`, migration `a3f5c9e1b7d2`) and passed through
+  `storefront_provision.provision(label=…)`.
+- **«سرویس‌های من» shows live usage + expiry.** Each provisioned service is an inline button; tapping it
+  reads the config **live** from the panel (used GB / limit GB, remaining days — new
+  `AdminApiClient.get_user` + `storefront_provision.live_status`, best-effort with a graceful fallback)
+  and re-sends the subscription link + QR.
+- **Wallet shows balance first.** Tapping «کیف پول» now shows the balance (and any pending top-ups) with
+  an «➕ افزایش موجودی» button; the amount is only asked after that button (it no longer jumps straight
+  into the amount prompt). The amount → method → proof flow is unchanged.
+- **Setup names the target panel/account.** The storefront setup always states «… برای حسابِ X روی
+  پنلِ Y راه‌اندازی می‌شود» before asking for the BotFather token (and still shows the picker when more
+  than one of the admin's accounts has the storefront enabled). To offer a choice, the owner enables
+  «فروشگاه» on each account in the web Resellers page.
+
 ## 1.41.2 - 2026-06-27
 
 ### Fixed — main bot menu reverted to inline; storefront setup no longer fails on token

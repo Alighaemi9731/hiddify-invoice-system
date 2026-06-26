@@ -1160,6 +1160,14 @@ _BOTFATHER_GUIDE = (
 )
 
 
+async def _storefront_target_line(session, r: Reseller) -> str:  # noqa: ANN001
+    """A one-liner naming which account/panel this storefront bot will sell from — always shown so the
+    owner knows the target before sending the token."""
+    panel = await session.get(Panel, r.panel_id)
+    return (f"🏪 رباتِ فروشگاهی برای حسابِ «{r.name or '—'}» روی پنلِ "
+            f"«{panel.key if panel else '?'}» راه‌اندازی می‌شود.\n\n")
+
+
 async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMContext) -> None:  # noqa: ANN001
     roots = [
         r for r in await _top_level_resellers(session, chat_id)
@@ -1169,16 +1177,17 @@ async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMConte
         await answer(rtl("این قابلیت برای شما فعال نیست."))
         return
     if len(roots) == 1:
+        target = await _storefront_target_line(session, roots[0])
         await state.set_state(StorefrontSetupState.token)
         await state.update_data(sf_reseller_id=roots[0].id)
-        await answer(rtl(_BOTFATHER_GUIDE), parse_mode="HTML",
+        await answer(rtl(target + _BOTFATHER_GUIDE), parse_mode="HTML",
                      reply_markup=keyboards.cancel_keyboard("« انصراف"))
         return
     items = []
     for r in roots:
         panel = await session.get(Panel, r.panel_id)
         items.append((r.id, f"{r.name or '—'} — {panel.key if panel else '?'}"))
-    await answer(rtl("🏪 رباتِ فروشگاهی روی کدام پنل؟"),
+    await answer(rtl("🏪 رباتِ فروشگاهی روی کدام حساب/پنل؟"),
                  reply_markup=keyboards.storefront_setup_panels_keyboard(items))
 
 
@@ -1197,9 +1206,10 @@ async def cb_sf_setup_panel(cb: CallbackQuery, state: FSMContext) -> None:
         if r is None or r.bot_chat_id != cb.from_user.id or not getattr(r, "storefront_enabled", False):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
+        target = await _storefront_target_line(s, r)
     await state.set_state(StorefrontSetupState.token)
     await state.update_data(sf_reseller_id=rid)
-    await cb.message.answer(rtl(_BOTFATHER_GUIDE), parse_mode="HTML",
+    await cb.message.answer(rtl(target + _BOTFATHER_GUIDE), parse_mode="HTML",
                             reply_markup=keyboards.cancel_keyboard("« انصراف"))
     await cb.answer()
 

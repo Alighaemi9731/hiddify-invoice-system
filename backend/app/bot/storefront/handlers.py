@@ -15,6 +15,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from sqlalchemy import select
 
 from app.bot.rtl import rtl
 from app.bot.storefront import keyboards as kb
@@ -35,11 +36,11 @@ storefront_router.message.filter(F.chat.type == "private")
 
 
 class SF(StatesGroup):
-    plan_title = State()
     plan_gb = State()
     plan_days = State()
     plan_price = State()
     pay_value = State()        # data: method (+ card sub-step)
+    buy_name = State()         # customer names the config; data: buy_plan_id
     topup_amount = State()     # data: nothing yet
     topup_proof = State()      # data: amount, method
     confirm_amount = State()   # admin sets credited Toman; data: txn_id
@@ -96,9 +97,12 @@ async def _notify_admin(bot: Bot, reseller: Reseller, text: str, **kw) -> None: 
         log.warning("notify storefront admin failed", exc_info=True)
 
 
-async def _deliver_config(bot: Bot, chat_id: int, *, gb: int, days: int, sub_link: str) -> None:  # noqa: ANN001
+async def _deliver_config(  # noqa: ANN001
+    bot: Bot, chat_id: int, *, gb: int, days: int, sub_link: str, name: str | None = None
+) -> None:
+    head = f"✅ سرویسِ «{name}» آماده شد" if name else "✅ سرویسِ شما آماده شد"
     caption = rtl(
-        f"✅ سرویسِ شما آماده شد — {gb} گیگ · {days} روز\n\n"
+        f"{head} — {gb} گیگ · {days} روز\n\n"
         f"🔗 لینکِ اشتراک:\n<code>{sub_link}</code>"
     )
     try:
@@ -219,32 +223,44 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
             return
         await ans(rtl("🛒 یک سرویس را انتخاب کنید:"), reply_markup=kb.buy_plans_kb(plans))
     elif action == "wallet":
-        bal = _toman(customer.wallet_balance_toman)
-        await ans(rtl(f"👛 موجودیِ کیفِ پول: {bal} تومان\nبرای شارژ، مبلغ (تومان) را بفرستید:"),
-                  reply_markup=kb.cancel_kb())
-        await state.set_state(SF.topup_amount)
+        bal = _toman(storefront_wallet.balance(customer))
+        lines = [f"👛 کیفِ پولِ شما\n\nموجودی: {bal} تومان"]
+        pend = await storefront_wallet.pending_topups_for_customer(s, customer.id)
+        if pend:
+            lines.append("\n⏳ در انتظارِ تأییدِ مدیر:")
+            lines += [f"• #{t.id} — {_toman(t.amount_toman)} تومان" for t in pend]
+        await ans(rtl("\n".join(lines)), reply_markup=kb.wallet_kb())
     elif action == "orders":
-        rows = (await s.execute(
-            StorefrontOrder.__table__.select().where(StorefrontOrder.customer_id == customer.id)
-        )).all()
-        if not rows:
+        orders = (await s.execute(
+            select(StorefrontOrder).where(StorefrontOrder.customer_id == customer.id)
+            .order_by(StorefrontOrder.id.desc())
+        )).scalars().all()
+        if not orders:
             await ans(rtl("هنوز سرویسی نخریده‌اید."))
             return
-        out = ["📦 سرویس‌های شما:"]
-        for r in rows[-20:]:
-            out.append(f"• {r.gb} گیگ/{r.days} روز — {r.status}")
-        await ans(rtl("\n".join(out)))
+        live = [o for o in orders if o.status == "provisioned"]
+        other = [o for o in orders if o.status != "provisioned"]
+        if live:
+            await ans(rtl("📦 سرویس‌های شما — برای دیدنِ مصرف و لینک، روی هرکدام بزنید:"),
+                      reply_markup=kb.orders_kb(live[:20]))
+        if other:
+            labels = {"pending": "در حالِ پردازش", "failed": "ناموفق"}
+            lines = ["⏳ سایر:"]
+            lines += [f"• {o.label or 'سرویس'} — {o.gb}گیگ/{o.days}روز — "
+                      f"{labels.get(o.status, o.status)}" for o in other[:10]]
+            await ans(rtl("\n".join(lines)))
     elif action == "support":
         await ans(rtl(f"💬 پشتیبانی: {sf.support_contact or 'به‌زودی'}"))
 
 
-# ── buy → wallet debit → provision ───────────────────────────────────────────
+# ── buy → name → confirm → wallet debit → provision ──────────────────────────
 
 @storefront_router.callback_query(F.data.startswith("sfbuy:"))
-async def sf_buy(cb: CallbackQuery, bot: Bot) -> None:
+async def sf_buy(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Step 1: a plan is tapped. Check the balance, then ask the customer to NAME this service."""
     plan_id = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
-        sf, reseller, _ = await _resolve(s, bot, cb.from_user)
+        sf, _reseller, _ = await _resolve(s, bot, cb.from_user)
         if sf is None:
             await cb.answer()
             return
@@ -257,26 +273,92 @@ async def sf_buy(cb: CallbackQuery, bot: Bot) -> None:
             short = int(plan.price_toman) - int(storefront_wallet.balance(customer))
             await cb.message.answer(rtl(
                 f"موجودیِ کیفِ پولِ شما کافی نیست. {_toman(short)} تومان کم دارید.\n"
-                "از «👛 کیف پول» کیفِ خود را شارژ کنید."))
+                "از «👛 کیف پول» کیفِ خود را شارژ کنید."), reply_markup=kb.wallet_kb())
+            await cb.answer()
+            return
+        plan_text = kb.plan_label(plan)
+    await state.set_state(SF.buy_name)
+    await state.update_data(buy_plan_id=plan_id)
+    await cb.message.answer(rtl(
+        f"🛒 {plan_text}\n\n"
+        "یک نام برای این سرویس بفرستید (مثلاً: گوشی) تا بعداً آن را از هم تشخیص دهید:"),
+        reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.buy_name, F.text)
+async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Step 2: validate the chosen name and show a final confirm card before charging."""
+    name = " ".join((message.text or "").split())
+    if not name or len(name) > 40:
+        await message.answer(rtl("نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید."),
+                             reply_markup=kb.cancel_kb())
+        return
+    data = await state.get_data()
+    plan_id = int(data.get("buy_plan_id") or 0)
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            await state.clear()
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+        plan = await s.get(StorefrontPlan, plan_id)
+        if plan is None or plan.storefront_bot_id != sf.id or not plan.enabled:
+            await state.clear()
+            await message.answer(rtl("این پلن دیگر در دسترس نیست."))
+            return
+        after = int(storefront_wallet.balance(customer)) - int(plan.price_toman)
+        plan_text = kb.plan_label(plan)
+    await state.update_data(buy_name=name)
+    await message.answer(rtl(
+        f"🧾 تأییدِ خرید\n\n{plan_text}\nنام: {name}\n\n"
+        f"موجودیِ پس از خرید: {_toman(after)} تومان"),
+        reply_markup=kb.buy_confirm_kb())
+
+
+@storefront_router.callback_query(F.data == "sfbuyok")
+async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Step 3: charge the wallet, create the order, provision the config under the chosen name."""
+    data = await state.get_data()
+    plan_id = int(data.get("buy_plan_id") or 0)
+    name = (data.get("buy_name") or "").strip()
+    await state.clear()
+    if not plan_id or not name:
+        await cb.answer()
+        return
+    async with SessionLocal() as s:
+        sf, reseller, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
+        plan = await s.get(StorefrontPlan, plan_id)
+        if plan is None or plan.storefront_bot_id != sf.id or not plan.enabled:
+            await cb.message.answer(rtl("این پلن دیگر در دسترس نیست."))
             await cb.answer()
             return
         ok, _txn = await storefront_wallet.charge_purchase(s, customer.id, plan.price_toman)
         if not ok:
-            await cb.answer("موجودی کافی نیست.", show_alert=True)
+            await cb.message.answer(rtl(
+                "موجودیِ کیفِ پولِ شما کافی نیست. ابتدا کیفِ خود را شارژ کنید."),
+                reply_markup=kb.wallet_kb())
+            await cb.answer()
             return
         order = StorefrontOrder(
-            customer_id=customer.id, plan_id=plan.id, gb=plan.gb, days=plan.days,
+            customer_id=customer.id, plan_id=plan.id, label=name[:64], gb=plan.gb, days=plan.days,
             price_toman=plan.price_toman, status="pending")
         s.add(order)
         await s.commit()
         await cb.message.answer(rtl("⏳ در حال ساختِ سرویس…"))
-        res = await storefront_provision.provision(s, sf, customer, gb=plan.gb, days=plan.days)
+        res = await storefront_provision.provision(
+            s, sf, customer, gb=plan.gb, days=plan.days, label=name)
         if res.ok and res.sub_link:
             order.status = "provisioned"
             order.panel_user_uuid = res.uuid
             order.sub_link = res.sub_link
             await s.commit()
-            await _deliver_config(bot, cb.from_user.id, gb=plan.gb, days=plan.days, sub_link=res.sub_link)
+            await _deliver_config(
+                bot, cb.from_user.id, gb=plan.gb, days=plan.days, sub_link=res.sub_link, name=name)
         else:
             order.status = "failed"
             await storefront_wallet.refund(s, customer.id, plan.price_toman, note=f"provision {res.reason}")
@@ -289,7 +371,52 @@ async def sf_buy(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
+# ── my services: live detail ─────────────────────────────────────────────────
+
+@storefront_router.callback_query(F.data.startswith("sforder:"))
+async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
+    order_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _reseller, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
+        order = await s.get(StorefrontOrder, order_id)
+        if order is None or order.customer_id != customer.id:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        name = order.label or "سرویس"
+        lines = [f"📦 {name}", f"پلن: {order.gb} گیگ · {order.days} روز"]
+        status = await storefront_provision.live_status(s, sf, order)
+        if status.ok:
+            lines.append(f"مصرف: {status.used_gb:.2f} از {status.limit_gb:.0f} گیگ")
+            if status.remaining_days is not None:
+                lines.append(f"روزهای باقی‌مانده: {status.remaining_days}")
+        else:
+            lines.append("اطلاعاتِ مصرف فعلاً در دسترس نیست.")
+        await cb.message.answer(rtl("\n".join(lines)))
+        if order.sub_link:
+            await _deliver_config(
+                bot, cb.from_user.id, gb=order.gb, days=order.days,
+                sub_link=order.sub_link, name=name)
+    await cb.answer()
+
+
 # ── top-up flow ───────────────────────────────────────────────────────────────
+
+@storefront_router.callback_query(F.data == "sftopup")
+async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, cb.from_user)
+    if sf is None:
+        await cb.answer()
+        return
+    await state.set_state(SF.topup_amount)
+    await cb.message.answer(rtl("مبلغی که می‌خواهید شارژ کنید (تومان) را بفرستید:"),
+                            reply_markup=kb.cancel_kb())
+    await cb.answer()
+
 
 @storefront_router.message(SF.topup_amount, F.text)
 async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None:
@@ -474,16 +601,10 @@ async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     if not is_admin:
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
-    await state.set_state(SF.plan_title)
-    await cb.message.answer(rtl("عنوانِ پلن را بفرستید (مثلاً: اقتصادی):"), reply_markup=kb.cancel_kb())
-    await cb.answer()
-
-
-@storefront_router.message(SF.plan_title, F.text)
-async def sf_plan_title(message: Message, state: FSMContext) -> None:
-    await state.update_data(p_title=(message.text or "").strip()[:128])
+    # No title (owner: «عنوان نمی‌خواهیم») — collect volume → days → price only.
     await state.set_state(SF.plan_gb)
-    await message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+    await cb.answer()
 
 
 @storefront_router.message(SF.plan_gb, F.text)
@@ -521,7 +642,7 @@ async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
         if sf is None or not is_admin:
             return
         await storefront.add_plan(
-            s, sf.id, title=data.get("p_title", ""), gb=int(data.get("p_gb", 0)),
+            s, sf.id, title="", gb=int(data.get("p_gb", 0)),
             days=int(data.get("p_days", 0)), price_toman=int(raw))
         plans = await storefront.list_plans(s, sf.id)
     await message.answer(rtl("✅ پلن اضافه شد."), reply_markup=kb.plans_manage_kb(plans))

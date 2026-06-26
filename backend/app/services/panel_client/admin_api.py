@@ -120,6 +120,22 @@ class AdminApiClient(PanelClient):
         uid = data.get("id") if isinstance(data, dict) else None
         return int(uid) if isinstance(uid, int) else None
 
+    async def get_user(  # noqa: ANN001
+        self, panel, user_uuid: str, *, api_key: str | None = None
+    ) -> dict | None:
+        """Live read of ONE end-user via `GET /user/{uuid}/` — the full record (used by the storefront
+        «my services» live view: current_usage_GB, usage_limit_GB, remaining_day, …). Returns the parsed
+        dict, or None if the user is absent (404). Other HTTP errors raise."""
+        url = f"{panel.admin_api_base}/user/{user_uuid}/"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, headers=self._headers(panel, api_key))
+        if resp.status_code == 404:
+            return None
+        if resp.status_code >= 400:
+            raise RuntimeError(f"GET user {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+
     async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
         """Return Hiddify's internal numeric id for every visible user (WHOLE panel — heavy).
 

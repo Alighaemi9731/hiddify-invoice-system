@@ -146,6 +146,7 @@ class StorefrontOrder(Base, TimestampMixin):
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("storefront_plans.id", ondelete="SET NULL"), nullable=True
     )
+    label: Mapped[str | None] = mapped_column(String(64), nullable=True)  # customer-chosen config name
     gb: Mapped[int] = mapped_column(Integer, default=0)
     days: Mapped[int] = mapped_column(Integer, default=0)
     price_toman: Mapped[int] = mapped_column(Integer, default=0)

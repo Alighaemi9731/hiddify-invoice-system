@@ -8,7 +8,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.models import StorefrontBot, StorefrontPlan
+from app.models import StorefrontBot, StorefrontOrder, StorefrontPlan
 
 # ── docked reply-keyboard menus (label → action) ──────────────────────────────
 ADMIN_MENU: list[tuple[str, str]] = [
@@ -63,11 +63,14 @@ def cancel_kb(label: str = "✖️ انصراف") -> InlineKeyboardMarkup:
 
 
 # ── inline keyboards ──────────────────────────────────────────────────────────
+def plan_label(p: StorefrontPlan) -> str:
+    """Customer-facing plan label — volume · duration · price, no title (owner: «عنوان نمی‌خواهیم»)."""
+    return f"{p.gb} گیگ · {p.days} روزه — {p.price_toman:,} تومان"
+
+
 def buy_plans_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(
-            text=f"{p.title or f'{p.gb}گیگ/{p.days}روز'} — {p.price_toman:,} ت",
-            callback_data=f"sfbuy:{p.id}")]
+        [InlineKeyboardButton(text=plan_label(p), callback_data=f"sfbuy:{p.id}")]
         for p in plans
     ]
     return InlineKeyboardMarkup(
@@ -80,13 +83,40 @@ def plans_manage_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
     for p in plans:
         flag = "" if p.enabled else " (غیرفعال)"
         rows.append([
-            InlineKeyboardButton(
-                text=f"{p.title or f'{p.gb}گیگ/{p.days}روز'} — {p.price_toman:,} ت{flag}",
-                callback_data="sfnoop"),
+            InlineKeyboardButton(text=f"{plan_label(p)}{flag}", callback_data="sfnoop"),
             InlineKeyboardButton(text="🗑", callback_data=f"sfplandel:{p.id}"),
         ])
     rows.append([InlineKeyboardButton(text="➕ افزودن پلن", callback_data="sfplanadd")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
+    """One button per provisioned service (tap → live usage/expiry + link/QR)."""
+    rows = [
+        [InlineKeyboardButton(
+            text=f"{o.label or 'سرویس'} — {o.gb}گیگ/{o.days}روز",
+            callback_data=f"sforder:{o.id}")]
+        for o in orders
+    ]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="sfnoop")]]
+    )
+
+
+def buy_confirm_kb() -> InlineKeyboardMarkup:
+    """Final confirm before charging the wallet + creating the config."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ خرید و ساختِ سرویس", callback_data="sfbuyok")],
+        [InlineKeyboardButton(text="✖️ انصراف", callback_data="sfcancel")],
+    ])
+
+
+def wallet_kb() -> InlineKeyboardMarkup:
+    """Wallet screen — show balance first, then offer top-up (owner: don't jump straight to amount)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ افزایش موجودی", callback_data="sftopup")],
+        [InlineKeyboardButton(text="✖️ بستن", callback_data="sfcancel")],
+    ])
 
 
 def pay_methods_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:

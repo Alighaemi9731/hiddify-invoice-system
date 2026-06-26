@@ -32,6 +32,7 @@ _POST_BASELINE_COLUMNS = {
     "usage_meters.renew_used_gb", "panels.host_aliases", "panels.client_proxy_path_enc",
     "end_user_snapshots.panel_user_id",
     "resellers.storefront_enabled", "resellers.storefront_monthly_fee_toman",
+    "storefront_orders.label",
 }
 # Whole TABLES introduced by a post-baseline migration. A pre-Alembic (baseline-era) database
 # legitimately lacks these — they're created by `upgrade` right after the baseline is stamped — so
