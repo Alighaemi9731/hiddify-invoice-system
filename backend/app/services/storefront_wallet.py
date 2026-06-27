@@ -108,10 +108,11 @@ async def manual_adjust(
 
 
 async def charge_purchase(
-    session: AsyncSession, customer_id: int, price_toman: int
+    session: AsyncSession, customer_id: int, price_toman: int, *, order_id: int | None = None
 ) -> tuple[bool, StorefrontWalletTxn | None]:
     """Atomically debit the wallet for a purchase. Re-reads the customer under a row lock (Postgres)
-    so two concurrent buys can't overspend. Returns (ok, debit_txn). ok=False if the balance is short."""
+    so two concurrent buys can't overspend. Returns (ok, debit_txn). ok=False if the balance is short.
+    Does NOT commit — the caller commits the debit together with the order it belongs to."""
     price = Decimal(str(int(price_toman)))
     stmt = select(StorefrontCustomer).where(StorefrontCustomer.id == customer_id)
     try:
@@ -124,17 +125,18 @@ async def charge_purchase(
     customer.wallet_balance_toman = float(balance(customer) - price)
     txn = StorefrontWalletTxn(
         customer_id=customer.id, kind="purchase", amount_toman=-price, status="done",
-        decided_at=_now(),
+        order_id=order_id, decided_at=_now(),
     )
     session.add(txn)
-    await session.commit()
+    await session.flush()
     return True, txn
 
 
 async def refund(
-    session: AsyncSession, customer_id: int, amount_toman: int, *, note: str = ""
+    session: AsyncSession, customer_id: int, amount_toman: int, *, order_id: int | None = None,
+    note: str = "",
 ) -> StorefrontWalletTxn | None:
-    """Credit a refund back to the wallet (e.g. provisioning failed after the debit)."""
+    """Credit a refund back to the wallet (e.g. provisioning failed after the debit). Does NOT commit."""
     customer = await session.get(StorefrontCustomer, customer_id)
     if customer is None:
         return None
@@ -142,11 +144,24 @@ async def refund(
     customer.wallet_balance_toman = float(balance(customer) + amt)
     txn = StorefrontWalletTxn(
         customer_id=customer.id, kind="refund", amount_toman=amt, status="done",
-        note=(note or "")[:255], decided_at=_now(),
+        order_id=order_id, note=(note or "")[:255], decided_at=_now(),
     )
     session.add(txn)
-    await session.commit()
+    await session.flush()
     return txn
+
+
+async def order_has_refund(session: AsyncSession, order_id: int) -> bool:
+    """True if this order's purchase was already refunded — so the reaper never double-refunds."""
+    row = (
+        await session.execute(
+            select(StorefrontWalletTxn.id).where(
+                StorefrontWalletTxn.order_id == order_id,
+                StorefrontWalletTxn.kind == "refund",
+            ).limit(1)
+        )
+    ).first()
+    return row is not None
 
 
 async def pending_topups_for_bot(

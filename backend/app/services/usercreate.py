@@ -84,12 +84,17 @@ class CreateResult:
 
 
 async def create_for_reseller(
-    session: AsyncSession, reseller: Reseller, *, count: int, gb: int, days: int, base_name: str
+    session: AsyncSession, reseller: Reseller, *, count: int, gb: int, days: int, base_name: str,
+    user_uuid: str | None = None,
 ) -> CreateResult:
     """Create `count` users under `reseller` (names: the base for a single, `<base>1..<base>N` for
     bulk). Capacity is pre-checked against the reseller's `panel_max_users`; the panel also enforces
     it server-side (a rejection sets `limit_hit`). Stops at the first failure and returns what was
-    created so the caller can report partial success."""
+    created so the caller can report partial success.
+
+    `user_uuid` (single-create only) pins the new user's uuid — the storefront pre-generates it and
+    records it on the order BEFORE provisioning, so a crash mid-create is recoverable (the reaper can
+    look the uuid up on the panel)."""
     panel = await session.get(Panel, reseller.panel_id)
     res = CreateResult(max_users=reseller.panel_max_users)
     if panel is None:
@@ -111,7 +116,8 @@ async def create_for_reseller(
         name = base_name if count == 1 else f"{base_name}{i + 1}"
         try:
             uid = await client.create_user(
-                panel, name=name, gb=gb, days=days, api_key=reseller.admin_uuid
+                panel, name=name, gb=gb, days=days, api_key=reseller.admin_uuid,
+                user_uuid=user_uuid if count == 1 else None,
             )
         except UserLimitError:
             res.limit_hit = True

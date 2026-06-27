@@ -18,6 +18,7 @@ _SCHEDULE_KEYS = {
     "invoice_day_of_month", "invoice_hour", "dunning_hour",
     "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
     "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
+    "storefront_pending_order_reaper_minutes",
 }
 
 

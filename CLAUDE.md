@@ -123,6 +123,22 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M72** Storefront Phase 2 — reliability, subscription management & retention (`v1.44.0`). Free
+  trial **on by default** for everyone (concurrency-safe compare-and-set + per-customer in-process lock).
+  Orders now reference the real panel user via denormalized `(panel_id, panel_user_uuid)` (no fragile FK)
+  with the uuid pre-generated before provisioning. **Atomic crash-safe purchase** (`storefront_provision.purchase`):
+  order+debit commit together before any network I/O, provision outside the session, finalize/refund;
+  a new **pending-order reaper** scheduler job (`storefront_pending_order_reaper_minutes`, default 15m)
+  completes or refunds orphaned buys. Full **subscription control** — customer renew (same config, fresh
+  GB+days at the CURRENT price via `AdminApiClient.renew_user` PATCH), pause/resume (`set_user_enabled`),
+  delete (`delete_user` = `get_user_id`→`bulk_delete_users`); admin manages any customer's subs. New
+  `storefront_subscription.py` + `panel_client.admin_api` `patch_user`/`delete_user`/`renew_user`. **Banned**
+  enforced via `storefront_router` outer middleware (callbacks + messages, fail-open). **Retention**:
+  `maintenance.prune_stale_storefront` (in the daily job) purges no-footprint tire-kickers inactive
+  `storefront_stale_customer_days` (default 90) + junk orders/topups/proofs; the financial ledger is never
+  touched. Scale/robustness: bounded-parallel manager `get_me`, a duplicate/invalid token can't abort the
+  fleet, supervised bot loops, larger Postgres pool, editable welcome text, per-customer pending-topup cap,
+  proof file-handle fix, customer free-text fallback. Migration `c7a2f4e9d1b6`. Tests in `tests/test_storefront.py`.
 - [x] **M71** Per-reseller VPN storefront bots — Phase 1 (`v1.41.0`). Multi-tenant: each top-level
   reseller can run their own Telegram shop bot (own BotFather token, one of their panels) to sell VPN to
   their customers. Runtime: a second aiogram Dispatcher + storefront router in the existing `bot`

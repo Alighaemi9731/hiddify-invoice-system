@@ -136,6 +136,59 @@ class AdminApiClient(PanelClient):
         data = resp.json()
         return data if isinstance(data, dict) else None
 
+    async def patch_user(  # noqa: ANN001
+        self, panel, user_uuid: str, body: dict, *, api_key: str | None = None
+    ) -> None:
+        """PATCH one user (usage_limit_GB / package_days / start_date / enable / …) via
+        `PATCH /user/{uuid}/`. Tolerates the Hiddify v12 quirk where the PATCH applies but returns a
+        non-2xx: re-GET and accept if every field we sent actually took effect."""
+        url = f"{panel.admin_api_base}/user/{user_uuid}/"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.patch(url, headers=self._headers(panel, api_key), json=body)
+            if resp.status_code < 400:
+                return
+            try:
+                check = await client.get(url, headers=self._headers(panel, api_key))
+                if check.status_code < 400:
+                    d = check.json()
+                    if isinstance(d, dict) and all(d.get(k) == v for k, v in body.items()):
+                        return
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
+
+    async def delete_user(  # noqa: ANN001
+        self, panel, user_uuid: str, *, api_key: str | None = None
+    ) -> None:
+        """Delete ONE end-user. Hiddify v2 has no single-user DELETE, so resolve the numeric id (as the
+        owning admin) and use the native bulk action. A missing user (already gone) is a no-op."""
+        uid = await self.get_user_id(panel, user_uuid, api_key=api_key)
+        if uid is None:
+            return
+        await self.bulk_delete_users(panel, [uid])
+
+    async def renew_user(  # noqa: ANN001
+        self, panel, user_uuid: str, *, gb: int, days: int, api_key: str | None = None
+    ) -> None:
+        """Renew/extend a user IN PLACE (same uuid → the customer's link/QR keep working): grant a fresh
+        `gb`/`days` from now. Reads current usage and sets `usage_limit_GB = used + gb` so the REMAINING
+        quota is exactly `gb` regardless of Hiddify's reset semantics, resets `package_days`, and clears
+        `start_date` (null → the window restarts on first connect). Re-enables if it was disabled."""
+        data = await self.get_user(panel, user_uuid, api_key=api_key)
+        used = 0.0
+        if data:
+            try:
+                used = float(data.get("current_usage_GB") or 0)
+            except (TypeError, ValueError):
+                used = 0.0
+        body = {
+            "usage_limit_GB": round(used + float(gb), 3),
+            "package_days": int(days),
+            "start_date": None,
+            "enable": True,
+        }
+        await self.patch_user(panel, user_uuid, body, api_key=api_key)
+
     async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
         """Return Hiddify's internal numeric id for every visible user (WHOLE panel — heavy).
 

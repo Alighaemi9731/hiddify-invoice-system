@@ -23,6 +23,7 @@ from app.services import storefront
 log = logging.getLogger("bot.storefront")
 
 _RECONCILE_SECONDS = 30
+_GETME_CONCURRENCY = 20  # bounded parallel token validation (cold start with many bots stays fast)
 
 _dp: Dispatcher | None = None
 _poll_task: asyncio.Task[None] | None = None
@@ -86,26 +87,46 @@ async def reconcile() -> None:
 
         await _stop_polling()
 
-        bots: list[Bot] = []
-        for rid, (row_id, tok) in desired.items():
-            bot = Bot(token=tok)
-            try:
-                me = await asyncio.wait_for(bot.get_me(), timeout=20)
-            except Exception as exc:  # noqa: BLE001 — invalid/revoked token → mark errored, skip
-                await _safe_close(bot)
-                async with SessionLocal() as s:
-                    await storefront.mark_errored(s, row_id, f"getMe failed: {exc}")
-                log.warning("storefront bot row %s token invalid: %s", row_id, exc)
-                continue
-            async with SessionLocal() as s:
-                row = await s.get(StorefrontBot, row_id)
-                if row is not None and (row.bot_telegram_id != me.id or row.bot_username != me.username):
-                    row.bot_telegram_id = me.id
-                    row.bot_username = me.username
-                    await s.commit()
-            bots.append(bot)
-            log.info("storefront bot @%s (reseller %s) ready", me.username, rid)
+        # Validate every desired bot's token in PARALLEL (bounded) — a revoked token is filtered out
+        # here (marked errored, skipped) so it can't crash the shared poller; bounded concurrency keeps
+        # a cold start with hundreds of bots fast instead of N sequential getMe calls.
+        sem = asyncio.Semaphore(_GETME_CONCURRENCY)
 
+        async def _validate(row_id: int, rid: int, tok: str) -> Bot | None:
+            async with sem:
+                bot = Bot(token=tok)
+                try:
+                    me = await asyncio.wait_for(bot.get_me(), timeout=20)
+                except Exception as exc:  # noqa: BLE001 — invalid/revoked token → mark errored, skip
+                    await _safe_close(bot)
+                    async with SessionLocal() as s:
+                        await storefront.mark_errored(s, row_id, f"getMe failed: {exc}")
+                    log.warning("storefront bot row %s token invalid: %s", row_id, exc)
+                    return None
+                try:  # persist the id/username; a duplicate-token unique clash must NOT abort the fleet
+                    async with SessionLocal() as s:
+                        row = await s.get(StorefrontBot, row_id)
+                        if row is not None and (
+                            row.bot_telegram_id != me.id or row.bot_username != me.username
+                        ):
+                            row.bot_telegram_id = me.id
+                            row.bot_username = me.username
+                            await s.commit()
+                except Exception as exc:  # noqa: BLE001 — e.g. two rows share one token → same me.id
+                    await _safe_close(bot)
+                    async with SessionLocal() as s:
+                        await storefront.mark_errored(s, row_id, f"id clash: {exc}")
+                    log.warning("storefront bot row %s id persist failed: %s", row_id, exc)
+                    return None
+                log.info("storefront bot @%s (reseller %s) ready", me.username, rid)
+                return bot
+
+        # return_exceptions so one unexpected failure can't cancel the others (belt + suspenders).
+        validated = await asyncio.gather(
+            *(_validate(row_id, rid, tok) for rid, (row_id, tok) in desired.items()),
+            return_exceptions=True,
+        )
+        bots: list[Bot] = [b for b in validated if isinstance(b, Bot)]
         _polled = bots
         if bots:
             # ONE start_polling for ALL bots; we own session-closing (close_bot_session=False).

@@ -69,11 +69,27 @@ async def main() -> None:
     restart_signal.start_watcher()
 
     # Run the owner/reseller main bot AND the per-reseller storefront-bot manager (which polls every
-    # active reseller storefront bot) concurrently in this one process. A crash in one must not kill
-    # the other.
+    # active reseller storefront bot) concurrently in this one process. Each runs under a supervisor so
+    # an unexpected crash in one self-restarts WITHOUT cancelling the other.
     from app.bot.storefront.manager import run_manager
 
-    await asyncio.gather(_main_bot_loop(), run_manager())
+    await asyncio.gather(
+        _supervise(_main_bot_loop, "main-bot-loop"),
+        _supervise(run_manager, "storefront-manager"),
+    )
+
+
+async def _supervise(factory, name: str) -> None:  # noqa: ANN001
+    """Keep a long-running loop alive: restart it on any unexpected exit, never let it cancel siblings."""
+    while True:
+        try:
+            await factory()
+            log.warning("%s exited; restarting in 15s", name)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("%s crashed; restarting in 15s", name)
+        await asyncio.sleep(15)
 
 
 if __name__ == "__main__":

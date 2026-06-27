@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, exists, or_, select
+from sqlalchemy import CursorResult, and_, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -39,6 +40,9 @@ from app.models import (
     EnforcementAction,
     Invoice,
     Panel,
+    StorefrontCustomer,
+    StorefrontOrder,
+    StorefrontWalletTxn,
     SyncRun,
     UsageMeter,
 )
@@ -189,4 +193,89 @@ async def prune_stale_snapshots(session: AsyncSession) -> dict[str, int]:
     counts = {"stale_snapshots": snapshots, "orphan_meters": meters, "old_meters": old_meters}
     if snapshots or meters or old_meters:
         log.info("Stale-snapshot retention sweep (keep >= %s): %s", keep_from, counts)
+    return counts
+
+
+async def prune_stale_storefront(
+    session: AsyncSession, *, now: dt.datetime | None = None
+) -> dict[str, int]:
+    """Purge storefront bloat so the DB doesn't grow from tire-kickers.
+
+    Deletes:
+      • Customers with **no financial footprint** — zero wallet balance, no provisioned/disabled order,
+        AND no confirmed top-up — inactive for ``storefront_stale_customer_days`` (default 90; 0 = off).
+        Such a customer never successfully paid (net balance 0), so the WHOLE row goes — their orders,
+        wallet txns and proof files included. (These are reseller↔customer records; the owner↔reseller
+        billing ledger — financial_records/invoices/payments — is a different subsystem and is untouched.)
+      • Orphan junk for KEPT customers: failed/deleted orders and rejected top-ups older than the window.
+
+    For a KEPT customer (positive balance, a live service, or a confirmed top-up) nothing financial is
+    pruned: confirmed top-ups, purchase/refund/manual txns, and provisioned/disabled orders all survive.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    raw = await settings_service.get(session, "storefront_stale_customer_days", 90)
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        days = 90
+    if days <= 0:
+        return {"customers": 0, "junk_orders": 0, "junk_topups": 0, "retention_days": 0}
+    cutoff = now - dt.timedelta(days=days)
+
+    async def _delete(stmt: Any) -> int:
+        result = await session.execute(stmt.execution_options(synchronize_session=False))
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    has_live_order = exists().where(
+        StorefrontOrder.customer_id == StorefrontCustomer.id,
+        StorefrontOrder.status.in_(("provisioned", "disabled")),
+    )
+    has_confirmed_topup = exists().where(
+        StorefrontWalletTxn.customer_id == StorefrontCustomer.id,
+        StorefrontWalletTxn.kind == "topup",
+        StorefrontWalletTxn.status == "confirmed",
+    )
+    activity = func.coalesce(StorefrontCustomer.last_seen_at, StorefrontCustomer.created_at)
+    stale_ids = list((await session.execute(
+        select(StorefrontCustomer.id).where(
+            StorefrontCustomer.wallet_balance_toman <= 0,
+            ~has_live_order,
+            ~has_confirmed_topup,
+            activity < cutoff,
+        ).limit(5000)
+    )).scalars().all())
+
+    # Remove proof files for everything we're about to delete (stale customers' txns + aged rejected
+    # top-ups), then the rows. Files are the real disk bloat.
+    proof_filter = and_(StorefrontWalletTxn.status == "rejected", StorefrontWalletTxn.created_at < cutoff)
+    if stale_ids:
+        proof_filter = or_(proof_filter, StorefrontWalletTxn.customer_id.in_(stale_ids))
+    for path in (await session.execute(
+        select(StorefrontWalletTxn.proof_path).where(
+            StorefrontWalletTxn.proof_path.is_not(None), proof_filter)
+    )).scalars().all():
+        if not path:
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    customers = 0
+    if stale_ids:
+        # Explicit child-first deletes (don't depend on DB cascade being enabled, e.g. SQLite PRAGMA).
+        await _delete(delete(StorefrontWalletTxn).where(StorefrontWalletTxn.customer_id.in_(stale_ids)))
+        await _delete(delete(StorefrontOrder).where(StorefrontOrder.customer_id.in_(stale_ids)))
+        customers = await _delete(delete(StorefrontCustomer).where(StorefrontCustomer.id.in_(stale_ids)))
+
+    junk_orders = await _delete(delete(StorefrontOrder).where(
+        StorefrontOrder.status.in_(("failed", "deleted")), StorefrontOrder.created_at < cutoff))
+    junk_topups = await _delete(delete(StorefrontWalletTxn).where(
+        StorefrontWalletTxn.kind == "topup", StorefrontWalletTxn.status == "rejected",
+        StorefrontWalletTxn.created_at < cutoff))
+    await session.commit()
+
+    counts = {"customers": customers, "junk_orders": junk_orders, "junk_topups": junk_topups}
+    if any(counts.values()):
+        log.info("Storefront retention sweep (>%dd inactive): %s", days, counts)
     return counts

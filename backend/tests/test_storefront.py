@@ -4,6 +4,8 @@ import os
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/storefront.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
@@ -14,10 +16,16 @@ from app.bot import keyboards  # noqa: E402
 from app.bot.storefront import keyboards as sfkb  # noqa: E402
 from app.core import crypto  # noqa: E402
 from app.models import Panel, Reseller, StorefrontBot, StorefrontOrder  # noqa: E402
-from app.models.storefront import StorefrontCustomer, StorefrontPlan  # noqa: E402
+from app.models.storefront import (  # noqa: E402
+    StorefrontCustomer,
+    StorefrontPlan,
+    StorefrontWalletTxn,
+)
 from app.services import (  # noqa: E402
+    maintenance,
     storefront,
     storefront_provision,
+    storefront_subscription,
     storefront_wallet,
     usercreate,
 )
@@ -170,12 +178,13 @@ def test_storefront_order_has_label_column(tmp_path):
 def test_provision_passes_customer_label_as_config_name(tmp_path, monkeypatch):
     captured = {}
 
-    async def fake_create(session, reseller, *, count, gb, days, base_name):  # noqa: ANN001, ANN002
+    async def fake_create(session, reseller, *, count, gb, days, base_name, user_uuid=None):  # noqa: ANN001, ANN002
         captured["base_name"] = base_name
         captured["count"] = count
+        uid = user_uuid or "u-1"
         return SimpleNamespace(
-            created=[SimpleNamespace(name=base_name, uuid="u-1",
-                                     sub_link=f"https://h/p/u-1/#{base_name}")],
+            created=[SimpleNamespace(name=base_name, uuid=uid,
+                                     sub_link=f"https://h/p/{uid}/#{base_name}")],
             error=None, capacity_blocked=False, limit_hit=False)
 
     monkeypatch.setattr(usercreate, "create_for_reseller", fake_create)
@@ -242,51 +251,71 @@ def test_trial_available_logic():
                             SimpleNamespace(free_trial_used=False)) is False
 
 
-def test_free_trial_is_one_per_customer(tmp_path, monkeypatch):
-    from app.bot.storefront import handlers as sfh
-
-    calls = {"n": 0}
-
-    async def fake_create(session, reseller, *, count, gb, days, base_name):  # noqa: ANN001, ANN002
+def _fake_create_factory(calls):  # noqa: ANN001, ANN202
+    async def fake_create(session, reseller, *, count, gb, days, base_name, user_uuid=None):  # noqa: ANN001, ANN002
         calls["n"] += 1
+        uid = user_uuid or f"u{calls['n']}"
         return SimpleNamespace(
-            created=[SimpleNamespace(name=base_name, uuid=f"u{calls['n']}",
-                                     sub_link="https://h/p/u/#x")],
+            created=[SimpleNamespace(name=base_name, uuid=uid, sub_link=f"https://h/p/{uid}/#x")],
             error=None, capacity_blocked=False, limit_hit=False)
+    return fake_create
 
-    monkeypatch.setattr(usercreate, "create_for_reseller", fake_create)
 
-    class FakeUser:
-        id, first_name, username = 555, "C", "c"
+def _engine_session(tmp_path, name):  # noqa: ANN001, ANN202
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / name}")
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
 
-    class FakeMsg:
-        from_user = FakeUser()
 
-        async def answer(self, *a, **k):  # noqa: ANN002, ANN003
-            return None
+def test_free_trial_is_one_per_customer(tmp_path, monkeypatch):
+    calls = {"n": 0}
+    monkeypatch.setattr(usercreate, "create_for_reseller", _fake_create_factory(calls))
 
-    class FakeBot:
-        async def send_photo(self, *a, **k):  # noqa: ANN002, ANN003
-            return None
+    async def go():
+        engine, Session = _engine_session(tmp_path, "trial.db")
+        from app.core.db import Base
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            bot.free_trial_enabled, bot.free_trial_gb, bot.free_trial_days = True, 1, 1
+            await s.commit()
+            sf_id, cid = bot.id, cust.id
 
-        async def send_message(self, *a, **k):  # noqa: ANN002, ANN003
-            return None
+        r1 = await storefront_provision.claim_trial(Session, sf_id=sf_id, customer_id=cid)
+        assert r1.ok and calls["n"] == 1
+        async with Session() as s:
+            assert (await s.get(StorefrontCustomer, cid)).free_trial_used is True
+        # second claim refused — no second config minted
+        r2 = await storefront_provision.claim_trial(Session, sf_id=sf_id, customer_id=cid)
+        assert r2.ok is False and r2.reason == "used" and calls["n"] == 1
+        await engine.dispose()
 
-    async def body(s):
-        _r, bot, cust = await _seed(s)
-        bot.free_trial_enabled = True
-        bot.free_trial_gb, bot.free_trial_days = 1, 1
-        await s.commit()
+    asyncio.run(go())
 
-        await sfh._claim_free_trial(FakeMsg(), s, bot, cust, FakeBot())
-        await s.refresh(cust)
-        assert cust.free_trial_used is True and calls["n"] == 1
 
-        # a second claim is refused — no second config minted
-        await sfh._claim_free_trial(FakeMsg(), s, bot, cust, FakeBot())
+def test_free_trial_concurrent_double_tap_mints_one(tmp_path, monkeypatch):
+    calls = {"n": 0}
+    monkeypatch.setattr(usercreate, "create_for_reseller", _fake_create_factory(calls))
+
+    async def go():
+        engine, Session = _engine_session(tmp_path, "trial2.db")
+        from app.core.db import Base
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            bot.free_trial_enabled = True
+            await s.commit()
+            sf_id, cid = bot.id, cust.id
+        a, b = await asyncio.gather(
+            storefront_provision.claim_trial(Session, sf_id=sf_id, customer_id=cid),
+            storefront_provision.claim_trial(Session, sf_id=sf_id, customer_id=cid),
+        )
+        assert sum(1 for r in (a, b) if r.ok) == 1   # exactly one trial minted
         assert calls["n"] == 1
+        await engine.dispose()
 
-    _run(body, tmp_path, "trial.db")
+    asyncio.run(go())
 
 
 def test_manager_polls_all_bots_in_one_start_polling(tmp_path, monkeypatch):
@@ -363,3 +392,312 @@ def test_monthly_fee_active_only(tmp_path):
         assert await storefront.monthly_fee_for(s, r3) == 0
 
     _run(body, tmp_path, "fee.db")
+
+
+# ── v1.44.0: atomic purchase, reaper, subscription lifecycle, retention ──────────
+
+async def _seed_engine(tmp_path, name):  # noqa: ANN001, ANN202
+    engine, Session = _engine_session(tmp_path, name)
+    from app.core.db import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return engine, Session
+
+
+def test_purchase_is_atomic_and_refunds_on_provision_failure(tmp_path, monkeypatch):
+    calls = {"n": 0}
+    monkeypatch.setattr(usercreate, "create_for_reseller", _fake_create_factory(calls))
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "buy.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+            await storefront_wallet.manual_adjust(s, cust, 80_000, note="seed")
+            sf_id, cid, pid = bot.id, cust.id, plan.id
+
+        res = await storefront_provision.purchase(
+            Session, sf_id=sf_id, customer_id=cid, plan_id=pid, label="گوشی")
+        assert res.ok and res.sub_link
+        async with Session() as s:
+            cust = await s.get(StorefrontCustomer, cid)
+            assert int(storefront_wallet.balance(cust)) == 30_000      # 80k − 50k debited once
+            orders = (await s.execute(
+                StorefrontOrder.__table__.select().where(StorefrontOrder.customer_id == cid)
+            )).all()
+            assert len(orders) == 1
+            order = await s.get(StorefrontOrder, orders[0].id)
+            assert order.status == "provisioned" and order.label == "گوشی"
+            # the order's pre-generated uuid IS the panel user's uuid (embedded in the sub-link)
+            assert order.panel_user_uuid and order.panel_user_uuid in res.sub_link
+            txn = (await s.execute(
+                StorefrontWalletTxn.__table__.select().where(
+                    StorefrontWalletTxn.kind == "purchase")
+            )).first()
+            assert txn is not None and txn.order_id == order.id   # money linked to its order
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_purchase_refunds_when_provision_fails(tmp_path, monkeypatch):
+    async def fail_create(session, reseller, *, count, gb, days, base_name, user_uuid=None):  # noqa: ANN001, ANN002
+        return SimpleNamespace(created=[], error=None, capacity_blocked=True, limit_hit=False)
+    monkeypatch.setattr(usercreate, "create_for_reseller", fail_create)
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "buyfail.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+            await storefront_wallet.manual_adjust(s, cust, 80_000, note="seed")
+            sf_id, cid, pid = bot.id, cust.id, plan.id
+        res = await storefront_provision.purchase(
+            Session, sf_id=sf_id, customer_id=cid, plan_id=pid, label="x")
+        assert res.ok is False and res.reason == "capacity"
+        async with Session() as s:
+            cust = await s.get(StorefrontCustomer, cid)
+            assert int(storefront_wallet.balance(cust)) == 80_000   # fully refunded
+            order = (await s.execute(
+                StorefrontOrder.__table__.select().where(StorefrontOrder.customer_id == cid)
+            )).first()
+            assert order.status == "failed"
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_reaper_completes_existing_and_refunds_missing(tmp_path, monkeypatch):
+    import datetime as _dt
+
+    from app.services.panel_client import admin_api
+
+    async def fake_get_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
+        return {"current_usage_GB": 0} if uuid == "exists" else None
+
+    async def noop_notify(sf, customer, order):  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(admin_api.AdminApiClient, "get_user", fake_get_user)
+    monkeypatch.setattr(storefront_provision, "_notify_completed", noop_notify)
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "reaper.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            a = StorefrontOrder(customer_id=cust.id, panel_id=bot.panel_id, label="A", gb=10,
+                                days=30, price_toman=50_000, status="pending", panel_user_uuid="exists")
+            b = StorefrontOrder(customer_id=cust.id, panel_id=bot.panel_id, label="B", gb=10,
+                                days=30, price_toman=50_000, status="pending", panel_user_uuid="gone")
+            s.add_all([a, b])
+            await s.flush()
+            s.add(StorefrontWalletTxn(customer_id=cust.id, kind="purchase", amount_toman=-50_000,
+                                      status="done", order_id=b.id))
+            await s.commit()
+            aid, bid, cid = a.id, b.id, cust.id
+
+        async with Session() as s:
+            res = await storefront_provision.reap_pending_orders(
+                s, older_than=_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1))
+        assert res["completed"] == 1 and res["refunded"] == 1
+        async with Session() as s:
+            assert (await s.get(StorefrontOrder, aid)).status == "provisioned"
+            assert (await s.get(StorefrontOrder, bid)).status == "failed"
+            cust = await s.get(StorefrontCustomer, cid)
+            assert int(storefront_wallet.balance(cust)) == 50_000   # B refunded once
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_renew_charges_current_price_in_place(tmp_path, monkeypatch):
+    from app.services.panel_client import admin_api
+
+    seen = {}
+
+    async def fake_renew_user(self, panel, uuid, *, gb, days, api_key=None):  # noqa: ANN001, ANN002
+        seen.update(uuid=uuid, gb=gb, days=days)
+
+    monkeypatch.setattr(admin_api.AdminApiClient, "renew_user", fake_renew_user)
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "renew.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+            await storefront_wallet.manual_adjust(s, cust, 80_000, note="seed")
+            order = StorefrontOrder(customer_id=cust.id, plan_id=plan.id, panel_id=bot.panel_id,
+                                    label="x", gb=10, days=30, price_toman=50_000,
+                                    status="provisioned", panel_user_uuid="u1",
+                                    sub_link="https://h/p/u1/#x")
+            s.add(order)
+            await s.flush()
+            plan.price_toman = 60_000   # price went UP after purchase
+            await s.commit()
+            oid, cid = order.id, cust.id
+
+        res = await storefront_subscription.renew(Session, order_id=oid, by_admin=False)
+        assert res.ok and res.price == 60_000 and seen["uuid"] == "u1"
+        async with Session() as s:
+            cust = await s.get(StorefrontCustomer, cid)
+            assert int(storefront_wallet.balance(cust)) == 20_000   # charged the NEW 60k
+            order = await s.get(StorefrontOrder, oid)
+            assert order.sub_link == "https://h/p/u1/#x" and order.last_renewed_at is not None
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_delete_subscription_removes_panel_user(tmp_path, monkeypatch):
+    from app.services.panel_client import admin_api
+
+    seen = {}
+
+    async def fake_delete_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
+        seen["uuid"] = uuid
+
+    monkeypatch.setattr(admin_api.AdminApiClient, "delete_user", fake_delete_user)
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "del.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            order = StorefrontOrder(customer_id=cust.id, panel_id=bot.panel_id, label="x", gb=10,
+                                    days=30, price_toman=0, status="provisioned", panel_user_uuid="u1")
+            s.add(order)
+            await s.commit()
+            oid = order.id
+        res = await storefront_subscription.delete_subscription(Session, order_id=oid)
+        assert res.ok and seen["uuid"] == "u1"
+        async with Session() as s:
+            assert (await s.get(StorefrontOrder, oid)).status == "deleted"
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_renew_user_grants_fresh_quota_on_top_of_usage(tmp_path, monkeypatch):
+    from app.services.panel_client.admin_api import AdminApiClient
+
+    body = {}
+
+    async def fake_get_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
+        return {"current_usage_GB": 7.5}
+
+    async def fake_patch_user(self, panel, uuid, b, *, api_key=None):  # noqa: ANN001, ANN002
+        body.update(b)
+
+    monkeypatch.setattr(AdminApiClient, "get_user", fake_get_user)
+    monkeypatch.setattr(AdminApiClient, "patch_user", fake_patch_user)
+
+    async def go():
+        await AdminApiClient().renew_user(SimpleNamespace(), "u1", gb=10, days=30, api_key="k")
+        assert body["usage_limit_GB"] == 17.5   # used 7.5 + fresh 10 → remaining is exactly 10
+        assert body["package_days"] == 30 and body["start_date"] is None and body["enable"] is True
+
+    asyncio.run(go())
+
+
+def test_retention_purges_tire_kickers_keeps_ledger(tmp_path):
+    import datetime as _dt
+
+    old = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=200)
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "ret.db")
+        async with Session() as s:
+            _r, bot, _c = await _seed(s)
+            # A: pure tire-kicker (no orders, zero balance) → purged
+            a = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1001, last_seen_at=old)
+            # B: has a provisioned order → kept
+            b = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1002, last_seen_at=old)
+            # C: has a confirmed top-up → kept
+            c = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1003, last_seen_at=old)
+            s.add_all([a, b, c])
+            await s.flush()
+            s.add(StorefrontOrder(customer_id=b.id, panel_id=bot.panel_id, label="x", gb=10, days=30,
+                                  price_toman=0, status="provisioned", panel_user_uuid="u1"))
+            s.add(StorefrontWalletTxn(customer_id=c.id, kind="topup", amount_toman=100_000,
+                                      status="confirmed"))
+            # junk for B that should be swept (failed order, old)
+            junk = StorefrontOrder(customer_id=b.id, panel_id=bot.panel_id, label="j", gb=1, days=1,
+                                   price_toman=0, status="failed", panel_user_uuid="z")
+            s.add(junk)
+            await s.flush()
+            # backdate the failed order so it's older than the window
+            junk.created_at = old
+            await s.commit()
+            aid, bid, cid = a.id, b.id, c.id
+
+        async with Session() as s:
+            counts = await maintenance.prune_stale_storefront(s)
+        assert counts["customers"] == 1
+        async with Session() as s:
+            assert await s.get(StorefrontCustomer, aid) is None       # tire-kicker purged
+            assert await s.get(StorefrontCustomer, bid) is not None    # kept (provisioned order)
+            assert await s.get(StorefrontCustomer, cid) is not None    # kept (confirmed top-up)
+            kept_topup = (await s.execute(
+                StorefrontWalletTxn.__table__.select().where(StorefrontWalletTxn.customer_id == cid)
+            )).all()
+            assert len(kept_topup) == 1   # the ledger top-up survives
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_banned_customer_is_blocked_everywhere(tmp_path, monkeypatch):
+    from app.bot.storefront import handlers as sfh
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "ban.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            cust.banned = True
+            await s.commit()
+            tgid, banned_tg = bot.bot_telegram_id, cust.telegram_id
+        monkeypatch.setattr(sfh, "SessionLocal", Session)
+        assert await sfh._is_banned(
+            SimpleNamespace(id=tgid),
+            SimpleNamespace(id=banned_tg, first_name="C", username="c")) is True
+        # a different, non-banned customer is allowed through
+        assert await sfh._is_banned(
+            SimpleNamespace(id=tgid),
+            SimpleNamespace(id=424242, first_name="X", username="x")) is False
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_bot_telegram_id_is_partial_unique(tmp_path):
+    from sqlalchemy.exc import IntegrityError
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "uq.db")
+        async with Session() as s:
+            p1 = Panel(key="u1", host="u1.invalid", proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
+            p2 = Panel(key="u2", host="u2.invalid", proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
+            s.add_all([p1, p2])
+            await s.flush()
+            r1 = Reseller(panel_id=p1.id, admin_uuid="U1", name="R1")
+            r2 = Reseller(panel_id=p2.id, admin_uuid="U2", name="R2")
+            s.add_all([r1, r2])
+            await s.flush()
+            # two NULL bot_telegram_id rows are allowed (partial index excludes NULLs)
+            s.add_all([
+                StorefrontBot(reseller_id=r1.id, panel_id=p1.id, bot_token_enc="a"),
+                StorefrontBot(reseller_id=r2.id, panel_id=p2.id, bot_token_enc="b"),
+            ])
+            await s.commit()
+            # but two rows with the SAME non-null id collide
+            await s.execute(
+                StorefrontBot.__table__.update()
+                .where(StorefrontBot.reseller_id == r1.id).values(bot_telegram_id=777))
+            await s.commit()
+            with pytest.raises(IntegrityError):
+                await s.execute(
+                    StorefrontBot.__table__.update()
+                    .where(StorefrontBot.reseller_id == r2.id).values(bot_telegram_id=777))
+                await s.commit()
+        await engine.dispose()
+
+    asyncio.run(go())

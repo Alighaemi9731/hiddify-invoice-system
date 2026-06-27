@@ -17,11 +17,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,7 +35,13 @@ class StorefrontBot(Base, TimestampMixin):
     """One storefront per top-level reseller. Holds the bot token (encrypted), the chosen panel,
     payment configuration, and the forced-join gate. `status`: 'active' | 'errored' (revoked token)."""
     __tablename__ = "storefront_bots"
-    __table_args__ = (UniqueConstraint("reseller_id", name="uq_storefront_bot_reseller"),)
+    __table_args__ = (
+        UniqueConstraint("reseller_id", name="uq_storefront_bot_reseller"),
+        # One physical Telegram bot maps to exactly one tenant (when its id is known).
+        Index("uq_storefront_bot_tgid", "bot_telegram_id", unique=True,
+              sqlite_where=text("bot_telegram_id IS NOT NULL"),
+              postgresql_where=text("bot_telegram_id IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     reseller_id: Mapped[int] = mapped_column(
@@ -68,9 +76,9 @@ class StorefrontBot(Base, TimestampMixin):
     channel_link: Mapped[str | None] = mapped_column(String(255), nullable=True)
     channel_required: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # One-time free trial (each customer can claim it once). Default 1 GB · 1 day — at/under the
-    # owner's free-config threshold, so the trial config is free for the reseller too.
-    free_trial_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # One-time free trial (each customer can claim it once). Default ON for everyone, 1 GB · 1 day —
+    # at/under the owner's free-config threshold, so the trial config is free for the reseller too.
+    free_trial_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     free_trial_gb: Mapped[int] = mapped_column(Integer, default=1)
     free_trial_days: Mapped[int] = mapped_column(Integer, default=1)
 
@@ -118,6 +126,8 @@ class StorefrontCustomer(Base, TimestampMixin):
     wallet_balance_toman: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
     banned: Mapped[bool] = mapped_column(Boolean, default=False)
     free_trial_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Bumped on every interaction → drives retention (a tire-kicker who never returns is purged).
+    last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class StorefrontWalletTxn(Base, TimestampMixin):
@@ -134,6 +144,9 @@ class StorefrontWalletTxn(Base, TimestampMixin):
     amount_toman: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # card|usdt|ton|manual
+    # Links a purchase/refund to its order so the reaper can reconcile money ↔ provisioning.
+    # Plain reference (no hard FK) so order lifecycle never cascades into the money ledger.
+    order_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     proof_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     txid: Mapped[str | None] = mapped_column(String(120), nullable=True)
     chain: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -143,8 +156,15 @@ class StorefrontWalletTxn(Base, TimestampMixin):
 
 class StorefrontOrder(Base, TimestampMixin):
     """A purchase → one config on the reseller's panel. Plan figures are snapshotted so later plan
-    edits don't rewrite history. `status`: pending | provisioned | failed."""
+    edits don't rewrite history. `status`: pending | provisioned | disabled | failed | deleted.
+
+    `(panel_id, panel_user_uuid)` is the durable reference to the real panel user — joinable to
+    end_user_snapshots(panel_id, user_uuid) but NOT a hard FK (snapshots are pruned when a user/panel
+    disappears, which must never cascade-delete order/ledger history)."""
     __tablename__ = "storefront_orders"
+    __table_args__ = (
+        Index("ix_storefront_order_panel_user", "panel_id", "panel_user_uuid"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     customer_id: Mapped[int] = mapped_column(
@@ -153,6 +173,9 @@ class StorefrontOrder(Base, TimestampMixin):
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("storefront_plans.id", ondelete="SET NULL"), nullable=True
     )
+    # Plain reference (no hard FK) — the panel user is keyed by (panel_id, panel_user_uuid); a pruned
+    # snapshot or deleted panel must never cascade into order history.
+    panel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)  # customer-chosen config name
     gb: Mapped[int] = mapped_column(Integer, default=0)
     days: Mapped[int] = mapped_column(Integer, default=0)
@@ -160,3 +183,4 @@ class StorefrontOrder(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     panel_user_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_renewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

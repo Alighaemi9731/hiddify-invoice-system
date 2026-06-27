@@ -203,6 +203,15 @@ DEFS: list[SettingDef] = [
     # usage_meters older than this many months are pruned by the daily maintenance (old periods are
     # already locked into invoices + the financial ledger). Keeps the metering table bounded. 0 = off.
     SettingDef("meter_retention_months", 6, False, "schedule"),
+    # Storefront pending-order reaper cadence (minutes): how often to reconcile purchases orphaned by a
+    # mid-buy crash (complete the ones whose config exists on the panel, refund the rest).
+    SettingDef("storefront_pending_order_reaper_minutes", 15, False, "schedule"),
+    # Storefront retention: the daily maintenance purges customers with NO financial footprint (zero
+    # balance, no provisioned/disabled order, no confirmed top-up) inactive for this many days, plus
+    # failed/deleted orders + rejected top-ups. Confirmed top-ups + provisioned services are kept. 0 = off.
+    SettingDef("storefront_stale_customer_days", 90, False, "schedule"),
+    # Max simultaneous PENDING top-ups one customer may have (anti-spam on the admin review queue).
+    SettingDef("storefront_max_pending_topups", 3, False, "schedule"),
     # Daily owner digest to the owner's Telegram PV (KPIs + health). On by default at 09:00.
     SettingDef("daily_digest_enabled", True, False, "schedule"),
     SettingDef("daily_digest_hour", 9, False, "schedule"),
@@ -289,6 +298,9 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "backup_interval_hours": (1, 24),
     "log_retention_days": (7, 3650),
     "meter_retention_months": (0, 120),
+    "storefront_pending_order_reaper_minutes": (1, 1440),
+    "storefront_stale_customer_days": (0, 3650),
+    "storefront_max_pending_topups": (1, 50),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),

@@ -8,6 +8,44 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.44.0 - 2026-06-27
+
+### Added / Changed — Storefront reliability, subscription management & retention
+
+A professional pass over the per-reseller storefront bots:
+
+- **Free trial on by default for everyone.** New storefronts default to the trial enabled, and existing
+  ones are backfilled to enabled (admins keep the on/off + volume/days controls). Claiming is now
+  concurrency-safe (compare-and-set under a row lock + a per-customer in-process lock) so a double-tap
+  can't mint two trials.
+- **Configs reliably reference the real panel user.** Each order stores `(panel_id, panel_user_uuid)`
+  (denormalized — joinable to `end_user_snapshots`, no fragile FK), and the uuid is pre-generated and
+  recorded **before** provisioning.
+- **Atomic, crash-safe purchase.** Buying now commits the order + wallet debit together in one short
+  transaction before any network call, provisions outside the DB session, then finalizes — so money is
+  never debited without either a config or a refund. A new **pending-order reaper** (scheduler job,
+  `storefront_pending_order_reaper_minutes`, default 15m) reconciles any purchase orphaned by a mid-buy
+  crash: it completes the ones whose config exists on the panel and refunds the rest (idempotent).
+- **Full subscription control.** Customers can **renew** (same config/link, fresh GB+days, charged at the
+  **current** plan price), **pause/resume**, and **delete** their services; the reseller-admin can manage
+  any customer's subscriptions (free renew, pause/resume, delete) from «👥 مشتری‌ها → 📦 سرویس‌ها».
+  Renew resets the config in place via `PATCH /user/{uuid}` (Hiddify); delete removes it from the panel.
+- **Banned enforced everywhere.** A router middleware blocks a banned customer on every callback and
+  message (not just `/start`), failing open on transient errors so a DB blip can't lock everyone out.
+- **Automatic data retention.** The daily maintenance job purges storefront tire-kickers — customers with
+  no financial footprint (zero balance, no live service, no confirmed top-up) inactive for
+  `storefront_stale_customer_days` (default 90; 0 = off) — plus failed/deleted orders, rejected top-ups,
+  and their proof files. Confirmed top-ups and provisioned services are never pruned. The owner↔reseller
+  billing ledger is a separate subsystem and is untouched.
+- **Scale & robustness.** Storefront-bot token validation now runs in bounded parallel (fast cold start
+  with many bots), a duplicate/invalid token can no longer abort the whole fleet's polling, the bot
+  process supervises its two loops independently, the DB pool is enlarged for Postgres, the welcome-text
+  is now editable, pending top-ups are capped per customer (anti-spam), a proof file-handle leak is
+  fixed, and a stray customer message re-shows the menu instead of being ignored.
+
+Migration `c7a2f4e9d1b6` (order `panel_id`/`last_renewed_at` + index, wallet-txn `order_id`, customer
+`last_seen_at`, free-trial backfill, partial-unique `bot_telegram_id`). Tests in `tests/test_storefront.py`.
+
 ## 1.43.2 - 2026-06-27
 
 ### Fixed — group membership gate rejected `restricted` members

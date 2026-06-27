@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -48,6 +48,7 @@ class ScheduleConfig:
     rate_hours: int = 1        # live USDT→Toman rate refresh: every N hours (1–24)
     enforcement_minutes: int = 5  # queued live enforcement worker cadence (1–60)
     digest_hour: int = 9       # daily owner digest: hour (0–23)
+    storefront_reaper_minutes: int = 15  # storefront pending-order reaper cadence (1–1440)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -65,6 +66,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         "invoice_day_of_month", "invoice_hour", "dunning_hour",
         "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
         "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
+        "storefront_pending_order_reaper_minutes",
     ])
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
@@ -76,6 +78,8 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 24, 1),
         enforcement_minutes=_clamp(s.get("enforcement_worker_interval_minutes"), 1, 60, 5),
         digest_hour=_clamp(s.get("daily_digest_hour"), 0, 23, 9),
+        storefront_reaper_minutes=_clamp(
+            s.get("storefront_pending_order_reaper_minutes"), 1, 1440, 15),
     )
 
 
@@ -214,14 +218,34 @@ async def daily_digest_job() -> None:
 
 async def daily_maintenance_job() -> None:
     """Daily retention sweep: aged log/audit rows + stale (removed-from-Hiddify) end-user
-    snapshots older than the previous billing month + their orphaned usage meters."""
+    snapshots older than the previous billing month + their orphaned usage meters + stale storefront
+    tire-kicker data (never the financial ledger)."""
     try:
         async with SessionLocal() as session:
             await maintenance.prune_old_logs(session)
         async with SessionLocal() as session:
             await maintenance.prune_stale_snapshots(session)
+        async with SessionLocal() as session:
+            await maintenance.prune_stale_storefront(session)
     except Exception:  # noqa: BLE001
         log.exception("daily_maintenance_job failed")
+
+
+async def storefront_reaper_job() -> None:
+    """Reconcile storefront orders stuck in `pending` (process died mid-purchase): complete the ones
+    whose config actually got created on the panel, refund the rest. Money-correctness backstop."""
+    try:
+        from app.services import storefront_provision
+
+        async with SessionLocal() as session:
+            cfg = await load_config(session)
+            older_than = datetime.now(timezone.utc) - timedelta(
+                minutes=cfg.storefront_reaper_minutes)
+            res = await storefront_provision.reap_pending_orders(session, older_than=older_than)
+            if res.get("completed") or res.get("refunded"):
+                log.info("storefront reaper: %s", res)
+    except Exception:  # noqa: BLE001
+        log.exception("storefront_reaper_job failed")
 
 
 async def rate_refresh_job() -> None:
@@ -288,6 +312,10 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         # with the on-the-hour jobs above.
         ("rate_refresh", rate_refresh_job,
          IntervalTrigger(hours=cfg.rate_hours, start_date=rate_anchor, timezone=tz), 3600),
+        # Storefront pending-order reaper: complete/refund purchases orphaned by a mid-buy crash.
+        ("storefront_reaper", storefront_reaper_job,
+         IntervalTrigger(minutes=cfg.storefront_reaper_minutes, start_date=interval_anchor,
+                         timezone=tz), 300),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,

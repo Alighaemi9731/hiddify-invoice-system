@@ -16,6 +16,7 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("🧩 پلن‌ها", "plans"),
     ("💳 روش‌های پرداخت", "pay"),
     ("🎁 تنظیماتِ تست رایگان", "trialcfg"),
+    ("📝 پیام خوش‌آمد", "welcome"),
     ("🧾 شارژهای در انتظار", "topups"),
     ("👥 مشتری‌ها", "customers"),
     ("📊 آمار", "stats"),
@@ -111,6 +112,47 @@ def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
     )
 
 
+def order_actions_kb(order_id: int, renew_price: int, *, paused: bool) -> InlineKeyboardMarkup:
+    """Customer controls for one provisioned service: renew (at the current price), pause/resume, delete."""
+    toggle = ("▶️ فعال‌سازی", "sftgl") if paused else ("⏸ توقف", "sftgl")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=rtl(f"🔄 تمدید ({renew_price:,} تومان)"),
+                              callback_data=f"sfrenew:{order_id}")],
+        [InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
+         InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfdel:{order_id}")],
+    ])
+
+
+def confirm_kb(yes_text: str, yes_cb: str, *, no_cb: str = "sfcancel") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=yes_text, callback_data=yes_cb)],
+        [InlineKeyboardButton(text="✖️ انصراف", callback_data=no_cb)],
+    ])
+
+
+def admin_subs_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
+    """Admin view of a customer's subscriptions — tap one to manage (renew/pause/delete)."""
+    rows = [
+        [InlineKeyboardButton(
+            text=rtl(f"{'⏸ ' if o.status == 'disabled' else ''}{o.label or 'سرویس'} — "
+                     f"{o.gb}گیگ/{o.days}روز"),
+            callback_data=f"sfasub:{o.id}")]
+        for o in orders
+    ]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="sfnoop")]]
+    )
+
+
+def admin_sub_actions_kb(order_id: int, *, paused: bool) -> InlineKeyboardMarkup:
+    toggle = ("▶️ فعال‌سازی", "sfatgl") if paused else ("⏸ توقف", "sfatgl")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 تمدیدِ رایگان", callback_data=f"sfarenew:{order_id}")],
+        [InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
+         InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfadel:{order_id}")],
+    ])
+
+
 def buy_confirm_kb() -> InlineKeyboardMarkup:
     """Final confirm before charging the wallet + creating the config."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -177,4 +219,5 @@ def customer_row_kb(customer_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="➕ شارژ دستی", callback_data=f"sfadj:{customer_id}:+"),
         InlineKeyboardButton(text="➖ کسر دستی", callback_data=f"sfadj:{customer_id}:-"),
+        InlineKeyboardButton(text="📦 سرویس‌ها", callback_data=f"sfacust:{customer_id}"),
     ]])

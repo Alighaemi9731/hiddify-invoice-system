@@ -6,12 +6,18 @@ owner's monthly-fee computation. Money movement lives in `storefront_wallet`; pr
 """
 from __future__ import annotations
 
+import datetime as dt
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
 from app.models import Reseller, StorefrontBot, StorefrontCustomer, StorefrontPlan
 from app.services import settings_service
+
+# Refresh last_seen_at at most this often (avoid a write on every single interaction; 6h granularity
+# is ample for a 90-day retention window).
+_SEEN_REFRESH = dt.timedelta(hours=6)
 
 # ── bot record ────────────────────────────────────────────────────────────────
 
@@ -127,16 +133,25 @@ async def get_or_create_customer(
     ).scalar_one_or_none()
     name = getattr(tg_user, "first_name", None) or getattr(tg_user, "username", None) or ""
     username = getattr(tg_user, "username", None)
+    now = dt.datetime.now(dt.timezone.utc)
     if cust is None:
         cust = StorefrontCustomer(
             storefront_bot_id=storefront_bot_id, telegram_id=tg_user.id,
-            name=name[:128] if name else None, username=username,
+            name=name[:128] if name else None, username=username, last_seen_at=now,
         )
         session.add(cust)
         await session.commit()
-    elif (cust.name or "") != (name or "")[:128] or cust.username != username:
+        return cust
+    changed = False
+    if (cust.name or "") != (name or "")[:128] or cust.username != username:
         cust.name = name[:128] if name else None
         cust.username = username
+        changed = True
+    seen = cust.last_seen_at
+    if seen is None or seen.tzinfo is None or (now - seen) > _SEEN_REFRESH:
+        cust.last_seen_at = now  # activity heartbeat for retention (coarse, to bound writes)
+        changed = True
+    if changed:
         await session.commit()
     return cust
 

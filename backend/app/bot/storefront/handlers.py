@@ -27,7 +27,14 @@ from app.models import (
     StorefrontOrder,
     StorefrontPlan,
 )
-from app.services import storefront, storefront_provision, storefront_wallet, usercreate
+from app.services import (
+    settings_service,
+    storefront,
+    storefront_provision,
+    storefront_subscription,
+    storefront_wallet,
+    usercreate,
+)
 
 log = logging.getLogger("bot.storefront")
 
@@ -48,6 +55,7 @@ class SF(StatesGroup):
     confirm_amount = State()   # admin sets credited Toman; data: txn_id
     adjust_amount = State()    # admin manual wallet edit; data: customer_id, sign
     support = State()
+    welcome = State()          # admin sets the storefront welcome text
     broadcast = State()
 
 
@@ -123,6 +131,48 @@ async def _deliver_config(  # noqa: ANN001
         await bot.send_message(chat_id, caption, parse_mode="HTML", disable_web_page_preview=True)
 
 
+# ── banned gate (every callback + non-/start message) ────────────────────────
+
+_BAN_EXEMPT_COMMANDS = {"/start", "/cancel"}
+
+
+async def _is_banned(bot: Bot, user) -> bool:  # noqa: ANN001
+    """A non-admin customer flagged banned. Fails OPEN on any error (a transient DB blip must not lock
+    everyone out; ban is a rare, deliberate action)."""
+    try:
+        async with SessionLocal() as s:
+            sf, _r, is_admin = await _resolve(s, bot, user)
+            if sf is None or is_admin:
+                return False
+            customer = await storefront.get_or_create_customer(s, sf.id, user)
+            return bool(customer.banned)
+    except Exception:  # noqa: BLE001
+        log.warning("storefront ban check failed", exc_info=True)
+        return False
+
+
+@storefront_router.callback_query.outer_middleware
+async def _sf_ban_cb_mw(handler, event, data):  # noqa: ANN001, ANN202
+    bot, user = data.get("bot"), getattr(event, "from_user", None)
+    if bot is not None and user is not None and await _is_banned(bot, user):
+        await event.answer("دسترسیِ شما مسدود شده است.", show_alert=True)
+        return None
+    return await handler(event, data)
+
+
+@storefront_router.message.outer_middleware
+async def _sf_ban_msg_mw(handler, event, data):  # noqa: ANN001, ANN202
+    cmd = (getattr(event, "text", None) or "").strip().split()[0].lower() if getattr(
+        event, "text", None) else ""
+    if cmd in _BAN_EXEMPT_COMMANDS:  # /start shows the banned notice itself; /cancel always allowed
+        return await handler(event, data)
+    bot, user = data.get("bot"), getattr(event, "from_user", None)
+    if bot is not None and user is not None and await _is_banned(bot, user):
+        await event.answer(rtl("دسترسیِ شما مسدود شده است."))
+        return None
+    return await handler(event, data)
+
+
 # ── /start + menu dispatch ──────────────────────────────────────────────────
 
 @storefront_router.message(Command("start"))
@@ -146,6 +196,7 @@ async def sf_start(message: Message, state: FSMContext, bot: Bot) -> None:
 @storefront_router.message(F.text.in_(kb.ALL_LABELS))
 async def sf_menu(message: Message, state: FSMContext, bot: Bot) -> None:
     text = (message.text or "").strip()
+    trial_ids: tuple[int, int] | None = None
     async with SessionLocal() as s:
         sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None:
@@ -163,8 +214,13 @@ async def sf_menu(message: Message, state: FSMContext, bot: Bot) -> None:
             if customer.banned:
                 await message.answer(rtl("دسترسیِ شما مسدود شده است."))
                 return
-            await _customer_action(
-                kb.CUSTOMER_LABEL_TO_ACTION[text], message, state, s, sf, customer, bot)
+            action = kb.CUSTOMER_LABEL_TO_ACTION[text]
+            if action == "trial":  # heavy (panel I/O) → run it WITHOUT holding the menu's connection
+                trial_ids = (sf.id, customer.id)
+            else:
+                await _customer_action(action, message, state, s, sf, customer, bot)
+    if trial_ids is not None:
+        await _claim_free_trial(message, trial_ids[0], trial_ids[1], bot)
 
 
 # ── ADMIN ───────────────────────────────────────────────────────────────────
@@ -223,6 +279,12 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await ans(rtl(
             f"شناسهٔ پشتیبانی (مثلاً @yourID) را بفرستید.\nفعلی: {sf.support_contact or '—'}"),
             reply_markup=kb.cancel_kb())
+    elif action == "welcome":
+        await state.set_state(SF.welcome)
+        await ans(rtl(
+            "متنِ خوش‌آمدگوییِ فروشگاه را بفرستید (به مشتری در شروع نشان داده می‌شود).\n"
+            f"فعلی: {sf.welcome_text or '🛍 به فروشگاه خوش آمدید!'}"),
+            reply_markup=kb.cancel_kb())
     elif action == "preview":
         await state.update_data(sf_preview=True)
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
@@ -268,38 +330,21 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
             await ans(rtl("\n".join(lines)))
     elif action == "support":
         await ans(rtl(f"💬 پشتیبانی: {sf.support_contact or 'به‌زودی'}"))
-    elif action == "trial":
-        await _claim_free_trial(message, s, sf, customer, bot)
 
 
-async def _claim_free_trial(message, s, sf, customer, bot) -> None:  # noqa: ANN001
-    """Give this customer their ONE free trial config. Idempotent: the used-flag is set only after a
-    successful provision, and re-checked, so a double-tap can't mint two trials."""
-    if not sf.free_trial_enabled:
-        await message.answer(rtl("تستِ رایگان فعال نیست."))
-        return
-    if customer.free_trial_used:
-        await message.answer(rtl("شما قبلاً تستِ رایگان دریافت کرده‌اید."))
-        return
-    gb, days = int(sf.free_trial_gb or 1), int(sf.free_trial_days or 1)
-    name = "تست رایگان"
-    await message.answer(rtl(f"🎁 در حال ساختِ تستِ رایگان ({gb} گیگ · {days} روز)…"))
-    order = StorefrontOrder(
-        customer_id=customer.id, plan_id=None, label=name, gb=gb, days=days,
-        price_toman=0, status="pending")
-    s.add(order)
-    await s.commit()
-    res = await storefront_provision.provision(s, sf, customer, gb=gb, days=days, label=name)
+async def _claim_free_trial(message, sf_id: int, customer_id: int, bot: Bot) -> None:  # noqa: ANN001
+    """Claim the one-time free trial via the concurrency-safe service (compare-and-set + atomic
+    provision), then deliver the config. No DB connection is held across the panel/Telegram I/O."""
+    await message.answer(rtl("🎁 در حال ساختِ تستِ رایگان…"))
+    res = await storefront_provision.claim_trial(SessionLocal, sf_id=sf_id, customer_id=customer_id)
     if res.ok and res.sub_link:
-        order.status = "provisioned"
-        order.panel_user_uuid = res.uuid
-        order.sub_link = res.sub_link
-        customer.free_trial_used = True
-        await s.commit()
-        await _deliver_config(bot, message.from_user.id, gb=gb, days=days, sub_link=res.sub_link, name=name)
+        await _deliver_config(bot, message.from_user.id, gb=res.gb, days=res.days,
+                              sub_link=res.sub_link, name=res.label)
+    elif res.reason == "used":
+        await message.answer(rtl("شما قبلاً تستِ رایگان دریافت کرده‌اید."))
+    elif res.reason == "disabled":
+        await message.answer(rtl("تستِ رایگان فعلاً فعال نیست."))
     else:
-        order.status = "failed"
-        await s.commit()
         await message.answer(rtl("❌ ساختِ تستِ رایگان ناموفق بود. لطفاً بعداً دوباره تلاش کنید."))
 
 
@@ -368,7 +413,8 @@ async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
 
 @storefront_router.callback_query(F.data == "sfbuyok")
 async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Step 3: charge the wallet, create the order, provision the config under the chosen name."""
+    """Step 3: hand off to the atomic, crash-safe purchase service (charge + provision in short txns,
+    no DB connection held across the panel/Telegram I/O), then deliver or report."""
     data = await state.get_data()
     plan_id = int(data.get("buy_plan_id") or 0)
     name = (data.get("buy_name") or "").strip()
@@ -382,39 +428,29 @@ async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             await cb.answer()
             return
         customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
-        plan = await s.get(StorefrontPlan, plan_id)
-        if plan is None or plan.storefront_bot_id != sf.id or not plan.enabled:
-            await cb.message.answer(rtl("این پلن دیگر در دسترس نیست."))
-            await cb.answer()
-            return
-        ok, _txn = await storefront_wallet.charge_purchase(s, customer.id, plan.price_toman)
-        if not ok:
-            await cb.message.answer(rtl(
-                "موجودیِ کیفِ پولِ شما کافی نیست. ابتدا کیفِ خود را شارژ کنید."),
-                reply_markup=kb.wallet_kb())
-            await cb.answer()
-            return
-        order = StorefrontOrder(
-            customer_id=customer.id, plan_id=plan.id, label=name[:64], gb=plan.gb, days=plan.days,
-            price_toman=plan.price_toman, status="pending")
-        s.add(order)
-        await s.commit()
-        await cb.message.answer(rtl("⏳ در حال ساختِ سرویس…"))
-        res = await storefront_provision.provision(
-            s, sf, customer, gb=plan.gb, days=plan.days, label=name)
-        if res.ok and res.sub_link:
-            order.status = "provisioned"
-            order.panel_user_uuid = res.uuid
-            order.sub_link = res.sub_link
-            await s.commit()
-            await _deliver_config(
-                bot, cb.from_user.id, gb=plan.gb, days=plan.days, sub_link=res.sub_link, name=name)
-        else:
-            order.status = "failed"
-            await storefront_wallet.refund(s, customer.id, plan.price_toman, note=f"provision {res.reason}")
-            await s.commit()
-            await cb.message.answer(rtl(
-                "❌ ساختِ سرویس ناموفق بود؛ مبلغ به کیفِ پولِ شما بازگردانده شد. با پشتیبانی تماس بگیرید."))
+        sf_id, customer_id, reseller_id = sf.id, customer.id, sf.reseller_id
+    await cb.answer()
+    await cb.message.answer(rtl("⏳ در حال ساختِ سرویس…"))
+    res = await storefront_provision.purchase(
+        SessionLocal, sf_id=sf_id, customer_id=customer_id, plan_id=plan_id, label=name)
+    if res.ok and res.sub_link:
+        await _deliver_config(bot, cb.from_user.id, gb=res.gb, days=res.days,
+                              sub_link=res.sub_link, name=res.label)
+        return
+    if res.reason == "insufficient":
+        await cb.message.answer(rtl(
+            f"موجودیِ کیفِ پولِ شما کافی نیست. {_toman(res.short_toman)} تومان کم دارید."),
+            reply_markup=kb.wallet_kb())
+        return
+    if res.reason == "plan_gone":
+        await cb.message.answer(rtl("این پلن دیگر در دسترس نیست."))
+        return
+    # provisioning failed → the service already refunded; tell the customer + nudge the admin
+    await cb.message.answer(rtl(
+        "❌ ساختِ سرویس ناموفق بود؛ مبلغ به کیفِ پولِ شما بازگردانده شد. با پشتیبانی تماس بگیرید."))
+    async with SessionLocal() as s:
+        reseller = await s.get(Reseller, reseller_id)
+        if reseller is not None:
             await _notify_admin(bot, reseller,
                                 f"⚠️ ساختِ سرویس برای یک مشتری ناموفق بود ({res.reason}). "
                                 "احتمالاً ظرفیتِ پنل پُر است.")
@@ -422,6 +458,15 @@ async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 
 
 # ── my services: live detail ─────────────────────────────────────────────────
+
+async def _owned_order(s, sf, user, order_id: int):  # noqa: ANN001, ANN202
+    """Return the order iff it belongs to THIS customer of THIS storefront, else None."""
+    customer = await storefront.get_or_create_customer(s, sf.id, user)
+    order = await s.get(StorefrontOrder, order_id)
+    if order is None or order.customer_id != customer.id:
+        return None
+    return order
+
 
 @storefront_router.callback_query(F.data.startswith("sforder:"))
 async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
@@ -431,26 +476,235 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None:
             await cb.answer()
             return
-        customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
-        order = await s.get(StorefrontOrder, order_id)
-        if order is None or order.customer_id != customer.id:
+        order = await _owned_order(s, sf, cb.from_user, order_id)
+        if order is None or order.status in ("deleted", "failed"):
             await cb.answer("یافت نشد.", show_alert=True)
             return
-        name = order.label or "سرویس"
-        lines = [f"📦 {name}", f"پلن: {order.gb} گیگ · {order.days} روز"]
+        name, gb, days, sub_link, paused = (
+            order.label or "سرویس", order.gb, order.days, order.sub_link, order.status == "disabled")
+        plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
+        renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
         status = await storefront_provision.live_status(s, sf, order)
-        if status.ok:
-            lines.append(f"مصرف: {status.used_gb:.2f} از {status.limit_gb:.0f} گیگ")
-            if status.remaining_days is not None:
-                lines.append(f"روزهای باقی‌مانده: {status.remaining_days}")
-        else:
-            lines.append("اطلاعاتِ مصرف فعلاً در دسترس نیست.")
-        await cb.message.answer(rtl("\n".join(lines)))
-        if order.sub_link:
-            await _deliver_config(
-                bot, cb.from_user.id, gb=order.gb, days=order.days,
-                sub_link=order.sub_link, name=name)
+    lines = [f"📦 {name}", f"پلن: {gb} گیگ · {days} روز"]
+    if paused:
+        lines.append("وضعیت: متوقف ⏸")
+    if status.ok:
+        lines.append(f"مصرف: {status.used_gb:.2f} از {status.limit_gb:.0f} گیگ")
+        if status.remaining_days is not None:
+            lines.append(f"روزهای باقی‌مانده: {status.remaining_days}")
+    else:
+        lines.append("اطلاعاتِ مصرف فعلاً در دسترس نیست.")
+    await cb.message.answer(
+        rtl("\n".join(lines)),
+        reply_markup=kb.order_actions_kb(order_id, renew_price, paused=paused))
+    if sub_link:
+        await _deliver_config(bot, cb.from_user.id, gb=gb, days=days, sub_link=sub_link, name=name)
     await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfrenew:"))
+async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
+    order_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        order = await _owned_order(s, sf, cb.from_user, order_id)
+        if order is None or order.status not in ("provisioned", "disabled"):
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
+        price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        gb = int(plan.gb) if plan else int(order.gb)
+        days = int(plan.days) if plan else int(order.days)
+    await cb.message.answer(
+        rtl(f"🔄 تمدیدِ «{order.label or 'سرویس'}» — {gb} گیگ · {days} روز\n"
+            f"مبلغ: {_toman(price)} تومان از کیفِ پول کسر می‌شود."),
+        reply_markup=kb.confirm_kb(rtl("✅ تمدید"), f"sfrenewok:{order_id}"))
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfrenewok:"))
+async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
+    order_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+    await cb.answer()
+    await cb.message.answer(rtl("⏳ در حال تمدید…"))
+    res = await storefront_subscription.renew(SessionLocal, order_id=order_id, by_admin=False)
+    if res.ok:
+        await cb.message.answer(rtl(
+            f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز. لینکِ شما تغییری نکرده است."))
+    elif res.reason == "insufficient":
+        await cb.message.answer(
+            rtl(f"موجودی کافی نیست. {_toman(res.short_toman)} تومان کم دارید."),
+            reply_markup=kb.wallet_kb())
+    else:
+        await cb.message.answer(rtl("❌ تمدید ناموفق بود. با پشتیبانی تماس بگیرید."))
+
+
+@storefront_router.callback_query(F.data.startswith("sftgl:"))
+async def sf_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    order_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        order = await _owned_order(s, sf, cb.from_user, order_id)
+        if order is None or order.status not in ("provisioned", "disabled"):
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        enable = order.status == "disabled"
+    res = await storefront_subscription.set_enabled(SessionLocal, order_id=order_id, enabled=enable)
+    if res.ok:
+        await cb.answer("فعال شد." if enable else "متوقف شد.", show_alert=False)
+    else:
+        await cb.answer("ناموفق بود.", show_alert=True)
+
+
+@storefront_router.callback_query(F.data.startswith("sfdel:"))
+async def sf_delete(cb: CallbackQuery, bot: Bot) -> None:
+    order_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+    await cb.message.answer(
+        rtl("🗑 از حذفِ این سرویس مطمئن هستید؟ کانفیگ از پنل پاک می‌شود و وجهی بازنمی‌گردد."),
+        reply_markup=kb.confirm_kb(rtl("🗑 بله، حذف کن"), f"sfdelok:{order_id}"))
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfdelok:"))
+async def sf_delete_ok(cb: CallbackQuery, bot: Bot) -> None:
+    order_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+    await cb.answer()
+    res = await storefront_subscription.delete_subscription(SessionLocal, order_id=order_id)
+    await cb.message.answer(rtl("✅ سرویس حذف شد." if res.ok else "❌ حذف ناموفق بود."))
+
+
+# ── admin: a customer's subscriptions (renew / pause / delete) ───────────────
+
+async def _admin_order(s, sf, order_id: int):  # noqa: ANN001, ANN202
+    """Return the order iff its customer belongs to THIS admin's storefront, else None."""
+    order = await s.get(StorefrontOrder, order_id)
+    if order is None:
+        return None
+    cust = await s.get(StorefrontCustomer, order.customer_id)
+    if cust is None or cust.storefront_bot_id != sf.id:
+        return None
+    return order
+
+
+@storefront_router.callback_query(F.data.startswith("sfacust:"))
+async def sf_admin_customer_subs(cb: CallbackQuery, bot: Bot) -> None:
+    cid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        cust = await s.get(StorefrontCustomer, cid)
+        if cust is None or cust.storefront_bot_id != sf.id:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        orders = (await s.execute(
+            select(StorefrontOrder).where(
+                StorefrontOrder.customer_id == cid,
+                StorefrontOrder.status.in_(("provisioned", "disabled")),
+            ).order_by(StorefrontOrder.id.desc())
+        )).scalars().all()
+        title = cust.name or str(cust.telegram_id)
+    if not orders:
+        await cb.message.answer(rtl(f"«{title}» سرویسِ فعالی ندارد."))
+        await cb.answer()
+        return
+    await cb.message.answer(rtl(f"📦 سرویس‌های «{title}» — برای مدیریت روی هرکدام بزنید:"),
+                            reply_markup=kb.admin_subs_kb(list(orders)))
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfasub:"))
+async def sf_admin_sub_detail(cb: CallbackQuery, bot: Bot) -> None:
+    oid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        order = await _admin_order(s, sf, oid)
+        if order is None:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        name, gb, days, paused = (
+            order.label or "سرویس", order.gb, order.days, order.status == "disabled")
+        live = await storefront_provision.live_status(s, sf, order)
+    lines = [f"📦 {name}", f"پلن: {gb} گیگ · {days} روز"]
+    if paused:
+        lines.append("وضعیت: متوقف ⏸")
+    if live.ok:
+        lines.append(f"مصرف: {live.used_gb:.2f} از {live.limit_gb:.0f} گیگ")
+        if live.remaining_days is not None:
+            lines.append(f"روزهای باقی‌مانده: {live.remaining_days}")
+    await cb.message.answer(rtl("\n".join(lines)),
+                            reply_markup=kb.admin_sub_actions_kb(oid, paused=paused))
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfarenew:"))
+async def sf_admin_renew(cb: CallbackQuery, bot: Bot) -> None:
+    oid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin or await _admin_order(s, sf, oid) is None:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+    await cb.answer()
+    res = await storefront_subscription.renew(SessionLocal, order_id=oid, by_admin=True)
+    await cb.message.answer(
+        rtl(f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز." if res.ok else "❌ تمدید ناموفق بود."))
+
+
+@storefront_router.callback_query(F.data.startswith("sfatgl:"))
+async def sf_admin_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    oid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        order = await _admin_order(s, sf, oid)
+        if order is None:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        enable = order.status == "disabled"
+    res = await storefront_subscription.set_enabled(SessionLocal, order_id=oid, enabled=enable)
+    await cb.answer(("فعال شد." if enable else "متوقف شد.") if res.ok else "ناموفق بود.",
+                    show_alert=not res.ok)
+
+
+@storefront_router.callback_query(F.data.startswith("sfadel:"))
+async def sf_admin_delete(cb: CallbackQuery, bot: Bot) -> None:
+    oid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin or await _admin_order(s, sf, oid) is None:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+    await cb.answer()
+    res = await storefront_subscription.delete_subscription(SessionLocal, order_id=oid)
+    await cb.message.answer(rtl("✅ سرویس حذف شد." if res.ok else "❌ حذف ناموفق بود."))
 
 
 # ── top-up flow ───────────────────────────────────────────────────────────────
@@ -459,7 +713,15 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
 async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     async with SessionLocal() as s:
         sf, _r, _a = await _resolve(s, bot, cb.from_user)
-    if sf is None:
+        if sf is None:
+            await cb.answer()
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
+        pending = await storefront_wallet.pending_topups_for_customer(s, customer.id)
+        cap = int(await settings_service.get(s, "storefront_max_pending_topups", 3) or 3)
+    if len(pending) >= cap:  # anti-spam: don't pile up unreviewed top-ups
+        await cb.message.answer(rtl(
+            f"شما {len(pending)} شارژِ در انتظارِ تأیید دارید؛ تا بررسیِ آن‌ها صبر کنید."))
         await cb.answer()
         return
     await state.set_state(SF.topup_amount)
@@ -540,9 +802,9 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
                + (f"\nمتن/TXID: {txid}" if txid else ""))
         if reseller and reseller.bot_chat_id:
             try:
-                if proof_path:
+                if message.photo:  # forward by file_id — no disk read, no leaked file handle
                     await bot.send_photo(
-                        reseller.bot_chat_id, BufferedInputFile(open(proof_path, "rb").read(), "p.jpg"),
+                        reseller.bot_chat_id, message.photo[-1].file_id,
                         caption=rtl(cap), reply_markup=kb.topup_decide_kb(txn.id))
                 else:
                     await bot.send_message(reseller.bot_chat_id, rtl(cap),
@@ -885,6 +1147,18 @@ async def sf_support_set(message: Message, state: FSMContext, bot: Bot) -> None:
     await message.answer(rtl("✅ شناسهٔ پشتیبانی ذخیره شد."), reply_markup=kb.admin_reply_kb())
 
 
+@storefront_router.message(SF.welcome, F.text)
+async def sf_welcome_set(message: Message, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            return
+        sf.welcome_text = (message.text or "").strip()[:1000] or None
+        await s.commit()
+    await message.answer(rtl("✅ پیامِ خوش‌آمد ذخیره شد."), reply_markup=kb.admin_reply_kb())
+
+
 @storefront_router.message(SF.broadcast, F.text)
 async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
     await state.clear()
@@ -926,3 +1200,20 @@ async def sf_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 @storefront_router.callback_query(F.data == "sfnoop")
 async def sf_noop(cb: CallbackQuery) -> None:
     await cb.answer()
+
+
+# ── fallback: any other message → re-show the menu (registered LAST = lowest priority) ──────────
+
+@storefront_router.message()
+async def sf_fallback(message: Message, bot: Bot) -> None:
+    """A stray message that matched no command/label/FSM state → gently re-show the right menu instead
+    of ignoring it (a banned customer was already short-circuited by the middleware)."""
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            return
+        if is_admin:
+            await _send_admin_menu(message.answer, sf)
+        else:
+            cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+            await _send_customer_menu(message.answer, sf, cust)
