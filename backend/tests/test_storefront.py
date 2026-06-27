@@ -219,6 +219,76 @@ def test_wallet_kb_offers_topup_then_amount():
     assert "sftopup" in cbs                     # wallet screen offers top-up (not an immediate prompt)
 
 
+def test_orders_kb_label_is_rtl_isolated():
+    o = StorefrontOrder(id=1, customer_id=1, label="phone", gb=30, days=30,
+                        price_toman=0, status="provisioned")
+    text = sfkb.orders_kb([o]).inline_keyboard[0][0].text
+    assert "⁨phone⁩" in text                     # English name isolated → order doesn't scramble
+
+
+def test_customer_kb_shows_free_trial_only_when_flagged():
+    on = [b.text for row in sfkb.customer_reply_kb(show_free_trial=True).keyboard for b in row]
+    off = [b.text for row in sfkb.customer_reply_kb(show_free_trial=False).keyboard for b in row]
+    assert sfkb.FREE_TRIAL_LABEL in on and sfkb.FREE_TRIAL_LABEL not in off
+
+
+def test_trial_available_logic():
+    from app.bot.storefront.handlers import _trial_available
+    assert _trial_available(SimpleNamespace(free_trial_enabled=True),
+                            SimpleNamespace(free_trial_used=False)) is True
+    assert _trial_available(SimpleNamespace(free_trial_enabled=True),
+                            SimpleNamespace(free_trial_used=True)) is False
+    assert _trial_available(SimpleNamespace(free_trial_enabled=False),
+                            SimpleNamespace(free_trial_used=False)) is False
+
+
+def test_free_trial_is_one_per_customer(tmp_path, monkeypatch):
+    from app.bot.storefront import handlers as sfh
+
+    calls = {"n": 0}
+
+    async def fake_create(session, reseller, *, count, gb, days, base_name):  # noqa: ANN001, ANN002
+        calls["n"] += 1
+        return SimpleNamespace(
+            created=[SimpleNamespace(name=base_name, uuid=f"u{calls['n']}",
+                                     sub_link="https://h/p/u/#x")],
+            error=None, capacity_blocked=False, limit_hit=False)
+
+    monkeypatch.setattr(usercreate, "create_for_reseller", fake_create)
+
+    class FakeUser:
+        id, first_name, username = 555, "C", "c"
+
+    class FakeMsg:
+        from_user = FakeUser()
+
+        async def answer(self, *a, **k):  # noqa: ANN002, ANN003
+            return None
+
+    class FakeBot:
+        async def send_photo(self, *a, **k):  # noqa: ANN002, ANN003
+            return None
+
+        async def send_message(self, *a, **k):  # noqa: ANN002, ANN003
+            return None
+
+    async def body(s):
+        _r, bot, cust = await _seed(s)
+        bot.free_trial_enabled = True
+        bot.free_trial_gb, bot.free_trial_days = 1, 1
+        await s.commit()
+
+        await sfh._claim_free_trial(FakeMsg(), s, bot, cust, FakeBot())
+        await s.refresh(cust)
+        assert cust.free_trial_used is True and calls["n"] == 1
+
+        # a second claim is refused — no second config minted
+        await sfh._claim_free_trial(FakeMsg(), s, bot, cust, FakeBot())
+        assert calls["n"] == 1
+
+    _run(body, tmp_path, "trial.db")
+
+
 def test_monthly_fee_active_only(tmp_path):
     async def body(s):
         # enabled + active bot + per-reseller fee → that fee

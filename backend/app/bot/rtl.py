@@ -19,11 +19,14 @@ import re
 
 _RLM, _FSI, _PDI = "‏", "⁨", "⁩"
 
-# A run to isolate: a /command, or a maximal run of Latin/number/symbol chars (spaces allowed
-# inside so «30.86 USDT» stays one unit), or a single Latin letter. Only runs that actually
-# contain a Latin LETTER are isolated (a lone number renders fine in RTL and is left as-is).
+# A run to isolate: a /command, an @mention (the @ MUST stay inside the isolate so Telegram still
+# detects the mention and it stays clickable — `@⁨name⁩` is NOT detected, `⁨@name⁩` is), or a maximal
+# run of Latin/number/symbol chars (spaces allowed inside so «30.86 USDT» stays one unit), or a single
+# Latin letter. Only runs that actually contain a Latin LETTER are isolated (a lone number renders fine
+# in RTL and is left as-is). An email's @ is consumed by the general run first, so it stays one unit too.
 _LTR_RUN = re.compile(
     r"/[A-Za-z][\w-]*"
+    r"|@[A-Za-z0-9_]+"
     r"|[A-Za-z0-9][A-Za-z0-9 .,:/_+=@#%×–-]*[A-Za-z0-9]"
     r"|[A-Za-z]"
 )

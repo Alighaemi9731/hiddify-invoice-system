@@ -8,12 +8,14 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.bot.rtl import rtl
 from app.models import StorefrontBot, StorefrontOrder, StorefrontPlan
 
 # ── docked reply-keyboard menus (label → action) ──────────────────────────────
 ADMIN_MENU: list[tuple[str, str]] = [
     ("🧩 پلن‌ها", "plans"),
     ("💳 روش‌های پرداخت", "pay"),
+    ("🎁 تنظیماتِ تست رایگان", "trialcfg"),
     ("🧾 شارژهای در انتظار", "topups"),
     ("👥 مشتری‌ها", "customers"),
     ("📊 آمار", "stats"),
@@ -27,8 +29,11 @@ CUSTOMER_MENU: list[tuple[str, str]] = [
     ("📦 سرویس‌های من", "orders"),
     ("💬 پشتیبانی", "support"),
 ]
+# Shown only when the admin enabled it AND the customer hasn't claimed it yet (added to the keyboard
+# dynamically), but always routable so a tap is never a dead end.
+FREE_TRIAL_LABEL = "🎁 تست رایگان"
 ADMIN_LABEL_TO_ACTION = dict(ADMIN_MENU)
-CUSTOMER_LABEL_TO_ACTION = dict(CUSTOMER_MENU)
+CUSTOMER_LABEL_TO_ACTION = {**dict(CUSTOMER_MENU), FREE_TRIAL_LABEL: "trial"}
 # The admin can jump back from the customer preview.
 BACK_TO_ADMIN = "« بازگشت به مدیریت"
 ALL_LABELS = set(ADMIN_LABEL_TO_ACTION) | set(CUSTOMER_LABEL_TO_ACTION) | {BACK_TO_ADMIN}
@@ -51,8 +56,10 @@ def admin_reply_kb() -> ReplyKeyboardMarkup:
     return _grid([label for label, _ in ADMIN_MENU])
 
 
-def customer_reply_kb(*, is_admin_preview: bool = False) -> ReplyKeyboardMarkup:
+def customer_reply_kb(*, is_admin_preview: bool = False, show_free_trial: bool = False) -> ReplyKeyboardMarkup:
     labels = [label for label, _ in CUSTOMER_MENU]
+    if show_free_trial:
+        labels = [FREE_TRIAL_LABEL, *labels]
     if is_admin_preview:
         labels = [*labels, BACK_TO_ADMIN]
     return _grid(labels)
@@ -70,7 +77,7 @@ def plan_label(p: StorefrontPlan) -> str:
 
 def buy_plans_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=plan_label(p), callback_data=f"sfbuy:{p.id}")]
+        [InlineKeyboardButton(text=rtl(plan_label(p)), callback_data=f"sfbuy:{p.id}")]
         for p in plans
     ]
     return InlineKeyboardMarkup(
@@ -83,7 +90,7 @@ def plans_manage_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
     for p in plans:
         flag = "" if p.enabled else " (غیرفعال)"
         rows.append([
-            InlineKeyboardButton(text=f"{plan_label(p)}{flag}", callback_data="sfnoop"),
+            InlineKeyboardButton(text=rtl(f"{plan_label(p)}{flag}"), callback_data="sfnoop"),
             InlineKeyboardButton(text="🗑", callback_data=f"sfplandel:{p.id}"),
         ])
     rows.append([InlineKeyboardButton(text="➕ افزودن پلن", callback_data="sfplanadd")])
@@ -91,10 +98,11 @@ def plans_manage_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
 
 
 def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
-    """One button per provisioned service (tap → live usage/expiry + link/QR)."""
+    """One button per provisioned service (tap → live usage/expiry + link/QR). The label is
+    rtl()-wrapped so a mixed Persian/English service name doesn't scramble the order."""
     rows = [
         [InlineKeyboardButton(
-            text=f"{o.label or 'سرویس'} — {o.gb}گیگ/{o.days}روز",
+            text=rtl(f"📦 {o.gb}گیگ/{o.days}روز — {o.label or 'سرویس'}"),
             callback_data=f"sforder:{o.id}")]
         for o in orders
     ]
@@ -144,6 +152,15 @@ def pay_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="✏️ آدرس", callback_data="sfpayset:usdt")],
         [InlineKeyboardButton(text=f"گرام/تون {t(bot.pay_ton_enabled)}", callback_data="sfpaytog:ton"),
          InlineKeyboardButton(text="✏️ آدرس", callback_data="sfpayset:ton")],
+    ])
+
+
+def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
+    """Admin toggles the one-time free trial on/off and edits its volume/duration."""
+    state = "✅ فعال" if bot.free_trial_enabled else "❌ غیرفعال"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"وضعیت: {state} (تغییر)", callback_data="sftrialtog")],
+        [InlineKeyboardButton(text="✏️ تغییرِ حجم/مدت", callback_data="sftrialset")],
     ])
 
 

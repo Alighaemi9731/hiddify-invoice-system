@@ -40,6 +40,8 @@ class SF(StatesGroup):
     plan_days = State()
     plan_price = State()
     pay_value = State()        # data: method (+ card sub-step)
+    trial_gb = State()         # admin sets free-trial volume
+    trial_days = State()       # admin sets free-trial duration; data: t_gb
     buy_name = State()         # customer names the config; data: buy_plan_id
     topup_amount = State()     # data: nothing yet
     topup_proof = State()      # data: amount, method
@@ -79,12 +81,20 @@ async def _send_admin_menu(answer, sf: StorefrontBot) -> None:  # noqa: ANN001
     )
 
 
+def _trial_available(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
+    return bool(sf.free_trial_enabled) and not customer.free_trial_used
+
+
 async def _send_customer_menu(answer, sf: StorefrontBot, customer: StorefrontCustomer, *, preview=False) -> None:  # noqa: ANN001
     bal = _toman(storefront_wallet.balance(customer))
     text = sf.welcome_text or "🛍 به فروشگاه خوش آمدید!"
+    lines = [text, "", f"👛 موجودیِ کیفِ پولِ شما: {bal} تومان"]
+    show_trial = _trial_available(sf, customer)
+    if show_trial:
+        lines.append(f"🎁 تستِ رایگان ({sf.free_trial_gb} گیگ · {sf.free_trial_days} روز) فعال است.")
     await answer(
-        rtl(f"{text}\n\n👛 موجودیِ کیفِ پولِ شما: {bal} تومان"),
-        reply_markup=kb.customer_reply_kb(is_admin_preview=preview),
+        rtl("\n".join(lines)),
+        reply_markup=kb.customer_reply_kb(is_admin_preview=preview, show_free_trial=show_trial),
     )
 
 
@@ -170,6 +180,13 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             f"کارت: {sf.card_number or '—'} ({sf.card_holder or '—'})\n"
             f"تتر: {sf.usdt_address or '—'}\nگرام/تون: {sf.ton_address or '—'}"),
             reply_markup=kb.pay_settings_kb(sf))
+    elif action == "trialcfg":
+        await ans(rtl(
+            f"🎁 تستِ رایگان (یک‌بار برای هر مشتری)\n"
+            f"وضعیت: {'فعال ✅' if sf.free_trial_enabled else 'غیرفعال ❌'}\n"
+            f"حجم: {sf.free_trial_gb} گیگ · مدت: {sf.free_trial_days} روز\n\n"
+            "نکته: حجمِ ۱ گیگ (یا کمتر) برای شما رایگان است؛ بیشتر از آن در فاکتورِ شما حساب می‌شود."),
+            reply_markup=kb.trial_settings_kb(sf))
     elif action == "topups":
         pend = await storefront_wallet.pending_topups_for_bot(s, sf.id)
         if not pend:
@@ -251,6 +268,39 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
             await ans(rtl("\n".join(lines)))
     elif action == "support":
         await ans(rtl(f"💬 پشتیبانی: {sf.support_contact or 'به‌زودی'}"))
+    elif action == "trial":
+        await _claim_free_trial(message, s, sf, customer, bot)
+
+
+async def _claim_free_trial(message, s, sf, customer, bot) -> None:  # noqa: ANN001
+    """Give this customer their ONE free trial config. Idempotent: the used-flag is set only after a
+    successful provision, and re-checked, so a double-tap can't mint two trials."""
+    if not sf.free_trial_enabled:
+        await message.answer(rtl("تستِ رایگان فعال نیست."))
+        return
+    if customer.free_trial_used:
+        await message.answer(rtl("شما قبلاً تستِ رایگان دریافت کرده‌اید."))
+        return
+    gb, days = int(sf.free_trial_gb or 1), int(sf.free_trial_days or 1)
+    name = "تست رایگان"
+    await message.answer(rtl(f"🎁 در حال ساختِ تستِ رایگان ({gb} گیگ · {days} روز)…"))
+    order = StorefrontOrder(
+        customer_id=customer.id, plan_id=None, label=name, gb=gb, days=days,
+        price_toman=0, status="pending")
+    s.add(order)
+    await s.commit()
+    res = await storefront_provision.provision(s, sf, customer, gb=gb, days=days, label=name)
+    if res.ok and res.sub_link:
+        order.status = "provisioned"
+        order.panel_user_uuid = res.uuid
+        order.sub_link = res.sub_link
+        customer.free_trial_used = True
+        await s.commit()
+        await _deliver_config(bot, message.from_user.id, gb=gb, days=days, sub_link=res.sub_link, name=name)
+    else:
+        order.status = "failed"
+        await s.commit()
+        await message.answer(rtl("❌ ساختِ تستِ رایگان ناموفق بود. لطفاً بعداً دوباره تلاش کنید."))
 
 
 # ── buy → name → confirm → wallet debit → provision ──────────────────────────
@@ -724,6 +774,64 @@ async def sf_pay_value(message: Message, state: FSMContext, bot: Bot) -> None:
         await s.commit()
         await state.clear()
         await message.answer(rtl("✅ ذخیره شد."), reply_markup=kb.pay_settings_kb(sf))
+
+
+# ── admin: free-trial settings ────────────────────────────────────────────────
+
+@storefront_router.callback_query(F.data == "sftrialtog")
+async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        sf.free_trial_enabled = not sf.free_trial_enabled
+        await s.commit()
+        await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
+    await cb.answer("فعال شد." if sf.free_trial_enabled else "غیرفعال شد.")
+
+
+@storefront_router.callback_query(F.data == "sftrialset")
+async def sf_trial_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        _sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if not is_admin:
+        await cb.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await state.set_state(SF.trial_gb)
+    await cb.message.answer(rtl("حجمِ تستِ رایگان به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.trial_gb, F.text)
+async def sf_trial_gb(message: Message, state: FSMContext) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        return
+    await state.update_data(t_gb=int(raw))
+    await state.set_state(SF.trial_days)
+    await message.answer(rtl("مدتِ تستِ رایگان به روز (عدد):"), reply_markup=kb.cancel_kb())
+
+
+@storefront_router.message(SF.trial_days, F.text)
+async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        return
+    data = await state.get_data()
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            return
+        sf.free_trial_gb = int(data.get("t_gb", 1))
+        sf.free_trial_days = int(raw)
+        await s.commit()
+        await message.answer(
+            rtl(f"✅ تستِ رایگان: {sf.free_trial_gb} گیگ · {sf.free_trial_days} روز"),
+            reply_markup=kb.trial_settings_kb(sf))
 
 
 # ── admin: manual wallet adjust, support, broadcast ──────────────────────────

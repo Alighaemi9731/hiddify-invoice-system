@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.43.0 - 2026-06-27
+
+### Added — Storefront one-time free trial
+
+- Each customer can claim **one** free trial config (admin opt-in, default **1 GB · 1 day** — at/under
+  the owner's free-config threshold, so it's free for the reseller too). The customer menu shows a
+  «🎁 تست رایگان» button only while it's enabled and unused; claiming provisions a config named
+  «تست رایگان» + QR and sets `storefront_customers.free_trial_used` (only on success, so a failed
+  provision can be retried). The reseller-admin enables/disables it and edits the volume/duration from a
+  new «🎁 تنظیماتِ تست رایگان» admin screen. New columns `storefront_bots.free_trial_enabled/gb/days` +
+  `storefront_customers.free_trial_used` (migration `b4e1d2f7a9c3`).
+
+### Fixed — RTL/bidi
+
+- **@usernames are clickable again.** `rtl()` was isolating mentions as `@⁨name⁩` (the `@` left
+  *outside* the bidi isolate), which both mis-positioned it and stopped Telegram from detecting the
+  mention. It now isolates `⁨@name⁩` (the `@` inside), so the admin-menu bot username, the BotFather
+  guide, and the support-id prompt render correctly and are tappable. Emails stay one unit.
+- **«سرویس‌های من» buttons no longer scramble.** Storefront inline-button labels (services, plans) are
+  now `rtl()`-wrapped, so a service whose name mixes Persian and English (e.g. «phone») keeps its
+  volume/duration in the right order.
+
 ## 1.42.0 - 2026-06-27
 
 ### Changed — Storefront bot UX redesign (customer + setup)

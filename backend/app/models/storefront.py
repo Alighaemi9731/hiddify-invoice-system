@@ -68,6 +68,12 @@ class StorefrontBot(Base, TimestampMixin):
     channel_link: Mapped[str | None] = mapped_column(String(255), nullable=True)
     channel_required: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # One-time free trial (each customer can claim it once). Default 1 GB · 1 day — at/under the
+    # owner's free-config threshold, so the trial config is free for the reseller too.
+    free_trial_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    free_trial_gb: Mapped[int] = mapped_column(Integer, default=1)
+    free_trial_days: Mapped[int] = mapped_column(Integer, default=1)
+
     plans: Mapped[list[StorefrontPlan]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
     )
@@ -111,6 +117,7 @@ class StorefrontCustomer(Base, TimestampMixin):
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     wallet_balance_toman: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
     banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    free_trial_used: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class StorefrontWalletTxn(Base, TimestampMixin):
