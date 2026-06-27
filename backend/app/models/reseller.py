@@ -82,10 +82,11 @@ class Reseller(Base, TimestampMixin):
     # Whether this admin is allowed to create sub-admins (Hiddify `can_add_admin`).
     can_add_admin: Mapped[bool] = mapped_column(default=False)
 
-    # Storefront-bot feature (owner-controlled, like create-user). When enabled, the reseller can set
-    # up their own VPN storefront bot; the monthly fee (override, else global default) is billed only
-    # for months they actually have an active storefront bot.
-    storefront_enabled: Mapped[bool] = mapped_column(default=False)
+    # Storefront-bot feature. ON by default for everyone (the owner can still disable a specific
+    # reseller); only TOP-LEVEL resellers can actually set one up (the bot's setup gate enforces that —
+    # never a sub-reseller). The monthly fee (override, else global default = free) is billed only for
+    # months they actually have an active storefront bot.
+    storefront_enabled: Mapped[bool] = mapped_column(default=True)
     storefront_monthly_fee_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Monthly SOLD-quota cap (GB) a PARENT reseller sets on this sub-reseller — a feature

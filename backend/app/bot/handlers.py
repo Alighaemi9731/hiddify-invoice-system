@@ -1176,6 +1176,25 @@ async def _storefront_target_line(session, r: Reseller) -> str:  # noqa: ANN001
 
 
 async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMContext) -> None:  # noqa: ANN001
+    from app.services import storefront
+
+    # One storefront bot per person: if they already have one, this setup REPLACES its token (keeping
+    # all data) instead of creating a second — and the panel stays fixed (changing it would orphan the
+    # configs already provisioned on it).
+    existing = await storefront.get_bot_for_chat(session, chat_id)
+    if existing is not None:
+        r = await session.get(Reseller, existing.reseller_id)
+        panel = await session.get(Panel, r.panel_id) if r else None
+        await state.set_state(StorefrontSetupState.token)
+        await state.update_data(sf_reseller_id=existing.reseller_id)
+        await answer(rtl(
+            f"🏪 شما هم‌اکنون یک ربات فروشگاهی دارید: @{existing.bot_username or '—'} "
+            f"(پنلِ «{panel.key if panel else '?'}»).\n"
+            "برای جایگزینی، توکنِ جدیدِ BotFather را بفرستید — همهٔ پلن‌ها، مشتری‌ها، سرویس‌ها و "
+            "موجودیِ کیفِ پول‌ها به توکنِ جدید منتقل می‌شوند و ربات قبلی از کار می‌افتد.\n\n"
+            + _BOTFATHER_GUIDE), parse_mode="HTML",
+            reply_markup=keyboards.cancel_keyboard("« انصراف"))
+        return
     roots = [
         r for r in await _top_level_resellers(session, chat_id)
         if getattr(r, "storefront_enabled", False)
@@ -1210,7 +1229,10 @@ async def cb_sf_setup_panel(cb: CallbackQuery, state: FSMContext) -> None:
     rid = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         r = await s.get(Reseller, rid)
-        if r is None or r.bot_chat_id != cb.from_user.id or not getattr(r, "storefront_enabled", False):
+        # Defensive: must be this person's OWN, storefront-enabled, TOP-LEVEL reseller (never a sub).
+        if r is None or r.bot_chat_id != cb.from_user.id \
+                or not getattr(r, "storefront_enabled", False) \
+                or not await _is_top_level_reseller(s, r):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
         target = await _storefront_target_line(s, r)
@@ -1238,18 +1260,26 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
     finally:
         await probe.session.close()
     data = await state.get_data()
-    rid = int(data.get("sf_reseller_id") or 0)
+    rid_picked = int(data.get("sf_reseller_id") or 0)
     await state.clear()
     from app.services import storefront
 
+    replaced = False
     async with SessionLocal() as s:
+        # One bot per person: if they already have one, ALWAYS repoint it (ignore any picked rid) so a
+        # second bot can never be created and all data stays attached to the same row.
+        mine = await storefront.get_bot_for_chat(s, message.from_user.id)
+        rid = mine.reseller_id if mine is not None else rid_picked
+        replaced = mine is not None
         r = await s.get(Reseller, rid)
+        # Must be this person's OWN, storefront-enabled, TOP-LEVEL reseller (never a sub-reseller).
         if r is None or r.bot_chat_id != message.from_user.id \
-                or not getattr(r, "storefront_enabled", False):
+                or not getattr(r, "storefront_enabled", False) \
+                or not await _is_top_level_reseller(s, r):
             await message.answer(rtl("دسترسی ندارید."))
             return
-        existing = await storefront.get_bot_by_telegram_id(s, me.id)
-        if existing is not None and existing.reseller_id != rid:
+        by_tgid = await storefront.get_bot_by_telegram_id(s, me.id)
+        if by_tgid is not None and by_tgid.reseller_id != rid:
             await message.answer(rtl("این ربات قبلاً برای حسابِ دیگری ثبت شده است."))
             return
         await storefront.upsert_bot(s, reseller_id=rid, panel_id=r.panel_id, token=token,
@@ -1260,9 +1290,15 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
         await manager.reconcile()
     except Exception:  # noqa: BLE001
         log.warning("storefront reconcile after setup failed", exc_info=True)
-    await message.answer(rtl(
-        f"✅ رباتِ فروشگاهیِ شما آماده شد: @{me.username}\n"
-        "اکنون واردِ رباتِ خودتان شوید و /start را بزنید تا پنلِ مدیریت را ببینید."))
+    if replaced:
+        await message.answer(rtl(
+            f"✅ رباتِ فروشگاهیِ شما به توکنِ جدید منتقل شد: @{me.username}\n"
+            "همهٔ داده‌ها (پلن‌ها، مشتری‌ها، سرویس‌ها، کیفِ پول) حفظ شد و ربات قبلی از کار افتاد.\n"
+            "واردِ رباتِ جدید شوید و /start را بزنید."))
+    else:
+        await message.answer(rtl(
+            f"✅ رباتِ فروشگاهیِ شما آماده شد: @{me.username}\n"
+            "اکنون واردِ رباتِ خودتان شوید و /start را بزنید تا پنلِ مدیریت را ببینید."))
 
 
 @router.callback_query(F.data.startswith("cupanel:"))

@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.45.0 - 2026-06-27
+
+### Changed — Storefront enablement: on-by-default, free, one bot per person
+
+- **The storefront permission is now ON by default for every reseller** (and all existing resellers are
+  backfilled to enabled by migration `d5b8e3f2a017`) — the owner no longer toggles «اجازهٔ راه‌اندازی»
+  one-by-one. The per-reseller toggle + fee field remain, so the owner can still disable or charge a
+  specific reseller. It stays **free** by default (the monthly fee already defaults to 0).
+- **Only first-tier admins can run a storefront.** Only TOP-LEVEL resellers (the ones registered in the
+  bot — direct children of the panel owner) can set one up; their sub-resellers cannot. The setup gate
+  enforced this already; with default-on it's now the sole gate, so a defensive top-level re-check was
+  added at the panel-pick and token steps.
+- **One storefront bot per person.** A reseller-admin who is top-level on several panels can no longer
+  spin up multiple bots — they get exactly one. Re-running setup recognises their existing bot and offers
+  to **replace its token** instead of creating a second (`storefront.get_bot_for_chat`).
+- **New token migrates everything.** Sending a new BotFather token repoints the same storefront record, so
+  all plans, customers, services and wallet balances carry over to the new token and the **old bot stops
+  working** — the bot confirms this on success.
+
 ## 1.44.0 - 2026-06-27
 
 ### Added / Changed — Storefront reliability, subscription management & retention

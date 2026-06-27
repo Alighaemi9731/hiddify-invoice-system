@@ -701,3 +701,75 @@ def test_bot_telegram_id_is_partial_unique(tmp_path):
         await engine.dispose()
 
     asyncio.run(go())
+
+
+# ── v1.45.0: storefront enable default-on, one-bot-per-person, sub-reseller gate ──────
+
+def test_reseller_storefront_enabled_defaults_on(tmp_path):
+    async def body(s):
+        p = Panel(key="d", host="d.invalid", proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
+        s.add(p)
+        await s.flush()
+        r = Reseller(panel_id=p.id, admin_uuid="X", name="X")   # storefront_enabled NOT passed
+        s.add(r)
+        await s.flush()
+        await s.refresh(r)
+        assert r.storefront_enabled is True   # default ON for everyone
+
+    _run(body, tmp_path, "sfdefault.db")
+
+
+def test_get_bot_for_chat_finds_persons_single_bot(tmp_path):
+    async def body(s):
+        r, bot, _c = await _seed(s)
+        r.bot_chat_id = 777
+        await s.commit()
+        found = await storefront.get_bot_for_chat(s, 777)
+        assert found is not None and found.id == bot.id
+        assert await storefront.get_bot_for_chat(s, 999) is None   # different person → none
+
+    _run(body, tmp_path, "botforchat.db")
+
+
+def test_upsert_bot_repoint_migrates_data_no_duplicate(tmp_path):
+    async def body(s):
+        r, bot, cust = await _seed(s)
+        plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=1000)
+        old_id = bot.id
+        updated = await storefront.upsert_bot(
+            s, reseller_id=r.id, panel_id=r.panel_id, token="999:newtoken",
+            bot_username="newbot", bot_telegram_id=8888)
+        assert updated.id == old_id                               # SAME row repointed
+        assert updated.bot_telegram_id == 8888 and updated.bot_username == "newbot"
+        assert storefront.bot_token(updated) == "999:newtoken"    # token migrated
+        plans = await storefront.list_plans(s, bot.id)
+        custs = await storefront.list_customers(s, bot.id)
+        assert len(plans) == 1 and plans[0].id == plan.id         # data preserved
+        assert any(c.id == cust.id for c in custs)
+        rows = (await s.execute(
+            StorefrontBot.__table__.select().where(StorefrontBot.reseller_id == r.id))).all()
+        assert len(rows) == 1                                     # never a second bot
+
+    _run(body, tmp_path, "repoint.db")
+
+
+def test_subreseller_cannot_setup_storefront(tmp_path):
+    from app.bot import handlers as h
+
+    async def body(s):
+        p = Panel(key="h", host="h.invalid", proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
+        s.add(p)
+        await s.flush()
+        s.add_all([
+            Reseller(panel_id=p.id, admin_uuid="OWNER", name="Owner", is_owner=True),
+            Reseller(panel_id=p.id, admin_uuid="TL", parent_admin_uuid="OWNER", name="TL",
+                     bot_chat_id=111, storefront_enabled=True),
+            Reseller(panel_id=p.id, admin_uuid="SUB", parent_admin_uuid="TL", name="SUB",
+                     bot_chat_id=222, storefront_enabled=True),
+        ])
+        await s.commit()
+        assert await h._can_setup_storefront(s, 111) is True    # first-tier admin → allowed
+        assert await h._can_setup_storefront(s, 222) is False   # their sub-reseller → blocked
+        assert await h._top_level_resellers(s, 222) == []
+
+    _run(body, tmp_path, "subgate.db")
