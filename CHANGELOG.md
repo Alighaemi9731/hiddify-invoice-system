@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.43.2 - 2026-06-27
+
+### Fixed — group membership gate rejected `restricted` members
+
+- The forced-membership gate (`_is_member`) treated a supergroup member whose status is `restricted`
+  (any restriction applied) as a non-member and showed «هنوز عضو گروه نیستید», even though Telegram
+  reports such a user as still in the group (`is_member=True`). It now counts `restricted` +
+  `is_member=True` as a member — matching `channel_guard`, which already did. (Channels never report
+  `restricted`, so only the group gate was affected.) Also dropped the dead `"owner"` status (Telegram
+  sends `"creator"`). Regression test in `tests/test_bot_identity_safety.py`.
+
 ## 1.43.1 - 2026-06-27
 
 ### Fixed — only the first storefront bot was actually running

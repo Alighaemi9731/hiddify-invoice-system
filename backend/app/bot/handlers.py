@@ -316,8 +316,15 @@ async def _is_member(bot: Bot, chat_id: str, user_id: int) -> bool:
         return True
     try:
         member = await bot.get_chat_member(chat_id, user_id)
-        return member.status in ("member", "administrator", "creator", "owner")
-    except Exception as exc:  # noqa: BLE001
+        if member.status in ("member", "administrator", "creator"):
+            return True
+        # In a supergroup a user under ANY restriction reports status `restricted` but is still IN the
+        # group (Telegram flags this with is_member=True). Channels never report `restricted`, so this
+        # only matters for the group gate — matching channel_guard, which already counts `restricted`.
+        if member.status == "restricted":
+            return bool(getattr(member, "is_member", False))
+        return False  # left / kicked
+    except Exception as exc:  # noqa: BLE001 — fail closed (treat as non-member) on API errors
         log.warning("membership check failed for %s: %s", user_id, exc)
         return False
 

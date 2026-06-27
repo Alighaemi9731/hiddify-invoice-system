@@ -175,3 +175,42 @@ def test_payable_revalidation_uses_tehran_today(tmp_path, monkeypatch):
         assert res2.status == "ok"
 
     _run(body, tmp_path, "date.db")
+
+
+def test_is_member_counts_restricted_but_still_in_group():
+    """The forced-membership gate must treat a `restricted` (but is_member=True) supergroup member as a
+    member — matching channel_guard. `left`/`kicked` and API errors stay non-member (fail closed)."""
+    from app.bot import handlers
+
+    class FakeBot:
+        def __init__(self, member=None, raises=False):
+            self._member, self._raises = member, raises
+
+        async def get_chat_member(self, chat_id, user_id):  # noqa: ANN001
+            if self._raises:
+                raise RuntimeError("Bad Request: user not found")
+            return self._member
+
+    def member(status, **kw):
+        return SimpleNamespace(status=status, **kw)
+
+    async def check(bot) -> bool:
+        return await handlers._is_member(bot, "-100123", 555)
+
+    async def body():
+        # restricted but still in the group → member
+        assert await check(FakeBot(member("restricted", is_member=True))) is True
+        # restricted and removed → non-member
+        assert await check(FakeBot(member("restricted", is_member=False))) is False
+        # plain statuses
+        assert await check(FakeBot(member("member"))) is True
+        assert await check(FakeBot(member("administrator"))) is True
+        assert await check(FakeBot(member("creator"))) is True
+        assert await check(FakeBot(member("left"))) is False
+        assert await check(FakeBot(member("kicked"))) is False
+        # API error → fail closed (non-member)
+        assert await check(FakeBot(raises=True)) is False
+        # no chat configured → gate is open (always "member")
+        assert await handlers._is_member(FakeBot(), "", 555) is True
+
+    asyncio.run(body())
