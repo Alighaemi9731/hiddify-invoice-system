@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.45.1 - 2026-06-27
+
+### Fixed — storefront double messages + one bot per panel
+
+- **Most messages were sent twice.** With many storefront bots, the manager polled them through a single
+  shared `start_polling(*bots)` and **restarted the whole fleet whenever any bot was added/removed** — the
+  old and new pollers overlapped (Telegram «terminated by other getUpdates» 409s), so every update was
+  delivered and handled **twice**. The manager now runs **one independent, cancellable poll loop per bot**
+  (`bot.get_updates` → `dp.feed_update`) and reconciles **incrementally**: adding or removing a bot touches
+  only that bot, never restarting the others. No more overlap, no more doubled messages.
+- **One storefront bot PER PANEL (not per person).** v1.45.0 over-restricted setup to one bot per
+  Telegram person, so an admin registered on two panels couldn't run a bot for each. Setup is back to one
+  bot per registered (top-level) panel: «🏪 راه‌اندازی ربات فروشگاهی» shows a per-panel picker annotated
+  with each panel's current bot («ربات فعلی: @x» / «بدون ربات»); picking a panel without a bot creates a
+  new one (needs its own BotFather token), and re-picking a panel that has one replaces its token in place
+  (all data preserved). Sub-resellers are still blocked (top-level gate, with defensive re-checks).
+- **«سرویس‌های من» detail is one message.** Tapping a service now sends a single QR photo carrying the
+  status + subscription link + the renew/pause/delete buttons, instead of a status message followed by a
+  redundant «✅ سرویس آماده شد» config message.
+
 ## 1.45.0 - 2026-06-27
 
 ### Changed — Storefront enablement: on-by-default, free, one bot per person

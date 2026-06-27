@@ -318,15 +318,25 @@ def test_free_trial_concurrent_double_tap_mints_one(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_manager_polls_all_bots_in_one_start_polling(tmp_path, monkeypatch):
-    # aiogram's Dispatcher.start_polling holds a _running_lock for its whole lifetime, so the manager
-    # MUST poll every bot through ONE start_polling(*bots) call — one-call-per-bot deadlocks all but
-    # the first. This guards that regression: reconcile issues exactly one call covering both bots.
+def test_manager_polls_each_bot_independently_no_fleet_restart(tmp_path, monkeypatch):
+    # Each bot gets its OWN poll loop; adding a bot must NOT restart the others (a fleet-wide restart
+    # caused overlapping getUpdates → every update delivered twice). This guards that: the original
+    # pollers are the SAME task objects after a new bot is added.
     import asyncio as _aio
 
-    from aiogram import Bot, Dispatcher
+    from aiogram import Bot
 
     from app.bot.storefront import manager
+
+    async def fake_get_me(self):  # noqa: ANN001
+        return SimpleNamespace(id=int(self.token.split(":")[0]), username="b" + self.token[:3])
+
+    async def fake_get_updates(self, **kw):  # noqa: ANN001, ANN003 — idle long-poll, no network
+        await _aio.sleep(0.2)
+        return []
+
+    monkeypatch.setattr(Bot, "get_me", fake_get_me)
+    monkeypatch.setattr(Bot, "get_updates", fake_get_updates)
 
     async def go():
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mgr.db'}")
@@ -335,8 +345,9 @@ def test_manager_polls_all_bots_in_one_start_polling(tmp_path, monkeypatch):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)
-        async with Session() as s:
-            for i, tok in enumerate(["111:aaa", "222:bbb"], start=1):
+
+        async def add_bot(i, tok):  # noqa: ANN001, ANN202
+            async with Session() as s:
                 p = Panel(key=f"mp{i}", host=f"mp{i}.invalid",
                           proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
                 s.add(p)
@@ -346,31 +357,29 @@ def test_manager_polls_all_bots_in_one_start_polling(tmp_path, monkeypatch):
                 await s.flush()
                 s.add(StorefrontBot(reseller_id=r.id, panel_id=p.id,
                                     bot_token_enc=crypto.encrypt(tok) or "", enabled=True))
-            await s.commit()
+                await s.commit()
 
-        calls = []
-
-        async def fake_get_me(self):  # noqa: ANN001
-            return SimpleNamespace(id=int(self.token.split(":")[0]), username="b" + self.token[:3])
-
-        async def fake_start_polling(self, *bots, **kw):  # noqa: ANN001, ANN002, ANN003
-            calls.append(tuple(b.token for b in bots))
-            await _aio.Event().wait()  # emulate a long-running poller until cancelled
-
-        monkeypatch.setattr(Bot, "get_me", fake_get_me)
-        monkeypatch.setattr(Dispatcher, "start_polling", fake_start_polling)
+        await add_bot(1, "111:aaa")
+        await add_bot(2, "222:bbb")
         monkeypatch.setattr(manager, "SessionLocal", Session)
-        manager._attempted, manager._poll_task, manager._polled, manager._dp = {}, None, [], None
+        manager._active, manager._dp = {}, None
 
         await manager.reconcile()
-        await _aio.sleep(0)                       # let the polling task start
-        assert len(calls) == 1                    # ONE start_polling, not one per bot
-        assert set(calls[0]) == {"111:aaa", "222:bbb"}
+        assert len(manager._active) == 2                       # one independent poller per bot
+        tasks = {rid: r.task for rid, r in manager._active.items()}
+        assert all(not t.done() for t in tasks.values())
 
-        await manager.reconcile()                 # unchanged set → no extra start_polling
-        assert len(calls) == 1
+        await manager.reconcile()                              # unchanged → SAME tasks, not restarted
+        assert {rid: r.task for rid, r in manager._active.items()} == tasks
 
-        await manager._stop_polling()
+        await add_bot(3, "333:ccc")
+        await manager.reconcile()
+        assert len(manager._active) == 3
+        for rid, t in tasks.items():                           # the original two are UNTOUCHED
+            assert manager._active[rid].task is t
+
+        for rid in list(manager._active):
+            await manager._stop_runner(rid)
         manager._dp = None
         await engine.dispose()
 
@@ -719,16 +728,28 @@ def test_reseller_storefront_enabled_defaults_on(tmp_path):
     _run(body, tmp_path, "sfdefault.db")
 
 
-def test_get_bot_for_chat_finds_persons_single_bot(tmp_path):
+def test_two_panels_get_separate_bots(tmp_path):
     async def body(s):
-        r, bot, _c = await _seed(s)
-        r.bot_chat_id = 777
-        await s.commit()
-        found = await storefront.get_bot_for_chat(s, 777)
-        assert found is not None and found.id == bot.id
-        assert await storefront.get_bot_for_chat(s, 999) is None   # different person → none
+        # one person (same bot_chat_id) top-level on two panels → a SEPARATE bot per panel
+        rids = []
+        for i, tok in enumerate(["111:aaa", "222:bbb"], start=1):
+            p = Panel(key=f"tp{i}", host=f"tp{i}.invalid",
+                      proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
+            s.add(p)
+            await s.flush()
+            r = Reseller(panel_id=p.id, admin_uuid=f"P{i}", name=f"P{i}",
+                         bot_chat_id=555, storefront_enabled=True)
+            s.add(r)
+            await s.flush()
+            await storefront.upsert_bot(s, reseller_id=r.id, panel_id=p.id, token=tok,
+                                        bot_username=f"b{i}", bot_telegram_id=1000 + i)
+            rids.append(r.id)
+        a = await storefront.get_bot_for_reseller(s, rids[0])
+        b = await storefront.get_bot_for_reseller(s, rids[1])
+        assert a is not None and b is not None and a.id != b.id    # two distinct bots, one per panel
+        assert {a.bot_telegram_id, b.bot_telegram_id} == {1001, 1002}
 
-    _run(body, tmp_path, "botforchat.db")
+    _run(body, tmp_path, "twopanels.db")
 
 
 def test_upsert_bot_repoint_migrates_data_no_duplicate(tmp_path):
@@ -773,3 +794,58 @@ def test_subreseller_cannot_setup_storefront(tmp_path):
         assert await h._top_level_resellers(s, 222) == []
 
     _run(body, tmp_path, "subgate.db")
+
+
+def test_my_services_detail_sends_single_message(tmp_path, monkeypatch):
+    # Tapping a service in «سرویس‌های من» must send exactly ONE message (the QR photo with the status +
+    # link + action buttons), not a detail message AND a separate «… آماده شد» config message.
+    from app.bot.storefront import handlers as sfh
+    from app.services import storefront_provision as sp
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "detail.db")
+        async with Session() as s:
+            _r, bot, cust = await _seed(s)
+            order = StorefrontOrder(customer_id=cust.id, panel_id=bot.panel_id, label="x", gb=10,
+                                    days=30, price_toman=1000, status="provisioned",
+                                    panel_user_uuid="u1", sub_link="https://h/p/u1/#x")
+            s.add(order)
+            await s.commit()
+            oid, cust_tg, bot_tg = order.id, cust.telegram_id, bot.bot_telegram_id
+
+        monkeypatch.setattr(sfh, "SessionLocal", Session)
+        monkeypatch.setattr(sfh.usercreate, "qr_png", lambda link: b"PNG")
+
+        async def fake_live(session, sf, o):  # noqa: ANN001
+            return sp.LiveStatus(True, used_gb=1.0, limit_gb=10.0, remaining_days=20)
+
+        monkeypatch.setattr(sfh.storefront_provision, "live_status", fake_live)
+
+        sends = {"n": 0}
+
+        class FakeBot:
+            id = bot_tg
+
+            async def send_photo(self, *a, **k):  # noqa: ANN002, ANN003
+                sends["n"] += 1
+
+            async def send_message(self, *a, **k):  # noqa: ANN002, ANN003
+                sends["n"] += 1
+
+        class FakeMsg:
+            async def answer(self, *a, **k):  # noqa: ANN002, ANN003
+                sends["n"] += 1
+
+        class FakeCb:
+            data = f"sforder:{oid}"
+            from_user = SimpleNamespace(id=cust_tg, first_name="C", username="c")
+            message = FakeMsg()
+
+            async def answer(self, *a, **k):  # noqa: ANN002, ANN003
+                return None
+
+        await sfh.sf_order_detail(FakeCb(), FakeBot())
+        assert sends["n"] == 1   # exactly one outbound message
+        await engine.dispose()
+
+    asyncio.run(go())

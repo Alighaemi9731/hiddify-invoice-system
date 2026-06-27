@@ -38,20 +38,6 @@ async def get_bot_by_telegram_id(session: AsyncSession, bot_telegram_id: int) ->
     ).scalars().first()
 
 
-async def get_bot_for_chat(session: AsyncSession, chat_id: int) -> StorefrontBot | None:
-    """The ONE storefront bot owned by this Telegram person, across all their reseller rows/panels.
-    Enforces "one bot per person": setup repoints this bot instead of creating a second."""
-    return (
-        await session.execute(
-            select(StorefrontBot)
-            .join(Reseller, Reseller.id == StorefrontBot.reseller_id)
-            .where(Reseller.bot_chat_id == chat_id)
-            .order_by(StorefrontBot.id)
-            .limit(1)
-        )
-    ).scalars().first()
-
-
 async def active_bots(session: AsyncSession) -> list[StorefrontBot]:
     """Enabled storefront bots the manager should be polling."""
     return list(

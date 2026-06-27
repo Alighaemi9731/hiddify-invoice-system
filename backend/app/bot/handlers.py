@@ -1178,23 +1178,9 @@ async def _storefront_target_line(session, r: Reseller) -> str:  # noqa: ANN001
 async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMContext) -> None:  # noqa: ANN001
     from app.services import storefront
 
-    # One storefront bot per person: if they already have one, this setup REPLACES its token (keeping
-    # all data) instead of creating a second — and the panel stays fixed (changing it would orphan the
-    # configs already provisioned on it).
-    existing = await storefront.get_bot_for_chat(session, chat_id)
-    if existing is not None:
-        r = await session.get(Reseller, existing.reseller_id)
-        panel = await session.get(Panel, r.panel_id) if r else None
-        await state.set_state(StorefrontSetupState.token)
-        await state.update_data(sf_reseller_id=existing.reseller_id)
-        await answer(rtl(
-            f"🏪 شما هم‌اکنون یک ربات فروشگاهی دارید: @{existing.bot_username or '—'} "
-            f"(پنلِ «{panel.key if panel else '?'}»).\n"
-            "برای جایگزینی، توکنِ جدیدِ BotFather را بفرستید — همهٔ پلن‌ها، مشتری‌ها، سرویس‌ها و "
-            "موجودیِ کیفِ پول‌ها به توکنِ جدید منتقل می‌شوند و ربات قبلی از کار می‌افتد.\n\n"
-            + _BOTFATHER_GUIDE), parse_mode="HTML",
-            reply_markup=keyboards.cancel_keyboard("« انصراف"))
-        return
+    # One storefront bot PER PANEL (per reseller row): a person who is top-level on several panels can
+    # run a separate bot for each. Re-running setup on a panel that already has a bot just replaces its
+    # token (data preserved). Only top-level resellers reach here.
     roots = [
         r for r in await _top_level_resellers(session, chat_id)
         if getattr(r, "storefront_enabled", False)
@@ -1203,17 +1189,23 @@ async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMConte
         await answer(rtl("این قابلیت برای شما فعال نیست."))
         return
     if len(roots) == 1:
-        target = await _storefront_target_line(session, roots[0])
+        r = roots[0]
+        target = await _storefront_target_line(session, r)
+        if await storefront.get_bot_for_reseller(session, r.id) is not None:
+            target += ("این پنل هم‌اکنون یک ربات دارد — توکنِ جدید جایگزین می‌شود و همهٔ داده‌ها "
+                       "(پلن‌ها/مشتری‌ها/سرویس‌ها/کیفِ پول) حفظ می‌شوند.\n\n")
         await state.set_state(StorefrontSetupState.token)
-        await state.update_data(sf_reseller_id=roots[0].id)
+        await state.update_data(sf_reseller_id=r.id)
         await answer(rtl(target + _BOTFATHER_GUIDE), parse_mode="HTML",
                      reply_markup=keyboards.cancel_keyboard("« انصراف"))
         return
     items = []
     for r in roots:
         panel = await session.get(Panel, r.panel_id)
-        items.append((r.id, f"{r.name or '—'} — {panel.key if panel else '?'}"))
-    await answer(rtl("🏪 رباتِ فروشگاهی روی کدام حساب/پنل؟"),
+        bot = await storefront.get_bot_for_reseller(session, r.id)
+        status = f"ربات فعلی: @{bot.bot_username or '—'}" if bot is not None else "بدون ربات"
+        items.append((r.id, f"{r.name or '—'} — {panel.key if panel else '?'} ({status})"))
+    await answer(rtl("🏪 برای کدام حساب/پنل؟ (هر پنل یک ربات جداگانه)"),
                  reply_markup=keyboards.storefront_setup_panels_keyboard(items))
 
 
@@ -1260,17 +1252,11 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
     finally:
         await probe.session.close()
     data = await state.get_data()
-    rid_picked = int(data.get("sf_reseller_id") or 0)
+    rid = int(data.get("sf_reseller_id") or 0)
     await state.clear()
     from app.services import storefront
 
-    replaced = False
     async with SessionLocal() as s:
-        # One bot per person: if they already have one, ALWAYS repoint it (ignore any picked rid) so a
-        # second bot can never be created and all data stays attached to the same row.
-        mine = await storefront.get_bot_for_chat(s, message.from_user.id)
-        rid = mine.reseller_id if mine is not None else rid_picked
-        replaced = mine is not None
         r = await s.get(Reseller, rid)
         # Must be this person's OWN, storefront-enabled, TOP-LEVEL reseller (never a sub-reseller).
         if r is None or r.bot_chat_id != message.from_user.id \
@@ -1278,9 +1264,13 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
                 or not await _is_top_level_reseller(s, r):
             await message.answer(rtl("دسترسی ندارید."))
             return
+        # One bot per panel: if THIS panel already has a bot, the token replaces it (data preserved).
+        replaced = await storefront.get_bot_for_reseller(s, rid) is not None
+        # Each panel needs its OWN Telegram bot/token — reject reusing one already bound elsewhere.
         by_tgid = await storefront.get_bot_by_telegram_id(s, me.id)
         if by_tgid is not None and by_tgid.reseller_id != rid:
-            await message.answer(rtl("این ربات قبلاً برای حسابِ دیگری ثبت شده است."))
+            await message.answer(rtl(
+                "این توکن قبلاً برای پنلِ دیگری ثبت شده است؛ برای هر پنل یک ربات/توکنِ جداگانه لازم است."))
             return
         await storefront.upsert_bot(s, reseller_id=rid, panel_id=r.panel_id, token=token,
                                     bot_username=me.username, bot_telegram_id=me.id)

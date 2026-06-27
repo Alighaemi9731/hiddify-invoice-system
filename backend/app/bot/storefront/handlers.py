@@ -494,11 +494,23 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
             lines.append(f"روزهای باقی‌مانده: {status.remaining_days}")
     else:
         lines.append("اطلاعاتِ مصرف فعلاً در دسترس نیست.")
-    await cb.message.answer(
-        rtl("\n".join(lines)),
-        reply_markup=kb.order_actions_kb(order_id, renew_price, paused=paused))
     if sub_link:
-        await _deliver_config(bot, cb.from_user.id, gb=gb, days=days, sub_link=sub_link, name=name)
+        lines += ["", "🔗 لینکِ اشتراک:", f"<code>{sub_link}</code>"]
+    caption = rtl("\n".join(lines))
+    markup = kb.order_actions_kb(order_id, renew_price, paused=paused)
+    # ONE message: the QR photo carries the status + link + action buttons (no separate "آماده شد" send).
+    sent = False
+    if sub_link:
+        try:
+            png = usercreate.qr_png(sub_link)
+            await bot.send_photo(cb.from_user.id, BufferedInputFile(png, filename="sub.png"),
+                                 caption=caption, parse_mode="HTML", reply_markup=markup)
+            sent = True
+        except Exception:  # noqa: BLE001 — fall back to a single text message below
+            sent = False
+    if not sent:
+        await cb.message.answer(caption, parse_mode="HTML", reply_markup=markup,
+                                disable_web_page_preview=True)
     await cb.answer()
 
 
