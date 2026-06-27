@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.43.1 - 2026-06-27
+
+### Fixed — only the first storefront bot was actually running
+
+- When a second/third reseller set up a storefront bot, setup reported success but the bot stayed dead
+  (`/start` did nothing). Root cause: the manager called aiogram's `Dispatcher.start_polling` **once per
+  bot** on a single shared Dispatcher, but `start_polling` holds `_running_lock` for its entire lifetime —
+  so the first bot acquired the lock and every later bot's `start_polling` blocked forever. The manager
+  now polls **all** active bots through a **single** `start_polling(*bots)` call and restarts that one
+  poller only when the active set changes (bot added/removed or token rotated), skipping a bot whose token
+  is invalid without churning the others, and self-heals if the poller dies. Regression test in
+  `tests/test_storefront.py`.
+
 ## 1.43.0 - 2026-06-27
 
 ### Added — Storefront one-time free trial

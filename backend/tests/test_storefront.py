@@ -289,6 +289,65 @@ def test_free_trial_is_one_per_customer(tmp_path, monkeypatch):
     _run(body, tmp_path, "trial.db")
 
 
+def test_manager_polls_all_bots_in_one_start_polling(tmp_path, monkeypatch):
+    # aiogram's Dispatcher.start_polling holds a _running_lock for its whole lifetime, so the manager
+    # MUST poll every bot through ONE start_polling(*bots) call — one-call-per-bot deadlocks all but
+    # the first. This guards that regression: reconcile issues exactly one call covering both bots.
+    import asyncio as _aio
+
+    from aiogram import Bot, Dispatcher
+
+    from app.bot.storefront import manager
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mgr.db'}")
+        from app.core.db import Base
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as s:
+            for i, tok in enumerate(["111:aaa", "222:bbb"], start=1):
+                p = Panel(key=f"mp{i}", host=f"mp{i}.invalid",
+                          proxy_path_enc=crypto.encrypt("x"), owner_uuid="o")
+                s.add(p)
+                await s.flush()
+                r = Reseller(panel_id=p.id, admin_uuid=f"M{i}", name=f"R{i}", storefront_enabled=True)
+                s.add(r)
+                await s.flush()
+                s.add(StorefrontBot(reseller_id=r.id, panel_id=p.id,
+                                    bot_token_enc=crypto.encrypt(tok) or "", enabled=True))
+            await s.commit()
+
+        calls = []
+
+        async def fake_get_me(self):  # noqa: ANN001
+            return SimpleNamespace(id=int(self.token.split(":")[0]), username="b" + self.token[:3])
+
+        async def fake_start_polling(self, *bots, **kw):  # noqa: ANN001, ANN002, ANN003
+            calls.append(tuple(b.token for b in bots))
+            await _aio.Event().wait()  # emulate a long-running poller until cancelled
+
+        monkeypatch.setattr(Bot, "get_me", fake_get_me)
+        monkeypatch.setattr(Dispatcher, "start_polling", fake_start_polling)
+        monkeypatch.setattr(manager, "SessionLocal", Session)
+        manager._attempted, manager._poll_task, manager._polled, manager._dp = {}, None, [], None
+
+        await manager.reconcile()
+        await _aio.sleep(0)                       # let the polling task start
+        assert len(calls) == 1                    # ONE start_polling, not one per bot
+        assert set(calls[0]) == {"111:aaa", "222:bbb"}
+
+        await manager.reconcile()                 # unchanged set → no extra start_polling
+        assert len(calls) == 1
+
+        await manager._stop_polling()
+        manager._dp = None
+        await engine.dispose()
+
+    _aio.run(go())
+
+
 def test_monthly_fee_active_only(tmp_path):
     async def body(s):
         # enabled + active bot + per-reseller fee → that fee
