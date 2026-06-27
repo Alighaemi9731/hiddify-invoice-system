@@ -16,6 +16,7 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("🧩 پلن‌ها", "plans"),
     ("💳 روش‌های پرداخت", "pay"),
     ("🎁 تنظیماتِ تست رایگان", "trialcfg"),
+    ("🔒 عضویت اجباری", "joincfg"),
     ("📝 پیام خوش‌آمد", "welcome"),
     ("🧾 شارژهای در انتظار", "topups"),
     ("👥 مشتری‌ها", "customers"),
@@ -195,6 +196,25 @@ def pay_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"گرام/تون {t(bot.pay_ton_enabled)}", callback_data="sfpaytog:ton"),
          InlineKeyboardButton(text="✏️ آدرس", callback_data="sfpayset:ton")],
     ])
+
+
+def join_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
+    """Admin: toggle forced channel-join on/off, set/change the channel, or clear it."""
+    state = "✅ فعال" if bot.channel_required else "❌ غیرفعال"
+    rows = [[InlineKeyboardButton(text=f"وضعیت: {state} (تغییر)", callback_data="sfjointog")],
+            [InlineKeyboardButton(text="✏️ تنظیم/تغییرِ کانال", callback_data="sfjoinset")]]
+    if bot.channel_id:
+        rows.append([InlineKeyboardButton(text="🗑 حذفِ کانال", callback_data="sfjoinclear")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def join_prompt_kb(link: str | None) -> InlineKeyboardMarkup:
+    """Customer gate: a join button (when a link is known) + a re-check button."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if link:
+        rows.append([InlineKeyboardButton(text="📢 عضویت در کانال", url=link)])
+    rows.append([InlineKeyboardButton(text="✅ بررسی عضویت", callback_data="sfjoincheck")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:

@@ -849,3 +849,158 @@ def test_my_services_detail_sends_single_message(tmp_path, monkeypatch):
         await engine.dispose()
 
     asyncio.run(go())
+
+
+# ── v1.46.0: storefront forced-join (channel membership) ─────────────────────
+
+def test_join_keyboards_callbacks():
+    on = SimpleNamespace(channel_required=True, channel_id="-100x")
+    cbs = [b.callback_data for row in sfkb.join_settings_kb(on).inline_keyboard for b in row]
+    assert {"sfjointog", "sfjoinset", "sfjoinclear"} <= set(cbs)
+    off = SimpleNamespace(channel_required=False, channel_id=None)
+    cbs2 = [b.callback_data for row in sfkb.join_settings_kb(off).inline_keyboard for b in row]
+    assert "sfjoinclear" not in cbs2          # no clear button when no channel is set
+    pk = [b.callback_data for row in sfkb.join_prompt_kb("https://t.me/x").inline_keyboard
+          for b in row if b.callback_data]
+    assert "sfjoincheck" in pk
+
+
+def test_channel_block_gates_non_member_customer(tmp_path, monkeypatch):
+    from app.bot.storefront import handlers as sfh
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "chanblock.db")
+        async with Session() as s:
+            r, bot, cust = await _seed(s)
+            bot.channel_id, bot.channel_required, bot.channel_link = "-1009999", True, "https://t.me/x"
+            r.bot_chat_id = 4242                # the admin's telegram id (customer is 555)
+            await s.commit()
+            rid, bot_tg, cust_tg = r.id, bot.bot_telegram_id, cust.telegram_id
+
+        monkeypatch.setattr(sfh, "SessionLocal", Session)
+        status = {"v": "left"}
+
+        class FakeBot:
+            id = bot_tg
+
+            async def get_chat_member(self, chat, uid):  # noqa: ANN001
+                return SimpleNamespace(status=status["v"], is_member=False)
+
+        cust_user = SimpleNamespace(id=cust_tg, first_name="C", username="c")
+        admin_user = SimpleNamespace(id=4242, first_name="A", username="a")
+        fb = FakeBot()
+
+        assert (await sfh._channel_block(fb, cust_user)) is not None      # non-member → blocked
+        status["v"] = "member"
+        assert (await sfh._channel_block(fb, cust_user)) is None          # member → allowed
+        status["v"] = "left"
+        assert (await sfh._channel_block(fb, admin_user)) is None         # admin → never gated
+        async with Session() as s:                                       # required OFF → allowed
+            b = await storefront.get_bot_for_reseller(s, rid)
+            b.channel_required = False
+            await s.commit()
+        assert (await sfh._channel_block(fb, cust_user)) is None
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_set_channel_requires_bot_admin(tmp_path, monkeypatch):
+    from app.bot.storefront import handlers as sfh
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "setchan.db")
+        async with Session() as s:
+            r, bot, _c = await _seed(s)
+            r.bot_chat_id = 4242
+            await s.commit()
+            rid, bot_tg = r.id, bot.bot_telegram_id
+
+        monkeypatch.setattr(sfh, "SessionLocal", Session)
+        admin_status = {"v": "left"}
+
+        class FakeBot:
+            id = bot_tg
+
+            async def get_chat_member(self, chat, uid):  # noqa: ANN001
+                return SimpleNamespace(status=admin_status["v"])
+
+            async def get_chat(self, chat):  # noqa: ANN001
+                return SimpleNamespace(username="mychan")
+
+        class FakeState:
+            async def clear(self):
+                return None
+
+            async def set_state(self, *a, **k):  # noqa: ANN002, ANN003
+                return None
+
+        class FakeMsg:
+            from_user = SimpleNamespace(id=4242, first_name="A", username="a")
+            text = None
+            forward_origin = SimpleNamespace(chat=SimpleNamespace(type="channel", id=-1009999))
+
+            async def answer(self, *a, **k):  # noqa: ANN002, ANN003
+                return None
+
+        # bot NOT admin → nothing saved, stays gated off
+        await sfh.sf_join_channel_set(FakeMsg(), FakeState(), FakeBot())
+        async with Session() as s:
+            b = await storefront.get_bot_for_reseller(s, rid)
+            assert b.channel_id is None and b.channel_required is False
+
+        # bot IS admin → channel saved + forced-join enabled + link captured
+        admin_status["v"] = "administrator"
+        await sfh.sf_join_channel_set(FakeMsg(), FakeState(), FakeBot())
+        async with Session() as s:
+            b = await storefront.get_bot_for_reseller(s, rid)
+            assert b.channel_id == "-1009999" and b.channel_required is True
+            assert b.channel_link == "https://t.me/mychan"
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_join_toggle_requires_channel(tmp_path, monkeypatch):
+    from app.bot.storefront import handlers as sfh
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "jointog.db")
+        async with Session() as s:
+            r, bot, _c = await _seed(s)
+            r.bot_chat_id = 4242
+            await s.commit()
+            rid, bot_tg = r.id, bot.bot_telegram_id
+
+        monkeypatch.setattr(sfh, "SessionLocal", Session)
+
+        class FakeBot:
+            id = bot_tg
+
+            async def get_chat_member(self, chat, uid):  # noqa: ANN001
+                return SimpleNamespace(status="administrator")
+
+        class FakeCbMsg:
+            async def edit_reply_markup(self, **k):  # noqa: ANN003
+                return None
+
+        class FakeCb:
+            from_user = SimpleNamespace(id=4242, first_name="A", username="a")
+            message = FakeCbMsg()
+
+            async def answer(self, *a, **k):  # noqa: ANN002, ANN003
+                return None
+
+        await sfh.sf_join_toggle(FakeCb(), FakeBot())          # no channel → can't enable
+        async with Session() as s:
+            assert (await storefront.get_bot_for_reseller(s, rid)).channel_required is False
+        async with Session() as s:                            # set a channel
+            b = await storefront.get_bot_for_reseller(s, rid)
+            b.channel_id = "-100777"
+            await s.commit()
+        await sfh.sf_join_toggle(FakeCb(), FakeBot())          # now it enables
+        async with Session() as s:
+            assert (await storefront.get_bot_for_reseller(s, rid)).channel_required is True
+        await engine.dispose()
+
+    asyncio.run(go())

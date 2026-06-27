@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.46.0 - 2026-06-27
+
+### Added — Storefront forced channel-join
+
+- Each storefront admin (reseller) can now require their **customers to join the reseller's Telegram
+  channel** before using the shop bot. New admin screen «🔒 عضویت اجباری»: the admin sets the channel by
+  forwarding a post from it (or sending `@username` / a `-100…` id), and the bot **verifies it is an admin
+  of that channel first** — if not, it replies «ابتدا ربات را در کانالِ خود ادمین کنید» and doesn't save.
+  Once set, the admin can toggle forced-join on/off (enabling re-checks that the bot is still a channel
+  admin) or clear the channel.
+- Customers who aren't members are blocked on every action with a join prompt (channel link + «بررسی
+  عضویت» button); after joining, the check passes and the shop opens. Admins are never gated. Reuses the
+  main bot's membership primitives (`_is_member`, per-user one-time invite links). Uses the existing
+  `StorefrontBot.channel_id/channel_link/channel_required` columns — no migration. Tests in
+  `tests/test_storefront.py`.
+
 ## 1.45.1 - 2026-06-27
 
 ### Fixed — storefront double messages + one bot per panel

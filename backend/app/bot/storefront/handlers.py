@@ -17,6 +17,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import select
 
+# Reuse the main bot's generic membership primitives: `_is_member` (restricted-safe, fail-closed) and
+# `_join_link` (per-user one-time invite link, falls back to a static link). Safe — app.bot.handlers
+# does not import the storefront at module load.
+from app.bot.handlers import _is_member, _join_link
 from app.bot.rtl import rtl
 from app.bot.storefront import keyboards as kb
 from app.core.db import SessionLocal
@@ -56,6 +60,7 @@ class SF(StatesGroup):
     adjust_amount = State()    # admin manual wallet edit; data: customer_id, sign
     support = State()
     welcome = State()          # admin sets the storefront welcome text
+    join_channel = State()     # admin sets the forced-join channel (forward a post / send @id)
     broadcast = State()
 
 
@@ -173,6 +178,65 @@ async def _sf_ban_msg_mw(handler, event, data):  # noqa: ANN001, ANN202
     return await handler(event, data)
 
 
+# ── forced-join gate (customer must be a member of the reseller's channel) ────
+
+_JOIN_EXEMPT_CALLBACKS = {"sfjoincheck", "sfcancel"}
+
+
+async def _channel_block(bot: Bot, user) -> dict | None:  # noqa: ANN001
+    """If this NON-admin customer must join the storefront's channel and isn't a member yet, return
+    {id, link}; else None. Admins are never gated. Membership uses `_is_member` (fails closed on a
+    Telegram error → blocked until the admin fixes the channel/bot-admin); resolution errors fail OPEN."""
+    try:
+        async with SessionLocal() as s:
+            sf, _r, is_admin = await _resolve(s, bot, user)
+            if sf is None or is_admin or not sf.channel_required or not sf.channel_id:
+                return None
+            link = sf.channel_link
+            chan = sf.channel_id
+        if await _is_member(bot, chan, user.id):
+            return None
+        return {"id": chan, "link": link}
+    except Exception:  # noqa: BLE001 — a resolution blip must not lock everyone out
+        log.warning("storefront channel gate check failed", exc_info=True)
+        return None
+
+
+async def _send_join_prompt(bot: Bot, chat_id: int, block: dict) -> None:  # noqa: ANN001
+    link = await _join_link(bot, block["id"], block.get("link") or "", True)
+    await bot.send_message(
+        chat_id,
+        rtl("برای استفاده از فروشگاه، ابتدا باید در کانالِ ما عضو شوید، سپس «بررسی عضویت» را بزنید."),
+        reply_markup=kb.join_prompt_kb(link))
+
+
+@storefront_router.callback_query.outer_middleware
+async def _sf_join_cb_mw(handler, event, data):  # noqa: ANN001, ANN202
+    cb_data = getattr(event, "data", "") or ""
+    if cb_data in _JOIN_EXEMPT_CALLBACKS:
+        return await handler(event, data)
+    bot, user = data.get("bot"), getattr(event, "from_user", None)
+    if bot is not None and user is not None and await _channel_block(bot, user) is not None:
+        await event.answer("ابتدا در کانال عضو شوید و سپس /start را بزنید.", show_alert=True)
+        return None
+    return await handler(event, data)
+
+
+@storefront_router.message.outer_middleware
+async def _sf_join_msg_mw(handler, event, data):  # noqa: ANN001, ANN202
+    cmd = (getattr(event, "text", None) or "").strip().split()[0].lower() if getattr(
+        event, "text", None) else ""
+    if cmd in _BAN_EXEMPT_COMMANDS:  # /start shows the join prompt itself; /cancel always allowed
+        return await handler(event, data)
+    bot, user = data.get("bot"), getattr(event, "from_user", None)
+    if bot is not None and user is not None:
+        block = await _channel_block(bot, user)
+        if block is not None:
+            await _send_join_prompt(bot, user.id, block)
+            return None
+    return await handler(event, data)
+
+
 # ── /start + menu dispatch ──────────────────────────────────────────────────
 
 @storefront_router.message(Command("start"))
@@ -190,6 +254,13 @@ async def sf_start(message: Message, state: FSMContext, bot: Bot) -> None:
         if customer.banned:
             await message.answer(rtl("دسترسیِ شما مسدود شده است."))
             return
+    block = await _channel_block(bot, message.from_user)   # forced-join gate (outside the session)
+    if block is not None:
+        await _send_join_prompt(bot, message.from_user.id, block)
+        return
+    async with SessionLocal() as s:
+        sf = await storefront.get_bot_by_telegram_id(s, bot.id)
+        customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
         await _send_customer_menu(message.answer, sf, customer)
 
 
@@ -285,6 +356,14 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             "متنِ خوش‌آمدگوییِ فروشگاه را بفرستید (به مشتری در شروع نشان داده می‌شود).\n"
             f"فعلی: {sf.welcome_text or '🛍 به فروشگاه خوش آمدید!'}"),
             reply_markup=kb.cancel_kb())
+    elif action == "joincfg":
+        cur = sf.channel_id or "—"
+        await ans(rtl(
+            f"🔒 عضویت اجباری در کانال\n"
+            f"وضعیت: {'فعال ✅' if sf.channel_required else 'غیرفعال ❌'}\nکانال: {cur}\n\n"
+            "برای تنظیم، ابتدا ربات (@" + (sf.bot_username or "—") + ") را در کانالِ خود ادمین کنید، "
+            "سپس «✏️ تنظیم/تغییرِ کانال» را بزنید."),
+            reply_markup=kb.join_settings_kb(sf))
     elif action == "preview":
         await state.update_data(sf_preview=True)
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
@@ -1169,6 +1248,141 @@ async def sf_welcome_set(message: Message, state: FSMContext, bot: Bot) -> None:
         sf.welcome_text = (message.text or "").strip()[:1000] or None
         await s.commit()
     await message.answer(rtl("✅ پیامِ خوش‌آمد ذخیره شد."), reply_markup=kb.admin_reply_kb())
+
+
+# ── admin: forced-join (channel membership) ───────────────────────────────────
+
+async def _bot_is_channel_admin(bot: Bot, channel_id: str, bot_telegram_id: int | None) -> bool:  # noqa: ANN001
+    """True iff this storefront bot is an admin of the channel (so it can both gate joins and read
+    member status). A bot not in the channel → get_chat_member raises → treated as not-admin."""
+    if not bot_telegram_id:
+        return False
+    try:
+        m = await bot.get_chat_member(channel_id, bot_telegram_id)
+        return m.status in ("administrator", "creator")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@storefront_router.callback_query(F.data == "sfjoinset")
+async def sf_join_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if sf is None or not is_admin:
+        await cb.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await state.set_state(SF.join_channel)
+    await cb.message.answer(rtl(
+        f"یک پیام از کانالِ خود را همین‌جا فوروارد کنید (یا @username یا آیدیِ -100… را بفرستید).\n"
+        f"توجه: ربات (@{sf.bot_username or '—'}) باید در آن کانال ادمین باشد."),
+        reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.join_channel)
+async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> None:
+    # Resolve the channel id from a forwarded post, or from @username / -100… text.
+    channel_id: str | None = None
+    origin = getattr(message, "forward_origin", None)
+    chat = getattr(origin, "chat", None)
+    if chat is not None and getattr(chat, "type", None) == "channel":
+        channel_id = str(chat.id)
+    elif message.text:
+        t = message.text.strip()
+        if t.startswith("@") and len(t) > 1:
+            channel_id = t
+        elif t.lstrip("-").isdigit():
+            channel_id = t
+    if not channel_id:
+        await message.answer(rtl(
+            "نشد. یک پیام از کانال را فوروارد کنید یا @username / آیدیِ -100… را بفرستید."),
+            reply_markup=kb.cancel_kb())
+        return
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            await state.clear()
+            return
+        bot_tg = sf.bot_telegram_id
+    if not await _bot_is_channel_admin(bot, channel_id, bot_tg):
+        await message.answer(rtl(
+            "ابتدا ربات را در کانالِ خود ادمین کنید، سپس دوباره پیام را فوروارد کنید."),
+            reply_markup=kb.cancel_kb())
+        return  # stay in the state so they can retry after granting admin
+    # Bot is admin → resolve a join link best-effort and save (enable by default).
+    link: str | None = None
+    try:
+        full = await bot.get_chat(channel_id)
+        if getattr(full, "username", None):
+            link = f"https://t.me/{full.username}"
+        else:
+            invite = await bot.create_chat_invite_link(channel_id)
+            link = invite.invite_link
+    except Exception:  # noqa: BLE001 — link is optional; the gate still works via the check button
+        link = None
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            return
+        sf.channel_id = channel_id[:64]
+        sf.channel_link = (link or "")[:255] or None
+        sf.channel_required = True
+        await s.commit()
+        markup = kb.join_settings_kb(sf)
+    await message.answer(rtl("✅ کانال ثبت و عضویت اجباری فعال شد."), reply_markup=kb.admin_reply_kb())
+    await message.answer(rtl("🔒 عضویت اجباری در کانال"), reply_markup=markup)
+
+
+@storefront_router.callback_query(F.data == "sfjointog")
+async def sf_join_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        if not sf.channel_required:  # turning ON → need a channel + the bot must be its admin
+            if not sf.channel_id:
+                await cb.answer("اول کانال را تنظیم کنید.", show_alert=True)
+                return
+            if not await _bot_is_channel_admin(bot, sf.channel_id, sf.bot_telegram_id):
+                await cb.answer("اول ربات را در کانال ادمین کنید.", show_alert=True)
+                return
+        sf.channel_required = not sf.channel_required
+        await s.commit()
+        await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
+    await cb.answer("فعال شد." if sf.channel_required else "غیرفعال شد.")
+
+
+@storefront_router.callback_query(F.data == "sfjoinclear")
+async def sf_join_clear(cb: CallbackQuery, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        sf.channel_id = None
+        sf.channel_link = None
+        sf.channel_required = False
+        await s.commit()
+        await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
+    await cb.answer("حذف شد.")
+
+
+@storefront_router.callback_query(F.data == "sfjoincheck")
+async def sf_join_check(cb: CallbackQuery, bot: Bot) -> None:
+    block = await _channel_block(bot, cb.from_user)
+    if block is not None:
+        await cb.answer("هنوز عضو کانال نیستید.", show_alert=True)
+        return
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        cust = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
+        await _send_customer_menu(cb.message.answer, sf, cust)
+    await cb.answer("✅ عضویت تأیید شد.")
 
 
 @storefront_router.message(SF.broadcast, F.text)
