@@ -181,19 +181,27 @@ async def _membership_gate_message_mw(handler, event, data):
     return await handler(event, data)
 
 
-_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")          # BEP-20 (BSC) tx hash
+_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")          # BEP-20 (BSC) / Avalanche C-Chain tx hash
 _TON_EXPLORERS = ("tonscan.org", "tonviewer.com", "ton.cx", "dton.io", "toncoin.org")
 
 
-def _parse_txid(text: str, *, usdt: bool, ton: bool) -> tuple[str, str] | None:
-    """Extract (chain, txid) from raw text OR a pasted explorer URL. chain ∈ {'bsc','ton'}.
-    Classification honors which methods are enabled (so a hash maps to an offered chain). No
-    on-chain check here — the owner verifies via the clickable link in the panel."""
+def _parse_txid(text: str, *, usdt: bool, ton: bool, avax: bool) -> tuple[str, str] | None:
+    """Extract (chain, txid) from raw text OR a pasted explorer URL. chain ∈ {'bsc','ton','avax'},
+    or the sentinel 'ambiguous' when a BARE 0x hash arrives and BOTH USDT(BSC) and AVAX are enabled
+    (they share the 0x+64hex format) — the caller then asks which network. Classification honors
+    which methods are enabled (so a hash maps to an offered chain). No on-chain check here — the
+    owner verifies via the clickable link in the panel."""
     t = (text or "").strip()
-    # Explorer URL → pull the hash out of the path.
+    # An explorer URL is AUTHORITATIVE about the chain: resolve to that chain when it's enabled,
+    # else REJECT (return None) — never fall through to the bare-0x scanner below, which would
+    # mis-attribute the hash to the *other* 0x-chain (a snowtrace link → bsc, or a bscscan link →
+    # avax) and produce a dead/wrong review link in the panel.
+    m = re.search(r"snowtrace\.io/tx/(0x[0-9a-fA-F]{64})", t, re.I)
+    if m:
+        return ("avax", m.group(1).lower()) if avax else None
     m = re.search(r"bscscan\.com/tx/(0x[0-9a-fA-F]{64})", t, re.I)
-    if m and usdt:
-        return ("bsc", m.group(1))
+    if m:
+        return ("bsc", m.group(1)) if usdt else None
     if ton:
         explorers = "|".join(re.escape(host) for host in _TON_EXPLORERS)
         m = re.search(rf"(?:{explorers})/\S+", t, re.I)
@@ -201,17 +209,24 @@ def _parse_txid(text: str, *, usdt: bool, ton: bool) -> tuple[str, str] | None:
             seg = m.group(0).rstrip("/").split("?")[0].split("/")[-1]
             if len(seg) >= 40:
                 return ("ton", seg)
-    # Bare BEP-20 txid (must carry the 0x prefix).
+    # Bare 0x+64hex txid — identical format on BSC and Avalanche C-Chain. Map to whichever of those
+    # two is enabled; if BOTH, it's genuinely ambiguous → let the caller ask which network.
     m = _TXID_RE.search(t)
-    if m and usdt:
-        return ("bsc", m.group(0))
-    # Bare TON hash: a base64/base64url token (43–44 chars). A bare 64-hex is only treated as
-    # TON when USDT is NOT enabled — otherwise it's almost certainly a BSC hash pasted without
-    # its 0x prefix, and classifying it as TON would produce a dead tonscan link.
+    if m:
+        hsh = m.group(0)
+        if usdt and avax:
+            return ("ambiguous", hsh)
+        if avax:
+            return ("avax", hsh.lower())
+        if usdt:
+            return ("bsc", hsh)
+    # Bare TON hash: a base64/base64url token (43–44 chars). A bare 64-hex is only treated as TON
+    # when neither 0x-chain (USDT/AVAX) is enabled — otherwise it's almost certainly such a hash
+    # pasted without its 0x prefix, and classifying it as TON would produce a dead tonscan link.
     if ton and not re.search(r"\s", t):
         if re.fullmatch(r"[A-Za-z0-9+/_-]{43,48}={0,2}", t):
             return ("ton", t)
-        if not usdt and re.fullmatch(r"[0-9a-fA-F]{64}", t):
+        if not usdt and not avax and re.fullmatch(r"[0-9a-fA-F]{64}", t):
             return ("ton", t)
     return None
 
@@ -219,7 +234,7 @@ def _parse_txid(text: str, *, usdt: bool, ton: bool) -> tuple[str, str] | None:
 def _proof_wanted_fa(opts) -> str:
     """What proof the customer should send, given the enabled methods — for the prompt/error."""
     wants = []
-    if opts.usdt or opts.ton:
+    if opts.usdt or opts.ton or opts.avax:
         wants.append("«شناسهٔ تراکنش (TXID)» یا لینکِ آن")
     if opts.card or opts.screenshot:
         wants.append("«تصویر رسید»")
@@ -492,7 +507,8 @@ async def cmd_help(message: Message) -> None:
                 "/support — پیام به پشتیبانی\n"
                 "/removelink — حذف لینک‌ها\n\n"
                 "برای ثبت‌نام، کافی است لینک پنل خود را همین‌جا ارسال کنید.\n"
-                "پرداخت با USDT (شبکهٔ BEP-20)، کارت‌به‌کارت یا ارسال تصویر رسید انجام می‌شود."
+                "پرداخت با رمزارز (USDT/گرام/AVAX)، کارت‌به‌کارت یا ارسال تصویر رسید انجام می‌شود "
+                "(روش‌های فعال هنگام پرداخت نمایش داده می‌شوند)."
             )
 
 
@@ -1582,11 +1598,17 @@ async def _start_pay_flow(cb: CallbackQuery, state: FSMContext, invoices: list[I
     async with SessionLocal() as s:
         opts = await payment_methods.load_options(s)
         amount_ton = None
-        if opts.ton:
+        amount_avax = None
+        if opts.ton or opts.avax:
             from app.services import rates
-            ton_rate = await rates.get_ton_toman(s)
-            if ton_rate:
-                amount_ton = f"{total_toman / ton_rate:,.2f}"
+            if opts.ton:
+                ton_rate = await rates.get_ton_toman(s)
+                if ton_rate:
+                    amount_ton = f"{total_toman / ton_rate:,.2f}"
+            if opts.avax:
+                avax_rate = await rates.get_avax_toman(s)
+                if avax_rate:
+                    amount_avax = f"{total_toman / avax_rate:,.4f}"
     if n == 1:
         header = f"💳 پرداخت فاکتور دوره {invoices[0].period_label}\n"
         footer = ("\n\nℹ️ این مبلغ فقط برای همین فاکتور است. پس از واریز، شناسهٔ تراکنش (TXID) یا "
@@ -1601,7 +1623,8 @@ async def _start_pay_flow(cb: CallbackQuery, state: FSMContext, invoices: list[I
         + f"مبلغ کل: {total_toman:,.0f} تومان\n\n"
         + payment_methods.instructions_text(
             opts, amount_usdt=f"{total_usdt:,.2f}",
-            amount_toman=f"{total_toman:,.0f}", amount_ton=amount_ton, html=True)
+            amount_toman=f"{total_toman:,.0f}", amount_ton=amount_ton,
+            amount_avax=amount_avax, html=True)
         + footer
     )
     await state.set_state(PayState.waiting)
@@ -1729,7 +1752,7 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
     async with SessionLocal() as s:
         await _track_user(s, message.from_user)
         opts = await payment_methods.load_options(s)
-        parsed = _parse_txid(text, usdt=opts.usdt, ton=opts.ton)
+        parsed = _parse_txid(text, usdt=opts.usdt, ton=opts.ton, avax=opts.avax)
         if parsed is None:
             # Invalid input → explain what's needed and STAY in the pay flow (no menu), with a
             # tappable exit so the user is never stuck guessing /cancel.
@@ -1742,6 +1765,15 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
             )
             return
         chain, txid = parsed
+        if chain == "ambiguous":
+            # A bare 0x hash with BOTH USDT(BSC) and AVAX enabled → ask which network. Hold the
+            # hash in FSM and stay in PayState; the paychain:* buttons resolve it.
+            await state.update_data(pay_txid=txid)
+            await message.answer(
+                rtl("این تراکنش روی کدام شبکه انجام شده است؟"),
+                reply_markup=keyboards.pay_chain_keyboard(),
+            )
+            return
         data = await state.get_data()
         invs = await _load_pay_invoices(s, data)
         await state.clear()
@@ -1759,6 +1791,33 @@ async def pay_state_other(message: Message) -> None:
         rtl(f"لطفاً {_proof_wanted_fa(opts)} را همین‌جا بفرستید."),
         reply_markup=keyboards.cancel_keyboard("✖️ انصراف از پرداخت"),
     )
+
+
+@router.callback_query(F.data.startswith("paychain:"))
+async def cb_pay_chain(cb: CallbackQuery, state: FSMContext) -> None:
+    """Resolve the «which network?» ask for an ambiguous bare 0x hash: attribute the pending hash
+    (held in FSM by `pay_state_text`) to the chosen chain and record it."""
+    if await state.get_state() != PayState.waiting.state:
+        await cb.answer()
+        return
+    chain = cb.data.split(":", 1)[1]
+    if chain not in ("avax", "bsc"):
+        await cb.answer()
+        return
+    data = await state.get_data()
+    txid = (data.get("pay_txid") or "").strip()
+    if not txid:
+        await state.clear()
+        await cb.answer("نشست منقضی شد؛ دوباره از «💳 پرداخت فاکتور» اقدام کنید.", show_alert=True)
+        return
+    if chain == "avax":
+        txid = txid.lower()
+    async with SessionLocal() as s:
+        invs = await _load_pay_invoices(s, data)
+        await state.clear()
+        await _track_user(s, cb.from_user)
+        await _handle_txid(cb.message, s, txid, invoices=invs, chain=chain, from_user=cb.from_user)
+    await cb.answer()
 
 
 @router.callback_query(F.data == "menu:removelink")
@@ -2917,7 +2976,7 @@ async def on_text(message: Message, bot: Bot) -> None:
         opts = await payment_methods.load_options(session)
         # A cold TXID/link (NOT inside the pay flow) is NOT a payment — guide them to the button
         # instead of silently recording a stray payment. (Inside PayState, pay_state_text handles it.)
-        if _parse_txid(text, usdt=opts.usdt, ton=opts.ton):
+        if _parse_txid(text, usdt=opts.usdt, ton=opts.ton, avax=opts.avax):
             await message.answer(
                 "برای ثبتِ پرداخت، اول روی دکمهٔ «💳 پرداخت فاکتور» (زیرِ فاکتور یا در منو) بزنید، "
                 "سپس شناسهٔ تراکنش را بفرستید."
@@ -3026,11 +3085,17 @@ async def _invoice_amount_for_chain(session, invoice, chain: str) -> str:
         if rate:
             return f"{toman} (≈ {float(invoice.amount_toman) / rate:,.2f} GRAM)"
         return toman
+    if chain == "avax":
+        from app.services import rates
+        rate = await rates.get_avax_toman(session)
+        if rate:
+            return f"{toman} (≈ {float(invoice.amount_toman) / rate:,.4f} AVAX)"
+        return toman
     return f"{toman} ({float(invoice.amount_usdt):,.2f} USDT)"
 
 
 _PAYMENT_METHOD_FA = {
-    "usdt_txid": "تتر (USDT)", "ton_txid": "گرام (GRAM)",
+    "usdt_txid": "تتر (USDT)", "ton_txid": "گرام (GRAM)", "avax_txid": "اوالانچ (AVAX)",
     "screenshot": "رسید تصویری", "manual": "دستی",
 }
 
@@ -3039,6 +3104,8 @@ def _explorer_link(chain: str, txid: str) -> str:
     """An HTML link to the matching block explorer so the owner can open the tx in one tap."""
     if chain == "ton":
         return f"<a href='https://tonscan.org/tx/{txid}'>مشاهده در tonscan</a>"
+    if chain == "avax":
+        return f"<a href='https://snowtrace.io/tx/{txid}'>مشاهده در snowtrace</a>"
     return f"<a href='https://bscscan.com/tx/{txid}'>مشاهده در bscscan</a>"
 
 
@@ -3119,13 +3186,15 @@ async def _handle_txid(
     *,
     invoices: list[Invoice] | None,
     chain: str = "bsc",
+    from_user=None,  # noqa: ANN001 — when called from a callback, cb.message.from_user is the bot
 ) -> None:
-    """Record a submitted tx hash (USDT/BSC or TON) as a PENDING payment for MANUAL review —
+    """Record a submitted tx hash (USDT/BSC, TON, or AVAX) as a PENDING payment for MANUAL review —
     no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
     confirms/rejects. A payment may cover several invoices (one transfer for several debts)."""
     from app.services import payments
 
-    resellers = await _resellers_for_chat(session, message.from_user.id)
+    actor = from_user or message.from_user
+    resellers = await _resellers_for_chat(session, actor.id)
     if not resellers:
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return

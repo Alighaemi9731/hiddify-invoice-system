@@ -33,6 +33,7 @@ _TX_BSC2 = "0x" + "b" * 64
 _TX_BSC3 = "0x" + "c" * 64
 _TX_BSC4 = "0x" + "d" * 64
 _TX_BSC5 = "0x" + "e" * 64
+_TX_AVAX = "0x" + "f" * 64
 
 
 def _run(body):
@@ -258,6 +259,24 @@ def test_pay_options_ownership_and_pay_txid(monkeypatch):
             ctx=ctx_a, session=s)
         assert out["status"] == "ok" and out["number"]
         created = (await s.execute(select(Payment).where(Payment.txid == _TX_BSC5))).scalar_one()
+        assert created.reseller_id == a.id and created.invoice_id == inv_a.id
+    _run(body)
+
+
+def test_pay_txid_avax_chain(monkeypatch):
+    from app.models.enums import PaymentMethod
+
+    monkeypatch.setattr(portal, "_notify_owner_new_payment", _noop_notify)
+
+    async def body(s):
+        a, _b, inv_a, _inv_b = await _seed(s, with_payments=False)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        out = await portal.pay_txid(
+            portal.PayTxidBody(invoice_id=inv_a.id, txid=_TX_AVAX, chain="avax"),
+            ctx=ctx_a, session=s)
+        assert out["status"] == "ok"
+        created = (await s.execute(select(Payment).where(Payment.txid == _TX_AVAX))).scalar_one()
+        assert created.chain == "avax" and created.method == PaymentMethod.avax_txid
         assert created.reseller_id == a.id and created.invoice_id == inv_a.id
     _run(body)
 

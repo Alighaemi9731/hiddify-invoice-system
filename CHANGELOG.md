@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.48.0 - 2026-06-28
+
+### Added — AVAX (Avalanche) payment method
+
+- AVAX is now a first-class owner↔reseller payment method alongside USDT, گرام/TON and card-to-card —
+  turn it on in «تنظیمات → روش‌های پرداخت» and set the AVAX (C-Chain) wallet address. The customer sees an
+  «❄️ اوالانچ (AVAX)» block with a tap-to-copy address, the live AVAX amount, and a «فقط شبکهٔ Avalanche
+  C-Chain» warning — in the bot pay flow AND the reseller web portal pay dialog.
+- **Live AVAX→Toman rate (derived).** No Iranian market quotes AVAX, so the rate is AVAX→USD from CoinGecko
+  (free, no key) × the existing live USDT→Toman rate, with a manual fallback (`avax_rate_mode` manual|auto,
+  `avax_toman_manual`). Refreshed hourly, on the «به‌روزرسانی نرخ» button, and best-effort before billing.
+- **Manual confirmation** (like TON): the reseller submits a TXID (or a Snowtrace link); the owner verifies
+  via the clickable `snowtrace.io` link in the Payments panel and confirms. No on-chain auto-verify.
+- An Avalanche tx hash shares BSC's `0x`+64hex format, so when **both** USDT(BSC) and AVAX are enabled the
+  bot asks which network for a bare hash (a pasted `snowtrace`/`bscscan` link is resolved automatically).
+- No schema/migration change (the method is a VARCHAR enum value; config is runtime settings auto-seeded on
+  boot). Tests in `tests/test_avax.py` + an AVAX case in `tests/test_portal.py`.
+
 ## 1.47.0 - 2026-06-28
 
 ### Changed — Storefront «مشتری‌ها» tab is now paginated + searchable

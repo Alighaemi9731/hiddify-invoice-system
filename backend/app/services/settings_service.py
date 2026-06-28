@@ -144,6 +144,10 @@ DEFS: list[SettingDef] = [
     # without one. And the tolerance for matching the on-chain deposit to the invoice amount.
     SettingDef("toncenter_api_key", "", True, "payments"),
     SettingDef("ton_amount_tolerance_pct", 5, False, "payments"),
+    # AVAX (Avalanche C-Chain) transfer — manual confirm + clickable Snowtrace link.
+    SettingDef("pay_avax_enabled", False, False, "payments"),       # AVAX C-Chain transfer
+    SettingDef("avax_address", "", False, "payments"),              # the destination AVAX address
+    SettingDef("avax_toman_auto", 0, False, "payments"),            # last derived AVAX→Toman (status)
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
@@ -154,6 +158,10 @@ DEFS: list[SettingDef] = [
     # TON (Toncoin) rate, mirroring the USDT manual/auto split.
     SettingDef("ton_rate_mode", "auto", False, "pricing"),   # manual | auto (live from Wallex)
     SettingDef("ton_toman_manual", 0, False, "pricing"),     # manual TON→Toman rate / fallback
+    # AVAX (Avalanche) rate, mirroring the TON manual/auto split. Auto is DERIVED:
+    # AVAX→USD (CoinGecko) × the live USDT→Toman rate (no Iranian AVAX market exists).
+    SettingDef("avax_rate_mode", "auto", False, "pricing"),  # manual | auto (live, derived)
+    SettingDef("avax_toman_manual", 0, False, "pricing"),    # manual AVAX→Toman rate / fallback
     # Last live USDT→Toman rate fetched from Tetherland/Wallex + when (read-only status, auto-updated).
     SettingDef("toman_per_usdt_auto", 0, False, "pricing"),
     SettingDef("toman_per_usdt_auto_at", "", False, "pricing"),
@@ -274,7 +282,7 @@ DEFS: list[SettingDef] = [
 _DEF_BY_KEY = {d.key: d for d in DEFS}
 _API_READ_ONLY = {
     "owner_chat_id", "setup_done", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
-    "ton_toman_auto", "last_backup_at",
+    "ton_toman_auto", "avax_toman_auto", "last_backup_at",
 }
 # Bounded positive-integer option lists (deduped + sorted) — the bot user-creation menus.
 _POSITIVE_INT_LISTS = {
@@ -289,6 +297,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "rate_refresh_hours": (1, 24),
     "min_sale_toman": (0, None),
     "ton_toman_manual": (0, None),
+    "avax_toman_manual": (0, None),
     "high_volume_gb_threshold": (1, None),
     "invoice_day_of_month": (1, 28),
     "invoice_hour": (0, 23),
@@ -399,7 +408,7 @@ def validate_api_value(key: str, value: Any) -> Any:
         raise ValueError(f"{key} must be a string")
     if len(value) > _STRING_MAX:
         raise ValueError(f"{key} is too long")
-    if key in ("rate_mode", "ton_rate_mode") and value not in {"manual", "auto"}:
+    if key in ("rate_mode", "ton_rate_mode", "avax_rate_mode") and value not in {"manual", "auto"}:
         raise ValueError(f"{key} must be 'manual' or 'auto'")
     if key == "rate_source" and value not in {"wallex", "tetherland"}:
         raise ValueError("rate_source must be 'wallex' or 'tetherland'")

@@ -58,7 +58,7 @@ export default function PayDialog({
   const open = !!invoice || !!payAll;
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
-  const [chain, setChain] = useState<"bsc" | "ton">("bsc");
+  const [chain, setChain] = useState<"bsc" | "ton" | "avax">("bsc");
   const [txid, setTxid] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -93,12 +93,13 @@ export default function PayDialog({
     : null;
 
   const m = opts?.methods;
-  const canTxid = !!(m?.usdt || m?.ton);
+  const canTxid = !!(m?.usdt || m?.ton || m?.avax);
   const canReceipt = !!(m?.card || m?.screenshot);
   // Default the chain selector to whichever crypto method is enabled.
-  const chainOptions: ("bsc" | "ton")[] = [
+  const chainOptions: ("bsc" | "ton" | "avax")[] = [
     ...(m?.usdt ? ["bsc" as const] : []),
     ...(m?.ton ? ["ton" as const] : []),
+    ...(m?.avax ? ["avax" as const] : []),
   ];
   const effChain = chainOptions.includes(chain) ? chain : chainOptions[0] || "bsc";
 
@@ -186,6 +187,18 @@ export default function PayDialog({
                 <QrBox value={m!.ton_address} />
               </Box>
             )}
+            {m!.avax && (
+              <Box>
+                <Chip size="small" color="error" label="اوالانچ (AVAX)" sx={{ fontWeight: 700 }} />
+                {m!.amount_avax != null && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
+                    مبلغ تقریبی: {m!.amount_avax.toLocaleString("en-US", { maximumFractionDigits: 4 })} AVAX — فقط روی شبکهٔ Avalanche C-Chain واریز شود.
+                  </Typography>
+                )}
+                <CopyRow label="آدرس کیف پول اوالانچ (AVAX)" value={m!.avax_address} show={show} />
+                <QrBox value={m!.avax_address} />
+              </Box>
+            )}
             {m!.card && (
               <Box>
                 <Chip size="small" color="warning" label="کارت‌به‌کارت" sx={{ fontWeight: 700 }} />
@@ -215,6 +228,7 @@ export default function PayDialog({
                   >
                     {m!.usdt && <ToggleButton value="bsc">USDT</ToggleButton>}
                     {m!.ton && <ToggleButton value="ton">GRAM</ToggleButton>}
+                    {m!.avax && <ToggleButton value="avax">AVAX</ToggleButton>}
                   </ToggleButtonGroup>
                 )}
                 <TextField

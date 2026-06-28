@@ -104,19 +104,23 @@ async def run_enforcement_queue(session: AsyncSession = Depends(get_session)) ->
 @router.post("/refresh-rate")
 async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
     """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display.
-    Also refreshes the TON→Toman rate when TON payment is enabled."""
-    from app.services import rates
+    Also refreshes the TON→Toman rate, and the (derived) AVAX→Toman rate when AVAX is enabled."""
+    from app.services import rates, settings_service
 
     usdt = await rates.refresh_auto_rate(session)
     ton = await rates.refresh_ton_rate(session)
-    if usdt is None and ton is None:
+    avax = None
+    if await settings_service.get(session, "pay_avax_enabled", False):
+        avax = await rates.refresh_avax_rate(session)
+    if usdt is None and ton is None and avax is None:
         raise HTTPException(
             502, "دریافت نرخ آنلاین ناموفق بود؛ بعداً دوباره تلاش کنید یا نرخ را دستی تنظیم کنید."
         )
     return {
-        "rate": usdt, "ton": ton,
+        "rate": usdt, "ton": ton, "avax": avax,
         "effective": await rates.get_effective_rate(session),
         "ton_effective": await rates.get_ton_toman(session),
+        "avax_effective": await rates.get_avax_toman(session),
     }
 
 
@@ -130,7 +134,8 @@ async def get_rates(session: AsyncSession = Depends(get_session)) -> dict:
         session,
         ["rate_mode", "rate_source", "toman_per_usdt", "toman_per_usdt_auto",
          "toman_per_usdt_auto_at", "ton_rate_mode", "ton_toman_auto", "ton_toman_manual",
-         "rate_max_age_hours", "pay_ton_enabled"],
+         "rate_max_age_hours", "pay_ton_enabled",
+         "avax_rate_mode", "avax_toman_auto", "avax_toman_manual", "pay_avax_enabled"],
     )
 
     def _int(v) -> int:
@@ -155,6 +160,11 @@ async def get_rates(session: AsyncSession = Depends(get_session)) -> dict:
         "ton_auto": _int(cfg.get("ton_toman_auto")),
         "ton_manual": _int(cfg.get("ton_toman_manual")),
         "ton_enabled": bool(cfg.get("pay_ton_enabled")),
+        "avax_mode": str(cfg.get("avax_rate_mode") or "auto").lower(),
+        "avax_effective": await rates.get_avax_toman(session),
+        "avax_auto": _int(cfg.get("avax_toman_auto")),
+        "avax_manual": _int(cfg.get("avax_toman_manual")),
+        "avax_enabled": bool(cfg.get("pay_avax_enabled")),
         "stale": bool(mode == "auto" and usdt_auto > 0 and not fresh),
     }
 

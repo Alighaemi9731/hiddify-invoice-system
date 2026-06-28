@@ -195,9 +195,11 @@ export interface PayOptions {
   payable: boolean;
   pending: boolean;
   methods: {
-    usdt: boolean; card: boolean; ton: boolean; screenshot: boolean;
+    usdt: boolean; card: boolean; ton: boolean; avax: boolean; screenshot: boolean;
     wallet: string; card_number: string; card_holder: string; ton_address: string;
+    avax_address: string;
     amount_ton: number | null;
+    amount_avax: number | null;
   };
 }
 export const portalPayOptions = (invoiceId: number) =>

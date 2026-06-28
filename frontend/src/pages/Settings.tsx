@@ -48,7 +48,7 @@ type Section = {
 };
 
 // Settings that are machine-managed, not user-editable — hidden from the panel entirely.
-const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at", "ton_toman_auto", "last_backup_at"]);
+const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at", "ton_toman_auto", "avax_toman_auto", "last_backup_at"]);
 
 const SECTIONS: Section[] = [
   {
@@ -103,6 +103,7 @@ const SECTIONS: Section[] = [
           { key: "pay_screenshot_enabled", label: "ارسال تصویر رسید" },
           { key: "pay_card_enabled", label: "کارت‌به‌کارت" },
           { key: "pay_ton_enabled", label: "گرام (GRAM)" },
+          { key: "pay_avax_enabled", label: "اوالانچ (AVAX)" },
         ],
       },
       {
@@ -122,6 +123,12 @@ const SECTIONS: Section[] = [
             help: "هنگام تأییدِ دستیِ پرداختِ گرام، مبلغِ واقعیِ واریزشده از زنجیرهٔ TON خوانده و با مبلغِ فاکتور مقایسه می‌شود؛ اختلافِ تا این درصد «مطابق» در نظر گرفته می‌شود. پیش‌فرض ۵.", when: (v) => !!v("pay_ton_enabled") },
           { key: "toncenter_api_key", label: "کلید API تون‌سنتر (اختیاری)", advanced: true, dir: "ltr",
             help: "برای خواندنِ واریزیِ گرام از toncenter (شبکهٔ TON)؛ بدون کلید هم کار می‌کند ولی با محدودیتِ نرخ. خالی بگذارید مگر به سقفِ درخواست بخورید.", when: (v) => !!v("pay_ton_enabled") },
+        ],
+      },
+      {
+        title: "اطلاعات اوالانچ (AVAX)",
+        fields: [
+          { key: "avax_address", label: "آدرس کیف پول اوالانچ (AVAX)", help: "آدرس مقصدِ AVAX روی شبکهٔ Avalanche C-Chain. مبلغِ معادلِ AVAX به‌صورت آنلاین (CoinGecko × نرخ تتر) محاسبه و به مشتری نشان داده می‌شود؛ تأیید به‌صورت دستی (لینکِ Snowtrace) انجام می‌شود.", dir: "ltr", when: (v) => !!v("pay_avax_enabled") },
         ],
       },
       {
@@ -170,6 +177,13 @@ const SECTIONS: Section[] = [
           { key: "ton_toman_manual", label: "نرخ گرامِ دستی (تومان به ازای هر GRAM)", type: "number", min: 0,
             help: "در حالت دستیِ گرام این نرخ استفاده می‌شود؛ در حالت خودکار به‌عنوان فالبک.",
             when: (v) => !!v("pay_ton_enabled") },
+          { key: "avax_rate_mode", label: "حالت نرخ اوالانچ (AVAX→تومان)", type: "select",
+            help: "«خودکار» نرخ AVAX را آنلاین می‌خواند (CoinGecko برای AVAX→دلار × نرخ تتر)؛ «دستی» از نرخ پایین استفاده می‌کند.",
+            options: [{ value: "manual", label: "دستی" }, { value: "auto", label: "خودکار (آنلاین)" }],
+            when: (v) => !!v("pay_avax_enabled") },
+          { key: "avax_toman_manual", label: "نرخ اوالانچِ دستی (تومان به ازای هر AVAX)", type: "number", min: 0,
+            help: "در حالت دستیِ AVAX این نرخ استفاده می‌شود؛ در حالت خودکار به‌عنوان فالبک.",
+            when: (v) => !!v("pay_avax_enabled") },
           { key: "free_under_gb", label: "آستانهٔ کانفیگ رایگان (گیگ)", help: "کانفیگ‌هایی با حجم کوچک‌تر یا مساوی این مقدار، تستی و رایگان حساب می‌شوند (مثلاً ۱ → هم ۰٫۵ و هم ۱ گیگ رایگان، ۱٫۵ به بالا محاسبه می‌شود).", type: "number", min: 0 },
           { key: "min_sale_toman", label: "حداقل فروش هر نماینده (تومان)", help: "۰ = غیرفعال. اگر مبلغ فاکتور از این کمتر شد، همین مبلغ لحاظ می‌شود.", type: "number", min: 0 },
           { key: "metering_enabled", label: "متر مصرف ضد سوءاستفاده", help: "محاسبهٔ مصرف فراتر از سهمیه (ترفند ریست روزانه) و تمدید با ویرایش." },
@@ -477,6 +491,12 @@ export default function Settings() {
                   ? <Chip color={getVal("ton_rate_mode") === "auto" ? "success" : "default"} size="small"
                       label={`نرخ آنلاین گرام: ${Number(byKey["ton_toman_auto"].value).toLocaleString("fa-IR")} تومان`} />
                   : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین گرام هنوز دریافت نشده" />
+              )}
+              {!!getVal("pay_avax_enabled") && (
+                Number(byKey["avax_toman_auto"]?.value) > 0
+                  ? <Chip color={getVal("avax_rate_mode") === "auto" ? "success" : "default"} size="small"
+                      label={`نرخ آنلاین اوالانچ: ${Number(byKey["avax_toman_auto"].value).toLocaleString("fa-IR")} تومان`} />
+                  : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین اوالانچ هنوز دریافت نشده" />
               )}
               <Button size="small" variant="outlined" disabled={refreshRateM.isPending} onClick={() => refreshRateM.mutate()}>
                 به‌روزرسانی نرخ

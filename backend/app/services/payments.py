@@ -156,7 +156,13 @@ async def submit_reseller_payment(
         # 0xABC… and 0xabc… would be two rows for ONE transfer and could each settle invoices. TON
         # hashes stay case-sensitive.
         txid = txid.strip()
-        if chain == "bsc":
+        # Defensive allow-list: only known chains reach the validators/method-map below. An
+        # unknown chain would otherwise be validated as TON and stored as a USDT payment.
+        if chain not in ("bsc", "avax", "ton"):
+            return SubmitResult("invalid_txid", "شبکهٔ پرداخت نامعتبر است.")
+        if chain in ("bsc", "avax"):
+            # AVAX C-Chain hashes share the BSC format (0x + 64 hex) and are matched
+            # case-insensitively on-chain → lowercase, same as BSC.
             txid = txid.lower()
             if not BSC_TXID_RE.fullmatch(txid):
                 return SubmitResult(
@@ -239,7 +245,10 @@ async def submit_reseller_payment(
             note="رسید تصویری (در انتظار بررسی مالک)",
         )
     else:
-        method = PaymentMethod.ton_txid if chain == "ton" else PaymentMethod.usdt_txid
+        method = {
+            "ton": PaymentMethod.ton_txid,
+            "avax": PaymentMethod.avax_txid,
+        }.get(chain, PaymentMethod.usdt_txid)
         payment = Payment(
             reseller_id=primary.reseller_id, invoice_id=primary.id,
             settled_invoice_ids=settled_ids, amount_usdt=total_usdt, amount_toman=total_toman,
@@ -262,7 +271,7 @@ async def submit_reseller_payment(
         )
         owner_intro = "🧾 رسید پرداخت جدید — منتظر تأیید شماست."
     else:
-        label = "GRAM" if chain == "ton" else "USDT"
+        label = {"ton": "GRAM", "avax": "AVAX"}.get(chain, "USDT")
         user_message = (
             f"✅ شناسهٔ تراکنش ({label}) برای {scope_fa} دریافت شد و در انتظار تأیید پشتیبانی است.\n"
             "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
@@ -517,7 +526,7 @@ async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
     """Decision aid for the panel's MANUAL USDT confirmation: read the actual USDT credited to our
     wallet by this payment's txid (free BSC RPC) and compare (within tolerance) to the invoice's
     USDT amount. Display-only — never auto-confirms. Best-effort: returns {'available': False}."""
-    if payment.chain == "ton" or not payment.txid:
+    if payment.chain in ("ton", "avax") or not payment.txid:
         return {"available": False}
     cfg = await settings_service.get_many(
         session,
@@ -556,6 +565,9 @@ async def deposit_check(session: AsyncSession, payment: Payment) -> dict:
         d = await ton_deposit_check(session, payment)
         d["kind"] = "ton" if d.get("available") else "none"
         return d
+    if payment.chain == "avax":
+        # AVAX is manual-confirm only (no on-chain read) — never look an AVAX hash up on the BSC RPC.
+        return {"available": False, "kind": "none"}
     # chain "bsc" or legacy "" with a txid → USDT/BEP-20
     d = await usdt_deposit_check(session, payment)
     d["kind"] = "usdt" if d.get("available") else "none"
@@ -611,8 +623,8 @@ async def verify_payment(
     if payment.status == PaymentStatus.confirmed:
         return PaymentResult("confirmed", True, "این پرداخت قبلاً تأیید شده است.")
 
-    # On-chain verify is BSC/USDT-only. A non-BSC (TON) hash must never be looked up on BscScan —
-    # it would never be found and the message would be misleading. Hold for manual review.
+    # On-chain verify is BSC/USDT-only. A non-BSC (TON / AVAX) hash must never be looked up on
+    # BscScan — it would never be found and the message would be misleading. Hold for manual review.
     if payment.chain and payment.chain not in ("bsc", ""):
         return PaymentResult(
             "pending", False,

@@ -379,11 +379,17 @@ async def pay_options(
     pending = await payments._pending_payment_for_invoice(session, inv.id) is not None
     opts = await payment_methods.load_options(session)
     amount_ton = None
-    if opts.ton:
+    amount_avax = None
+    if opts.ton or opts.avax:
         from app.services import rates
-        rate = await rates.get_ton_toman(session)
-        if rate:
-            amount_ton = round(float(inv.amount_toman) / rate, 2)
+        if opts.ton:
+            rate = await rates.get_ton_toman(session)
+            if rate:
+                amount_ton = round(float(inv.amount_toman) / rate, 2)
+        if opts.avax:
+            arate = await rates.get_avax_toman(session)
+            if arate:
+                amount_avax = round(float(inv.amount_toman) / arate, 4)
     return {
         "invoice": {
             "id": inv.id, "number": invoice_code(inv.id), "period_label": inv.period_label,
@@ -391,12 +397,15 @@ async def pay_options(
         },
         "payable": payable, "pending": pending,
         "methods": {
-            "usdt": opts.usdt, "card": opts.card, "ton": opts.ton, "screenshot": opts.screenshot,
+            "usdt": opts.usdt, "card": opts.card, "ton": opts.ton, "avax": opts.avax,
+            "screenshot": opts.screenshot,
             "wallet": opts.wallet if opts.usdt else "",
             "card_number": opts.card_number if opts.card else "",
             "card_holder": opts.card_holder if opts.card else "",
             "ton_address": opts.ton_address if opts.ton else "",
+            "avax_address": opts.avax_address if opts.avax else "",
             "amount_ton": amount_ton,
+            "amount_avax": amount_avax,
         },
     }
 
@@ -426,11 +435,17 @@ async def pay_options_all(
     total_usdt = float(sum((i.amount_usdt or 0) for i in payable))
     opts = await payment_methods.load_options(session)
     amount_ton = None
-    if opts.ton:
+    amount_avax = None
+    if opts.ton or opts.avax:
         from app.services import rates
-        rate = await rates.get_ton_toman(session)
-        if rate:
-            amount_ton = round(total_toman / rate, 2)
+        if opts.ton:
+            rate = await rates.get_ton_toman(session)
+            if rate:
+                amount_ton = round(total_toman / rate, 2)
+        if opts.avax:
+            arate = await rates.get_avax_toman(session)
+            if arate:
+                amount_avax = round(total_toman / arate, 4)
     return {
         "invoices": [
             {"id": i.id, "number": invoice_code(i.id), "period_label": i.period_label,
@@ -441,12 +456,15 @@ async def pay_options_all(
         "count": len(payable),
         "total_amount_toman": total_toman, "total_amount_usdt": total_usdt,
         "methods": {
-            "usdt": opts.usdt, "card": opts.card, "ton": opts.ton, "screenshot": opts.screenshot,
+            "usdt": opts.usdt, "card": opts.card, "ton": opts.ton, "avax": opts.avax,
+            "screenshot": opts.screenshot,
             "wallet": opts.wallet if opts.usdt else "",
             "card_number": opts.card_number if opts.card else "",
             "card_holder": opts.card_holder if opts.card else "",
             "ton_address": opts.ton_address if opts.ton else "",
+            "avax_address": opts.avax_address if opts.avax else "",
             "amount_ton": amount_ton,
+            "amount_avax": amount_avax,
         },
     }
 
@@ -455,7 +473,7 @@ class PayTxidBody(BaseModel):
     invoice_id: int | None = None          # legacy single-invoice alias
     invoice_ids: list[int] | None = None   # pay several invoices with one transfer
     txid: str
-    chain: str = "bsc"  # "bsc" (USDT/BEP-20) | "ton"
+    chain: str = "bsc"  # "bsc" (USDT/BEP-20) | "ton" | "avax"
 
 
 def _form_invoice_ids(invoice_id: int | None, invoice_ids: str | None) -> list[int]:
@@ -474,12 +492,12 @@ async def pay_txid(
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Submit a tx hash (USDT/BSC or TON) as a PENDING payment for one OR MORE owed invoices.
-    Same shared validation as the bot — never auto-confirms; the owner reviews."""
+    """Submit a tx hash (USDT/BSC, TON, or AVAX) as a PENDING payment for one OR MORE owed
+    invoices. Same shared validation as the bot — never auto-confirms; the owner reviews."""
     txid = (body.txid or "").strip()
     if not txid:
         raise HTTPException(400, "شناسهٔ تراکنش خالی است.")
-    chain = "ton" if body.chain == "ton" else "bsc"
+    chain = body.chain if body.chain in ("ton", "avax") else "bsc"
     ids = body.invoice_ids or ([body.invoice_id] if body.invoice_id else [])
     result = await payments.submit_reseller_payment(
         session, reseller_ids=set(ctx.ids), invoice_ids=ids, txid=txid, chain=chain)

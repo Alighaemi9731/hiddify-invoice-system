@@ -123,6 +123,20 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M73** AVAX (Avalanche) payment method (`v1.48.0`). AVAX added as a first-class owner↔reseller
+  payment method (main bot pay flow + invoice instructions + panel Payments + reseller web portal pay
+  dialog), mirroring TON: **manual confirm** + a clickable `snowtrace.io` explorer link (no on-chain
+  auto-verify). Settings: `pay_avax_enabled` + `avax_address`; new `PaymentMethod.avax_txid`, `chain="avax"`.
+  **Live rate is DERIVED** (`rates.fetch_avax_usd`/`refresh_avax_rate`/`get_avax_toman`): no Iranian market
+  quotes AVAX (verified Wallex/Tetherland have none), so AVAX→Toman = AVAX→USD (CoinGecko `avalanche-2`,
+  free/no-key) × the live USDT→Toman rate, with a manual fallback (`avax_rate_mode`, `avax_toman_manual`,
+  `avax_toman_auto`); refreshed in `rate_refresh_job` + best-effort before billing. An Avalanche tx hash is
+  byte-identical to a BSC hash (`0x`+64hex), so the bot's `_parse_txid(…, avax=…)` treats a bare 0x hash as
+  the single enabled 0x-chain and, when BOTH USDT(BSC) and AVAX are on, returns an `"ambiguous"` sentinel →
+  the pay flow asks which network (`paychain:avax`/`paychain:bsc`, hash held in FSM); a pasted
+  snowtrace/bscscan link is authoritative. The web portal uses an explicit chain dropdown (no ambiguity).
+  **No schema/migration** (VARCHAR enum value + runtime settings auto-seeded on boot). Scope is
+  owner↔reseller only — NOT the storefront bots. Tests in `tests/test_avax.py` + a portal AVAX case.
 - [x] **M72** Storefront Phase 2 — reliability, subscription management & retention (`v1.44.0`). Free
   trial **on by default** for everyone (concurrency-safe compare-and-set + per-customer in-process lock).
   Orders now reference the real panel user via denormalized `(panel_id, panel_user_uuid)` (no fragile FK)

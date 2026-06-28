@@ -15,7 +15,8 @@ from app.services import settings_service
 
 _KEYS = [
     "pay_usdt_enabled", "pay_screenshot_enabled", "pay_card_enabled", "pay_ton_enabled",
-    "usdt_bep20_address", "card_number", "card_holder_name", "ton_wallet_address",
+    "pay_avax_enabled", "usdt_bep20_address", "card_number", "card_holder_name",
+    "ton_wallet_address", "avax_address",
 ]
 
 
@@ -25,14 +26,16 @@ class PaymentOptions:
     screenshot: bool
     card: bool
     ton: bool
+    avax: bool
     wallet: str
     card_number: str
     card_holder: str
     ton_address: str
+    avax_address: str
 
     @property
     def any_enabled(self) -> bool:
-        return self.usdt or self.screenshot or self.card or self.ton
+        return self.usdt or self.screenshot or self.card or self.ton or self.avax
 
 
 async def load_options(session: AsyncSession) -> PaymentOptions:
@@ -40,24 +43,27 @@ async def load_options(session: AsyncSession) -> PaymentOptions:
     wallet = (cfg.get("usdt_bep20_address") or "").strip()
     card = (cfg.get("card_number") or "").strip()
     ton = (cfg.get("ton_wallet_address") or "").strip()
+    avax = (cfg.get("avax_address") or "").strip()
     return PaymentOptions(
         # A method is only really available if its data is present (a wallet / a card
-        # number / a TON address), so an enabled-but-unconfigured method is silently skipped
-        # rather than telling the reseller to pay to nowhere.
+        # number / a TON or AVAX address), so an enabled-but-unconfigured method is silently
+        # skipped rather than telling the reseller to pay to nowhere.
         usdt=bool(cfg.get("pay_usdt_enabled")) and bool(wallet),
         screenshot=bool(cfg.get("pay_screenshot_enabled")),
         card=bool(cfg.get("pay_card_enabled")) and bool(card),
         ton=bool(cfg.get("pay_ton_enabled")) and bool(ton),
+        avax=bool(cfg.get("pay_avax_enabled")) and bool(avax),
         wallet=wallet,
         card_number=card,
         card_holder=(cfg.get("card_holder_name") or "").strip(),
         ton_address=ton,
+        avax_address=avax,
     )
 
 
 def instructions_text(
     opts: PaymentOptions, *, amount_usdt: str | None = None, amount_toman: str | None = None,
-    amount_ton: str | None = None, html: bool = False,
+    amount_ton: str | None = None, amount_avax: str | None = None, html: bool = False,
 ) -> str:
     """Multi-line payment instructions for the enabled methods.
 
@@ -107,7 +113,17 @@ def instructions_text(
         b.append(copyable(opts.ton_address))
         b.append("⚠️ فقط روی شبکهٔ TON واریز شود.")
         blocks.append("\n".join(b))
-    if opts.screenshot and not (opts.card or opts.ton):
+    if opts.avax:
+        b = ["❄️ اوالانچ (AVAX):"]
+        if amount_avax:
+            b.append(f"❄️ مبلغ: {amount_avax} AVAX")
+        elif amount_toman:
+            # No live AVAX rate → tell them to send the Toman equivalent (header amount).
+            b.append(f"❄️ معادلِ {amount_toman} تومان به AVAX")
+        b.append(copyable(opts.avax_address))
+        b.append("⚠️ فقط روی شبکهٔ Avalanche C-Chain واریز شود.")
+        blocks.append("\n".join(b))
+    if opts.screenshot and not (opts.card or opts.ton or opts.avax):
         # Standalone "send a receipt photo" note — useful next to USDT, redundant when card/TON
         # already ask for a photo.
         blocks.append("🧾 یا تصویر رسید واریز را همین‌جا بفرستید.")
@@ -117,14 +133,14 @@ def instructions_text(
     out = ["💳 از یکی از روش‌های زیر پرداخت کنید:", "\n\n".join(blocks)]
     # Only ever shown AFTER the customer taps the «💳 پرداخت فاکتور» button (the locked pay flow);
     # the sent invoice no longer embeds payment instructions. → tell them to submit the proof now.
-    txid_m = opts.usdt or opts.ton
+    txid_m = opts.usdt or opts.ton or opts.avax
     photo_m = opts.card or opts.screenshot
     if txid_m and photo_m:
-        out.append("📩 پس از واریز: برای USDT/TON «شناسهٔ تراکنش (TXID)» و برای کارت «تصویر رسید» را همین‌جا بفرستید.")
+        out.append("📩 پس از واریز: برای رمزارز «شناسهٔ تراکنش (TXID)» و برای کارت «تصویر رسید» را همین‌جا بفرستید.")
     elif txid_m:
         out.append("📩 پس از واریز، «شناسهٔ تراکنش (TXID)» را همین‌جا بفرستید (لینکِ تراکنش هم قبول است).")
     else:
         out.append("📩 پس از واریز، «تصویر رسید» را همین‌جا بفرستید.")
-    if html and (opts.usdt or opts.card or opts.ton):
+    if html and (opts.usdt or opts.card or opts.ton or opts.avax):
         out.append("👆 برای کپی، روی آدرس یا شمارهٔ کارت ضربه بزنید.")
     return "\n\n".join(out)

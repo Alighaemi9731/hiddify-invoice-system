@@ -147,10 +147,10 @@ export default function Payments() {
                 </TableCell>
                 <TableCell data-label="روش">{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
                 <TableCell data-label="TXID" dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {/* Click the hash → open it on the matching explorer (TON → tonscan, else bscscan)
-                      so the owner can verify it manually before confirming. */}
+                  {/* Click the hash → open it on the matching explorer (TON → tonscan, AVAX →
+                      snowtrace, else bscscan) so the owner can verify it manually before confirming. */}
                   {p.txid
-                    ? <Tooltip title="باز کردن در اکسپلورر برای بررسی"><Link href={p.chain === "ton" ? `https://tonscan.org/tx/${p.txid}` : `https://bscscan.com/tx/${p.txid}`} target="_blank" rel="noopener">{p.txid.slice(0, 14)}…</Link></Tooltip>
+                    ? <Tooltip title="باز کردن در اکسپلورر برای بررسی"><Link href={p.chain === "ton" ? `https://tonscan.org/tx/${p.txid}` : p.chain === "avax" ? `https://snowtrace.io/tx/${p.txid}` : `https://bscscan.com/tx/${p.txid}`} target="_blank" rel="noopener">{p.txid.slice(0, 14)}…</Link></Tooltip>
                     : p.has_proof
                       ? <Tooltip title="مشاهدهٔ رسید"><IconButton size="small" onClick={() => openPaymentProof(p.id)}><ImageIcon fontSize="small" /></IconButton></Tooltip>
                       : "—"}
@@ -174,8 +174,9 @@ export default function Payments() {
                 <TableCell data-label="عملیات" align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
                   {/* On-chain check (read-only, free): reads the actual deposit — TON via toncenter,
-                      USDT/BEP-20 via a public BSC RPC node — and reports it for the manual decision. */}
-                  <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+                      USDT/BEP-20 via a public BSC RPC node — and reports it for the manual decision.
+                      AVAX is manual-confirm only (no on-chain read), so the check is disabled there. */}
+                  <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || p.chain === "avax" || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>

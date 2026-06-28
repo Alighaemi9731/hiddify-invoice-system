@@ -25,21 +25,25 @@ router = APIRouter(
 )
 
 
-def _equiv_str(method: str, toman: float | None, usdt: float | None, ton_rate: int) -> str:
+def _equiv_str(
+    method: str, toman: float | None, usdt: float | None, ton_rate: int, avax_rate: int
+) -> str:
     """The invoice's crypto equivalent in the PAID currency — ONLY for crypto methods: TON for a
-    TON payment, USDT for a USDT payment. A card/screenshot/manual payment is in Toman, so no
-    crypto equivalent is shown (the tooltip then has only the Toman amount)."""
+    TON payment, AVAX for an AVAX payment, USDT for a USDT payment. A card/screenshot/manual
+    payment is in Toman, so no crypto equivalent is shown (the tooltip then has only the Toman)."""
     if not toman:
         return ""
     if method == "ton_txid":
         return f"{float(toman) / ton_rate:,.2f} GRAM" if ton_rate else ""
+    if method == "avax_txid":
+        return f"{float(toman) / avax_rate:,.4f} AVAX" if avax_rate else ""
     if method == "usdt_txid":
         return f"{float(usdt or 0):,.2f} USDT"
     return ""
 
 
 def _briefs_for(
-    p: Payment, inv_map: dict[int, Invoice], ton_rate: int
+    p: Payment, inv_map: dict[int, Invoice], ton_rate: int, avax_rate: int
 ) -> list[InvoiceBrief]:
     """The covered invoices of a payment, in stored order (the first is the primary)."""
     briefs: list[InvoiceBrief] = []
@@ -51,7 +55,7 @@ def _briefs_for(
             id=inv.id, period=inv.period_label,
             amount_toman=float(inv.amount_toman or 0),
             equiv=_equiv_str(p.method.value, float(inv.amount_toman or 0),
-                             float(inv.amount_usdt or 0), ton_rate),
+                             float(inv.amount_usdt or 0), ton_rate, avax_rate),
         ))
     return briefs
 
@@ -114,9 +118,10 @@ async def list_payments(
     from app.services import rates
 
     ton_rate = await rates.get_ton_toman(session)
+    avax_rate = await rates.get_avax_toman(session)
     inv_map = await _load_invoice_map(session, [p for p, *_ in rows])
     return [
-        _to_out(p, name, briefs=_briefs_for(p, inv_map, ton_rate),
+        _to_out(p, name, briefs=_briefs_for(p, inv_map, ton_rate, avax_rate),
                 reseller_chat_id=chat_id, reseller_username=username)
         for p, name, chat_id, username in rows
     ]
@@ -151,9 +156,10 @@ async def get_payment(payment_id: int, session: AsyncSession = Depends(get_sessi
     from app.services import rates
 
     ton_rate = await rates.get_ton_toman(session)
+    avax_rate = await rates.get_avax_toman(session)
     inv_map = await _load_invoice_map(session, [p])
     return _to_out(p, reseller.name if reseller else None,
-                   briefs=_briefs_for(p, inv_map, ton_rate),
+                   briefs=_briefs_for(p, inv_map, ton_rate, avax_rate),
                    reseller_chat_id=reseller.bot_chat_id if reseller else None,
                    reseller_username=username)
 

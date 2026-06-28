@@ -41,6 +41,17 @@ def cancel_keyboard(label: str = "✖️ انصراف", target: str = "cancel") 
     return InlineKeyboardMarkup(inline_keyboard=[cancel_row(label, target)])
 
 
+def pay_chain_keyboard() -> InlineKeyboardMarkup:
+    """Disambiguate a bare 0x hash when BOTH USDT(BSC) and AVAX are enabled (same hash format):
+    ask which network the customer paid on. The pending hash is held in FSM, so the buttons carry
+    only the chain."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❄️ اوالانچ (AVAX)", callback_data="paychain:avax"),
+         InlineKeyboardButton(text="🟢 تتر (USDT-BSC)", callback_data="paychain:bsc")],
+        cancel_row("✖️ انصراف از پرداخت"),
+    ])
+
+
 def reseller_menu_keyboard(
     *, show_create_user: bool = False, show_storefront: bool = False
 ) -> InlineKeyboardMarkup:

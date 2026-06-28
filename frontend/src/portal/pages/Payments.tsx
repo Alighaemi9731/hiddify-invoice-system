@@ -13,10 +13,11 @@ const STATUS_COLOR: Record<string, "default" | "warning" | "success" | "error"> 
   rejected: "error",
 };
 
-// A clickable explorer link for the tx hash (tonscan for TON, bscscan for BSC/USDT).
+// A clickable explorer link for the tx hash (tonscan for TON, snowtrace for AVAX, bscscan for BSC/USDT).
 function explorerHref(chain: string | null, txid: string | null): string | null {
   if (!txid) return null;
   if (chain === "ton") return `https://tonscan.org/tx/${txid}`;
+  if (chain === "avax") return `https://snowtrace.io/tx/${txid}`;
   return `https://bscscan.com/tx/${txid}`;
 }
 

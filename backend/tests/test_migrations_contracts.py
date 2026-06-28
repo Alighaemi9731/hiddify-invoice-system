@@ -183,7 +183,7 @@ assert handler in probe.handlers
 def test_active_enum_contract_has_no_unimplemented_branches():
     assert {item.value for item in SyncSource} == {"backup_json"}
     assert {item.value for item in PaymentMethod} == {
-        "usdt_txid", "manual", "screenshot", "ton_txid",
+        "usdt_txid", "manual", "screenshot", "ton_txid", "avax_txid",
     }
     assert {item.value for item in PaymentStatus} == {"pending", "confirmed", "rejected"}
     assert {item.value for item in DeliveryStatus} == {

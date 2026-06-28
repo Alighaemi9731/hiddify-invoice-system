@@ -160,6 +160,67 @@ async def get_ton_toman(session: AsyncSession) -> int:
     return (_pos_int(cfg.get("ton_toman_auto")) or 0) or manual
 
 
+# AVAX has no Toman market on Wallex/Tetherland (the only sources reachable from the prod host),
+# so its rate is DERIVED: AVAX→USD from CoinGecko (free, no key, resolves internationally) times
+# the live USDT→Toman rate (USDT ≈ USD). Display-only; a failure just hides the amount.
+_COINGECKO_AVAX = "https://api.coingecko.com/api/v3/simple/price?ids=avalanche-2&vs_currencies=usd"
+
+
+async def fetch_avax_usd() -> float | None:
+    """Fetch the current AVAX price in **USD** from CoinGecko. Returns None on any failure (the
+    caller keeps the previous value). Shape: {"avalanche-2": {"usd": <float>}}."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "invoice-system/1"}) as client:
+            r = await client.get(_COINGECKO_AVAX)
+            r.raise_for_status()
+            usd = ((r.json().get("avalanche-2") or {}).get("usd"))
+            if usd is not None:
+                v = float(usd)
+                return v if v > 0 else None
+    except Exception:  # noqa: BLE001
+        log.warning("failed to fetch AVAX→USD rate from CoinGecko", exc_info=True)
+    return None
+
+
+# AVAX→Toman ≈ a few-USD coin × ~100k–200k Toman/USD → low/mid hundreds of k to a few M. The floor
+# is kept well below any realistic correct value (≈$0.17-worth) so a market dip never rejects a good
+# rate; it only catches a source glitch (cents/garbage). The ceiling guards an obvious unit slip.
+_AVAX_MIN, _AVAX_MAX = 30_000, 100_000_000
+
+
+async def refresh_avax_rate(session: AsyncSession) -> int | None:
+    """Fetch AVAX→USD and multiply by the live USDT→Toman rate to cache AVAX→Toman
+    (`avax_toman_auto`) when plausible. Best-effort. Same two-part guard as the USDT/TON rates:
+    an absolute band plus a 3× relative band vs the last value."""
+    usd = await fetch_avax_usd()
+    usdt_toman = await get_effective_rate(session)
+    if not usd or not usdt_toman:
+        return None
+    rate = int(round(usd * usdt_toman))
+    if rate < _AVAX_MIN or rate > _AVAX_MAX:
+        log.warning("derived AVAX rate %s outside absolute band — ignored", rate)
+        return None
+    prev = _pos_int(await settings_service.get(session, "avax_toman_auto", 0))
+    if prev and not (prev / 3 <= rate <= prev * 3):
+        log.warning("derived AVAX rate %s is >3× off the previous %s — ignored", rate, prev)
+        return None
+    await settings_service.set_value(session, "avax_toman_auto", rate)
+    return rate
+
+
+async def get_avax_toman(session: AsyncSession) -> int:
+    """The AVAX→Toman rate to actually use (no network I/O), mirroring the TON manual/auto split:
+    `manual` → the owner-set `avax_toman_manual`; `auto` → the last cached live rate, falling back
+    to the manual rate when the live one is missing. 0 if nothing usable."""
+    cfg = await settings_service.get_many(
+        session, ["avax_rate_mode", "avax_toman_manual", "avax_toman_auto"]
+    )
+    manual = _pos_int(cfg.get("avax_toman_manual")) or 0
+    if str(cfg.get("avax_rate_mode") or "auto").lower() == "manual":
+        return manual
+    return (_pos_int(cfg.get("avax_toman_auto")) or 0) or manual
+
+
 def _rate_is_fresh(stamp: str | None, max_age_hours: float) -> bool:
     """True if the cached auto-rate timestamp is within max_age_hours of now. A missing or
     unparseable stamp, or max_age_hours<=0 (disabled), is treated as NOT fresh / always-fresh

@@ -41,6 +41,7 @@ class PaymentMethod(str, enum.Enum):
     manual = "manual"            # owner records it by hand
     screenshot = "screenshot"    # reseller sends a deposit screenshot (owner confirms)
     ton_txid = "ton_txid"        # reseller submits a TON tx hash (owner confirms manually)
+    avax_txid = "avax_txid"      # reseller submits an Avalanche C-Chain TXID (owner confirms manually)
 
 
 class PaymentStatus(str, enum.Enum):

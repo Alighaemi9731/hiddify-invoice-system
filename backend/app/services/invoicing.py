@@ -115,6 +115,13 @@ async def generate_invoices(
         except Exception:  # noqa: BLE001
             import logging
             logging.getLogger("invoicing").warning("pre-billing TON rate refresh failed", exc_info=True)
+    # AVAX payment shows the customer an AVAX amount → keep that derived rate fresh too.
+    if await settings_service.get(session, "pay_avax_enabled", False):
+        try:
+            await rates.refresh_avax_rate(session)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("invoicing").warning("pre-billing AVAX rate refresh failed", exc_info=True)
 
     # Serialize against any other concurrent generation/recompute before reading + writing.
     await _serialize_billing(session)
