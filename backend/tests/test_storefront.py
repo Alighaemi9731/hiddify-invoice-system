@@ -1004,3 +1004,65 @@ def test_join_toggle_requires_channel(tmp_path, monkeypatch):
         await engine.dispose()
 
     asyncio.run(go())
+
+
+# ── v1.47.0: paginated + searchable customers tab ────────────────────────────
+
+def test_list_customers_page_and_search(tmp_path):
+    async def body(s):
+        _r, bot, _c = await _seed(s)   # seeds one customer (telegram 555, name "Cust")
+        for i in range(2, 12):         # +10 → 11 total
+            s.add(StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1000 + i, name=f"name{i}"))
+        await s.commit()
+        rows, total = await storefront.list_customers_page(s, bot.id, offset=0, limit=8)
+        assert total == 11 and len(rows) == 8
+        rows2, total2 = await storefront.list_customers_page(s, bot.id, offset=8, limit=8)
+        assert total2 == 11 and len(rows2) == 3                       # last page
+        assert await storefront.count_customers(s, bot.id) == 11
+        r_name, t_name = await storefront.list_customers_page(s, bot.id, query="name5")
+        assert t_name == 1 and r_name[0].name == "name5"              # search by name substring
+        r_id, t_id = await storefront.list_customers_page(s, bot.id, query="1005")
+        assert t_id == 1 and r_id[0].telegram_id == 1005             # search by telegram id
+
+    _run(body, tmp_path, "custpage.db")
+
+
+def test_customers_page_kb_nav_and_search():
+    rows = [SimpleNamespace(id=i, name=f"n{i}", telegram_id=i, wallet_balance_toman=0)
+            for i in range(8)]
+    cbs = [b.callback_data for row in sfkb.customers_page_kb(
+        rows, page=0, per_page=8, total=20).inline_keyboard for b in row]
+    assert any(c.startswith("sfcust:") for c in cbs)
+    assert "sfcustpg:1" in cbs and "sfcustsearch" in cbs              # next + search, no prev on page 0
+    assert "sfcustpg:-1" not in cbs
+    cbs1 = [b.callback_data for row in sfkb.customers_page_kb(
+        rows, page=1, per_page=8, total=20).inline_keyboard for b in row]
+    assert "sfcustpg:0" in cbs1 and "sfcustpg:2" in cbs1             # prev + next on a middle page
+    cbs2 = [b.callback_data for row in sfkb.customers_page_kb(
+        rows, page=0, per_page=20, total=3, searching=True).inline_keyboard for b in row]
+    assert "sfcustpg:0" in cbs2 and "sfcustsearch" not in cbs2        # search results → back, no search
+
+
+def test_customer_detail_kb_actions():
+    cbs = [b.callback_data for row in sfkb.customer_detail_kb(7).inline_keyboard for b in row]
+    assert {"sfadj:7:+", "sfadj:7:-", "sfacust:7", "sfcustpg:0"} <= set(cbs)
+
+
+def test_customers_tab_sends_single_message(tmp_path):
+    from app.bot.storefront import handlers as sfh
+
+    async def body(s):
+        reseller, bot, _c = await _seed(s)
+        for i in range(2, 12):
+            s.add(StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=2000 + i, name=f"c{i}"))
+        await s.commit()
+        sent = {"n": 0}
+
+        class FakeMsg:
+            async def answer(self, *a, **k):  # noqa: ANN002, ANN003
+                sent["n"] += 1
+
+        await sfh._admin_action("customers", FakeMsg(), None, s, bot, reseller)
+        assert sent["n"] == 1   # ONE tidy message, not one-per-customer
+
+    _run(body, tmp_path, "custonemsg.db")

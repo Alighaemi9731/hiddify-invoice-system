@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
@@ -166,6 +166,36 @@ async def list_customers(session: AsyncSession, storefront_bot_id: int) -> list[
             )
         ).scalars().all()
     )
+
+
+async def count_customers(session: AsyncSession, storefront_bot_id: int) -> int:
+    return int((await session.execute(
+        select(func.count()).select_from(StorefrontCustomer)
+        .where(StorefrontCustomer.storefront_bot_id == storefront_bot_id)
+    )).scalar_one())
+
+
+async def list_customers_page(
+    session: AsyncSession, storefront_bot_id: int, *, offset: int = 0, limit: int = 8,
+    query: str | None = None,
+) -> tuple[list[StorefrontCustomer], int]:
+    """A page of this storefront's customers (+ the total count), newest first. `query` filters by name
+    substring (case-insensitive) OR an exact numeric telegram_id — for the searchable admin list."""
+    where: list = [StorefrontCustomer.storefront_bot_id == storefront_bot_id]
+    q = (query or "").strip()
+    if q:
+        conds: list = [StorefrontCustomer.name.ilike(f"%{q}%")]
+        if q.lstrip("-").isdigit():
+            conds.append(StorefrontCustomer.telegram_id == int(q))
+        where.append(or_(*conds))
+    total = int((await session.execute(
+        select(func.count()).select_from(StorefrontCustomer).where(*where)
+    )).scalar_one())
+    rows = (await session.execute(
+        select(StorefrontCustomer).where(*where)
+        .order_by(StorefrontCustomer.created_at.desc()).offset(offset).limit(limit)
+    )).scalars().all()
+    return list(rows), total
 
 
 # ── owner monthly fee ──────────────────────────────────────────────────────────

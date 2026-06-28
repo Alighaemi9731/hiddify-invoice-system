@@ -9,7 +9,12 @@ from aiogram.types import (
 )
 
 from app.bot.rtl import rtl
-from app.models import StorefrontBot, StorefrontOrder, StorefrontPlan
+from app.models import (
+    StorefrontBot,
+    StorefrontCustomer,
+    StorefrontOrder,
+    StorefrontPlan,
+)
 
 # ── docked reply-keyboard menus (label → action) ──────────────────────────────
 ADMIN_MENU: list[tuple[str, str]] = [
@@ -235,9 +240,36 @@ def topup_decide_kb(txn_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def customer_row_kb(customer_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="➕ شارژ دستی", callback_data=f"sfadj:{customer_id}:+"),
-        InlineKeyboardButton(text="➖ کسر دستی", callback_data=f"sfadj:{customer_id}:-"),
-        InlineKeyboardButton(text="📦 سرویس‌ها", callback_data=f"sfacust:{customer_id}"),
-    ]])
+def customers_page_kb(
+    rows: list[StorefrontCustomer], *, page: int, per_page: int, total: int, searching: bool = False
+) -> InlineKeyboardMarkup:
+    """A tidy single-message customer list: one button per customer (→ detail), plus page nav + search
+    (full list) or a back-to-list button (search results)."""
+    kb: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(
+            text=rtl(f"{c.name or c.telegram_id} — {int(c.wallet_balance_toman or 0):,} ت"),
+            callback_data=f"sfcust:{c.id}")]
+        for c in rows
+    ]
+    if searching:
+        kb.append([InlineKeyboardButton(text="‹ بازگشت به فهرست", callback_data="sfcustpg:0")])
+        return InlineKeyboardMarkup(inline_keyboard=kb)
+    pages = max(1, (total + per_page - 1) // per_page)
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹ قبلی", callback_data=f"sfcustpg:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"صفحه {page + 1}/{pages}", callback_data="sfnoop"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="بعدی ›", callback_data=f"sfcustpg:{page + 1}"))
+    kb.append(nav)
+    kb.append([InlineKeyboardButton(text="🔍 جستجو", callback_data="sfcustsearch")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def customer_detail_kb(customer_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ شارژ دستی", callback_data=f"sfadj:{customer_id}:+"),
+         InlineKeyboardButton(text="➖ کسر دستی", callback_data=f"sfadj:{customer_id}:-")],
+        [InlineKeyboardButton(text="📦 سرویس‌ها", callback_data=f"sfacust:{customer_id}")],
+        [InlineKeyboardButton(text="‹ بازگشت به فهرست", callback_data="sfcustpg:0")],
+    ])

@@ -42,6 +42,9 @@ from app.services import (
 
 log = logging.getLogger("bot.storefront")
 
+_PER_PAGE = 8          # customers per page in the admin «مشتری‌ها» list
+_SEARCH_LIMIT = 20     # max matches shown for a customer search (refine if more)
+
 storefront_router = Router()
 storefront_router.message.filter(F.chat.type == "private")
 
@@ -61,6 +64,7 @@ class SF(StatesGroup):
     support = State()
     welcome = State()          # admin sets the storefront welcome text
     join_channel = State()     # admin sets the forced-join channel (forward a post / send @id)
+    cust_search = State()      # admin searches customers by name / telegram id
     broadcast = State()
 
 
@@ -326,21 +330,18 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
                    f"مشتری: {(cust.name if cust else '') or txn.customer_id}")
             await ans(rtl(cap), reply_markup=kb.topup_decide_kb(txn.id))
     elif action == "customers":
-        custs = await storefront.list_customers(s, sf.id)
-        if not custs:
+        rows, total = await storefront.list_customers_page(s, sf.id, offset=0, limit=_PER_PAGE)
+        if total == 0:
             await ans(rtl("هنوز مشتری‌ای ندارید."))
             return
-        await ans(rtl(f"👥 {len(custs)} مشتری:"))
-        for c in custs[:30]:
-            await ans(
-                rtl(f"{c.name or c.telegram_id} — موجودی: {_toman(c.wallet_balance_toman)} ت"),
-                reply_markup=kb.customer_row_kb(c.id))
+        await ans(rtl(f"👥 مشتری‌ها ({total})"),
+                  reply_markup=kb.customers_page_kb(rows, page=0, per_page=_PER_PAGE, total=total))
     elif action == "stats":
         plans = await storefront.list_plans(s, sf.id)
-        custs = await storefront.list_customers(s, sf.id)
+        n_custs = await storefront.count_customers(s, sf.id)
         pend = await storefront_wallet.pending_topups_for_bot(s, sf.id)
         await ans(rtl(
-            f"📊 آمار\nمشتری‌ها: {len(custs)}\nپلن‌ها: {len(plans)}\n"
+            f"📊 آمار\nمشتری‌ها: {n_custs}\nپلن‌ها: {len(plans)}\n"
             f"شارژِ در انتظار: {len(pend)}"))
     elif action == "broadcast":
         await state.set_state(SF.broadcast)
@@ -696,6 +697,87 @@ async def _admin_order(s, sf, order_id: int):  # noqa: ANN001, ANN202
     if cust is None or cust.storefront_bot_id != sf.id:
         return None
     return order
+
+
+# ── admin: customers list (paginated + searchable) ───────────────────────────
+
+@storefront_router.callback_query(F.data.startswith("sfcustpg:"))
+async def sf_customers_page(cb: CallbackQuery, bot: Bot) -> None:
+    page = max(0, int(cb.data.split(":")[1]))
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        rows, total = await storefront.list_customers_page(
+            s, sf.id, offset=page * _PER_PAGE, limit=_PER_PAGE)
+    text = rtl(f"👥 مشتری‌ها ({total})")
+    markup = kb.customers_page_kb(rows, page=page, per_page=_PER_PAGE, total=total)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:  # noqa: BLE001 — message too old / unchanged → send a fresh one
+        await cb.message.answer(text, reply_markup=markup)
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfcust:"))
+async def sf_customer_detail(cb: CallbackQuery, bot: Bot) -> None:
+    cid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        cust = await s.get(StorefrontCustomer, cid)
+        if cust is None or cust.storefront_bot_id != sf.id:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        name, tgid, bal, banned = (cust.name or "—", cust.telegram_id,
+                                   _toman(cust.wallet_balance_toman), cust.banned)
+    lines = [f"👤 {name}", f"🆔 {tgid}", f"👛 موجودی: {bal} تومان"]
+    if banned:
+        lines.append("⛔️ مسدود")
+    text = rtl("\n".join(lines))
+    markup = kb.customer_detail_kb(cid)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:  # noqa: BLE001
+        await cb.message.answer(text, reply_markup=markup)
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data == "sfcustsearch")
+async def sf_customers_search_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        _sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if not is_admin:
+        await cb.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await state.set_state(SF.cust_search)
+    await cb.message.answer(rtl("نام یا آیدیِ عددیِ مشتری را بفرستید:"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.cust_search, F.text)
+async def sf_customers_search(message: Message, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    q = (message.text or "").strip()
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            return
+        rows, total = await storefront.list_customers_page(
+            s, sf.id, offset=0, limit=_SEARCH_LIMIT, query=q)
+    if total == 0:
+        await message.answer(rtl("مشتری‌ای یافت نشد."), reply_markup=kb.admin_reply_kb())
+        return
+    header = f"🔍 نتایج ({total})"
+    if total > _SEARCH_LIMIT:
+        header += " — نتایج زیاد است؛ دقیق‌تر جستجو کنید."
+    await message.answer(
+        rtl(header),
+        reply_markup=kb.customers_page_kb(rows, page=0, per_page=_SEARCH_LIMIT, total=total,
+                                          searching=True))
 
 
 @storefront_router.callback_query(F.data.startswith("sfacust:"))

@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.47.0 - 2026-06-28
+
+### Changed — Storefront «مشتری‌ها» tab is now paginated + searchable
+
+- The admin customers tab used to send **one Telegram message per customer** (capped at 30, silently
+  dropping the rest) — a flood for resellers with many customers. It's now a single tidy message: a page
+  of customers as inline buttons («{name} — {balance} ت») with «‹ قبلی»/«بعدی ›» navigation (8/page) and
+  a «🔍 جستجو» button. Tapping a customer opens a detail view (balance + the manual wallet ±/services
+  actions + a back button). Search matches by name substring or numeric Telegram id. New paginated/counted
+  queries (`storefront.list_customers_page`, `count_customers`); the stats tab no longer loads every
+  customer just to count them. No schema change.
+
 ## 1.46.0 - 2026-06-27
 
 ### Added — Storefront forced channel-join
