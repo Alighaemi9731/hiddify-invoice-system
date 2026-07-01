@@ -2,17 +2,14 @@ import React, { useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { CacheProvider } from "@emotion/react";
 import { ThemeProvider, CssBaseline, PaletteMode } from "@mui/material";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import { rtlCache } from "./rtlCache";
 import { makeTheme } from "./theme";
 import { ColorModeContext } from "./colorMode";
 import { AuthProvider } from "./auth/AuthContext";
+import { queryClient } from "./api/queryClient";
 import App from "./App";
-
-const qc = new QueryClient({
-  defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
-});
 
 function Root() {
   const [mode, setMode] = useState<PaletteMode>(
@@ -37,7 +34,7 @@ function Root() {
       <ColorModeContext.Provider value={ctx}>
         <ThemeProvider theme={theme}>
           <CssBaseline />
-          <QueryClientProvider client={qc}>
+          <QueryClientProvider client={queryClient}>
             <BrowserRouter>
               <AuthProvider>
                 <App />

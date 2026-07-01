@@ -154,3 +154,61 @@ def test_reconciles_to_locked_usage_gb_after_manual_edit(tmp_path):
         assert round(bd["own"]["gb"], 3) == 120.0        # +20 adjustment folded into own
 
     _run(body, tmp_path)
+
+
+def test_concurrent_renders_are_thread_safe(tmp_path, monkeypatch):
+    """I03: reportlab rendering runs in worker threads (`invoice_pdf._build_pdf` →
+    asyncio.to_thread). Three invoices rendered SIMULTANEOUSLY (the monthly-generation
+    shape) must produce three valid PDFs — shared font registration is serialized."""
+    from pathlib import Path
+
+    monkeypatch.chdir(tmp_path)  # renders write under ./data/invoices/
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'pdfc.db'}")
+        from app.core.db import Base
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            ids: list[tuple[int, int]] = []
+            async with Session() as s:
+                for i in range(3):
+                    panel = Panel(key=f"p{i}", host=f"h{i}", proxy_path_enc="x",
+                                  owner_uuid=f"o{i}")
+                    s.add(panel)
+                    await s.flush()
+                    r = Reseller(panel_id=panel.id, admin_uuid=f"own-{i}", name=f"R{i}")
+                    s.add(r)
+                    await s.flush()
+                    inv = Invoice(
+                        reseller_id=r.id, panel_id=panel.id,
+                        period_start=dt.date(2026, 5, 1), period_end=dt.date(2026, 5, 31),
+                        period_label="2026-05", usage_gb=25.0, amount_toman=1,
+                        base_amount_toman=1, status=InvoiceStatus.sent,
+                    )
+                    s.add(inv)
+                    await s.flush()
+                    s.add(InvoiceLine(invoice_id=inv.id, end_user_uuid=f"u{i}", name=f"u{i}",
+                                      usage_gb=25.0, added_by_uuid=f"own-{i}",
+                                      sub_reseller_name=f"R{i}"))
+                    ids.append((r.id, inv.id))
+                await s.commit()
+
+            async def one(rid: int, iid: int):
+                async with Session() as s2:
+                    inv2 = await s2.get(Invoice, iid)
+                    own2 = await s2.get(Reseller, rid)
+                    return await invoice_pdf.render_invoice_node_pdfs(s2, inv2, own2)
+
+            all_docs = await asyncio.gather(*(one(rid, iid) for rid, iid in ids))
+            assert len(all_docs) == 3
+            for docs in all_docs:
+                assert docs, "a concurrent render produced no PDFs"
+                for path, _caption in docs:
+                    data = Path(path).read_bytes()
+                    assert data.startswith(b"%PDF") and len(data) > 1000
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())

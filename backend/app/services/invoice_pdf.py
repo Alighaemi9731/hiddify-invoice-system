@@ -1,6 +1,13 @@
-"""Render an invoice to a PDF file (shared by the API download + the bot delivery)."""
+"""Render an invoice to a PDF file (shared by the API download + the bot delivery).
+
+Every reportlab render goes through `_build_pdf`, which runs the synchronous rendering in
+a worker thread — monthly generation renders N+1 PDFs per reseller, and doing that on the
+event loop stalls every concurrent API/bot request. Font registration is serialized inside
+`pdf._register_fonts`, and each render builds its own document, so parallel renders are safe.
+"""
 from __future__ import annotations
 
+import asyncio
 import re
 
 from sqlalchemy import select
@@ -10,6 +17,11 @@ from app.core.codes import invoice_code
 from app.models import Invoice, InvoiceLine, Panel, Reseller
 from app.services import pdf as pdf_service
 from app.services import settings_service
+
+
+async def _build_pdf(out_path: str, **kwargs) -> None:
+    """Run the synchronous reportlab render off the event loop."""
+    await asyncio.to_thread(pdf_service.build_invoice_pdf, out_path, **kwargs)
 
 
 def _safe_name(name: str) -> str:
@@ -37,7 +49,7 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
     # Disk path carries the invoice id so two resellers with the SAME name in a period don't
     # overwrite each other's file (the Telegram filename below stays clean/human).
     out_path = f"data/invoices/{inv.period_label}/factor_{safe}_{inv.id}_{inv.period_label}.pdf"
-    pdf_service.build_invoice_pdf(
+    await _build_pdf(
         out_path,
         reseller_name=reseller.name, panel_label=panel.key, period_label=inv.period_label,
         period_start=inv.period_start, period_end=inv.period_end,
@@ -129,7 +141,7 @@ async def render_invoice_node_pdfs(
         total = round(sum(float(ln["usage_gb"]) for ln in gl), 3)
         safe = _safe_name(node_name)
         out_path = f"data/invoices/{inv.period_label}/inv{inv.id}_n{idx}_{safe}_{inv.period_label}.pdf"
-        pdf_service.build_invoice_pdf(
+        await _build_pdf(
             out_path,
             reseller_name=node_name, panel_label=panel.key if panel else "",
             period_label=inv.period_label, period_start=inv.period_start, period_end=inv.period_end,
@@ -184,7 +196,7 @@ async def render_node_usage_pdf(
     owner_name = issuer_name or (await settings_service.get(session, "owner_name", "") or "")
     safe = _safe_name(node.name)
     out_path = f"data/invoices/{period.label}/usage_{safe}_{node.id}_{period.label}.pdf"
-    pdf_service.build_invoice_pdf(
+    await _build_pdf(
         out_path,
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
@@ -213,7 +225,7 @@ async def render_own_usage_pdf(
     owner_name = issuer_name or (await settings_service.get(session, "owner_name", "") or "")
     safe = _safe_name(node.name)
     out_path = f"data/invoices/{period.label}/own_{safe}_{node.id}_{period.label}.pdf"
-    pdf_service.build_invoice_pdf(
+    await _build_pdf(
         out_path,
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,
@@ -241,7 +253,7 @@ async def render_sub_invoice_pdf(
     panel = await session.get(Panel, node.panel_id)
     safe = _safe_name(node.name)
     out_path = f"data/invoices/{period.label}/sub_{safe}_{node.id}_{period.label}.pdf"
-    pdf_service.build_invoice_pdf(
+    await _build_pdf(
         out_path,
         reseller_name=node.name, panel_label=panel.key if panel else "",
         period_label=period.label, period_start=period.start, period_end=period.end,

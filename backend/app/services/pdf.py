@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,9 @@ STRIPE = colors.HexColor("#f8fafc")
 GREEN = colors.HexColor("#15803d")
 
 _FONTS_READY: bool | None = None
+# Renders run in worker threads (invoice_pdf._build_pdf); the reportlab font registry is
+# global, so first-time registration must be serialized. Each document is otherwise its own.
+_FONTS_LOCK = threading.Lock()
 
 # Strip emoji / pictographs the PDF font can't draw (keeps Persian, Latin, digits).
 _EMOJI = re.compile(
@@ -54,31 +58,35 @@ _ZW = re.compile("[​‌‍⁠﻿]")
 
 
 def _register_fonts() -> bool:
-    """Register Vazirmatn (preferred) or fall back to DejaVuSans / Helvetica."""
+    """Register Vazirmatn (preferred) or fall back to DejaVuSans / Helvetica.
+    Thread-safe: double-checked under a lock (renders run in worker threads)."""
     global _FONTS_READY
     if _FONTS_READY is not None:
         return _FONTS_READY
-    candidates = [
-        (FONT, FONTS_DIR / "Vazirmatn-Regular.ttf", BOLD, FONTS_DIR / "Vazirmatn-Bold.ttf"),
-    ]
-    for reg_name, reg_path, bold_name, bold_path in candidates:
-        if reg_path.exists():
-            try:
-                pdfmetrics.registerFont(TTFont(reg_name, str(reg_path)))
-                pdfmetrics.registerFont(TTFont(bold_name, str(bold_path if bold_path.exists() else reg_path)))
-                _FONTS_READY = True
-                return True
-            except Exception:  # noqa: BLE001
-                pass
-    # Fallback to the bundled DejaVuSans (Persian-capable) for both weights.
-    dejavu = FONTS_DIR / "DejaVuSans.ttf"
-    try:
-        pdfmetrics.registerFont(TTFont(FONT, str(dejavu)))
-        pdfmetrics.registerFont(TTFont(BOLD, str(dejavu)))
-        _FONTS_READY = True
-    except Exception:  # noqa: BLE001
-        _FONTS_READY = False
-    return _FONTS_READY
+    with _FONTS_LOCK:
+        if _FONTS_READY is not None:
+            return _FONTS_READY
+        candidates = [
+            (FONT, FONTS_DIR / "Vazirmatn-Regular.ttf", BOLD, FONTS_DIR / "Vazirmatn-Bold.ttf"),
+        ]
+        for reg_name, reg_path, bold_name, bold_path in candidates:
+            if reg_path.exists():
+                try:
+                    pdfmetrics.registerFont(TTFont(reg_name, str(reg_path)))
+                    pdfmetrics.registerFont(TTFont(bold_name, str(bold_path if bold_path.exists() else reg_path)))
+                    _FONTS_READY = True
+                    return True
+                except Exception:  # noqa: BLE001
+                    pass
+        # Fallback to the bundled DejaVuSans (Persian-capable) for both weights.
+        dejavu = FONTS_DIR / "DejaVuSans.ttf"
+        try:
+            pdfmetrics.registerFont(TTFont(FONT, str(dejavu)))
+            pdfmetrics.registerFont(TTFont(BOLD, str(dejavu)))
+            _FONTS_READY = True
+        except Exception:  # noqa: BLE001
+            _FONTS_READY = False
+        return _FONTS_READY
 
 
 def _clean(text: object) -> str:

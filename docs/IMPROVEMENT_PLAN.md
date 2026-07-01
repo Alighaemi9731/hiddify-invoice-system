@@ -84,7 +84,7 @@ Primary files:
 
 ## I03 - PDF thread offload and frontend 401 cache clear
 
-Priority: P2. Version: PATCH. Status: TODO.
+Priority: P2. Version: PATCH. Status: DONE in `v1.50.2`.
 
 - Wrap the synchronous reportlab rendering in `asyncio.to_thread` inside
   `app/services/invoice_pdf.py` (all render functions funnel there); guard

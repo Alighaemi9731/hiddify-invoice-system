@@ -1,5 +1,7 @@
 import axios from "axios";
 
+import { queryClient } from "./queryClient";
+
 // VITE_API_BASE_URL:
 //   • undefined (local dev, var not set)  → talk to the dev backend on :8000
 //   • "" (production build arg)            → same-origin (Caddy proxies /api). MUST
@@ -28,6 +30,9 @@ api.interceptors.response.use(
   (err) => {
     if (err?.response?.status === 401 && getToken()) {
       setToken(null);
+      // Drop the whole react-query cache: after a re-login the app must refetch, not
+      // serve pre-logout invoice/payment data (possibly another era of the account).
+      queryClient.clear();
       if (!location.pathname.startsWith("/login")) location.href = "/login";
     }
     return Promise.reject(err);

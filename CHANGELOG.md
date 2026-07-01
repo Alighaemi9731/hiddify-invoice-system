@@ -8,7 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.1 - 2026-07-02
+## 1.50.2 - 2026-07-02
+
+Batch I03 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Fixed
+
+- **PDF rendering no longer stalls the whole backend.** Every invoice-PDF render (reportlab,
+  fully synchronous) used to run on the async event loop — during monthly generation the backend
+  renders N+1 PDFs per reseller and every concurrent API/bot request waited behind them. All
+  renders now run in worker threads (`asyncio.to_thread` inside `invoice_pdf._build_pdf`), with
+  the shared reportlab font registration serialized behind a lock. A regression test renders
+  three invoices concurrently.
+- **Stale data purged on forced logout.** When the panel session expires (401 → auto-logout),
+  the react-query cache is now cleared, so logging back in always refetches instead of briefly
+  showing pre-logout invoice/payment data. The shared `QueryClient` moved to
+  `src/api/queryClient.ts`.
 
 Batch I02 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 
