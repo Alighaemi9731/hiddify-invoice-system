@@ -8,7 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.2 - 2026-07-02
+## 1.50.3 - 2026-07-02
+
+Batch I04 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Fixed
+
+- **Every outgoing bot message is now bidi-safe.** The central send helpers already passed text
+  through `rtl()`, but ~200 direct handler replies didn't — any message mixing Persian with
+  Latin/digits (amounts, TXIDs, panel keys) could render jumbled in Telegram. A new client-session
+  request middleware applies `rtl()` to the text/caption of every send/edit API call on all three
+  bots (main, notifier, storefront), ending this class of bug instead of patching call sites one by
+  one. `rtl()` is idempotent, so already-formatted messages pass through byte-identical; callback
+  toast alerts are deliberately excluded for now.
+- **Blocked-user replies show a clean message.** Replying to a support message from a reseller who
+  blocked the bot (or deleted their account) told the owner the raw English API error; it now says
+  «این کاربر ربات را مسدود کرده…» (and «گفتگویی با این کاربر پیدا نشد» for a never-started chat).
+- **A revoked storefront-bot token stops burning retries.** If a reseller revoked their shop bot's
+  token while it was polling, the poll loop retried forever (log spam every few seconds) and the
+  ~30s reconcile kept re-validating the dead token. After 3 consecutive 401s the bot is now marked
+  `errored` and excluded from polling; re-running the storefront setup wizard re-arms it.
 
 Batch I03 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 

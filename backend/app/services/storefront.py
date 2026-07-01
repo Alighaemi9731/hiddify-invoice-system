@@ -39,10 +39,16 @@ async def get_bot_by_telegram_id(session: AsyncSession, bot_telegram_id: int) ->
 
 
 async def active_bots(session: AsyncSession) -> list[StorefrontBot]:
-    """Enabled storefront bots the manager should be polling."""
+    """Enabled storefront bots the manager should be polling. Errored rows (invalid/revoked
+    token) are EXCLUDED — otherwise reconcile re-validates the dead token every ~30s forever.
+    Re-running the setup wizard (`upsert_bot`) resets status to active and re-arms polling."""
     return list(
         (
-            await session.execute(select(StorefrontBot).where(StorefrontBot.enabled.is_(True)))
+            await session.execute(
+                select(StorefrontBot).where(
+                    StorefrontBot.enabled.is_(True), StorefrontBot.status != "errored"
+                )
+            )
         ).scalars().all()
     )
 

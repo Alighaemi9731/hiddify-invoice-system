@@ -9,6 +9,7 @@ import os
 import re
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -858,11 +859,22 @@ async def on_owner_reply(message: Message, state: FSMContext) -> None:
             # so fall back to a plain message.
             try:
                 await message.bot.send_message(int(target), body, reply_to_message_id=int(reply_to))
+            except TelegramForbiddenError:
+                raise
             except Exception:  # noqa: BLE001
                 await message.bot.send_message(int(target), body)
         else:
             await message.bot.send_message(int(target), body)
         await message.answer("✅ پاسخ ارسال شد.")
+    except TelegramForbiddenError:
+        # The user blocked the bot (or deleted their account) — say that plainly instead of
+        # dumping the raw English API error on the owner.
+        await message.answer("⛔️ ارسال نشد: این کاربر ربات را مسدود کرده یا حسابش حذف شده است.")
+    except TelegramBadRequest as exc:
+        if "chat not found" in str(exc).lower():
+            await message.answer("⛔️ ارسال نشد: گفتگویی با این کاربر پیدا نشد (شاید هرگز ربات را استارت نکرده است).")
+        else:
+            await message.answer(f"ارسال پاسخ ناموفق بود: {exc}")
     except Exception as exc:  # noqa: BLE001
         await message.answer(f"ارسال پاسخ ناموفق بود: {exc}")
 

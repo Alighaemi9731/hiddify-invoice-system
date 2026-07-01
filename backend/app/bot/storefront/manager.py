@@ -20,8 +20,10 @@ import logging
 from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from app.bot import rtl_middleware
 from app.core.db import SessionLocal
 from app.models import StorefrontBot
 from app.services import storefront
@@ -32,6 +34,7 @@ _RECONCILE_SECONDS = 30
 _GETME_CONCURRENCY = 20   # bounded parallel token validation (cold start with many bots stays fast)
 _LONGPOLL_TIMEOUT = 25    # getUpdates long-poll seconds
 _POLL_BACKOFF = 3         # seconds to wait after a getUpdates error (e.g. a brief 409 on token change)
+_UNAUTHORIZED_LIMIT = 3   # consecutive 401s before a mid-run revoked token is marked errored
 
 
 @dataclass
@@ -70,22 +73,38 @@ async def _feed(dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
         log.warning("storefront update handling failed", exc_info=True)
 
 
-async def _poll_one(bot: Bot) -> None:
+async def _poll_one(bot: Bot, row_id: int) -> None:
     """One bot's dedicated long-poll loop. Each update is dispatched as its own task so a slow handler
-    (panel/Telegram I/O) doesn't stall polling. Exits cleanly on cancel; backs off on transient errors."""
+    (panel/Telegram I/O) doesn't stall polling. Exits cleanly on cancel; backs off on transient errors.
+    A token revoked MID-RUN (consecutive 401s) marks the row errored and ends the loop — otherwise the
+    dead bot would burn a retry every few seconds forever until someone re-ran the setup wizard."""
     dp = _dispatcher()
     allowed = dp.resolve_used_update_types()
     offset: int | None = None
+    unauthorized = 0
     while True:
         try:
             updates = await bot.get_updates(
                 offset=offset, timeout=_LONGPOLL_TIMEOUT, allowed_updates=allowed)
         except asyncio.CancelledError:
             raise
+        except TelegramUnauthorizedError as exc:
+            unauthorized += 1
+            if unauthorized >= _UNAUTHORIZED_LIMIT:
+                log.warning("storefront bot row %s token revoked — marking errored: %s", row_id, exc)
+                try:
+                    async with SessionLocal() as s:
+                        await storefront.mark_errored(s, row_id, f"token revoked: {exc}")
+                except Exception:  # noqa: BLE001
+                    log.exception("mark_errored failed for storefront bot row %s", row_id)
+                return  # reconcile reaps the done task; errored rows are excluded from active_bots
+            await asyncio.sleep(_POLL_BACKOFF)
+            continue
         except Exception as exc:  # noqa: BLE001 — 409 during a token-change overlap, network blips, …
             log.debug("storefront getUpdates error: %s", exc)
             await asyncio.sleep(_POLL_BACKOFF)
             continue
+        unauthorized = 0
         for update in updates:
             offset = update.update_id + 1
             asyncio.create_task(_feed(dp, bot, update))
@@ -108,6 +127,7 @@ async def _stop_runner(reseller_id: int) -> None:
 async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.Semaphore) -> None:
     async with sem:
         bot = Bot(token=token)
+        rtl_middleware.install(bot)  # storefront replies are Persian+Latin mixes too
         try:
             me = await asyncio.wait_for(bot.get_me(), timeout=20)
         except Exception as exc:  # noqa: BLE001 — invalid/revoked token → mark errored, don't poll
@@ -131,7 +151,7 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
                 await storefront.mark_errored(s, row_id, f"id clash: {exc}")
             log.warning("storefront bot row %s id persist failed: %s", row_id, exc)
             return
-    task = asyncio.create_task(_poll_one(bot))
+    task = asyncio.create_task(_poll_one(bot, row_id))
     _active[reseller_id] = _Runner(bot=bot, task=task, token=token)
     log.info("storefront bot @%s (reseller %s) polling", me.username, reseller_id)
 

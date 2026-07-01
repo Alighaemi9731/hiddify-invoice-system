@@ -14,6 +14,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from app.bot import rtl_middleware
 from app.bot.commands import apply_command_menus
 from app.bot.handlers import router
 from app.bot.telegram import get_token
@@ -50,6 +51,7 @@ async def _main_bot_loop() -> None:
             continue
 
         bot = Bot(token=token)
+        rtl_middleware.install(bot)  # bidi-safe outgoing text on every handler reply
         try:
             # Default (reseller) command menu globally + owner menu scoped to the
             # owner's chat, so the owner doesn't see reseller-only commands.

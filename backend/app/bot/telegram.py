@@ -4,6 +4,7 @@ from __future__ import annotations
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot import rtl_middleware
 from app.services import settings_service
 
 
@@ -17,4 +18,6 @@ async def build_bot(session: AsyncSession) -> Bot | None:
     token = await get_token(session)
     if not token:
         return None
-    return Bot(token=token)
+    bot = Bot(token=token)
+    rtl_middleware.install(bot)  # bidi-safe outgoing text; idempotent with rtl() at call sites
+    return bot

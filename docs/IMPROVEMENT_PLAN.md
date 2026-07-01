@@ -98,7 +98,7 @@ Primary files:
 
 ## I04 - Bot messaging and resilience fixes
 
-Priority: P2. Version: PATCH. Status: TODO.
+Priority: P2. Version: PATCH. Status: DONE in `v1.50.3`.
 
 - Outgoing-message `rtl()` middleware (`BaseRequestMiddleware` on the bot client
   session) rewriting `text`/`caption` on send/edit methods, installed at all
