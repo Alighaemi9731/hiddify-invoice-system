@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.49.2 - 2026-07-01
+
+### Fixed
+
+- **Manually recording a payment now notifies the reseller.** Marking an invoice paid by hand via the
+  panel «ثبت پرداخت» button (`POST /api/invoices/{id}/mark-paid`) previously updated the ledger and
+  lifted enforcement silently — the reseller got no confirmation. It now sends them the same
+  «پرداخت … تأیید شد» acknowledgement as confirming a submitted payment (a safe no-op if they aren't on
+  the bot). Sent after commit, so a delivery failure never rolls back the paid status.
+
 ## 1.49.1 - 2026-07-01
 
 ### Fixed

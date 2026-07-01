@@ -210,9 +210,18 @@ async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session
     # Manually marking an invoice paid must restore a suspended reseller, exactly like
     # confirming a payment does — but ONLY when no other debt remains (see _maybe_restore),
     # otherwise recording one cash payment would un-suspend a reseller who still owes.
-    from app.services.payments import _maybe_restore
+    from app.services.payments import _maybe_restore, _payment_received_text
     await _maybe_restore(session, reseller, exclude_invoice_id=inv.id)
     await session.commit()
+    # Tell the reseller their invoice was confirmed paid — same acknowledgement as confirming a
+    # submitted payment, so a manually-recorded «ثبت پرداخت» isn't silent. Sent after commit
+    # (a delivery failure must not roll back the paid status); no-op if they aren't on the bot.
+    if reseller is not None and reseller.bot_chat_id:
+        from app.services import notifier
+        await notifier.send_to_reseller(
+            session, reseller, await _payment_received_text(session, inv.period_label),
+            kind=DeliveryKind.payment_ack, invoice_id=inv.id,
+        )
     return _to_out(inv, reseller.name, panel.key)
 
 

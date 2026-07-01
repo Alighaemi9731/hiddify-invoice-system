@@ -519,6 +519,52 @@ def test_bsc_txid_canonicalized_and_validated(tmp_path):
     _run(body, tmp_path, "txcanon.db")
 
 
+def test_mark_paid_notifies_reseller(tmp_path, monkeypatch):
+    """«ثبت پرداخت» (mark an invoice paid by hand) must send the reseller the same confirmation as
+    confirming a submitted payment — and must be a safe no-op when they aren't on the bot."""
+    from app.api import invoices
+    from app.models import Panel
+    from app.services import notifier
+
+    sent: list = []
+
+    async def fake_send(session, reseller, text, **kw):  # noqa: ANN001, ANN003
+        sent.append((reseller.id, text, kw))
+
+    monkeypatch.setattr(notifier, "send_to_reseller", fake_send)
+
+    async def body(s):
+        s.add(Panel(key="p", host="p.invalid", proxy_path_enc="x", owner_uuid="o"))
+        await s.flush()
+        r = _reseller(bot_chat_id=555)
+        s.add(r)
+        await s.flush()
+        inv = _invoice(r.id, status=S.sent, label="2026-03")
+        s.add(inv)
+        await s.commit()
+
+        await invoices.mark_paid(inv.id, session=s)
+        await s.refresh(inv)
+        assert inv.status == S.paid
+        assert len(sent) == 1
+        rid, text, kw = sent[0]
+        assert rid == r.id and "2026-03" in text
+        assert kw.get("invoice_id") == inv.id and kw.get("kind") == DeliveryKind.payment_ack
+
+        # A reseller not on the bot → no send, no crash.
+        r2 = _reseller(uuid="u2", name="R2", bot_chat_id=None)
+        s.add(r2)
+        await s.flush()
+        inv2 = _invoice(r2.id, status=S.sent, label="2026-04")
+        s.add(inv2)
+        await s.commit()
+        await invoices.mark_paid(inv2.id, session=s)
+        await s.refresh(inv2)
+        assert inv2.status == S.paid and len(sent) == 1  # still just the first
+
+    _run(body, tmp_path, "markpaid_notify.db")
+
+
 def test_portal_login_link_is_one_time(tmp_path):
     """Bug 2: a portal login link can be exchanged only ONCE — a replay within its TTL is rejected."""
     async def body(s):
