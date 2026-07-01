@@ -65,7 +65,7 @@ Primary files:
 
 ## I02 - Deploy and CI hardening
 
-Priority: P1. Version: PATCH. Status: TODO.
+Priority: P1. Version: PATCH. Status: DONE in `v1.50.1`.
 
 - `deploy/docker-compose.prod.yml`: shared `x-logging` anchor (json-file,
   `max-size: 10m`, `max-file: "3"`) on all services; conservative memory limits

@@ -8,7 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.0 - 2026-07-02
+## 1.50.1 - 2026-07-02
+
+Batch I02 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Changed
+
+- **Bounded container logs + memory caps.** Docker's default json-file logging has no size cap, so
+  container logs could slowly fill the VPS disk; every service now rotates at 10 MiB × 3 files. Each
+  service also gets a memory ceiling sized against real production usage on the ~2 GiB host
+  (db 512 MiB, backend 640 MiB, bot 512 MiB, frontend 128 MiB, caddy 192 MiB — normal total is
+  ~0.5 GiB) so one runaway container gets OOM-killed and self-heals via `restart: unless-stopped`
+  instead of taking down dockerd or Postgres with it.
+- **Bot + frontend healthchecks.** The bot container (no HTTP server) now touches a container-local
+  heartbeat file every 30 s from its event loop and the Compose healthcheck probes the file's age —
+  a crashed/hung bot finally shows as `unhealthy` instead of blissfully "Up". The nginx frontend
+  gets a `wget` self-probe. `deploy/smoke.sh` already fails on any unhealthy container, so these
+  strengthen the post-deploy check automatically.
+- **CI now tests against real PostgreSQL 16.** A new `backend-postgres` job applies every Alembic
+  migration to a `postgres:16` service, runs `alembic check`, and executes new env-gated smoke
+  tests (`tests/test_postgres_smoke.py`: settings roundtrip incl. an encrypted secret, core money
+  rows + the production status-filtered query, and a CHECK-constraint rejection). SQLite/Postgres
+  dialect differences have caused two production incidents before; they now fail in CI instead.
+
+No schema or application-behavior change; the deploy requires one stack recreation to apply the
+compose-level limits.
 
 Batch I01 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — the successor to
 the completed B00–B10 remediation plan.

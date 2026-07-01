@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -66,7 +67,26 @@ async def _main_bot_loop() -> None:
             await bot.session.close()
 
 
+# Container-LOCAL on purpose (not the shared data volume): liveness is per-container.
+# The compose healthcheck probes this file's mtime (stale >120s → unhealthy).
+_HEARTBEAT_FILE = Path("/tmp/bot.heartbeat")
+
+
+async def _liveness_beacon() -> None:
+    """Touch the heartbeat file every 30s while the event loop is alive."""
+    while True:
+        try:
+            _HEARTBEAT_FILE.touch()
+        except Exception:  # noqa: BLE001 - liveness must never crash the bot
+            pass
+        await asyncio.sleep(30)
+
+
 async def main() -> None:
+    try:
+        _HEARTBEAT_FILE.touch()  # first stamp before bootstrap, which can take a while
+    except Exception:  # noqa: BLE001
+        pass
     await run_bootstrap()
     # Self-restart if a restore (here or in the backend) changed the DB / SECRET_KEY, so the
     # bot never keeps a stale key or a pooled handle to the pre-restore database.
@@ -82,6 +102,7 @@ async def main() -> None:
     await asyncio.gather(
         _supervise(_main_bot_loop, "main-bot-loop"),
         _supervise(run_manager, "storefront-manager"),
+        _supervise(_liveness_beacon, "liveness-beacon"),
     )
 
 

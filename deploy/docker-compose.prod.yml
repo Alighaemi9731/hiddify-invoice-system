@@ -8,10 +8,26 @@
 #   cp .env.example .env   # set SERVER_DOMAIN, ACME_EMAIL, SECRET_KEY, ADMIN_PASSWORD, DB creds
 #   docker compose -f deploy/docker-compose.prod.yml up -d --build
 
+# Bounded container logs on every service: Docker's default json-file driver has NO size
+# cap, so a chatty/looping container slowly fills the VPS disk. 10 MiB × 3 files ≈ 30 MiB
+# per service, rotated by the daemon.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Memory caps protect the (small, ~2 GiB) host from ONE runaway container taking the
+# whole box down with it — normal total usage is ~0.5 GiB, so these are generous
+# ceilings, not budgets. An OOM-killed container self-heals via `restart: unless-stopped`;
+# a host-level OOM can kill dockerd or Postgres instead.
+
 services:
   db:
     image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-invoice}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -27,6 +43,8 @@ services:
   backend:
     build: ../backend
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 640m
     env_file: ../.env
     environment:
       POSTGRES_HOST: db
@@ -58,6 +76,8 @@ services:
   bot:
     build: ../backend
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     env_file: ../.env
     environment:
       POSTGRES_HOST: db
@@ -67,6 +87,14 @@ services:
     volumes:
       - app_data:/app/data
     command: python -m app.bot.run
+    # The bot has no HTTP server; app/bot/run.py touches this container-local file every
+    # 30s while its event loop is alive. Stale mtime (>120s) → unhealthy.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(0 if time.time()-os.stat('/tmp/bot.heartbeat').st_mtime<120 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   frontend:
     build:
@@ -75,10 +103,21 @@ services:
         # In production the SPA talks to the API on the SAME origin (Caddy proxies /api).
         VITE_API_BASE_URL: ""
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    healthcheck:
+      # busybox wget (nginx:alpine); a hung/crashed nginx flips the service unhealthy.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   caddy:
     image: caddy:2-alpine@sha256:77c07d5ebfa5be9fd6c820d2094ae662c9e7eeb9bf98346b7f639900263ee2a2
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 192m
     depends_on:
       backend:
         condition: service_healthy
