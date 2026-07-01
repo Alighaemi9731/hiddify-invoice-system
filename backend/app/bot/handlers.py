@@ -421,6 +421,26 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     )
 
 
+async def _reshow_menu(message: Message, session, user) -> None:  # noqa: ANN001
+    """Re-send the role-aware main menu as the LAST message so it's always at hand after a completed
+    action (the menu is inline, so it scrolls up as the chat fills with messages). Compact — just the
+    menu keyboard, no welcome text. Call this only at the END of an action/flow, never when entering
+    an FSM prompt (that would put the menu below the prompt mid-flow)."""
+    try:
+        if await _is_owner_user(session, user):
+            await message.answer("📋 منوی مدیریت:", reply_markup=keyboards.owner_menu_keyboard())
+            return
+        can_create = await _can_create_users(session, user.id)
+        can_storefront = await _can_setup_storefront(session, user.id)
+        await message.answer(
+            "📋 منوی اصلی:",
+            reply_markup=keyboards.reseller_menu_keyboard(
+                show_create_user=can_create, show_storefront=can_storefront),
+        )
+    except Exception:  # noqa: BLE001 — a menu re-show must never break the action it follows
+        pass
+
+
 async def _top_level_resellers(session, chat_id: int) -> list[Reseller]:
     """The chat's reseller rows that are TOP-LEVEL on their panel (eligible to create users)."""
     out = []
@@ -486,10 +506,14 @@ async def cmd_help(message: Message) -> None:
                 "📖 راهنمای مدیر\n\n"
                 "/menu — منوی مدیریت\n"
                 "/stats — آمار کلی\n"
+                "/health — سلامت سامانه\n"
+                "/payments — پرداخت‌های در انتظار\n"
                 "/debtors — بدهکاران\n"
+                "/search — جستجوی نماینده\n"
                 "/broadcast — پیام همگانی به نمایندگان\n"
                 "/sync — همگام‌سازی پنل‌ها\n"
-                "/backup — پشتیبان‌گیری اکنون\n\n"
+                "/backup — پشتیبان‌گیری اکنون\n"
+                "/cancel — لغو عملیات جاری\n\n"
                 "• ثبت کانال/گروه: یک پیام از آن را برای ربات فوروارد کنید.\n"
                 "• بازیابی: فایل پشتیبان (zip) را برای ربات بفرستید.\n"
                 "• پاسخ به پشتیبانی: روی پیام کاربر «ریپلای» کنید."
@@ -504,8 +528,12 @@ async def cmd_help(message: Message) -> None:
                 "/panels — پنل‌های من\n"
                 "/subs — مدیریت زیرمجموعه‌ها\n"
                 "/newuser — ساخت کاربر (نماینده‌های اصلی)\n"
+                "/storefront — راه‌اندازی ربات فروشگاهی\n"
+                "/portal — ورود به پنلِ تحتِ وب\n"
+                "/register — ثبت لینک پنل من\n"
                 "/support — پیام به پشتیبانی\n"
-                "/removelink — حذف لینک‌ها\n\n"
+                "/removelink — حذف لینک‌ها\n"
+                "/cancel — لغو عملیات جاری\n\n"
                 "برای ثبت‌نام، کافی است لینک پنل خود را همین‌جا ارسال کنید.\n"
                 "پرداخت با رمزارز (USDT/گرام/AVAX)، کارت‌به‌کارت یا ارسال تصویر رسید انجام می‌شود "
                 "(روش‌های فعال هنگام پرداخت نمایش داده می‌شوند)."
@@ -516,6 +544,7 @@ async def cmd_help(message: Message) -> None:
 async def cmd_invoices(message: Message) -> None:
     async with SessionLocal() as s:
         await _send_invoices(message.answer, message.from_user.id, s)
+        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(Command("pay"))
@@ -523,24 +552,28 @@ async def cmd_pay(message: Message, state: FSMContext) -> None:
     await state.clear()  # re-opening the pay list resets any prior invoice selection
     async with SessionLocal() as s:
         await _send_pay(message.answer, message.from_user.id, s)
+        # No menu re-show: the result is a payable-invoice picker; a trailing menu would bury it.
 
 
 @router.message(Command("panels"))
 async def cmd_panels(message: Message) -> None:
     async with SessionLocal() as s:
         await _send_panels(message.answer, message.from_user.id, s)
+        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(Command("portal"))
 async def cmd_portal(message: Message) -> None:
     async with SessionLocal() as s:
         await _send_portal_link(message.answer, message.from_user.id, s)
+        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(Command("interim"))
 async def cmd_interim(message: Message, bot: Bot) -> None:
     async with SessionLocal() as s:
         await _send_self_interim(message.answer, message.from_user.id, s, bot=bot)
+        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(Command("support"))
@@ -555,12 +588,30 @@ async def cmd_support(message: Message, state: FSMContext) -> None:
 async def cmd_removelink(message: Message) -> None:
     async with SessionLocal() as s:
         await _send_removelink(message.answer, message.from_user.id, s)
+        # No menu re-show: the result is a link picker (tap to remove) — a menu would bury it.
 
 
 @router.message(Command("subs"))
 async def cmd_subs(message: Message) -> None:
     async with SessionLocal() as s:
         await _send_sub_panels(message.answer, message.from_user.id, s)
+        # No menu re-show: the result is a sub-panel picker — a menu would bury it.
+
+
+@router.message(Command("storefront"))
+async def cmd_storefront(message: Message, state: FSMContext) -> None:
+    """Start the storefront-bot setup (self-gated: only top-level resellers with the capability)."""
+    async with SessionLocal() as s:
+        await _begin_storefront_setup(message.answer, message.from_user.id, s, state)
+
+
+@router.message(Command("register"))
+async def cmd_register(message: Message) -> None:
+    """Prompt for the panel link (same as the «🔗 ثبت لینک پنل من» menu action)."""
+    await message.answer(
+        "لطفاً لینک پنل خود را ارسال کنید (شامل دامنه و شناسه).",
+        reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+    )
 
 
 # --------------------------- broadcast (owner) ---------------------------
@@ -677,6 +728,16 @@ async def on_menu_label(message: Message, state: FSMContext, bot: Bot) -> None:
         await _send_menu(message.answer, s, message.from_user, bot=bot)
 
 
+# Terminal reseller actions whose result is complete info the user just reads → re-show the menu
+# after them. EXCLUDED: selection-list actions (pay/subs/removelink) whose result is a picker the
+# user must tap next — a trailing menu would bury those buttons; the menu re-appears when the
+# sub-action completes. FSM-entering actions (storefront/support/register/newuser) re-show on
+# completion. (Matches the owner's «اگه تموم شد» — only after a completed action.)
+_RESELLER_TERMINAL = {"invoices", "interim", "panels", "portal"}
+# Terminal owner actions. EXCLUDED: payments (a picker) + broadcast/search (open a flow).
+_OWNER_TERMINAL = {"stats", "health", "debtors", "sync", "backup"}
+
+
 async def _do_reseller_menu(action: str, message: Message, state: FSMContext, bot: Bot, s) -> None:  # noqa: ANN001
     ans, cid = message.answer, message.from_user.id
     if action == "invoices":
@@ -705,6 +766,9 @@ async def _do_reseller_menu(action: str, message: Message, state: FSMContext, bo
         )
     elif action == "newuser":
         await _begin_create_user(ans, cid, s, state)
+    # Keep the menu at hand after a completed (non-flow) action.
+    if action in _RESELLER_TERMINAL:
+        await _reshow_menu(message, s, message.from_user)
 
 
 async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) -> None:  # noqa: ANN001
@@ -715,8 +779,10 @@ async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) ->
             "🔎 نام یا شناسهٔ نماینده را بفرستید.",
             reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
         )
-    else:
-        await _dispatch_owner(action, ans, s)
+        return
+    await _dispatch_owner(action, ans, s)
+    if action in _OWNER_TERMINAL:
+        await _reshow_menu(message, s, message.from_user)
 
 
 # --------------------------- support chat (no DB storage) ---------------------------
@@ -743,6 +809,7 @@ async def on_support_text(message: Message, state: FSMContext) -> None:
             parse_mode="HTML",
         )
         await message.answer("✅ پیام شما برای پشتیبانی ارسال شد. به‌زودی پاسخ می‌گیرید.")
+        await _reshow_menu(message, s, message.from_user)
 
 
 def _support_message_html(user, text: str) -> str:
@@ -825,6 +892,7 @@ async def on_broadcast_text(message: Message, state: FSMContext) -> None:
             await message.answer("متن خالی بود؛ لغو شد.")
             return
         await _do_broadcast(message, s, message.text, audience, panel_id)
+        await _reshow_menu(message, s, message.from_user)
 
 
 # --------------------------- reseller callbacks ---------------------------
@@ -856,6 +924,7 @@ async def cb_register(cb: CallbackQuery) -> None:
 async def cb_panels(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_panels(cb.message.answer, cb.from_user.id, s)
+        await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer()
 
 
@@ -863,6 +932,7 @@ async def cb_panels(cb: CallbackQuery) -> None:
 async def cb_portal(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_portal_link(cb.message.answer, cb.from_user.id, s)
+        await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer()
 
 
@@ -871,6 +941,7 @@ async def cb_portal(cb: CallbackQuery) -> None:
 async def cb_subs(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_sub_panels(cb.message.answer, cb.from_user.id, s)
+        # No menu re-show: sub-panel picker (tap to manage) — a trailing menu would bury it.
     await cb.answer()
 
 
@@ -1443,10 +1514,13 @@ async def cb_cu_confirm(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer("اطلاعات ناقص است؛ از ابتدا شروع کنید.", show_alert=True)
         return
     await cb.answer("در حال ساخت…")
-    await _finish_create_user(cb.message, cb.from_user.id, data)
+    await _finish_create_user(cb.message, cb.from_user.id, data, user=cb.from_user)
 
 
-async def _finish_create_user(message: Message, chat_id: int, data: dict) -> None:
+async def _finish_create_user(message: Message, chat_id: int, data: dict, *, user=None) -> None:  # noqa: ANN001
+    # `message` is cb.message (bot-authored), so its from_user is the BOT — use the passed real
+    # `user` (the reseller) for the menu re-show, falling back to message.from_user defensively.
+    menu_user = user or message.from_user
     from app.services import usercreate
 
     rid = int(data["cu_reseller_id"])
@@ -1473,6 +1547,8 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict) -> Non
             f"(باقی‌مانده: {remaining} از {result.max_users}).\n"
             "از «👥 زیرمجموعه‌ها» یا پشتیبانی، افزایشِ ظرفیت درخواست کنید."
         )
+        async with SessionLocal() as s:
+            await _reshow_menu(message, s, menu_user)
         return
 
     for u in result.created:
@@ -1512,6 +1588,8 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict) -> Non
                 s, f"➕ نمایندهٔ «{rname}» روی پنل {pname} تعداد {made} کاربر ساخت "
                    f"({gb} گیگ، {days} روز)."
             )
+    async with SessionLocal() as s:
+        await _reshow_menu(message, s, menu_user)
 
 
 @router.callback_query(F.data == "menu:support")
@@ -1527,6 +1605,7 @@ async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
 async def cb_invoices(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_invoices(cb.message.answer, cb.from_user.id, s)
+        await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer()
 
 
@@ -1562,6 +1641,7 @@ async def cb_interim(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer("در حال ساخت فاکتور علی‌الحساب…")
     async with SessionLocal() as s:
         await _send_self_interim(cb.message.answer, cb.from_user.id, s, bot=bot)
+        await _reshow_menu(cb.message, s, cb.from_user)
 
 
 @router.callback_query(F.data == "menu:pay")
@@ -1569,6 +1649,7 @@ async def cb_pay(cb: CallbackQuery, state: FSMContext) -> None:
     await state.clear()  # tapping «پرداخت فاکتور» again resets any prior invoice selection
     async with SessionLocal() as s:
         await _send_pay(cb.message.answer, cb.from_user.id, s)
+        # No menu re-show: payable-invoice picker — a trailing menu would bury it.
     await cb.answer()
 
 
@@ -1735,6 +1816,7 @@ async def pay_state_photo(message: Message, state: FSMContext) -> None:
         await state.clear()
         await _track_user(s, message.from_user)
         await _handle_payment_proof(message, s, invoices=invs)
+        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(PayState.waiting, F.text)
@@ -1778,6 +1860,7 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
         invs = await _load_pay_invoices(s, data)
         await state.clear()
         await _handle_txid(message, s, txid, invoices=invs, chain=chain)
+        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(PayState.waiting)
@@ -1817,6 +1900,7 @@ async def cb_pay_chain(cb: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await _track_user(s, cb.from_user)
         await _handle_txid(cb.message, s, txid, invoices=invs, chain=chain, from_user=cb.from_user)
+        await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer()
 
 
@@ -1824,6 +1908,7 @@ async def cb_pay_chain(cb: CallbackQuery, state: FSMContext) -> None:
 async def cb_removelink(cb: CallbackQuery) -> None:
     async with SessionLocal() as s:
         await _send_removelink(cb.message.answer, cb.from_user.id, s)
+        # No menu re-show: link picker (tap to remove) — a trailing menu would bury it.
     await cb.answer()
 
 
@@ -1915,6 +2000,8 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
             await cb.answer()
             return
         await _dispatch_owner(action, cb.message.answer, s)
+        if action in _OWNER_TERMINAL:
+            await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer()
 
 
@@ -1973,6 +2060,28 @@ async def cb_owner_payment_view(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
+async def _finalize_review_message(cb: CallbackQuery, status_line: str) -> bool:
+    """Edit the owner's payment-review message in place — append the decision and drop the تأیید/رد
+    buttons — so it's obvious which payment was already handled and it can't be re-tapped. Returns
+    True if the message was edited. Screenshot proofs are PHOTO messages (caption, no text), so use
+    edit_caption there and edit_text for a plain-text (TXID) notification. Best-effort: a too-old /
+    unmodifiable message returns False and the caller sends a plain confirmation instead."""
+    msg = cb.message
+    if msg is None:
+        return False
+    base = msg.html_text or ""
+    body = f"{base}\n\n{status_line}"
+    kb = keyboards.owner_payment_decided_keyboard()
+    try:
+        if msg.caption is not None or msg.photo:
+            await msg.edit_caption(caption=body[:1024], reply_markup=kb, parse_mode="HTML")
+        else:
+            await msg.edit_text(body, reply_markup=kb, parse_mode="HTML")
+        return True
+    except Exception:  # noqa: BLE001 — message too old / not modified → caller falls back
+        return False
+
+
 @router.callback_query(F.data.startswith("opok:"))
 async def cb_owner_payment_confirm(cb: CallbackQuery) -> None:
     pid = int(cb.data.split(":")[1])
@@ -1988,10 +2097,14 @@ async def cb_owner_payment_confirm(cb: CallbackQuery) -> None:
             await cb.message.answer(f"❌ تأیید ناموفق بود: {exc}")
             await cb.answer()
             return
-        await cb.message.answer(
-            "✅ پرداخت تأیید شد و به نماینده اطلاع داده شد."
-            if res.paid else f"⚠️ {res.message_fa}"
-        )
+        if res.paid:
+            edited = await _finalize_review_message(
+                cb, "✅ این پرداخت تأیید شد و به نماینده اطلاع داده شد.")
+            if not edited:  # couldn't update the original in place → send a plain confirmation
+                await cb.message.answer("✅ پرداخت تأیید شد و به نماینده اطلاع داده شد.")
+        else:
+            await cb.message.answer(f"⚠️ {res.message_fa}")
+        await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer("تأیید شد")
 
 
@@ -2010,7 +2123,10 @@ async def cb_owner_payment_reject(cb: CallbackQuery) -> None:
             await cb.message.answer(f"❌ رد ناموفق بود: {exc}")
             await cb.answer()
             return
-        await cb.message.answer("❌ پرداخت رد شد و به نماینده اطلاع داده شد.")
+        edited = await _finalize_review_message(cb, "❌ این پرداخت رد شد و به نماینده اطلاع داده شد.")
+        if not edited:
+            await cb.message.answer("❌ پرداخت رد شد و به نماینده اطلاع داده شد.")
+        await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer("رد شد")
 
 
@@ -2048,6 +2164,7 @@ async def on_owner_search(message: Message, state: FSMContext) -> None:
             return
         await state.clear()
         if len(rows) == 1:
+            # A reseller card with its own action buttons — no trailing menu (would bury the actions).
             await _send_reseller_card(message.answer, s, rows[0].id)
             return
         items = [(r.id, f"{(r.name or '—')[:24]}") for r in rows]
@@ -2055,6 +2172,7 @@ async def on_owner_search(message: Message, state: FSMContext) -> None:
             f"🔎 {len(rows)} نتیجه — یکی را انتخاب کنید:",
             reply_markup=keyboards.owner_reseller_results_keyboard(items),
         )
+        # No menu re-show: the results are a picker (tap a reseller) — a trailing menu would bury it.
 
 
 @router.callback_query(F.data.startswith("orc:"))
@@ -2331,6 +2449,20 @@ async def cmd_owner_action(message: Message, command: CommandObject) -> None:
         if not await _is_owner_user(s, message.from_user):
             return  # owner-only; resellers don't see these commands
         await _dispatch_owner(action, message.answer, s)
+        await _reshow_menu(message, s, message.from_user)
+
+
+@router.message(Command("search"))
+async def cmd_search(message: Message, state: FSMContext) -> None:
+    """Owner-only reseller search (same as the «🔎 جستجوی نماینده» menu action)."""
+    async with SessionLocal() as s:
+        if not await _is_owner_user(s, message.from_user):
+            return
+    await state.set_state(OwnerSearchState.waiting)
+    await message.answer(
+        "🔎 نام یا شناسهٔ نماینده را بفرستید.",
+        reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+    )
 
 
 async def _owner_stats(answer, session, label: str | None = None) -> None:
@@ -3044,6 +3176,8 @@ async def _handle_link(message: Message, session, parsed) -> None:
         await owner_notify.notify_owner(
             session, f"🔗 نمایندهٔ جدید در ربات ثبت شد: «{reseller.name}»"
             + (f" (پنل {panel.key})" if panel else ""))
+    # Now a registered reseller → keep the menu at hand.
+    await _reshow_menu(message, session, message.from_user)
 
 
 async def _registration_candidate(session, parsed) -> Reseller | None:
@@ -3110,11 +3244,17 @@ def _explorer_link(chain: str, txid: str) -> str:
 
 
 def _network_status_fa(chk: dict) -> str:
-    """One-line on-chain status from a `deposit_check` result, for either chain (TON/USDT)."""
+    """One-line on-chain status from a `deposit_check` result, for any chain (TON/AVAX/USDT)."""
     if not chk.get("available"):
         return "⚪️ از زنجیره خوانده نشد — تراکنش را از روی لینک بررسی کنید."
     if chk.get("kind") == "ton":
         recv = f"{chk['received_ton']} GRAM ≈ {chk['received_toman']:,.0f} تومان"
+        tol = f"±{chk['tolerance_pct']:.0f}٪"
+    elif chk.get("kind") == "avax":
+        recv = f"{chk['received_avax']} AVAX ≈ {chk['received_toman']:,.0f} تومان"
+        conf = chk.get("confirmations")
+        if conf is not None:
+            recv += f" ({conf} تأیید)"
         tol = f"±{chk['tolerance_pct']:.0f}٪"
     else:  # usdt
         recv = f"{chk['received_usdt']:,.2f} USDT"

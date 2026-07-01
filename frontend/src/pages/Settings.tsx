@@ -129,6 +129,10 @@ const SECTIONS: Section[] = [
         title: "اطلاعات اوالانچ (AVAX)",
         fields: [
           { key: "avax_address", label: "آدرس کیف پول اوالانچ (AVAX)", help: "آدرس مقصدِ AVAX روی شبکهٔ Avalanche C-Chain. مبلغِ معادلِ AVAX به‌صورت آنلاین (CoinGecko × نرخ تتر) محاسبه و به مشتری نشان داده می‌شود؛ تأیید به‌صورت دستی (لینکِ Snowtrace) انجام می‌شود.", dir: "ltr", when: (v) => !!v("pay_avax_enabled") },
+          { key: "avax_amount_tolerance_pct", label: "اغماضِ مبلغِ اوالانچ (درصد)", type: "number", min: 0, max: 100,
+            help: "هنگام «بررسی واریزی روی زنجیره»، مبلغِ واقعیِ واریزشده از زنجیرهٔ Avalanche خوانده و با مبلغِ فاکتور مقایسه می‌شود؛ اختلافِ تا این درصد «مطابق» در نظر گرفته می‌شود. پیش‌فرض ۵.", when: (v) => !!v("pay_avax_enabled") },
+          { key: "avalanche_rpc_url", label: "نودِ RPC شبکهٔ Avalanche", advanced: true, dir: "ltr",
+            help: "برای خواندنِ واریزیِ AVAX از زنجیره هنگام تأییدِ دستی (رایگان، بدون کلید). پیش‌فرض را تغییر ندهید مگر به محدودیتِ نرخ بخورید.", when: (v) => !!v("pay_avax_enabled") },
         ],
       },
       {

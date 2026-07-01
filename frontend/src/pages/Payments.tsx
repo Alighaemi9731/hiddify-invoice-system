@@ -62,6 +62,8 @@ export default function Payments() {
   // via a public BSC RPC node — both free) and reports it for the manual confirm decision.
   const depLabel = (r: any) => r.kind === "ton"
     ? `${r.received_ton} GRAM ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}`
+    : r.kind === "avax"
+    ? `${r.received_avax} AVAX ≈ ${fmtToman(r.received_toman)}${r.confirmations != null ? ` (${r.confirmations} تأیید)` : ""} | فاکتور: ${fmtToman(r.invoice_toman)}`
     : `${r.received_usdt} USDT${r.confirmations != null ? ` (${r.confirmations} تأیید)` : ""} | فاکتور: ${r.invoice_usdt} USDT`;
   const chainCheck = useMutation({
     mutationFn: (id: number) => depositCheck(id),
@@ -174,9 +176,9 @@ export default function Payments() {
                 <TableCell data-label="عملیات" align="left">
                   {/* Actions stay available for every status so a wrong choice is reversible. */}
                   {/* On-chain check (read-only, free): reads the actual deposit — TON via toncenter,
-                      USDT/BEP-20 via a public BSC RPC node — and reports it for the manual decision.
-                      AVAX is manual-confirm only (no on-chain read), so the check is disabled there. */}
-                  <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || p.chain === "avax" || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+                      AVAX via a public Avalanche C-Chain RPC, USDT/BEP-20 via a public BSC RPC node —
+                      and reports it for the manual decision (never auto-confirms). */}
+                  <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
@@ -227,6 +229,16 @@ export default function Payments() {
                       <>
                         <Typography variant="body2">
                           واریزی: <b dir="ltr">{depChk.data.received_ton} GRAM</b> ≈ <b>{fmtToman(depChk.data.received_toman)}</b>
+                        </Typography>
+                        <Typography variant="body2">فاکتور: <b>{fmtToman(depChk.data.invoice_toman)}</b></Typography>
+                        {depChk.data.match === true && <Chip size="small" color="success" label={`✓ مطابق (±${depChk.data.tolerance_pct}٪)`} />}
+                        {depChk.data.match === false && <Chip size="small" color="error" label={`✗ مغایر (خارج از ±${depChk.data.tolerance_pct}٪)`} />}
+                      </>
+                    ) : depChk.data.kind === "avax" ? (
+                      <>
+                        <Typography variant="body2">
+                          واریزی: <b dir="ltr">{depChk.data.received_avax} AVAX</b> ≈ <b>{fmtToman(depChk.data.received_toman)}</b>
+                          {depChk.data.confirmations != null ? <> — {depChk.data.confirmations} تأیید</> : null}
                         </Typography>
                         <Typography variant="body2">فاکتور: <b>{fmtToman(depChk.data.invoice_toman)}</b></Typography>
                         {depChk.data.match === true && <Chip size="small" color="success" label={`✓ مطابق (±${depChk.data.tolerance_pct}٪)`} />}

@@ -370,6 +370,13 @@ def owner_payment_detail_keyboard(payment_id: int) -> InlineKeyboardMarkup:
     ], [InlineKeyboardButton(text="« پرداخت‌های در انتظار", callback_data="owner:payments")]])
 
 
+def owner_payment_decided_keyboard() -> InlineKeyboardMarkup:
+    """Shown after the owner confirms/rejects — the تأیید/رد buttons are gone (so the decision is
+    unmistakable and can't be re-tapped); only the back-to-pending link remains."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="« پرداخت‌های در انتظار", callback_data="owner:payments")]])
+
+
 def owner_reseller_results_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     """Search results: one button per matched reseller. data: orc:<reseller_id>."""
     rows = [[InlineKeyboardButton(text=cap, callback_data=f"orc:{rid}")] for rid, cap in items]

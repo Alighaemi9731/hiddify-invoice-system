@@ -123,6 +123,24 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M74** Bot & payments polish (`v1.49.0`). Five owner-reported follow-ups: (1) **AVAX on-chain
+  deposit check** — the panel «بررسی واریزی روی زنجیره» button now works for AVAX (was disabled):
+  `payments._avax_received` reads the native AVAX transfer (`eth_getTransactionByHash` → `to`/`value`,
+  receipt `status`, confirmations) from a free public Avalanche C-Chain RPC (`avalanche_rpc_url`),
+  `avax_deposit_check` converts at the derived rate and compares within `avax_amount_tolerance_pct`;
+  wired into the `deposit_check` dispatcher + `_network_status_fa` + the panel dialog. Display-only —
+  `verify_payment` still HOLDS AVAX for manual confirm, never a BscScan lookup. (2) **Owner review message
+  reflects the decision** — `cb_owner_payment_confirm`/`reject` now `edit_text` the original Telegram
+  message (append ✅/❌, drop the تأیید/رد buttons via `owner_payment_decided_keyboard`) so it's clear what
+  was handled and can't be re-tapped. (3) **Storefront plan edit + reorder** — `storefront.update_plan` +
+  `move_plan` (swap `sort_order`) + a per-plan ✏️/⬆️/⬇️/🗑 row + an `SF.edit_gb/days/price` FSM, so a new
+  plan needn't be added at the bottom and re-created to fix order. (4) **Menu always at hand** — a shared
+  `_reshow_menu` re-sends the inline main menu as the last message after each completed action (dispatchers,
+  terminal `/` commands + inline menu callbacks, pay/support/register/newuser/broadcast/search completions,
+  payment confirm/reject), gated by `_RESELLER_TERMINAL`/`_OWNER_TERMINAL` so it never fires mid-FSM. (5)
+  **Complete `/` commands** — owner `/search` + `/cancel`; reseller `/storefront` + `/register` + `/cancel`
+  (+ `cmd_*` handlers), and the `/help` lists updated. No schema/migration (AVAX RPC settings auto-seeded).
+  Tests in `tests/test_avax.py`, `tests/test_storefront.py`, `tests/test_bot_ux.py`.
 - [x] **M73** AVAX (Avalanche) payment method (`v1.48.0`). AVAX added as a first-class owner↔reseller
   payment method (main bot pay flow + invoice instructions + panel Payments + reseller web portal pay
   dialog), mirroring TON: **manual confirm** + a clickable `snowtrace.io` explorer link (no on-chain

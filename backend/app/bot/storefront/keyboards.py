@@ -93,13 +93,20 @@ def buy_plans_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
 
 
 def plans_manage_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
+    # Each plan gets a label row + an action row (edit · move up · move down · delete), so plans can
+    # be edited and reordered in place — no need to delete everything and re-add to fix the order.
     rows: list[list[InlineKeyboardButton]] = []
-    for p in plans:
+    n = len(plans)
+    for i, p in enumerate(plans):
         flag = "" if p.enabled else " (غیرفعال)"
-        rows.append([
-            InlineKeyboardButton(text=rtl(f"{plan_label(p)}{flag}"), callback_data="sfnoop"),
-            InlineKeyboardButton(text="🗑", callback_data=f"sfplandel:{p.id}"),
-        ])
+        rows.append([InlineKeyboardButton(text=rtl(f"{plan_label(p)}{flag}"), callback_data="sfnoop")])
+        actions = [InlineKeyboardButton(text="✏️ ویرایش", callback_data=f"sfplanedit:{p.id}")]
+        if i > 0:
+            actions.append(InlineKeyboardButton(text="⬆️", callback_data=f"sfplanup:{p.id}"))
+        if i < n - 1:
+            actions.append(InlineKeyboardButton(text="⬇️", callback_data=f"sfplandown:{p.id}"))
+        actions.append(InlineKeyboardButton(text="🗑", callback_data=f"sfplandel:{p.id}"))
+        rows.append(actions)
     rows.append([InlineKeyboardButton(text="➕ افزودن پلن", callback_data="sfplanadd")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

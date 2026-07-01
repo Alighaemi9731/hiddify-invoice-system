@@ -162,6 +162,54 @@ def test_plan_label_is_gb_days_price_never_title():
     assert "30 گیگ" in label and "30 روزه" in label and "120,000" in label
 
 
+def test_update_plan_edits_and_rejects_foreign(tmp_path):
+    async def body(s):
+        _r, bot, _c = await _seed(s)
+        p = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+        assert await storefront.update_plan(s, bot.id, p.id, gb=20, days=60, price_toman=90_000)
+        p2 = await s.get(StorefrontPlan, p.id)
+        assert (p2.gb, p2.days, p2.price_toman) == (20, 60, 90_000)
+        # a different storefront can't edit this plan
+        assert await storefront.update_plan(
+            s, bot.id + 999, p.id, gb=1, days=1, price_toman=1) is False
+
+    _run(body, tmp_path, "planedit.db")
+
+
+def test_move_plan_reorders(tmp_path):
+    async def body(s):
+        _r, bot, _c = await _seed(s)
+        a = await storefront.add_plan(s, bot.id, title="", gb=1, days=1, price_toman=1)
+        b = await storefront.add_plan(s, bot.id, title="", gb=2, days=2, price_toman=2)
+        c = await storefront.add_plan(s, bot.id, title="", gb=3, days=3, price_toman=3)
+
+        async def order():
+            return [p.id for p in await storefront.list_plans(s, bot.id)]
+
+        assert await order() == [a.id, b.id, c.id]
+        assert await storefront.move_plan(s, bot.id, c.id, "up")     # a, c, b
+        assert await order() == [a.id, c.id, b.id]
+        assert await storefront.move_plan(s, bot.id, a.id, "down")   # c, a, b
+        assert await order() == [c.id, a.id, b.id]
+        # edge no-op: the top plan can't move up
+        top = (await storefront.list_plans(s, bot.id))[0]
+        assert await storefront.move_plan(s, bot.id, top.id, "up") is False
+
+    _run(body, tmp_path, "planmove.db")
+
+
+def test_plans_manage_kb_has_edit_move_delete():
+    plans = [StorefrontPlan(id=1, gb=1, days=1, price_toman=1, enabled=True, sort_order=0),
+             StorefrontPlan(id=2, gb=2, days=2, price_toman=2, enabled=True, sort_order=1)]
+    data = [b.callback_data for row in sfkb.plans_manage_kb(plans).inline_keyboard for b in row]
+    assert "sfplanedit:1" in data and "sfplandel:2" in data
+    assert "sfplandown:1" in data          # first can move down, not up
+    assert "sfplanup:1" not in data
+    assert "sfplanup:2" in data            # last can move up, not down
+    assert "sfplandown:2" not in data
+    assert "sfplanadd" in data
+
+
 def test_storefront_order_has_label_column(tmp_path):
     async def body(s):
         _r, _bot, cust = await _seed(s)

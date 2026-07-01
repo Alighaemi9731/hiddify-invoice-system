@@ -53,6 +53,9 @@ class SF(StatesGroup):
     plan_gb = State()
     plan_days = State()
     plan_price = State()
+    edit_gb = State()          # edit an existing plan; data: edit_plan_id
+    edit_days = State()        # data: edit_plan_id, e_gb
+    edit_price = State()       # data: edit_plan_id, e_gb, e_days
     pay_value = State()        # data: method (+ card sub-step)
     trial_gb = State()         # admin sets free-trial volume
     trial_days = State()       # admin sets free-trial duration; data: t_gb
@@ -1145,6 +1148,96 @@ async def sf_plan_del(cb: CallbackQuery, bot: Bot) -> None:
         plans = await storefront.list_plans(s, sf.id)
     await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
     await cb.answer("حذف شد.")
+
+
+@storefront_router.callback_query(F.data.startswith("sfplanup:"))
+async def sf_plan_up(cb: CallbackQuery, bot: Bot) -> None:
+    await _sf_plan_move(cb, bot, "up")
+
+
+@storefront_router.callback_query(F.data.startswith("sfplandown:"))
+async def sf_plan_down(cb: CallbackQuery, bot: Bot) -> None:
+    await _sf_plan_move(cb, bot, "down")
+
+
+async def _sf_plan_move(cb: CallbackQuery, bot: Bot, direction: str) -> None:
+    plan_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        moved = await storefront.move_plan(s, sf.id, plan_id, direction)
+        plans = await storefront.list_plans(s, sf.id)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
+    except Exception:  # noqa: BLE001 — "not modified" at an edge → ignore
+        pass
+    await cb.answer("جابه‌جا شد." if moved else "همین‌جاست.")
+
+
+@storefront_router.callback_query(F.data.startswith("sfplanedit:"))
+async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    plan_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        plan = await s.get(StorefrontPlan, plan_id)
+        if plan is None or plan.storefront_bot_id != sf.id:
+            await cb.answer("پلن یافت نشد.", show_alert=True)
+            return
+        cur = f"{plan.gb} گیگ · {plan.days} روز · {plan.price_toman:,} تومان"
+    await state.set_state(SF.edit_gb)
+    await state.update_data(edit_plan_id=plan_id)
+    await cb.message.answer(
+        rtl(f"ویرایش پلن ({cur})\n\nحجمِ جدید به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.edit_gb, F.text)
+async def sf_edit_gb(message: Message, state: FSMContext) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit():
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        return
+    await state.update_data(e_gb=int(raw))
+    await state.set_state(SF.edit_days)
+    await message.answer(rtl("مدتِ جدید به روز (عدد):"), reply_markup=kb.cancel_kb())
+
+
+@storefront_router.message(SF.edit_days, F.text)
+async def sf_edit_days(message: Message, state: FSMContext) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit():
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        return
+    await state.update_data(e_days=int(raw))
+    await state.set_state(SF.edit_price)
+    await message.answer(rtl("قیمتِ جدید به تومان (عدد):"), reply_markup=kb.cancel_kb())
+
+
+@storefront_router.message(SF.edit_price, F.text)
+async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit():
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        return
+    data = await state.get_data()
+    await state.clear()
+    plan_id = int(data.get("edit_plan_id", 0))
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            return
+        ok = await storefront.update_plan(
+            s, sf.id, plan_id, gb=int(data.get("e_gb", 0)),
+            days=int(data.get("e_days", 0)), price_toman=int(raw))
+        plans = await storefront.list_plans(s, sf.id)
+    await message.answer(
+        rtl("✅ پلن ویرایش شد." if ok else "پلن یافت نشد."),
+        reply_markup=kb.plans_manage_kb(plans))
 
 
 # ── admin: payment settings ───────────────────────────────────────────────────

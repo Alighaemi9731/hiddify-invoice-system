@@ -116,3 +116,101 @@ def test_paystate_cancel_text_exits_cleanly():
         assert msg.sent  # the user got an acknowledgement
 
     asyncio.run(go())
+
+
+# ── v1.49.0: complete slash commands + owner decision keyboard + menu re-show ────
+
+def test_command_menus_include_all_actions():
+    """The `/` list must offer every action (owner /search, reseller /storefront + /register,
+    both /cancel), and each new command must have a handler function."""
+    from app.bot import handlers
+    from app.bot.commands import OWNER_COMMANDS, RESELLER_COMMANDS
+
+    r = {c.command for c in RESELLER_COMMANDS}
+    o = {c.command for c in OWNER_COMMANDS}
+    assert {"storefront", "register", "cancel"} <= r
+    assert {"search", "cancel"} <= o
+    assert callable(handlers.cmd_search)
+    assert callable(handlers.cmd_storefront)
+    assert callable(handlers.cmd_register)
+
+
+def test_finalize_review_message_edits_caption_for_photo_and_text_for_text():
+    """The owner review message may be a PHOTO (screenshot proof, caption) or TEXT (TXID). Use
+    edit_caption for the former and edit_text for the latter — else the screenshot path silently
+    fails and the buttons stay live."""
+    async def go():
+        from app.bot import handlers
+
+        calls: dict = {}
+
+        class FakeMsg:
+            def __init__(self, *, is_photo: bool) -> None:
+                self.caption = "cap" if is_photo else None
+                self.photo = [object()] if is_photo else None
+                self.html_text = "cap" if is_photo else "txt"
+
+            async def edit_caption(self, **kw):  # noqa: ANN003
+                calls["caption"] = kw
+
+            async def edit_text(self, *a, **kw):  # noqa: ANN002, ANN003
+                calls["text"] = (a, kw)
+
+        cb = SimpleNamespace(message=FakeMsg(is_photo=True))
+        assert await handlers._finalize_review_message(cb, "✅ done") is True
+        assert "caption" in calls and "text" not in calls
+
+        calls.clear()
+        cb = SimpleNamespace(message=FakeMsg(is_photo=False))
+        assert await handlers._finalize_review_message(cb, "✅ done") is True
+        assert "text" in calls and "caption" not in calls
+
+    asyncio.run(go())
+
+
+def test_owner_payment_decided_keyboard_drops_action_buttons():
+    """After a decision the تأیید/رد buttons are gone (unmistakable + un-re-tappable); the live
+    keyboard still has both."""
+    decided = _callbacks(keyboards.owner_payment_decided_keyboard())
+    assert decided == ["owner:payments"]
+    live = _callbacks(keyboards.owner_payment_detail_keyboard(5))
+    assert "opok:5" in live and "opno:5" in live
+
+
+def test_reshow_menu_sends_role_aware_menu(tmp_path):
+    """`_reshow_menu` re-sends the inline main menu as a fresh message so it's always at hand."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.bot import handlers
+    from app.core.db import Base
+    from app.models import Panel, Reseller
+
+    sent: list = []
+
+    class FakeMsg:
+        async def answer(self, text: str = "", **kw):  # noqa: ANN003
+            sent.append((text, kw.get("reply_markup")))
+
+    user = SimpleNamespace(id=999, first_name="Ali", username="ali")
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reshow.db'}")
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as s:
+                p = Panel(key="p", host="p.invalid", proxy_path_enc="x", owner_uuid="o")
+                s.add(p)
+                await s.flush()
+                s.add(Reseller(panel_id=p.id, admin_uuid="a", name="Ali", bot_chat_id=999))
+                await s.commit()
+                await handlers._reshow_menu(FakeMsg(), s, user)
+            assert len(sent) == 1
+            text, kb = sent[0]
+            assert "منوی اصلی" in text
+            assert kb is not None and hasattr(kb, "inline_keyboard")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())

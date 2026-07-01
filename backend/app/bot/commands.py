@@ -38,9 +38,12 @@ RESELLER_COMMANDS = [
     BotCommand(command="panels", description="🖥 پنل‌های من"),
     BotCommand(command="subs", description="👥 زیرمجموعه‌ها"),
     BotCommand(command="newuser", description="➕ ساخت کاربر"),
+    BotCommand(command="storefront", description="🏪 راه‌اندازی ربات فروشگاهی"),
     BotCommand(command="portal", description="🌐 ورود به پنلِ تحتِ وب"),
+    BotCommand(command="register", description="🔗 ثبت لینک پنل من"),
     BotCommand(command="support", description="💬 پیام به پشتیبانی"),
     BotCommand(command="removelink", description="🗑 حذف لینک‌ها"),
+    BotCommand(command="cancel", description="✖️ لغو عملیات جاری"),
     BotCommand(command="help", description="❓ راهنما"),
 ]
 
@@ -51,9 +54,11 @@ OWNER_COMMANDS = [
     BotCommand(command="health", description="🩺 سلامت سامانه"),
     BotCommand(command="payments", description="💳 پرداخت‌های در انتظار"),
     BotCommand(command="debtors", description="💰 بدهکاران"),
+    BotCommand(command="search", description="🔎 جستجوی نماینده"),
     BotCommand(command="broadcast", description="📢 پیام همگانی"),
     BotCommand(command="sync", description="🔄 همگام‌سازی پنل‌ها"),
     BotCommand(command="backup", description="🗄 پشتیبان‌گیری اکنون"),
+    BotCommand(command="cancel", description="✖️ لغو عملیات جاری"),
     BotCommand(command="help", description="❓ راهنما"),
 ]
 

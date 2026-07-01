@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+from decimal import Decimal
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/avax.db")
 os.environ.setdefault("SECRET_KEY", "k")
@@ -284,6 +285,8 @@ def test_submit_avax_rejects_bad_hash():
 
 
 def test_verify_holds_avax_for_manual():
+    """The on-chain read is a display aid only — verify_payment must still HOLD AVAX for the owner's
+    manual decision (never auto-confirm, never a BscScan lookup)."""
     async def run():
         engine, factory = await _session()
         try:
@@ -295,10 +298,85 @@ def test_verify_holds_avax_for_manual():
             async with factory() as s:
                 r = await payments_service.verify_payment(s, pid)
                 assert r.status == "pending" and r.paid is False
-                # deposit_check never reads an AVAX hash on the BSC RPC
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+# ───────────────────────── on-chain deposit read (display-only) ─────────────────────────
+
+def _fake_rpc(*, to, value_wei, status="0x1", tx_block=100, latest=112):
+    """A fake Avalanche JSON-RPC client: answers getTransactionByHash / getTransactionReceipt /
+    blockNumber by the request's `method`."""
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def post(self, url, json=None):
+            m = (json or {}).get("method")
+            if m == "eth_getTransactionByHash":
+                return _Resp({"result": {"to": to, "value": hex(value_wei),
+                                         "blockNumber": hex(tx_block)}})
+            if m == "eth_getTransactionReceipt":
+                return _Resp({"result": {"status": status, "blockNumber": hex(tx_block)}})
+            if m == "eth_blockNumber":
+                return _Resp({"result": hex(latest)})
+            return _Resp({"result": None})
+
+    return FakeClient
+
+
+def test_avax_received_reads_native_transfer(monkeypatch):
+    monkeypatch.setattr(payments_service.httpx, "AsyncClient",
+                        _fake_rpc(to="0xWALLET", value_wei=2 * 10**18, tx_block=100, latest=112))
+    recv, confs = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
+    assert recv == Decimal(2) and confs == 13  # 112 - 100 + 1
+
+
+def test_avax_received_wrong_recipient(monkeypatch):
+    monkeypatch.setattr(payments_service.httpx, "AsyncClient",
+                        _fake_rpc(to="0xSOMEONE_ELSE", value_wei=2 * 10**18))
+    recv, confs = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
+    assert recv is None and confs is None
+
+
+def test_avax_received_reverted_tx(monkeypatch):
+    monkeypatch.setattr(payments_service.httpx, "AsyncClient",
+                        _fake_rpc(to="0xwallet", value_wei=10**18, status="0x0"))
+    recv, _ = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
+    assert recv is None  # a reverted tx credited nothing
+
+
+def test_avax_deposit_check_and_dispatch(monkeypatch):
+    async def run():
+        engine, factory = await _session()
+        try:
+            rid, iid = await _seed_payable(factory)  # invoice amount_toman = 600_000
+            async with factory() as s:
+                await settings_service.set_value(s, "avax_address", "0xWallet")
+                await settings_service.set_value(s, "avax_rate_mode", "manual")
+                await settings_service.set_value(s, "avax_toman_manual", 1_000_000)  # 1 AVAX = 1M T
+                res = await payments_service.submit_reseller_payment(
+                    s, reseller_ids={rid}, invoice_id=iid, txid=HASH, chain="avax")
+                pid = res.payment.id
+            # 0.6 AVAX × 1,000,000 = 600,000 T == the invoice → match; never touches the network.
+            monkeypatch.setattr(payments_service, "_avax_received",
+                                lambda *a, **k: _coro((Decimal("0.6"), 12)))
+            async with factory() as s:
                 p = await s.get(Payment, pid)
-                d = await payments_service.deposit_check(s, p)
-                assert d == {"available": False, "kind": "none"}
+                d = await payments_service.avax_deposit_check(s, p)
+                assert d["available"] and d["received_avax"] == 0.6
+                assert d["received_toman"] == 600_000 and d["match"] is True
+                assert d["confirmations"] == 12
+                # the dispatcher tags kind="avax"
+                assert (await payments_service.deposit_check(s, p))["kind"] == "avax"
         finally:
             await engine.dispose()
 

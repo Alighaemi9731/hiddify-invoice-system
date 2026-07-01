@@ -555,10 +555,94 @@ async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
     }
 
 
+async def _avax_received(
+    txid: str, our_wallet: str, rpc_url: str
+) -> tuple[Decimal | None, int | None]:
+    """Best-effort (native AVAX credited to our wallet by this tx, confirmations), read from a public
+    Avalanche C-Chain JSON-RPC node — free, no API key. AVAX is a NATIVE coin, so (unlike USDT) the
+    amount is the transaction's own `value` and the recipient is its `to` — no ERC-20 log parsing.
+    Returns (None, None) on any failure so the caller falls back. Display-only — never auto-confirms.
+    Limitation: only a top-level value transfer is read (the normal exchange→wallet case); a
+    contract-internal transfer isn't visible here and just yields a fall-back 'read failed'."""
+    tx = (txid or "").strip()
+    if not tx or not our_wallet or not rpc_url:
+        return None, None
+    if not tx.startswith("0x"):
+        tx = "0x" + tx
+    want = our_wallet.lower()
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            resp = await client.post(rpc_url, json={
+                "jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionByHash", "params": [tx]})
+            resp.raise_for_status()
+            txn = (resp.json() or {}).get("result")
+            if not txn or (txn.get("to") or "").lower() != want:
+                return None, None
+            try:
+                value = Decimal(int(txn.get("value") or "0x0", 16)) / (Decimal(10) ** 18)
+            except (TypeError, ValueError):
+                return None, None
+            if value <= 0:
+                return None, None
+            # Confirm the tx actually succeeded (a reverted tx credits nothing).
+            rc = await client.post(rpc_url, json={
+                "jsonrpc": "2.0", "id": 2, "method": "eth_getTransactionReceipt", "params": [tx]})
+            receipt = (rc.json() or {}).get("result")
+            if not receipt or receipt.get("status") != "0x1":
+                return None, None
+            confs: int | None = None
+            try:
+                bn = await client.post(rpc_url, json={
+                    "jsonrpc": "2.0", "id": 3, "method": "eth_blockNumber", "params": []})
+                latest = int((bn.json() or {}).get("result") or "0x0", 16)
+                txblk = int(receipt.get("blockNumber") or txn.get("blockNumber") or "0x0", 16)
+                if latest and txblk:
+                    confs = max(0, latest - txblk + 1)
+            except Exception:  # noqa: BLE001 — confirmations are optional
+                confs = None
+            return value, confs
+    except Exception:  # noqa: BLE001 — node down / bad txid → fall back silently
+        return None, None
+
+
+async def avax_deposit_check(session: AsyncSession, payment: Payment) -> dict:
+    """Decision aid for the panel's MANUAL AVAX confirmation: read the actual native AVAX deposited
+    for this payment's txid (free Avalanche C-Chain RPC), convert at the derived AVAX→Toman rate, and
+    compare (within tolerance) to the invoice amount. Display-only — never auto-confirms. Best-effort:
+    returns {'available': False} if the chain can't be read, so the panel just shows the link."""
+    if payment.chain != "avax" or not payment.txid:
+        return {"available": False}
+    cfg = await settings_service.get_many(
+        session, ["avax_address", "avalanche_rpc_url", "avax_amount_tolerance_pct"])
+    received, confs = await _avax_received(
+        payment.txid, cfg.get("avax_address") or "", cfg.get("avalanche_rpc_url") or "")
+    if received is None:
+        return {"available": False}
+    avax_rate = await rates.get_avax_toman(session)  # int, 0 if unavailable
+    received_toman = float(received) * avax_rate if avax_rate else 0.0
+    invoice_toman = await _settled_amount_toman(session, payment)
+    tol_pct = float(cfg.get("avax_amount_tolerance_pct") or 0)
+    match: bool | None = None
+    if invoice_toman > 0 and received_toman > 0:
+        diff_pct = abs(received_toman - invoice_toman) / invoice_toman * 100
+        match = diff_pct <= tol_pct
+    return {
+        "available": True,
+        "received_avax": round(float(received), 4),
+        "received_toman": round(received_toman),
+        "invoice_toman": round(invoice_toman),
+        "avax_rate": avax_rate,
+        "tolerance_pct": tol_pct,
+        "confirmations": confs,
+        "match": match,
+    }
+
+
 async def deposit_check(session: AsyncSession, payment: Payment) -> dict:
     """Unified on-chain deposit read for the panel + bot. Dispatches by the payment's chain to the
-    free TON (toncenter) or USDT (BSC RPC) reader and tags the result with `kind`. Display-only —
-    never auto-confirms. {'available': False, 'kind': 'none'} when there's nothing to read."""
+    free TON (toncenter), AVAX (Avalanche RPC), or USDT (BSC RPC) reader and tags the result with
+    `kind`. Display-only — never auto-confirms. {'available': False, 'kind': 'none'} when there's
+    nothing to read."""
     if not payment.txid:
         return {"available": False, "kind": "none"}
     if payment.chain == "ton":
@@ -566,8 +650,9 @@ async def deposit_check(session: AsyncSession, payment: Payment) -> dict:
         d["kind"] = "ton" if d.get("available") else "none"
         return d
     if payment.chain == "avax":
-        # AVAX is manual-confirm only (no on-chain read) — never look an AVAX hash up on the BSC RPC.
-        return {"available": False, "kind": "none"}
+        d = await avax_deposit_check(session, payment)
+        d["kind"] = "avax" if d.get("available") else "none"
+        return d
     # chain "bsc" or legacy "" with a txid → USDT/BEP-20
     d = await usdt_deposit_check(session, payment)
     d["kind"] = "usdt" if d.get("available") else "none"

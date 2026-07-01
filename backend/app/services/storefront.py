@@ -118,6 +118,45 @@ async def delete_plan(session: AsyncSession, storefront_bot_id: int, plan_id: in
     return True
 
 
+async def update_plan(
+    session: AsyncSession, storefront_bot_id: int, plan_id: int, *,
+    gb: int, days: int, price_toman: int,
+) -> bool:
+    """Edit a plan's figures in place (ownership-checked). Title stays empty (owner: «عنوان نمی‌خواهیم»)."""
+    plan = await session.get(StorefrontPlan, plan_id)
+    if plan is None or plan.storefront_bot_id != storefront_bot_id:
+        return False
+    plan.gb = int(gb)
+    plan.days = int(days)
+    plan.price_toman = int(price_toman)
+    await session.commit()
+    return True
+
+
+async def move_plan(
+    session: AsyncSession, storefront_bot_id: int, plan_id: int, direction: str
+) -> bool:
+    """Reorder a plan up/down by swapping `sort_order` with its adjacent sibling (so a new plan
+    needn't be added at the bottom and re-created to reorder). Ownership-checked; a no-op at the
+    edge. Normalizes sort_order to the current display order first, so swaps are always well-defined
+    even if legacy rows share/duplicate sort_order values."""
+    plans = await list_plans(session, storefront_bot_id)
+    # Normalize to a dense 0..n-1 sequence in the current (sort_order, id) display order.
+    for idx, p in enumerate(plans):
+        if p.sort_order != idx:
+            p.sort_order = idx
+    pos = next((i for i, p in enumerate(plans) if p.id == plan_id), None)
+    if pos is None:
+        return False
+    swap = pos - 1 if direction == "up" else pos + 1
+    if swap < 0 or swap >= len(plans):
+        await session.commit()  # persist any normalization even on an edge no-op
+        return False
+    plans[pos].sort_order, plans[swap].sort_order = plans[swap].sort_order, plans[pos].sort_order
+    await session.commit()
+    return True
+
+
 # ── customers ─────────────────────────────────────────────────────────────────
 
 async def get_or_create_customer(

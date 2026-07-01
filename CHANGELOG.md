@@ -8,6 +8,34 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.49.0 - 2026-07-01
+
+### Added
+
+- **AVAX on-chain deposit check.** The panel «بررسی واریزی روی زنجیره» button now works for AVAX
+  (previously disabled): it reads the actual native AVAX transfer for the tx hash from a free public
+  Avalanche C-Chain RPC (`avalanche_rpc_url`), converts at the derived AVAX→Toman rate, and shows it
+  against the invoice within `avax_amount_tolerance_pct` (default 5%). Display-only — AVAX is still
+  **manually** confirmed, never auto-confirmed, and an AVAX hash is never looked up on the BSC RPC.
+- **Storefront plans: edit + reorder.** Each plan in the shop-bot admin now has ✏️ ویرایش (change
+  GB/days/price in place) and ⬆️/⬇️ move buttons, so a new plan needn't land at the bottom and be
+  re-created to fix the order (`storefront.update_plan`/`move_plan`).
+- **More `/` commands.** Owner adds `/search` + `/cancel`; reseller adds `/storefront`, `/register`,
+  `/cancel` — the typed-command list now mirrors every menu action.
+
+### Changed
+
+- **Owner payment-review message reflects the decision.** After tapping تأیید/رد on the Telegram
+  payment notification, the original message is edited in place («✅ این پرداخت تأیید شد» / «❌ … رد شد»)
+  and its تأیید/رد buttons are removed — so it's obvious which payment was already handled and it can't
+  be double-tapped.
+- **Menu always at hand.** The bot re-sends the main menu as the last message after each completed
+  action (viewing invoices/panels/subs, a payment, a search, etc.), so it never scrolls out of reach.
+  It is NOT re-sent mid-flow (while an FSM prompt is awaiting input).
+
+No schema/migration change (AVAX RPC settings are runtime, auto-seeded on boot). Tests in
+`tests/test_avax.py`, `tests/test_storefront.py`, `tests/test_bot_ux.py`.
+
 ## 1.48.0 - 2026-06-28
 
 ### Added — AVAX (Avalanche) payment method

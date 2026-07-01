@@ -148,6 +148,10 @@ DEFS: list[SettingDef] = [
     SettingDef("pay_avax_enabled", False, False, "payments"),       # AVAX C-Chain transfer
     SettingDef("avax_address", "", False, "payments"),              # the destination AVAX address
     SettingDef("avax_toman_auto", 0, False, "payments"),            # last derived AVAX→Toman (status)
+    # Public Avalanche C-Chain JSON-RPC node for the (free, key-less) on-chain deposit read — reads the
+    # native AVAX transfer's value/recipient. No API key needed; swap if it rate-limits.
+    SettingDef("avalanche_rpc_url", "https://api.avax.network/ext/bc/C/rpc", False, "payments"),
+    SettingDef("avax_amount_tolerance_pct", 5, False, "payments"),  # match tolerance for the AVAX read
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
@@ -324,6 +328,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "kick_grace_minutes": (0, 24 * 60),
     "min_confirmations": (0, 10_000),
     "ton_amount_tolerance_pct": (0, 100),
+    "avax_amount_tolerance_pct": (0, 100),
 }
 _NONNEGATIVE_NUMBERS = {
     "payment_amount_tolerance_usdt", "free_under_gb", "overage_tolerance_gb",
