@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.49.1 - 2026-07-01
+
+### Fixed
+
+- **Chain-check toast RTL.** The «بررسی واریزی روی زنجیره» success toast mixed Persian, Latin
+  (AVAX/GRAM/USDT) and digits in one flat line, so the bidi layout jumbled it. Each mixed value run is
+  now wrapped in a First-Strong Isolate (U+2068…U+2069) with RTL-friendly separators, so it reads
+  cleanly (e.g. «واریزی: ⁨1.4262 AVAX⁩ ≈ ⁨1,651,685 تومان⁩ — فاکتور ⁨1,659,208 تومان⁩ ✓ مطابق فاکتور»).
+  The confirm-dialog display was already correct (each value is a `dir="ltr"` span).
+
 ## 1.49.0 - 2026-07-01
 
 ### Added

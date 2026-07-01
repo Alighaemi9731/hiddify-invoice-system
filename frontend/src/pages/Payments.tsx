@@ -60,16 +60,23 @@ export default function Payments() {
 
   // No auto-verify anywhere; this just reads the actual on-chain deposit (TON via toncenter, USDT
   // via a public BSC RPC node — both free) and reports it for the manual confirm decision.
-  const depLabel = (r: any) => r.kind === "ton"
-    ? `${r.received_ton} GRAM ≈ ${fmtToman(r.received_toman)} | فاکتور: ${fmtToman(r.invoice_toman)}`
-    : r.kind === "avax"
-    ? `${r.received_avax} AVAX ≈ ${fmtToman(r.received_toman)}${r.confirmations != null ? ` (${r.confirmations} تأیید)` : ""} | فاکتور: ${fmtToman(r.invoice_toman)}`
-    : `${r.received_usdt} USDT${r.confirmations != null ? ` (${r.confirmations} تأیید)` : ""} | فاکتور: ${r.invoice_usdt} USDT`;
+  // Each mixed Latin/number+unit run is wrapped in a First-Strong Isolate (U+2068…U+2069) so the
+  // toast reads cleanly in the RTL layout (otherwise «AVAX», the digits, and the separators reorder
+  // and jumble). Neutral separators («≈», «—») sit between isolates and follow the RTL flow.
+  const iso = (v: string | number) => `⁨${v}⁩`;
+  const depLabel = (r: any) => {
+    const confs = r.confirmations != null ? ` ${iso(`(${r.confirmations} تأیید)`)}` : "";
+    if (r.kind === "ton")
+      return `${iso(`${r.received_ton} GRAM`)} ≈ ${iso(fmtToman(r.received_toman))} — فاکتور ${iso(fmtToman(r.invoice_toman))}`;
+    if (r.kind === "avax")
+      return `${iso(`${r.received_avax} AVAX`)} ≈ ${iso(fmtToman(r.received_toman))}${confs} — فاکتور ${iso(fmtToman(r.invoice_toman))}`;
+    return `${iso(`${r.received_usdt} USDT`)}${confs} — فاکتور ${iso(`${r.invoice_usdt} USDT`)}`;
+  };
   const chainCheck = useMutation({
     mutationFn: (id: number) => depositCheck(id),
     onSuccess: (r: any) => {
       if (!r?.available) { show("واریزی از زنجیره خوانده نشد؛ از روی لینک تراکنش بررسی کنید.", "error"); return; }
-      const m = r.match === true ? " — ✓ مطابق فاکتور" : r.match === false ? " — ✗ مغایر با فاکتور" : "";
+      const m = r.match === true ? " ✓ مطابق فاکتور" : r.match === false ? " ✗ مغایر با فاکتور" : "";
       show(`واریزی: ${depLabel(r)}${m}`, r.match === false ? "error" : "success");
     },
     onError: (e) => show(errMsg(e), "error"),
