@@ -83,30 +83,16 @@ def _breakdown_lines(bd: dict) -> list[str]:
 
 
 async def _render_invoice_pdfs(
-    session: AsyncSession, inv: Invoice, reseller: Reseller, bd: dict | None
+    session: AsyncSession, inv: Invoice, reseller: Reseller
 ) -> list[tuple[str, str]]:
-    """Build the per-node, volume-only PDFs for an invoice — ONE for the reseller's own users
-    and ONE per sub-reseller (its subtree) — exactly like the interim invoice, so the reseller
-    can hand each sub its matching PDF. Falls back to a single whole-bundle PDF if the split
-    yields nothing. Returns [(path, caption), …]."""
-    from app.services.periods import month_period
-
-    period = month_period(inv.period_start.year, inv.period_start.month)
+    """Build the per-node, volume-only PDFs for an invoice — ONE for the reseller's own users and
+    ONE per sub-reseller — straight from the invoice's PERSISTED lines (so they always match the
+    locked invoice total; a user deleted from the panel after issue no longer shrinks the PDF).
+    Falls back to a single whole-bundle PDF if the split yields nothing. Returns [(path, caption)]."""
     title = f"فاکتور دوره {inv.period_label}"
     docs: list[tuple[str, str]] = []
     try:
-        own = await invoice_pdf.render_own_usage_pdf(session, reseller, period, title=title)
-        if own:
-            docs.append((own[0], f"📄 {title} — کاربران خودتان"))
-        for s in (bd["subs"] if bd else []):
-            sub = await session.get(Reseller, s["id"])
-            if sub is None:
-                continue
-            res = await invoice_pdf.render_node_usage_pdf(
-                session, sub, period, title=title, issuer_name=reseller.name
-            )
-            if res:
-                docs.append((res[0], f"📄 {title} — زیرمجموعه «{sub.name}»"))
+        docs = await invoice_pdf.render_invoice_node_pdfs(session, inv, reseller)
     except Exception:  # noqa: BLE001
         log.warning("per-node invoice PDF render failed for invoice %s", inv.id, exc_info=True)
     if not docs:
@@ -128,15 +114,13 @@ async def send_invoice_content(
     users and one per sub-reseller. Returns the sent message ids. No DB side effects — the
     delivery wrapper (send_invoice) adds status/log/cleanup; the «فاکتورهای من» view reuses
     this raw to re-show an invoice on demand."""
-    from app.services import reseller_report
-    from app.services.periods import month_period
-
     if text is None:
         text = await build_invoice_text(session, inv, reseller)
-    period = month_period(inv.period_start.year, inv.period_start.month)
+    # Breakdown comes from the PERSISTED invoice lines (authoritative — sums to the locked total),
+    # NOT a live recompute, so it matches the amount shown in the text even after panel changes.
     bd: dict | None = None
     try:
-        b = await reseller_report.interim_breakdown(session, reseller, period)
+        b = await invoice_pdf.invoice_node_breakdown(session, inv, reseller)
         bd = b if b and b.get("total_gb", 0) > 0 else None
     except Exception:  # noqa: BLE001
         bd = None
@@ -150,7 +134,7 @@ async def send_invoice_content(
     sent_ids: list[int] = []
     msg = await bot.send_message(chat_id, rtl(full_text), parse_mode="HTML", reply_markup=markup)
     sent_ids.append(msg.message_id)
-    for path, caption in await _render_invoice_pdfs(session, inv, reseller, bd):
+    for path, caption in await _render_invoice_pdfs(session, inv, reseller):
         try:
             doc = await bot.send_document(chat_id, FSInputFile(path), caption=caption)
             sent_ids.append(doc.message_id)

@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.49.3 - 2026-07-02
+
+### Fixed
+
+- **Invoice PDF/breakdown now matches the invoice text (complete GB) in every send path.** The
+  customer-facing per-node PDFs (own users + each sub-reseller) and the text breakdown were
+  re-computed from **current panel snapshots**, so any end-user deleted or changed on the panel
+  *after* an invoice was issued silently shrank the PDF — while the invoice text used the locked
+  `usage_gb`. Example: an invoice reading 85 GB in text arrived as a 50 GB PDF once some of that
+  month's users were removed. Now, for a **persisted invoice** (real invoice, direct send, edit +
+  resend, or tapping «فاکتورهای پرداخت‌نشده»), the PDFs and breakdown are rendered straight from the
+  invoice's stored line items — so they always sum to the locked total (incl. the «مصرف اضافه/تمدید»
+  extra lines) regardless of later panel changes. The «فاکتور علی‌الحساب» (interim, current-month
+  preview) still reflects live usage by design, since it has no locked invoice yet.
+
 ## 1.49.2 - 2026-07-01
 
 ### Fixed

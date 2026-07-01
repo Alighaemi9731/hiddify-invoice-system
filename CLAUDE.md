@@ -123,6 +123,21 @@ touches SQLite — there is no local-run app variant.
 
 ## Milestone status
 
+- [x] **M75** Invoice-render + payment-notify fixes (`v1.49.1`–`v1.49.3`). (1) `v1.49.1` RTL-cleaned the
+  on-chain deposit-check toast (First-Strong-Isolate the mixed AVAX/GRAM/USDT + digit runs). (2) `v1.49.2`
+  the manual «ثبت پرداخت» (`POST /api/invoices/{id}/mark-paid`) now notifies the reseller via
+  `notifier.send_to_reseller` (reusing `payments._payment_received_text`), so a hand-recorded payment isn't
+  silent. (3) `v1.49.3` **invoice PDF/breakdown now equals the invoice text in every persisted-invoice send
+  path.** Root cause: the customer-facing per-node PDFs (`render_own_usage_pdf`/`render_node_usage_pdf`) +
+  the text breakdown (`interim_breakdown`) were re-computed from **live panel snapshots**, so an end-user
+  deleted/changed AFTER issue shrank the PDF while the text used the locked `usage_gb` (real prod case:
+  text 85 GB, PDF 50 GB after 8 of 10 users were removed). New `invoice_pdf._grouped_invoice_lines` +
+  `render_invoice_node_pdfs` + `invoice_node_breakdown` render the own/per-sub PDFs and the breakdown
+  straight from the **persisted `InvoiceLine` rows** (grouped by `sub_reseller_name`, extras keyed by
+  `added_by_uuid`), so they always sum to the locked total incl. the «مصرف اضافه/تمدید» lines; `delivery`
+  (`send_invoice`/`send_invoice_content`/`cb_invoice_view`/edit-resend) uses them. The «فاکتور علی‌الحساب»
+  interim (current-month preview, no locked invoice) intentionally stays live. Tests in
+  `tests/test_invoice_pdf_persisted.py`.
 - [x] **M74** Bot & payments polish (`v1.49.0`). Five owner-reported follow-ups: (1) **AVAX on-chain
   deposit check** — the panel «بررسی واریزی روی زنجیره» button now works for AVAX (was disabled):
   `payments._avax_received` reads the native AVAX transfer (`eth_getTransactionByHash` → `to`/`value`,
