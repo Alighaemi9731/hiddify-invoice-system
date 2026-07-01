@@ -407,6 +407,22 @@ async def daily_digest(session: AsyncSession) -> str:
     return "\n".join(lines)
 
 
+def render_errors(summ: dict) -> str | None:
+    """Digest section for errors tracked since the last digest (None → omit the section).
+    `summ` is `app.core.errortrack.summary()` output."""
+    total = int(summ.get("total") or 0)
+    if total <= 0:
+        return None
+    lines = [f"🐞 خطاهای ثبت‌شده از آخرین گزارش: {total}"]
+    for item in (summ.get("top") or [])[:5]:
+        exc = str(item.get("exc") or "").strip() or "خطا"
+        where = str(item.get("where") or item.get("logger") or "").strip()
+        count = int(item.get("count") or 1)
+        tail = f" — {where}" if where else ""
+        lines.append(_rtl(f"   • {exc} ×{count}{tail}"))
+    return "\n".join(lines)
+
+
 async def digest_enabled(session: AsyncSession) -> bool:
     return bool(await settings_service.get(session, "daily_digest_enabled", True))
 

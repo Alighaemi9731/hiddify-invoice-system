@@ -36,6 +36,14 @@ async def start() -> None:
     await _register_jobs(sched)
     sched.start()
     log.info("Scheduler started with %d job(s).", len(sched.get_jobs()))
+    # Stamp the heartbeat immediately so /health doesn't report a stale value left over
+    # from before a restart while the first interval tick is still up to 2 minutes away.
+    try:
+        from app.scheduler.jobs import scheduler_heartbeat_job
+
+        await scheduler_heartbeat_job()
+    except Exception:  # noqa: BLE001 - the liveness stamp must never affect boot
+        log.exception("initial scheduler heartbeat stamp failed")
 
 
 async def shutdown() -> None:

@@ -35,6 +35,12 @@ from app.services.invoice_state import InvoiceStateError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
 
+# In-app error tracking: fingerprint + persist every ERROR/exception for /health and the
+# owner's daily digest. Installed after basicConfig so it's an ADDITIONAL root handler.
+from app.core import errortrack  # noqa: E402
+
+errortrack.install("backend")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 from app.core.db import Base  # noqa: E402
 from app.models import Invoice, Panel, Payment, Reseller  # noqa: E402
 from app.models.enums import InvoiceStatus, PaymentMethod  # noqa: E402
-from app.services import payment_methods, payments as payments_service, rates, settings_service  # noqa: E402
+from app.services import payment_methods, rates, settings_service  # noqa: E402
+from app.services import payments as payments_service
 
 HASH = "0x" + "ab" * 32          # a well-formed 0x + 64-hex hash (BSC == AVAX format)
 HASH_UC = "0x" + "AB" * 32

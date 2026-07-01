@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.50.0 - 2026-07-02
+
+Batch I01 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — the successor to
+the completed B00–B10 remediation plan.
+
+### Added
+
+- **Scheduler liveness heartbeat.** A silently-dead scheduler previously looked healthy from the
+  outside while invoicing, dunning, and backups quietly never ran. A new fixed-cadence
+  `scheduler_heartbeat` job stamps `scheduler_last_heartbeat` every ~2 minutes (plus once at boot),
+  and `/health` now reports `"scheduler":"ok"|"stale"` with `"status":"degraded"` when the stamp is
+  older than 10 minutes. Degraded stays HTTP **200** with `"database":"ok"` intact, so the Compose
+  healthcheck and `deploy/smoke.sh` contracts are unchanged; only a real database outage is a 503.
+- **Lightweight in-app error tracking (no external service).** Every `ERROR`/exception in the
+  backend AND the bot is fingerprinted (logger + exception type + in-app frame + message template)
+  and appended to small per-process rotating JSONL files (`data/logs/errors-backend.jsonl` /
+  `errors-bot.jsonl`, ~2 MB × 3). `/health` gains an `errors_24h` counter (cached ~60 s), and the
+  owner's daily digest appends a «خطاهای ثبت‌شده» section listing new error groups since the last
+  delivered digest (cursor `error_digest_last_ts` advances only after a successful send, so an
+  undelivered day is never lost). Every tracking path swallows its own failures. New internal
+  read-only settings: `scheduler_last_heartbeat`, `error_digest_last_ts`. No migration.
+
+### Fixed
+
+- Two pre-existing lint findings that failed the release gate (an ambiguous loop-variable name in
+  `invoice_pdf.py` and an unsorted import block in `tests/test_avax.py`). No behavior change.
+
 ## 1.49.3 - 2026-07-02
 
 ### Fixed

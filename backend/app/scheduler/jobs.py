@@ -211,9 +211,43 @@ async def daily_digest_job() -> None:
             if not await owner_report.digest_enabled(session):
                 return
             text = await owner_report.daily_digest(session)
-            await owner_notify.notify_owner(session, text)
+            # Append any NEW tracked errors since the last digest, so exceptions that never
+            # became their own Telegram alert still reach the owner once a day. Best-effort:
+            # the digest must go out even if error aggregation breaks.
+            now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            advance_cursor = False
+            try:
+                from app.core import errortrack
+
+                cursor = str(await settings_service.get(session, "error_digest_last_ts", "") or "")
+                since = errortrack.parse_ts(cursor) or (
+                    datetime.now(timezone.utc) - timedelta(hours=24))
+                section = owner_report.render_errors(errortrack.summary(since=since))
+                if section:
+                    text += "\n\n" + section
+                advance_cursor = True
+            except Exception:  # noqa: BLE001
+                log.exception("error digest section failed")
+            sent = await owner_notify.notify_owner(session, text)
+            # Advance the cursor only after a DELIVERED digest — an undelivered day's errors
+            # show up in the next successful digest instead of vanishing.
+            if sent and advance_cursor:
+                await settings_service.set_value(session, "error_digest_last_ts", now_iso)
     except Exception:  # noqa: BLE001
         log.exception("daily_digest_job failed")
+
+
+async def scheduler_heartbeat_job() -> None:
+    """Stamp `scheduler_last_heartbeat` so /health can tell a silently-dead scheduler from a
+    healthy one (a stopped scheduler means invoicing/dunning/backups quietly never run).
+    Fixed ~2-minute cadence, not owner-configurable; one settings upsert per tick."""
+    try:
+        async with SessionLocal() as session:
+            await settings_service.set_value(
+                session, "scheduler_last_heartbeat",
+                datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    except Exception:  # noqa: BLE001
+        log.exception("scheduler_heartbeat_job failed")
 
 
 async def daily_maintenance_job() -> None:
@@ -319,6 +353,9 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         ("storefront_reaper", storefront_reaper_job,
          IntervalTrigger(minutes=cfg.storefront_reaper_minutes, start_date=interval_anchor,
                          timezone=tz), 300),
+        # Liveness stamp read by /health; fixed cadence on purpose (not a setting).
+        ("scheduler_heartbeat", scheduler_heartbeat_job,
+         IntervalTrigger(minutes=2, start_date=interval_anchor, timezone=tz), 60),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,

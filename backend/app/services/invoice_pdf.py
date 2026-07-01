@@ -98,7 +98,7 @@ async def _grouped_invoice_lines(
         })
     # Reconcile to the locked total: if a manual usage_gb edit made the lines no longer sum to it,
     # add a clear adjustment line to the own group so text == breakdown == PDFs.
-    line_sum = round(sum(l["usage_gb"] for g in groups.values() for l in g["lines"]), 3)
+    line_sum = round(sum(row["usage_gb"] for g in groups.values() for row in g["lines"]), 3)
     diff = round(float(inv.usage_gb) - line_sum, 3)
     if abs(diff) > 0.01:
         own = groups.get(own_key) or groups.setdefault(

@@ -13,18 +13,23 @@ Automated **reseller management & invoicing** for a VPN business running on **Hi
 
 Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`. (The earlier `MY_UNDERSTANDING.md` and the three reference folders were removed once their content was absorbed.)
 
-## Current remediation program
+## Current improvement program
 
-The whole-codebase audit from 2026-06-09 is tracked in
-`docs/REMEDIATION_PLAN.md`. Fix exactly one batch per release, in the documented
-order, and use `docs/RELEASE_PROCESS.md` for versioning, GitHub publication,
-production deployment, smoke checks, and rollback.
+The 2026-06-09 audit program (`docs/REMEDIATION_PLAN.md`, B00–B10) is **complete**
+and kept as an archive. The active program is the verified-improvements roadmap
+from the 2026-07-02 whole-project review, tracked in `docs/IMPROVEMENT_PLAN.md`
+(batches I01–I12). Fix exactly one batch per release, in the documented order,
+and use `docs/RELEASE_PROCESS.md` for versioning, GitHub publication, production
+deployment, smoke checks, and rollback.
 Record user-visible release notes in `CHANGELOG.md`; the long milestone history
 below remains the archive for releases before this process was introduced.
 
+Durable rule: **any new Alembic migration must update the `HEAD` pin in
+`backend/tests/test_migrations_contracts.py`.**
+
 Claude commands:
 
-- `/fix-batch B01` — implement and verify one remediation batch.
+- `/fix-batch I01` — implement and verify one improvement batch.
 - `/release vX.Y.Z ...` — validate and publish; add `deploy` explicitly to deploy.
 
 Production coordinates are stored only in `.claude/OPS.local.md` (gitignored).

@@ -22,6 +22,12 @@ from app.services.bootstrap import run_bootstrap
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("bot")
 
+# In-app error tracking: fingerprint + persist every ERROR/exception (shared data volume,
+# own per-process file) so the backend's /health and daily digest see bot errors too.
+from app.core import errortrack  # noqa: E402
+
+errortrack.install("bot")
+
 
 async def _current_token() -> str | None:
     async with SessionLocal() as session:

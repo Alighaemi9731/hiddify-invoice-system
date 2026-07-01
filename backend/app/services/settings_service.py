@@ -259,6 +259,11 @@ DEFS: list[SettingDef] = [
     # Timestamp (ISO, UTC) of the last SUCCESSFUL backup — read by the health report's
     # «آخرین پشتیبان». Internal/read-only; written by backup.mark_backup_done.
     SettingDef("last_backup_at", "", False, "general"),
+    # Internal/read-only observability stamps (I01): the scheduler liveness heartbeat
+    # (written every ~2 min by `scheduler_heartbeat_job`, read by /health) and the cursor
+    # for the daily digest's "new tracked errors" section.
+    SettingDef("scheduler_last_heartbeat", "", False, "general"),
+    SettingDef("error_digest_last_ts", "", False, "general"),
     # Deployment (Phase 2): domain + automatic HTTPS, applied by the installer.
     SettingDef("server_domain", "", False, "deploy"),
     SettingDef("https_enabled", False, False, "deploy"),
@@ -287,6 +292,7 @@ _DEF_BY_KEY = {d.key: d for d in DEFS}
 _API_READ_ONLY = {
     "owner_chat_id", "setup_done", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
     "ton_toman_auto", "avax_toman_auto", "last_backup_at",
+    "scheduler_last_heartbeat", "error_digest_last_ts",
 }
 # Bounded positive-integer option lists (deduped + sorted) — the bot user-creation menus.
 _POSITIVE_INT_LISTS = {
