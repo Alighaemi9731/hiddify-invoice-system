@@ -188,7 +188,7 @@ Primary files:
 
 ## I10 - Storefront expiry notifications
 
-Priority: P3. Version: MINOR. Status: TODO. Contains a migration — isolated.
+Priority: P3. Version: MINOR. Status: DONE in `v1.52.0`. Contains a migration — isolated.
 
 - New `app/services/storefront_expiry.py` + daily scheduler job joining
   provisioned `storefront_orders` to `end_user_snapshots`; threshold setting

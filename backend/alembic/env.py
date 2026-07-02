@@ -37,6 +37,7 @@ _POST_BASELINE_COLUMNS = {
     "storefront_bots.free_trial_days", "storefront_customers.free_trial_used",
     "storefront_orders.panel_id", "storefront_orders.last_renewed_at",
     "storefront_wallet_txns.order_id", "storefront_customers.last_seen_at",
+    "storefront_orders.expiry_alerted_at",
 }
 # Whole TABLES introduced by a post-baseline migration. A pre-Alembic (baseline-era) database
 # legitimately lacks these — they're created by `upgrade` right after the baseline is stamped — so

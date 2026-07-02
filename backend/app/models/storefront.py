@@ -184,3 +184,7 @@ class StorefrontOrder(Base, TimestampMixin):
     panel_user_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_renewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the near-expiry reminder was last sent (I10). Re-armed by renewal: a reminder is due
+    # again once `last_renewed_at` is newer than this stamp. NULL = never notified.
+    expiry_alerted_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)

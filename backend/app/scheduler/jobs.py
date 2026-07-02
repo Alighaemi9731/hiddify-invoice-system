@@ -282,6 +282,17 @@ async def storefront_reaper_job() -> None:
         log.exception("storefront_reaper_job failed")
 
 
+async def storefront_expiry_job() -> None:
+    """Daily near-expiry reminders for storefront customers (renew button included)."""
+    try:
+        from app.services import storefront_expiry
+
+        async with SessionLocal() as session:
+            await storefront_expiry.notify_expiring(session)
+    except Exception:  # noqa: BLE001
+        log.exception("storefront_expiry_job failed")
+
+
 async def rate_refresh_job() -> None:
     """Refresh the live USDT→Toman rate (auto mode), the TON→Toman rate (when TON payment is
     enabled), and the AVAX→Toman rate (when AVAX payment is enabled). All independent and
@@ -356,6 +367,10 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         # Liveness stamp read by /health; fixed cadence on purpose (not a setting).
         ("scheduler_heartbeat", scheduler_heartbeat_job,
          IntervalTrigger(minutes=2, start_date=interval_anchor, timezone=tz), 60),
+        # Storefront near-expiry reminders, daily at a fixed quiet hour (11:15 local; the
+        # threshold in days is the `storefront_expiry_notify_days` setting, 0 = off).
+        ("storefront_expiry", storefront_expiry_job,
+         CronTrigger(hour=11, minute=15, timezone=tz), 6 * 3600),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,

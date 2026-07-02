@@ -58,7 +58,8 @@ def test_register_defaults_when_no_config():
     assert "hour='4'" in t["daily_maintenance"] and "minute='30'" in t["daily_maintenance"]
     assert "hour='9'" in t["daily_digest"]
     assert t["scheduler_heartbeat"] == "interval[0:02:00]"
-    assert len(t) == 11
+    assert "hour='11'" in t["storefront_expiry"] and "minute='15'" in t["storefront_expiry"]
+    assert len(t) == 12
 
 
 def test_non_divisor_interval_keeps_true_spacing_across_boundaries():

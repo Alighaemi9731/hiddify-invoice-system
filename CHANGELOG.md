@@ -8,7 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.51.0 - 2026-07-02
+## 1.52.0 - 2026-07-02
+
+Batch I10 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Added
+
+- **Storefront customers now get near-expiry reminders.** A customer's config used to expire
+  silently — the single most renewal-losing gap in the shop bots. A new daily job (11:15 Tehran)
+  scans every provisioned storefront order and messages the customer through their shop's own bot
+  when the config is `storefront_expiry_notify_days` (default **3**, `0` = off, editable in
+  Settings → زمان‌بندی) or fewer days from expiring — «⏳ سرویس شما تا N روز دیگر منقضی می‌شود» with
+  the existing **«🔄 تمدید سرویس»** button attached. Days-left comes from the panel snapshot
+  (`start_date + package_days`), falling back to the order duration. Each order is reminded once
+  per service period (new `expiry_alerted_at` column, migration `a8c5d7e2f4b6`); renewing re-arms
+  the reminder; a customer who blocked the bot is stamped, not retried daily; already-expired
+  configs are not spammed.
 
 Batch I09 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 
