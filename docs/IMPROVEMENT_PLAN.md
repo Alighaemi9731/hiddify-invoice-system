@@ -203,7 +203,7 @@ Primary files:
 
 ## I11 - Storefront admin stats dashboard
 
-Priority: P3. Version: MINOR. Status: TODO.
+Priority: P3. Version: MINOR. Status: DONE in `v1.53.0`.
 
 - Extend the storefront admin `stats` view with `storefront.stats_for_bot()`:
   monthly sales, confirmed top-ups, active customers, provisioned orders,

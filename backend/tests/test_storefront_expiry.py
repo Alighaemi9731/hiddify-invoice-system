@@ -182,3 +182,47 @@ def test_already_expired_not_spammed(tmp_path):
         assert c["due"] == 0 and fake.sent == []
 
     _run(body, tmp_path, "e7.db")
+
+
+# ── I11: admin stats aggregates ───────────────────────────────────────────────
+
+def test_stats_for_bot_aggregates(tmp_path):
+    from app.models import StorefrontPlan, StorefrontWalletTxn
+    from app.services import storefront as sf_service
+
+    async def body(s):
+        order, cust = await _seed(s, days_left_via_snapshot=2)
+        now = dt.datetime.now(dt.timezone.utc)
+        cust.last_seen_at = now
+        cust.wallet_balance_toman = 50_000
+        s.add_all([
+            StorefrontPlan(storefront_bot_id=cust.storefront_bot_id, title="", gb=20,
+                           days=30, price_toman=100_000, enabled=True, sort_order=0),
+            StorefrontPlan(storefront_bot_id=cust.storefront_bot_id, title="", gb=50,
+                           days=30, price_toman=200_000, enabled=False, sort_order=1),
+            # This month's ledger: one purchase (negative debit), a partial refund, one
+            # confirmed top-up, one pending top-up.
+            StorefrontWalletTxn(customer_id=cust.id, kind="purchase",
+                                amount_toman=-100_000, status="done", order_id=order.id),
+            StorefrontWalletTxn(customer_id=cust.id, kind="refund",
+                                amount_toman=20_000, status="done", order_id=order.id),
+            StorefrontWalletTxn(customer_id=cust.id, kind="topup",
+                                amount_toman=150_000, status="confirmed", method="card"),
+            StorefrontWalletTxn(customer_id=cust.id, kind="topup",
+                                amount_toman=80_000, status="pending", method="card"),
+        ])
+        await s.commit()
+
+        st = await sf_service.stats_for_bot(s, cust.storefront_bot_id)
+        assert st.customers == 1
+        assert st.active_30d == 1
+        assert st.plans_total == 2 and st.plans_enabled == 1
+        assert st.provisioned == 1
+        assert st.expiring_soon == 1                    # 2 days left <= threshold
+        assert st.sales_month_toman == 80_000           # 100k purchase - 20k refund
+        assert st.sales_month_count == 1
+        assert st.topups_month_toman == 150_000         # confirmed only
+        assert st.pending_topups == 1
+        assert st.wallet_liability_toman == 50_000
+
+    _run(body, tmp_path, "e8.db")

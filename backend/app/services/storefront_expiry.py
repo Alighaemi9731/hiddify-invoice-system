@@ -172,3 +172,43 @@ async def notify_expiring(
     if counts["due"]:
         log.info("storefront expiry reminders: %s", counts)
     return counts
+
+
+async def count_expiring_soon(
+    session: AsyncSession, storefront_bot_id: int, threshold: int
+) -> int:
+    """How many of ONE storefront's provisioned orders expire within `threshold` days
+    (for the admin stats view). Same days-left math as the reminder sweep."""
+    if threshold <= 0:
+        return 0
+    today = tehran_today()
+    rows = (
+        await session.execute(
+            select(StorefrontOrder)
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontOrder.customer_id)
+            .where(
+                StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+                StorefrontOrder.status == "provisioned",
+            )
+        )
+    ).scalars().all()
+    if not rows:
+        return 0
+    uuids = [o.panel_user_uuid for o in rows if o.panel_user_uuid]
+    snaps: dict[tuple[int, str], EndUserSnapshot] = {}
+    if uuids:
+        for sn in (
+            await session.execute(
+                select(EndUserSnapshot).where(EndUserSnapshot.user_uuid.in_(uuids))
+            )
+        ).scalars().all():
+            snaps[(sn.panel_id, sn.user_uuid)] = sn
+    n = 0
+    for order in rows:
+        snap = None
+        if order.panel_id is not None:
+            snap = snaps.get((order.panel_id, order.panel_user_uuid or ""))
+        days_left = _days_left(order, snap, today)
+        if days_left is not None and 0 <= days_left <= threshold:
+            n += 1
+    return n

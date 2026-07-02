@@ -8,7 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.52.0 - 2026-07-02
+## 1.53.0 - 2026-07-02
+
+Batch I11 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Added
+
+- **Real storefront stats for shop admins.** The «📊 آمار» view in each reseller's shop bot showed
+  only three counters (customers / plans / pending top-ups); it's now a business dashboard:
+  customers (with active-in-30-days), enabled/total plans, live services (with a near-expiry
+  count reusing the I10 math), **this-month sales in Toman** (purchases minus refunds from the
+  wallet ledger, with purchase count), this-month confirmed top-ups, pending top-ups, and the
+  total customer wallet balance (the reseller's liability).
 
 Batch I10 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 

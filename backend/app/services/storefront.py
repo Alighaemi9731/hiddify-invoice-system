@@ -7,6 +7,7 @@ owner's monthly-fee computation. Money movement lives in `storefront_wallet`; pr
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -260,3 +261,95 @@ async def monthly_fee_for(session: AsyncSession, reseller: Reseller) -> int:
         return max(0, int(fee or 0))
     except (TypeError, ValueError):
         return 0
+
+
+# ── admin stats (I11) ────────────────────────────────────────────────────────
+
+@dataclass
+class BotStats:
+    """Aggregates for the storefront admin «📊 آمار» view. Money is Toman."""
+    customers: int = 0
+    active_30d: int = 0
+    plans_enabled: int = 0
+    plans_total: int = 0
+    provisioned: int = 0
+    expiring_soon: int = 0
+    sales_month_toman: float = 0.0
+    sales_month_count: int = 0
+    topups_month_toman: float = 0.0
+    pending_topups: int = 0
+    wallet_liability_toman: float = 0.0
+
+
+async def stats_for_bot(session: AsyncSession, storefront_bot_id: int) -> BotStats:
+    """One storefront's dashboard numbers: customer counts, plan counts, provisioned +
+    near-expiry services, this-month sales (purchase debits minus refunds) and confirmed
+    top-ups from the wallet ledger, pending top-ups, and total wallet liability."""
+    from app.models import StorefrontOrder, StorefrontWalletTxn
+    from app.services import storefront_expiry, storefront_wallet
+    from app.services.periods import current_month
+
+    st = BotStats()
+    st.customers = await count_customers(session, storefront_bot_id)
+
+    now = dt.datetime.now(dt.timezone.utc)
+    st.active_30d = int((await session.execute(
+        select(func.count(StorefrontCustomer.id)).where(
+            StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+            StorefrontCustomer.last_seen_at.is_not(None),
+            StorefrontCustomer.last_seen_at >= now - dt.timedelta(days=30),
+        )
+    )).scalar_one() or 0)
+
+    plans = await list_plans(session, storefront_bot_id)
+    st.plans_total = len(plans)
+    st.plans_enabled = sum(1 for p in plans if p.enabled)
+
+    st.provisioned = int((await session.execute(
+        select(func.count(StorefrontOrder.id))
+        .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontOrder.customer_id)
+        .where(
+            StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+            StorefrontOrder.status == "provisioned",
+        )
+    )).scalar_one() or 0)
+
+    try:
+        threshold = int(await settings_service.get(session, "storefront_expiry_notify_days", 3))
+    except (TypeError, ValueError):
+        threshold = 3
+    st.expiring_soon = await storefront_expiry.count_expiring_soon(
+        session, storefront_bot_id, max(threshold, 3))
+
+    month_start = current_month().start
+    month_start_dt = dt.datetime(
+        month_start.year, month_start.month, month_start.day, tzinfo=dt.timezone.utc)
+
+    def _txn_q(*conds):
+        return (
+            select(func.coalesce(func.sum(StorefrontWalletTxn.amount_toman), 0),
+                   func.count(StorefrontWalletTxn.id))
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontWalletTxn.customer_id)
+            .where(StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+                   StorefrontWalletTxn.created_at >= month_start_dt, *conds)
+        )
+
+    purchases = (await session.execute(_txn_q(
+        StorefrontWalletTxn.kind == "purchase", StorefrontWalletTxn.status == "done"))).one()
+    refunds = (await session.execute(_txn_q(
+        StorefrontWalletTxn.kind == "refund", StorefrontWalletTxn.status == "done"))).one()
+    # purchases are stored as NEGATIVE debits; refunds as positive credits that undo them.
+    st.sales_month_toman = float(-(purchases[0] or 0)) - float(refunds[0] or 0)
+    st.sales_month_count = int(purchases[1] or 0)
+
+    topups = (await session.execute(_txn_q(
+        StorefrontWalletTxn.kind == "topup", StorefrontWalletTxn.status == "confirmed"))).one()
+    st.topups_month_toman = float(topups[0] or 0)
+    st.pending_topups = len(await storefront_wallet.pending_topups_for_bot(
+        session, storefront_bot_id))
+
+    st.wallet_liability_toman = float((await session.execute(
+        select(func.coalesce(func.sum(StorefrontCustomer.wallet_balance_toman), 0)).where(
+            StorefrontCustomer.storefront_bot_id == storefront_bot_id)
+    )).scalar_one() or 0)
+    return st

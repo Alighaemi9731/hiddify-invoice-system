@@ -340,12 +340,17 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await ans(rtl(f"👥 مشتری‌ها ({total})"),
                   reply_markup=kb.customers_page_kb(rows, page=0, per_page=_PER_PAGE, total=total))
     elif action == "stats":
-        plans = await storefront.list_plans(s, sf.id)
-        n_custs = await storefront.count_customers(s, sf.id)
-        pend = await storefront_wallet.pending_topups_for_bot(s, sf.id)
+        st_ = await storefront.stats_for_bot(s, sf.id)
+        expiring = f"  (⏳ نزدیک به انقضا: {st_.expiring_soon})" if st_.expiring_soon else ""
         await ans(rtl(
-            f"📊 آمار\nمشتری‌ها: {n_custs}\nپلن‌ها: {len(plans)}\n"
-            f"شارژِ در انتظار: {len(pend)}"))
+            "📊 آمار فروشگاه\n\n"
+            f"👥 مشتری‌ها: {st_.customers}  (فعال در ۳۰ روز اخیر: {st_.active_30d})\n"
+            f"📦 پلن‌ها: {st_.plans_enabled} فعال از {st_.plans_total}\n"
+            f"🟢 سرویس‌های فعال: {st_.provisioned}{expiring}\n\n"
+            f"💰 فروش این ماه: {st_.sales_month_toman:,.0f} تومان ({st_.sales_month_count} خرید)\n"
+            f"💳 شارژ تأییدشدهٔ این ماه: {st_.topups_month_toman:,.0f} تومان\n"
+            f"⏸ شارژِ در انتظار تأیید: {st_.pending_topups}\n"
+            f"🏦 موجودی کیف پول مشتری‌ها: {st_.wallet_liability_toman:,.0f} تومان"))
     elif action == "broadcast":
         await state.set_state(SF.broadcast)
         await ans(rtl("متنِ پیامِ همگانی به مشتری‌ها را بفرستید:"), reply_markup=kb.cancel_kb())
