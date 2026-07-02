@@ -8,7 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.4 - 2026-07-02
+## 1.50.5 - 2026-07-02
+
+### Fixed
+
+- **A malformed storefront bot token no longer crashes the setup flow.** Caught live by the new
+  in-app error tracker (v1.50.0) within hours of deployment: a reseller pasted a token that passed
+  the cheap pre-check but failed aiogram's constructor validation (`TokenValidationError`), which
+  escaped the handler — the user got silence instead of the «توکن نامعتبر است» reply. Both the
+  setup handler and the storefront manager (for a malformed *stored* token, which is now marked
+  errored instead of re-raising every reconcile) construct the probe `Bot` inside a guard.
 
 Batch I05 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 

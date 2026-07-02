@@ -1341,7 +1341,15 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
         await message.answer(rtl("توکن نامعتبر است؛ توکنِ BotFather را بفرستید."),
                              reply_markup=keyboards.cancel_keyboard("« انصراف"))
         return
-    probe = Bot(token=token)
+    try:
+        # aiogram validates the token FORMAT synchronously in the constructor — a malformed
+        # paste that slips past the cheap pre-check above must get the same friendly reply,
+        # not crash the handler (seen live: TokenValidationError, 2026-07-02).
+        probe = Bot(token=token)
+    except Exception:  # noqa: BLE001
+        await message.answer(rtl("توکن نامعتبر است؛ توکنِ BotFather را بفرستید."),
+                             reply_markup=keyboards.cancel_keyboard("« انصراف"))
+        return
     try:
         me = await probe.get_me()
     except Exception:  # noqa: BLE001

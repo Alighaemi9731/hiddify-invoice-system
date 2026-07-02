@@ -126,7 +126,15 @@ async def _stop_runner(reseller_id: int) -> None:
 
 async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.Semaphore) -> None:
     async with sem:
-        bot = Bot(token=token)
+        try:
+            # The Bot constructor validates the token FORMAT synchronously; a malformed stored
+            # token must be marked errored like a revoked one, not re-raised every reconcile.
+            bot = Bot(token=token)
+        except Exception as exc:  # noqa: BLE001
+            async with SessionLocal() as s:
+                await storefront.mark_errored(s, row_id, f"malformed token: {exc}")
+            log.warning("storefront bot row %s token malformed: %s", row_id, exc)
+            return
         rtl_middleware.install(bot)  # storefront replies are Persian+Latin mixes too
         try:
             me = await asyncio.wait_for(bot.get_me(), timeout=20)

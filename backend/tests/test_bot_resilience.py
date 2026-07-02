@@ -184,3 +184,60 @@ def test_active_bots_excludes_errored(tmp_path):
             await engine.dispose()
 
     asyncio.run(go())
+
+
+# ── malformed BotFather token (seen live 2026-07-02) ─────────────────────────
+
+def test_sf_setup_malformed_token_gets_friendly_reply():
+    """A pasted token that passes the cheap pre-check (has ':' and length) but fails
+    aiogram's constructor validation must produce the same «توکن نامعتبر است» reply the
+    obviously-bad input gets — not an unhandled TokenValidationError."""
+    async def go():
+        from app.bot import handlers
+
+        st, _ = _fsm_with({})
+        await st.set_state(handlers.StorefrontSetupState.token)
+        await st.update_data(sf_reseller_id=1)
+
+        class _M:
+            text = "1234567:invalid token with spaces and نviz"
+            from_user = SimpleNamespace(id=1, username=None, first_name="t")
+            sent: list[str] = []
+
+            async def answer(self, text: str = "", **_kw):
+                self.sent.append(text)
+
+        msg = _M()
+        await handlers.on_sf_setup_token(msg, st)  # must not raise
+        assert msg.sent and "نامعتبر" in msg.sent[-1]
+
+    asyncio.run(go())
+
+
+def test_start_runner_marks_malformed_stored_token_errored(monkeypatch):
+    from app.bot.storefront import manager
+
+    class _S:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return None
+
+    recorded: list[tuple[int, str]] = []
+
+    async def fake_mark_errored(_s, row_id, error):
+        recorded.append((row_id, error))
+
+    monkeypatch.setattr(manager, "SessionLocal", lambda: _S())
+    monkeypatch.setattr(manager.storefront, "mark_errored", fake_mark_errored)
+
+    async def go():
+        sem = asyncio.Semaphore(1)
+        await manager._start_runner(1, 9, "totally not a token", sem)
+
+    asyncio.run(go())
+    assert recorded and recorded[0][0] == 9
+    assert "malformed" in recorded[0][1]
+    assert 1 not in manager._active
+
