@@ -27,6 +27,21 @@ def today() -> dt.date:
     return dt.date.today()
 
 
+def to_local_date(ts: dt.datetime) -> dt.date:
+    """The LOCAL (Asia/Tehran) calendar date a stored instant fell on. Naive values are
+    treated as UTC (how timestamps are stored). Raw `.date()` on a UTC instant extracts the
+    UTC day — for events in the Tehran 00:00–03:29 window that's the PREVIOUS day, which
+    made day-count anchors (e.g. dunning's `sent_at`) fire a day early."""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    if ZoneInfo is not None:
+        try:
+            return ts.astimezone(ZoneInfo(_TZ_NAME)).date()
+        except Exception:  # noqa: BLE001
+            pass
+    return ts.date()
+
+
 @dataclass(frozen=True)
 class Period:
     start: dt.date

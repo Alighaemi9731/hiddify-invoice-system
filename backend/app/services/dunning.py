@@ -28,7 +28,7 @@ from app.models.enums import (
     InvoiceStatus,
     PaymentStatus,
 )
-from app.services import enforcement, notifier, owner_notify, settings_service
+from app.services import enforcement, notifier, owner_notify, periods, settings_service
 
 log = logging.getLogger("dunning")
 
@@ -81,7 +81,10 @@ async def _msg(session: AsyncSession, key: str, inv: Invoice, reseller: Reseller
 
 async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) -> dict:
     now = now or dt.datetime.now(dt.timezone.utc)
-    today = now.date()
+    # Day counting is TEHRAN-calendar based (like every deadline/eligibility check since B06).
+    # Raw `.date()` here extracted the UTC day: a sent_at in the Tehran 00:00–03:29 window
+    # anchored one day early, firing every reminder/enforcement threshold a day ahead.
+    today = periods.to_local_date(now)
 
     cfg = await settings_service.get_many(
         session,
@@ -147,7 +150,7 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                     continue
                 if sent_at.tzinfo is None:
                     sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
-                anchor = sent_at.date()
+                anchor = periods.to_local_date(sent_at)
             days = (today - anchor).days
             if days < 0:
                 # Deadline still in the future → fully paused.

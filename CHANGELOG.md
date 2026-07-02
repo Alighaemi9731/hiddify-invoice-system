@@ -8,7 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.53.1 - 2026-07-02
+## 1.53.2 - 2026-07-02
+
+### Fixed
+
+- **Dunning reminders no longer fire a day early for late-night invoices.** Owner-reported: with
+  `reminder1_day=2` and invoices sent at Tehran 03:00, the first reminder arrived on day 2 instead
+  of day 3. The day counter extracted the **UTC** calendar date from `sent_at`/now — for any
+  instant in the Tehran 00:00–03:29 window that's the *previous* day, pulling the anchor back and
+  firing every reminder/warning/enforcement threshold one day ahead. New `periods.to_local_date()`
+  converts stored instants to the Tehran calendar day; `run_dunning` now uses it for both the
+  anchor and "today" (a whole-codebase sweep confirmed dunning was the only defect site — all
+  other deadline checks already used the Tehran-local helper).
 
 Batch I12 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — the final batch; the
 2026-07-02 improvement program (I01–I12) is complete.
