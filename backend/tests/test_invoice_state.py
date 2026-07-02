@@ -24,6 +24,7 @@ from app.models import (  # noqa: E402
     FinancialRecord,
     Invoice,
     Payment,
+    PaymentSettlement,
     Reseller,
 )
 from app.models.enums import (  # noqa: E402
@@ -131,6 +132,11 @@ def test_reject_does_not_unpay_invoice_settled_by_other_payment(tmp_path):
         p2 = Payment(reseller_id=r.id, invoice_id=inv.id, method=PaymentMethod.manual,
                      status=PaymentStatus.confirmed, settled_invoice_ids=str(inv.id))
         s.add_all([p1, p2])
+        await s.flush()
+        # I06: directly-seeded payments must mirror their set into payment_settlements
+        # (production rows get this from the submit path / the backfill migration).
+        s.add_all([PaymentSettlement(payment_id=p1.id, invoice_id=inv.id),
+                   PaymentSettlement(payment_id=p2.id, invoice_id=inv.id)])
         await s.commit()
 
         from app.services import payments
@@ -166,6 +172,8 @@ def test_revert_clears_ledger_txid_and_resets_dunning(tmp_path):
                     txid="0xdeadbeef", status=PaymentStatus.confirmed,
                     settled_invoice_ids=str(inv.id))
         s.add(p)
+        await s.flush()
+        s.add(PaymentSettlement(payment_id=p.id, invoice_id=inv.id))
         await s.commit()
         old_sent = inv.sent_at
 
@@ -398,6 +406,10 @@ def test_reject_multi_reverts_whole_set_but_protects_overlap(tmp_path):
         p2 = Payment(reseller_id=r.id, invoice_id=b.id, method=PaymentMethod.manual,
                      status=PaymentStatus.confirmed, settled_invoice_ids=str(b.id))
         s.add_all([p1, p2])
+        await s.flush()
+        s.add_all([PaymentSettlement(payment_id=p1.id, invoice_id=a.id),
+                   PaymentSettlement(payment_id=p1.id, invoice_id=b.id),
+                   PaymentSettlement(payment_id=p2.id, invoice_id=b.id)])
         await s.commit()
 
         await payments.reject_payment(s, p1.id)

@@ -45,6 +45,7 @@ _POST_BASELINE_TABLES = {
     "portal_login_nonce",
     "storefront_bots", "storefront_plans", "storefront_customers",
     "storefront_wallet_txns", "storefront_orders",
+    "payment_settlements",
 }
 
 

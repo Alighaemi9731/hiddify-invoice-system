@@ -8,7 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.5 - 2026-07-02
+## 1.50.6 - 2026-07-02
+
+Batch I06 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — the isolated money batch.
+
+### Changed
+
+- **Payment invoice-sets got a real, indexed table.** The set of invoices a payment covers was
+  stored only as a comma-joined string (`payments.settled_invoice_ids`), which is not queryable —
+  the duplicate-pending block and the "don't un-pay an invoice another payment still settles"
+  protection loaded **every** payment into Python and parsed strings on each submission. New
+  `payment_settlements(payment_id, invoice_id)` join table (migration `f7a3b5d9c2e4`,
+  automatically backfilled from the comma column with dangling ids skipped and logged); the three
+  hot lookups are now single indexed queries. **Dual-write:** every writer keeps the comma column
+  byte-equal, so rolling back to v1.50.5 is completely safe (old code reads the comma column and
+  simply ignores the new table). A legacy payment confirmed after the migration (e.g. restored
+  from an old backup) self-heals its rows at confirm time. Money behavior is unchanged —
+  regression-tested: duplicate-pending block, multi-invoice revert overlap protection, legacy
+  confirm, delete cleanup, and the migration backfill itself; validated up/down on PostgreSQL 16.
 
 ### Fixed
 

@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.codes import payment_code
-from app.models import Invoice, Payment, Reseller
+from app.models import Invoice, Payment, PaymentSettlement, Reseller
 from app.models.enums import (
     DeliveryKind,
     InvoiceStatus,
@@ -83,34 +83,57 @@ async def _pending_payments_for_resellers(
     )
 
 
+async def _sync_settlements(session: AsyncSession, payment: Payment) -> None:
+    """Mirror this payment's invoice set into `payment_settlements` (I06). Dual-write: the
+    comma column stays byte-equal (a rollback to the previous release keeps working); the hot
+    lookups below use the indexed table instead of loading every payment into Python. Callers
+    must have flushed the payment (needs `payment.id`) and commit afterwards."""
+    await session.execute(
+        delete(PaymentSettlement).where(PaymentSettlement.payment_id == payment.id)
+    )
+    for iid in sorted(set(_settled_ids(payment))):
+        session.add(PaymentSettlement(payment_id=payment.id, invoice_id=iid))
+
+
 async def _pending_invoice_ids_in_sets(
     session: AsyncSession, candidate_ids: set[int], reseller_ids: set[int] | list[int]
 ) -> set[int]:
     """Which of `candidate_ids` already belong to ANY pending payment's invoice set — used to
     block a duplicate submission. One invoice may never sit in two pending payments at once."""
-    if not candidate_ids:
+    if not candidate_ids or not reseller_ids:
         return set()
-    held: set[int] = set()
-    for p in await _pending_payments_for_resellers(session, reseller_ids):
-        held.update(_settled_ids(p))
-    return {i for i in candidate_ids if i in held}
+    rows = (
+        await session.execute(
+            select(PaymentSettlement.invoice_id)
+            .join(Payment, Payment.id == PaymentSettlement.payment_id)
+            .where(
+                Payment.status == PaymentStatus.pending,
+                Payment.reseller_id.in_(list(reseller_ids)),
+                PaymentSettlement.invoice_id.in_(list(candidate_ids)),
+            )
+        )
+    ).scalars().all()
+    return set(rows)
 
 
 async def _pending_payment_for_invoice(session: AsyncSession, invoice_id: int | None) -> Payment | None:
     """The PENDING payment whose invoice SET contains this invoice (if any) — used to block a
-    duplicate submission so one invoice never sits in several pending payments. Matches both the
-    primary `invoice_id` link and membership of `settled_invoice_ids` (multi-invoice payments)."""
+    duplicate submission so one invoice never sits in several pending payments. Single indexed
+    query on the settlements table (which mirrors both the primary `invoice_id` link and the
+    multi-invoice `settled_invoice_ids` sets)."""
     if not invoice_id:
         return None
-    pending = (
+    return (
         await session.execute(
-            select(Payment).where(Payment.status == PaymentStatus.pending)
+            select(Payment)
+            .join(PaymentSettlement, PaymentSettlement.payment_id == Payment.id)
+            .where(
+                Payment.status == PaymentStatus.pending,
+                PaymentSettlement.invoice_id == invoice_id,
+            )
+            .limit(1)
         )
-    ).scalars().all()
-    for p in pending:
-        if invoice_id in _settled_ids(p):
-            return p
-    return None
+    ).scalars().first()
 
 
 async def submit_reseller_payment(
@@ -255,6 +278,8 @@ async def submit_reseller_payment(
             method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
         )
     session.add(payment)
+    await session.flush()
+    await _sync_settlements(session, payment)
     await session.commit()
 
     n = len(fresh_list)
@@ -830,6 +855,7 @@ async def verify_payment(
     if set_ids:
         payment.invoice_id = set_ids[0]
         payment.settled_invoice_ids = ",".join(str(i) for i in set_ids)
+        await _sync_settlements(session, payment)
     await session.commit()
     await _maybe_restore(
         session, await session.get(Reseller, targets[0].reseller_id),
@@ -907,15 +933,21 @@ async def _settled_by_other_confirmed(
 ) -> bool:
     """True if a DIFFERENT confirmed payment also settled this invoice. Reversing/deleting one
     payment must not un-pay an invoice that another confirmed payment still settles — otherwise
-    rejecting a duplicate/mis-clicked payment would wrongly mark a genuinely-paid invoice owed."""
-    others = (
+    rejecting a duplicate/mis-clicked payment would wrongly mark a genuinely-paid invoice owed.
+    Single indexed EXISTS-style query on the settlements table."""
+    row = (
         await session.execute(
-            select(Payment).where(
-                Payment.id != exclude_payment_id, Payment.status == PaymentStatus.confirmed
+            select(PaymentSettlement.payment_id)
+            .join(Payment, Payment.id == PaymentSettlement.payment_id)
+            .where(
+                Payment.status == PaymentStatus.confirmed,
+                Payment.id != exclude_payment_id,
+                PaymentSettlement.invoice_id == invoice_id,
             )
+            .limit(1)
         )
-    ).scalars().all()
-    return any(invoice_id in _settled_ids(p) for p in others)
+    ).scalars().first()
+    return row is not None
 
 
 async def _revert_settled_invoices(
@@ -996,6 +1028,7 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     if all_in_set:
         payment.invoice_id = all_in_set[0].id
         payment.settled_invoice_ids = ",".join(str(inv.id) for inv in all_in_set)
+        await _sync_settlements(session, payment)
         if not payment.amount_usdt:
             payment.amount_usdt = float(
                 sum(Decimal(str(inv.amount_usdt or 0)) for inv in all_in_set)
@@ -1071,6 +1104,11 @@ async def delete_payment(session: AsyncSession, payment_id: int) -> bool:
             os.remove(payment.proof_path)
         except OSError:
             log.warning("failed to remove proof file %s", payment.proof_path, exc_info=True)
+    # Postgres also removes these via ON DELETE CASCADE; delete explicitly so the mirror
+    # is correct on every backend (SQLite test runs don't enforce FK cascades).
+    await session.execute(
+        delete(PaymentSettlement).where(PaymentSettlement.payment_id == payment.id)
+    )
     await session.delete(payment)
     await session.commit()
     return True

@@ -67,3 +67,19 @@ class Payment(Base, TimestampMixin):
     # Invoice ids settled by this payment. Kept comma-separated for compatibility with older
     # multi-invoice rows; current workflows store exactly one id.
     settled_invoice_ids: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class PaymentSettlement(Base):
+    """One row per (payment, invoice) the payment covers/settles — the indexed, queryable
+    mirror of `Payment.settled_invoice_ids` (I06). Dual-write: writers keep the comma column
+    byte-equal for rollback safety; the hot lookups (duplicate-pending block, revert
+    protection) query this table instead of loading every payment into Python."""
+
+    __tablename__ = "payment_settlements"
+
+    payment_id: Mapped[int] = mapped_column(
+        ForeignKey("payments.id", ondelete="CASCADE"), primary_key=True
+    )
+    invoice_id: Mapped[int] = mapped_column(
+        ForeignKey("invoices.id", ondelete="CASCADE"), primary_key=True, index=True
+    )

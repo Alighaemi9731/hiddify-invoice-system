@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "e6d4a2c8b9f1"
+HEAD = "f7a3b5d9c2e4"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -301,3 +301,47 @@ def test_reseller_tree_is_panel_scoped_and_cycle_safe(tmp_path):
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_payment_settlements_backfill(tmp_path):
+    """I06: upgrading past f7a3b5d9c2e4 backfills payment_settlements from the comma column
+    (falling back to the primary invoice_id link) and skips dangling invoice ids."""
+    db = tmp_path / "settle.db"
+    _alembic(db, "upgrade", "e6d4a2c8b9f1")   # the revision just BEFORE the join table
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO panels (id, key, name, host, proxy_path_enc, owner_uuid, enabled, status, source)"
+        " VALUES (1, 'p', '', 'h', 'x', 'o', 1, 'ok', 'backup_json')"
+    )
+    conn.execute(
+        "INSERT INTO resellers (id, panel_id, admin_uuid, name, mode, is_owner,"
+        " exclude_from_billing, can_add_admin, enforcement_state)"
+        " VALUES (1, 1, 'r', 'R', 'agent', 0, 0, 0, 'active')"
+    )
+    for iid, label in ((1, "2026-01"), (2, "2026-02")):
+        conn.execute(
+            "INSERT INTO invoices (id, reseller_id, panel_id, period_start, period_end,"
+            " period_label, usage_gb, users_count, price_per_gb, amount_toman,"
+            " base_amount_toman, min_sale_toman, floor_applied, usdt_rate, amount_usdt, status)"
+            " VALUES (?, 1, 1, ?, ?, ?, 1, 1, 0, 0, 0, 0, 0, 0, 0, 'paid')",
+            (iid, f"{label}-01", f"{label}-28", label),
+        )
+    conn.executemany(
+        "INSERT INTO payments (id, reseller_id, invoice_id, method, status, chain,"
+        " confirmations, amount_usdt, settled_invoice_ids)"
+        " VALUES (?, 1, ?, 'manual', 'confirmed', 'bsc', 0, 0, ?)",
+        [
+            (1, 1, "1,2"),    # multi-invoice comma set
+            (2, 2, None),     # legacy row: only the primary invoice_id link
+            (3, 1, "1,999"),  # 999 was deleted since → skipped, 1 kept
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    rows = set(conn.execute(
+        "SELECT payment_id, invoice_id FROM payment_settlements").fetchall())
+    conn.close()
+    assert rows == {(1, 1), (1, 2), (2, 2), (3, 1)}

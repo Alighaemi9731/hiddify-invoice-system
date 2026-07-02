@@ -129,7 +129,7 @@ Primary files:
 
 ## I06 - Payment settlements join table
 
-Priority: P1. Version: PATCH. Status: TODO. MONEY batch — strictly isolated.
+Priority: P1. Version: PATCH. Status: DONE in `v1.50.6`. MONEY batch — strictly isolated.
 
 - New `PaymentSettlement(payment_id, invoice_id)` model (PK pair, CASCADE FKs,
   index on `invoice_id`); migration backfills from `settled_invoice_ids`
