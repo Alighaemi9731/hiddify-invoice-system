@@ -77,7 +77,9 @@ def test_registration_requires_unique_host_path_uuid(tmp_path):
 
 
 def test_message_membership_gate_blocks_commands_and_payment_state(monkeypatch):
-    from app.bot import handlers
+    # The gate middleware lives in the handlers package's `common` module and looks up
+    # these seams as its own module globals — patch them there (single patch point).
+    from app.bot.handlers import common as handlers
 
     class SessionContext:
         async def __aenter__(self):

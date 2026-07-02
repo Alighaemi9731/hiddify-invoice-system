@@ -1,0 +1,500 @@
+"""Reseller + owner bot handlers: membership gate, menus, registration, payment.
+
+Shared core of the handlers package: the single ``router`` (with its router-level
+private-chat filter and the two membership-gate outer middlewares), the FSM States,
+module-level constants/regexes, and the cross-module helper seams. Domain modules
+import ``common`` and register their handlers on ``common.router``; the package
+``__init__`` imports them in the original monolithic file's order, which IS the
+aiogram registration (= dispatch) order.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import re
+
+from aiogram import Bot, F, Router
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, ReplyKeyboardRemove
+from sqlalchemy import select
+
+from app.bot import keyboards, texts
+from app.core.db import SessionLocal
+from app.models import BotUser, Reseller
+from app.models.enums import InvoiceStatus
+from app.services import settings_service
+
+
+class BroadcastState(StatesGroup):
+    waiting = State()
+
+
+class SupportState(StatesGroup):
+    """A reseller is composing a message to support."""
+
+    waiting = State()
+
+
+class OwnerReplyState(StatesGroup):
+    """The owner is composing a reply to a specific user (target id in FSM data)."""
+
+    waiting = State()
+
+
+class SubCapState(StatesGroup):
+    """A reseller is entering the monthly GB cap for one of their sub-resellers
+    (the sub's id is held in FSM data)."""
+
+    waiting = State()
+
+
+class OwnerCapBumpState(StatesGroup):
+    """The owner is entering a custom capacity-increase amount for a reseller that requested
+    more capacity from the web portal (the reseller id is held in FSM data)."""
+
+    waiting = State()
+
+
+class PayState(StatesGroup):
+    """A reseller chose one or more invoices to pay and is now sending the TXID / receipt photo
+    (the chosen invoice ids are held in FSM data as `pay_invoice_ids`, a list)."""
+
+    waiting = State()
+
+
+class OwnerSearchState(StatesGroup):
+    """The owner is typing a reseller name/uuid to look up (admin-bot search)."""
+
+    waiting = State()
+
+
+class CreateUserState(StatesGroup):
+    """A top-level reseller is creating end-user(s). Choices (reseller_id, mode, count, gb, days)
+    are collected via inline buttons into FSM data; `name` waits for the typed user/base name."""
+
+    name = State()
+
+
+class StorefrontSetupState(StatesGroup):
+    """A reseller is setting up their VPN storefront bot — `token` waits for the BotFather token."""
+
+    token = State()
+
+
+log = logging.getLogger("bot.handlers")
+router = Router()
+
+# The bot is a PRIVATE-CHAT assistant. When it's an admin of the announcement channel/
+# group (needed for the membership gate + guard), Telegram delivers every group message to
+# it — but it must NOT react there. Restrict ALL message handlers to private chats; group/
+# channel/supergroup messages are ignored. Membership checks use the get_chat_member API,
+# not message handlers, so the gate still works. Callback queries (button taps) are
+# unaffected — they only occur on messages the bot itself sent in a private chat.
+router.message.filter(F.chat.type == "private")
+
+# Callbacks that must work even for a NON-member (so they can pass the gate or are inert).
+_GATE_EXEMPT_CALLBACKS = {"check_membership", "noop"}
+_GATE_EXEMPT_COMMANDS = {"start", "cancel"}
+
+
+@router.callback_query.outer_middleware
+async def _membership_gate_mw(handler, event, data):
+    """Re-check forced-membership on EVERY button tap, not just /start.
+
+    Without this, a user who already has the menu in their chat history (or left the
+    channel/group afterwards) could keep using old buttons without being a member. The
+    owner is exempt; `check_membership` is always allowed so they can re-verify."""
+    try:
+        cb_data = getattr(event, "data", "") or ""
+        if cb_data not in _GATE_EXEMPT_CALLBACKS:
+            bot = data.get("bot")
+            user = getattr(event, "from_user", None)
+            if bot is not None and user is not None:
+                async with SessionLocal() as session:
+                    if not await _is_owner_user(session, user):
+                        missing = await _missing_gates(bot, session, user.id)
+                        if missing:
+                            names = " و ".join(g["label"] for g in missing)
+                            await event.answer(
+                                f"برای استفاده از ربات باید عضو {names} باشید. ابتدا /start را بزنید.",
+                                show_alert=True,
+                            )
+                            return  # block the real handler
+    except Exception:  # noqa: BLE001 — a gate error must never break the bot
+        log.warning("membership gate middleware failed", exc_info=True)
+        await event.answer(
+            "بررسی عضویت موقتاً ممکن نیست؛ لطفاً کمی بعد دوباره تلاش کنید.",
+            show_alert=True,
+        )
+        return
+    return await handler(event, data)
+
+
+def _message_command(text: str | None) -> str | None:
+    """Return a normalized Telegram slash command, excluding any @bot suffix."""
+    parts = (text or "").strip().split(maxsplit=1)
+    if not parts:
+        return None
+    first = parts[0]
+    if not first.startswith("/"):
+        return None
+    return first[1:].split("@", 1)[0].lower()
+
+
+@router.message.outer_middleware
+async def _membership_gate_message_mw(handler, event, data):
+    """Apply forced membership to direct commands and FSM messages as well as callbacks.
+
+    `/start` must remain reachable so a non-member can obtain join links, and `/cancel`
+    remains reachable so an in-progress FSM can always be exited. Owners are exempt.
+    """
+    chat = getattr(event, "chat", None)
+    if getattr(chat, "type", None) != "private":
+        return await handler(event, data)
+    if _message_command(getattr(event, "text", None)) in _GATE_EXEMPT_COMMANDS:
+        return await handler(event, data)
+    try:
+        bot = data.get("bot")
+        user = getattr(event, "from_user", None)
+        if bot is not None and user is not None:
+            async with SessionLocal() as session:
+                if not await _is_owner_user(session, user):
+                    missing = await _missing_gates(bot, session, user.id)
+                    if missing:
+                        names = " و ".join(g["label"] for g in missing)
+                        await event.answer(
+                            f"برای استفاده از ربات باید عضو {names} باشید.\n"
+                            "ابتدا /start را بزنید تا لینک عضویت برایتان ارسال شود."
+                        )
+                        return
+    except Exception:  # noqa: BLE001 — gate failures must not grant access
+        log.warning("message membership gate middleware failed", exc_info=True)
+        await event.answer("بررسی عضویت موقتاً ممکن نیست؛ لطفاً کمی بعد دوباره تلاش کنید.")
+        return
+    return await handler(event, data)
+
+
+_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")          # BEP-20 (BSC) / Avalanche C-Chain tx hash
+_TON_EXPLORERS = ("tonscan.org", "tonviewer.com", "ton.cx", "dton.io", "toncoin.org")
+
+
+def _parse_txid(text: str, *, usdt: bool, ton: bool, avax: bool) -> tuple[str, str] | None:
+    """Extract (chain, txid) from raw text OR a pasted explorer URL. chain ∈ {'bsc','ton','avax'},
+    or the sentinel 'ambiguous' when a BARE 0x hash arrives and BOTH USDT(BSC) and AVAX are enabled
+    (they share the 0x+64hex format) — the caller then asks which network. Classification honors
+    which methods are enabled (so a hash maps to an offered chain). No on-chain check here — the
+    owner verifies via the clickable link in the panel."""
+    t = (text or "").strip()
+    # An explorer URL is AUTHORITATIVE about the chain: resolve to that chain when it's enabled,
+    # else REJECT (return None) — never fall through to the bare-0x scanner below, which would
+    # mis-attribute the hash to the *other* 0x-chain (a snowtrace link → bsc, or a bscscan link →
+    # avax) and produce a dead/wrong review link in the panel.
+    m = re.search(r"snowtrace\.io/tx/(0x[0-9a-fA-F]{64})", t, re.I)
+    if m:
+        return ("avax", m.group(1).lower()) if avax else None
+    m = re.search(r"bscscan\.com/tx/(0x[0-9a-fA-F]{64})", t, re.I)
+    if m:
+        return ("bsc", m.group(1)) if usdt else None
+    if ton:
+        explorers = "|".join(re.escape(host) for host in _TON_EXPLORERS)
+        m = re.search(rf"(?:{explorers})/\S+", t, re.I)
+        if m:
+            seg = m.group(0).rstrip("/").split("?")[0].split("/")[-1]
+            if len(seg) >= 40:
+                return ("ton", seg)
+    # Bare 0x+64hex txid — identical format on BSC and Avalanche C-Chain. Map to whichever of those
+    # two is enabled; if BOTH, it's genuinely ambiguous → let the caller ask which network.
+    m = _TXID_RE.search(t)
+    if m:
+        hsh = m.group(0)
+        if usdt and avax:
+            return ("ambiguous", hsh)
+        if avax:
+            return ("avax", hsh.lower())
+        if usdt:
+            return ("bsc", hsh)
+    # Bare TON hash: a base64/base64url token (43–44 chars). A bare 64-hex is only treated as TON
+    # when neither 0x-chain (USDT/AVAX) is enabled — otherwise it's almost certainly such a hash
+    # pasted without its 0x prefix, and classifying it as TON would produce a dead tonscan link.
+    if ton and not re.search(r"\s", t):
+        if re.fullmatch(r"[A-Za-z0-9+/_-]{43,48}={0,2}", t):
+            return ("ton", t)
+        if not usdt and not avax and re.fullmatch(r"[0-9a-fA-F]{64}", t):
+            return ("ton", t)
+    return None
+
+
+def _proof_wanted_fa(opts) -> str:
+    """What proof the customer should send, given the enabled methods — for the prompt/error."""
+    wants = []
+    if opts.usdt or opts.ton or opts.avax:
+        wants.append("«شناسهٔ تراکنش (TXID)» یا لینکِ آن")
+    if opts.card or opts.screenshot:
+        wants.append("«تصویر رسید»")
+    return " یا ".join(wants) if wants else "رسید پرداخت"
+_UNPAID = (InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+_OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+_STATUS_FA = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
+              "overdue": "سررسید گذشته", "enforced": "مسدود", "canceled": "لغو"}
+
+
+# --------------------------- helpers ---------------------------
+async def _resellers_for_chat(session, chat_id: int) -> list[Reseller]:
+    return list(
+        (await session.execute(select(Reseller).where(Reseller.bot_chat_id == chat_id)))
+        .scalars().all()
+    )
+
+
+def _iso(value) -> str:
+    """Wrap a value in a Unicode First-Strong Isolate (U+2068 … U+2069) so it renders cleanly
+    inside a mixed Persian/English Telegram line: the segment keeps its own auto-detected
+    direction and does NOT reorder the surrounding RTL text. Use around panel keys, reseller
+    names, link tags, uuids — anything that may be English/Latin and sits inside an RTL line."""
+    return f"⁨{value}⁩"
+
+
+async def _is_owner_user(session, user) -> bool:
+    """Owner identification, hardened against @username takeover.
+
+    `owner_telegram` is the owner identity the admin sets in Settings; `owner_chat_id` is the
+    pinned numeric chat the bot reaches for menus/alerts. Rules:
+      * If `owner_telegram` is a NUMERIC id, it is AUTHORITATIVE — the owner is exactly that id, and
+        we (re-)pin `owner_chat_id` to it. So editing it in Settings to a new id takes effect on the
+        new owner's next interaction, and a stale pin never wins (fixes "changed the id but the bot
+        still knows the old owner").
+      * Otherwise (an @username, or unset): once `owner_chat_id` is pinned we trust ONLY that id (a
+        reassigned @username can't impersonate the owner); before pinning, a first match by the
+        configured @username pins the id."""
+    owner_setting = str(await settings_service.get(session, "owner_telegram", "") or "").strip()
+    owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
+
+    # Explicit numeric owner id is the source of truth (Settings change applies immediately).
+    if owner_setting.isdigit():
+        is_owner = str(user.id) == owner_setting
+        if is_owner and owner_chat != owner_setting:
+            await settings_service.set_value(session, "owner_chat_id", owner_setting)
+        return is_owner
+
+    if owner_chat:
+        # Pinned (username-based identity): numeric id is the sole source of truth.
+        return str(user.id) == owner_chat
+
+    # Not yet pinned — allow a first-time match by the configured @username.
+    uname = (user.username or "").lstrip("@").lower()
+    owner_name = owner_setting.lstrip("@").lower()
+    is_owner = bool(owner_name and uname and uname == owner_name)
+    if is_owner:
+        # Pin the owner's chat id so scheduled backups/alerts/logs can reach them, and so all
+        # subsequent checks are id-only.
+        await settings_service.set_value(session, "owner_chat_id", str(user.id))
+    return is_owner
+
+
+async def _track_user(session, user) -> None:
+    """Record everyone who interacts with the bot (used by the channel guard)."""
+    row = (
+        await session.execute(select(BotUser).where(BotUser.telegram_id == user.id))
+    ).scalar_one_or_none()
+    now = dt.datetime.now(dt.timezone.utc)
+    if row is None:
+        session.add(BotUser(telegram_id=user.id, username=user.username,
+                            first_name=user.first_name, last_seen_at=now))
+    else:
+        row.username = user.username
+        row.first_name = user.first_name
+        row.last_seen_at = now
+    await session.commit()
+
+
+async def _join_link(bot: Bot, chat_id: str, static_link: str, one_time: bool) -> str | None:
+    """A per-user single-use invite link so the chat's real link isn't shared.
+    Falls back to the static link if the bot can't create one (needs invite rights)."""
+    if chat_id and one_time:
+        try:
+            link = await bot.create_chat_invite_link(chat_id, member_limit=1)
+            return link.invite_link
+        except Exception:  # noqa: BLE001
+            log.warning("create_chat_invite_link failed (need invite rights?)", exc_info=True)
+    return static_link or None
+
+
+async def _is_member(bot: Bot, chat_id: str, user_id: int) -> bool:
+    if not chat_id:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        if member.status in ("member", "administrator", "creator"):
+            return True
+        # In a supergroup a user under ANY restriction reports status `restricted` but is still IN the
+        # group (Telegram flags this with is_member=True). Channels never report `restricted`, so this
+        # only matters for the group gate — matching channel_guard, which already counts `restricted`.
+        if member.status == "restricted":
+            return bool(getattr(member, "is_member", False))
+        return False  # left / kicked
+    except Exception as exc:  # noqa: BLE001 — fail closed (treat as non-member) on API errors
+        log.warning("membership check failed for %s: %s", user_id, exc)
+        return False
+
+
+async def _required_gates(session) -> list[dict]:
+    """The enabled forced-membership targets (channel and/or group). Each: id, link, label.
+    A gate counts only when its toggle is on AND a chat id is configured."""
+    cfg = await settings_service.get_many(session, [
+        "channel_membership_required", "announcement_channel_id", "announcement_channel_link",
+        "group_membership_required", "announcement_group_id", "announcement_group_link",
+    ])
+    gates: list[dict] = []
+    if cfg.get("channel_membership_required") and (cfg.get("announcement_channel_id") or ""):
+        gates.append({"id": str(cfg["announcement_channel_id"]),
+                      "link": cfg.get("announcement_channel_link") or "", "label": "کانال"})
+    if cfg.get("group_membership_required") and (cfg.get("announcement_group_id") or ""):
+        gates.append({"id": str(cfg["announcement_group_id"]),
+                      "link": cfg.get("announcement_group_link") or "", "label": "گروه"})
+    return gates
+
+
+async def _missing_gates(bot: Bot, session, user_id: int) -> list[dict]:
+    """Of the enabled gates, the ones the user is NOT a member of."""
+    return [g for g in await _required_gates(session) if not await _is_member(bot, g["id"], user_id)]
+
+
+async def _gate_or_menu(answer, bot: Bot, session, user) -> None:
+    """Show the main menu if the user is the owner or passes every enabled gate; otherwise
+    show the join prompt with a button per chat they still need to join."""
+    if await _is_owner_user(session, user):
+        await _send_menu(answer, session, user)
+        return
+    missing = await _missing_gates(bot, session, user.id)
+    if not missing:
+        await _send_menu(answer, session, user)
+        return
+    one_time = bool(await settings_service.get(session, "one_time_invite_links", True))
+    targets = []
+    for g in missing:
+        link = await _join_link(bot, g["id"], g["link"], one_time)
+        targets.append({"label": g["label"], "link": link})
+    text = await texts.render(session, "tpl_membership")
+    await answer(text, reply_markup=keyboards.membership_keyboard(targets))
+
+
+async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
+    if await _is_owner_user(session, user):
+        # Menu is inline again; clear any lingering docked reply keyboard (from the brief reply-menu
+        # era), then show the inline menu.
+        await answer("👑 پنل مدیریت", reply_markup=ReplyKeyboardRemove())
+        await answer(
+            "یک گزینه را انتخاب کنید:",
+            reply_markup=keyboards.owner_menu_keyboard(),
+        )
+        return
+    # A non-owner must pass the membership gate to see the menu. If `bot` is available we
+    # re-check here too, so a stray message from a non-member shows the JOIN prompt (with a
+    # clickable /start) instead of leaking the reseller menu.
+    if bot is not None:
+        missing = await _missing_gates(bot, session, user.id)
+        if missing:
+            names = " و ".join(g["label"] for g in missing)
+            await answer(
+                f"برای استفاده از ربات باید عضو {names} ما باشید.\n"
+                "ابتدا /start را بزنید تا لینک عضویت برایتان ارسال شود."
+            )
+            return
+    name = user.first_name or user.username or ""
+    welcome = await texts.render(session, "tpl_welcome", name=name)
+    menu = await texts.render(session, "tpl_menu")
+    can_create = await _can_create_users(session, user.id)
+    can_storefront = await _can_setup_storefront(session, user.id)
+    # Clear any lingering docked reply keyboard, then show the inline menu (the docked menu didn't fit).
+    await answer(welcome, reply_markup=ReplyKeyboardRemove())
+    await answer(
+        menu,
+        reply_markup=keyboards.reseller_menu_keyboard(
+            show_create_user=can_create, show_storefront=can_storefront),
+    )
+
+
+async def _reshow_menu(message: Message, session, user) -> None:  # noqa: ANN001
+    """Re-send the role-aware main menu as the LAST message so it's always at hand after a completed
+    action (the menu is inline, so it scrolls up as the chat fills with messages). Compact — just the
+    menu keyboard, no welcome text. Call this only at the END of an action/flow, never when entering
+    an FSM prompt (that would put the menu below the prompt mid-flow)."""
+    try:
+        if await _is_owner_user(session, user):
+            await message.answer("📋 منوی مدیریت:", reply_markup=keyboards.owner_menu_keyboard())
+            return
+        can_create = await _can_create_users(session, user.id)
+        can_storefront = await _can_setup_storefront(session, user.id)
+        await message.answer(
+            "📋 منوی اصلی:",
+            reply_markup=keyboards.reseller_menu_keyboard(
+                show_create_user=can_create, show_storefront=can_storefront),
+        )
+    except Exception:  # noqa: BLE001 — a menu re-show must never break the action it follows
+        pass
+
+
+async def _top_level_resellers(session, chat_id: int) -> list[Reseller]:
+    """The chat's reseller rows that are TOP-LEVEL on their panel (eligible to create users)."""
+    out = []
+    for r in await _resellers_for_chat(session, chat_id):
+        if await _is_top_level_reseller(session, r):
+            out.append(r)
+    return out
+
+
+async def _can_create_users(session, chat_id: int) -> bool:
+    """True if the user-creation feature is on AND this chat has at least one top-level reseller."""
+    from app.services import usercreate
+
+    opts = await usercreate.load_options(session)
+    if not opts.enabled or not (opts.gb and opts.days):
+        return False
+    return bool(await _top_level_resellers(session, chat_id))
+
+
+async def _can_setup_storefront(session, chat_id: int) -> bool:
+    """True if the owner enabled the storefront feature for at least one of this chat's top-level
+    resellers."""
+    return any(
+        getattr(r, "storefront_enabled", False)
+        for r in await _top_level_resellers(session, chat_id)
+    )
+
+
+# --------------------------- /commands ---------------------------
+async def _sync_command_menu(bot: Bot, session, user) -> None:
+    """Make sure this user's `/` command list matches their role (owner vs reseller)."""
+    from app.bot import commands as bot_commands
+
+    try:
+        if await _is_owner_user(session, user):
+            await bot_commands.apply_owner_menu(bot, user.id)
+    except Exception:  # noqa: BLE001
+        log.warning("sync command menu failed", exc_info=True)
+
+# Terminal reseller actions whose result is complete info the user just reads → re-show the menu
+# after them. EXCLUDED: selection-list actions (pay/subs/removelink) whose result is a picker the
+# user must tap next — a trailing menu would bury those buttons; the menu re-appears when the
+# sub-action completes. FSM-entering actions (storefront/support/register/newuser) re-show on
+# completion. (Matches the owner's «اگه تموم شد» — only after a completed action.)
+_RESELLER_TERMINAL = {"invoices", "interim", "panels", "portal"}
+# Terminal owner actions. EXCLUDED: payments (a picker) + broadcast/search (open a flow).
+_OWNER_TERMINAL = {"stats", "health", "debtors", "sync", "backup"}
+
+_SETCHAT_RE = re.compile(r"^(channel|group|کانال|گروه)\s+(-?\d{5,})$", re.IGNORECASE)
+
+async def _is_top_level_reseller(session, reseller: Reseller) -> bool:
+    """True only for a TOP-LEVEL reseller — a direct child of the panel's Owner. Mirrors the
+    billing engine's `select_billable_roots` rule so "who may register in the bot" matches
+    "who gets billed". A sub-reseller (its parent is another reseller, not the Owner) is NOT
+    top-level: it's managed/billed through its parent, so it must not self-register."""
+    panel_resellers = (
+        await session.execute(select(Reseller).where(Reseller.panel_id == reseller.panel_id))
+    ).scalars().all()
+    owner_uuids = {r.admin_uuid for r in panel_resellers if r.is_owner}
+    all_uuids = {r.admin_uuid for r in panel_resellers}
+    if owner_uuids:
+        return reseller.parent_admin_uuid in owner_uuids
+    # No Owner row in the data → fall back to structural roots (orphans / no parent).
+    return reseller.parent_admin_uuid is None or reseller.parent_admin_uuid not in all_uuids

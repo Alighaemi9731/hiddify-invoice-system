@@ -8,7 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.6 - 2026-07-02
+## 1.50.7 - 2026-07-02
+
+Batch I07 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — pure refactor, zero
+behavior change.
+
+### Changed
+
+- **The bot's 3,434-line `handlers.py` is now a 15-module package** (`app/bot/handlers/`):
+  common (router/middlewares/states/helpers), commands, broadcast, menus, support,
+  reseller callbacks, subs management, user-create, storefront setup, owner views, misc,
+  the free-text fallback, plus two helper-only modules. All modules register on the SAME
+  router in the exact original order (aiogram dispatches first-match, so order is
+  semantics); a new order-sensitive router-inventory test (34 message + 53 callback
+  handlers + 2 outer middlewares, snapshot fixture generated from the pre-split file)
+  proves registration is byte-identical. Every previously importable name is re-exported
+  from the package, so all external imports keep working unchanged.
 
 Batch I06 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — the isolated money batch.
 

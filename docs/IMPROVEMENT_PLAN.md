@@ -145,7 +145,9 @@ Primary files:
 
 ## I07 - Split bot handlers into domain routers
 
-Priority: P2. Version: PATCH. Status: TODO. Pure refactor — released alone.
+Priority: P2. Version: PATCH. Status: DONE in `v1.50.7`. Pure refactor — released alone.
+(Implemented with the same-router pattern rather than include_router: all modules register
+on one Router in original order, proven by the order-sensitive inventory snapshot test.)
 
 - Convert `app/bot/handlers.py` (~3,400 lines) into the package
   `app/bot/handlers/` with domain modules (registration, menus, payments, subs,
