@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.53.3 - 2026-07-03
+
+Batch U01 of the UI/UX program (`docs/UIUX_PLAN.md`).
+
+### Fixed
+
+- **Dark-mode "haze" that made card text hard to read.** In dark mode the cards were a 7%-white
+  translucent surface under a heavy `blur(40px)`, and the mobile row-cards stacked a *second*
+  translucency on top — ~3.4% white over black plus blur, i.e. a washed-out gray. Dark cards are
+  now a near-opaque Apple-style surface (`#1c1c1e` @ 90%) with a lighter `blur(20px)` edge that
+  keeps the glass identity, the secondary text color is lifted (`#a1a1a6`, ≈6.6:1 contrast), and
+  the mobile Invoices/Payments/Resellers cards use a solid nested surface instead of the stacked
+  alpha. The StatCard icon's double-blur "halo" is removed. Table hover/stripe/divider contrast
+  nudged up to match. **Light mode is unchanged** (the only light-mode edit is the no-op StatCard
+  blur removal); the frosted glass is deliberately kept on the sidebar, AppBar, and dialogs.
+
 ## 1.53.2 - 2026-07-02
 
 ### Fixed

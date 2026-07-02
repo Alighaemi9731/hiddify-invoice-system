@@ -4,7 +4,7 @@ import {
   IconButton, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell,
   TableHead, TableRow, TextField, Tooltip, Typography, Link, useMediaQuery,
 } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
+import { useTheme } from "@mui/material/styles";
 import DownloadIcon from "@mui/icons-material/esm/Download";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import VerifiedIcon from "@mui/icons-material/esm/Verified";
@@ -23,6 +23,7 @@ import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { DataState } from "../components/DataState";
 import { fmtToman, fmtDate, fmtNum, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
+import { nestedCardBg } from "../theme";
 import { downloadCsv } from "../csv";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
@@ -262,7 +263,7 @@ export default function Payments() {
           {shown.map((p: any) => (
             <Box key={p.id} sx={{
               p: 1.5, borderRadius: 3, border: "1px solid", borderColor: "divider",
-              bgcolor: (t) => alpha(t.palette.background.paper, 0.48),
+              bgcolor: nestedCardBg,
             }}>
               <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
                 <Box sx={{ minWidth: 0 }}>

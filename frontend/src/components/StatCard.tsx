@@ -54,8 +54,6 @@ export default function StatCard({
               placeItems: "center",
               bgcolor: alpha(color, 0.15),
               backgroundImage: "linear-gradient(145deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 60%)",
-              backdropFilter: "blur(12px) saturate(180%)",
-              WebkitBackdropFilter: "blur(12px) saturate(180%)",
               border: `1px solid ${alpha(color, 0.25)}`,
               boxShadow: [
                 `inset 0 1px 0 rgba(255,255,255,.38)`,

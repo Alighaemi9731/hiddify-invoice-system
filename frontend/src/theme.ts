@@ -20,10 +20,13 @@ export function makeTheme(mode: PaletteMode) {
   // apple.com localnav dark: rgba(0,0,0,0.6) + blur(~40px)
   // apple.com pill border: rgba(217,207,207,0.25)
 
-  // Tier-1: content surfaces
-  const glassBg     = isDark ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.78)";
+  // Tier-1: content surfaces. Dark cards are NEAR-OPAQUE (#1c1c1e @ 90%): stacking a second
+  // translucency (mobile row-cards) on a 7%-white surface + blur(40px) produced a washed-out
+  // "haze" that made text hard to read. Glass identity is kept via the reduced-blur edge + the
+  // top specular rim; sidebar/AppBar/dialogs keep the FULL translucent glass (separate tokens).
+  const glassBg     = isDark ? "rgba(28,28,30,0.90)" : "rgba(255,255,255,0.78)";
   const glassBorder = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.05)";
-  const glassBlur   = "blur(40px) saturate(180%)";
+  const glassBlur   = isDark ? "blur(20px) saturate(140%)" : "blur(40px) saturate(180%)";
 
   // Tier-2: floating overlays (Apple nav/dialog style)
   const floatBg   = isDark ? "rgba(28,28,30,0.82)"  : "rgba(255,255,255,0.88)";
@@ -110,9 +113,9 @@ export function makeTheme(mode: PaletteMode) {
       error:   { main: isDark ? "#ff453a" : "#ff3b30" },     // Apple red
       warning: { main: isDark ? "#ffd60a" : "#ff9500" },     // Apple yellow
       info:    { main: isDark ? "#2997ff" : "#0071e3" },     // Apple blue
-      divider: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+      divider: isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)",
       text: isDark
-        ? { primary: "#f5f5f7", secondary: "#86868b" }       // Apple dark text
+        ? { primary: "#f5f5f7", secondary: "#a1a1a6" }       // secondary lifted for ≈6.6:1 on #1c1c1e
         : { primary: "#1d1d1f", secondary: "#6e6e73" },      // Apple light text
     },
     typography: {
@@ -180,9 +183,10 @@ export function makeTheme(mode: PaletteMode) {
               borderRadius: 14,
               padding: "2px 12px",
               border: `1px solid ${glassBorder}`,
-              backgroundColor: isDark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.72)",
-              backdropFilter: "blur(40px) saturate(180%)",
-              WebkitBackdropFilter: "blur(40px) saturate(180%)",
+              // Near-opaque in dark (same haze fix as the explicit mobile row-cards); reduced blur.
+              backgroundColor: isDark ? "rgba(36,36,38,0.94)" : "rgba(255,255,255,0.72)",
+              backdropFilter: isDark ? "blur(20px) saturate(140%)" : "blur(40px) saturate(180%)",
+              WebkitBackdropFilter: isDark ? "blur(20px) saturate(140%)" : "blur(40px) saturate(180%)",
             },
             ".resp-table td": {
               display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -194,7 +198,7 @@ export function makeTheme(mode: PaletteMode) {
             ".resp-table td:last-child": { borderBottom: "0 !important" },
             ".resp-table td::before": {
               content: "attr(data-label)", fontWeight: 600, fontSize: 12.5,
-              color: isDark ? "#86868b" : "#6e6e73", whiteSpace: "nowrap", flexShrink: 0,
+              color: isDark ? "#a1a1a6" : "#6e6e73", whiteSpace: "nowrap", flexShrink: 0,
             },
             ".resp-table td[data-label='']::before": { content: '""' },
           },
@@ -402,10 +406,10 @@ export function makeTheme(mode: PaletteMode) {
             transition: "background-color .15s ease",
             "&:last-child td": { borderBottom: 0 },
             "&:nth-of-type(even)": {
-              backgroundColor: isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.015)",
+              backgroundColor: isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.015)",
             },
             "&.MuiTableRow-hover:hover": {
-              backgroundColor: isDark ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.70)",
+              backgroundColor: isDark ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.70)",
             },
           },
         },
@@ -565,3 +569,12 @@ export function makeTheme(mode: PaletteMode) {
 }
 
 export const theme = makeTheme("light");
+
+/**
+ * Background for a mobile row-card NESTED inside a glass Card. Dark: a solid surface one step
+ * lighter than the card (#1c1c1e) for hierarchy — NO second translucency (which, over the old
+ * 7%-white card, was the source of the washed-out "haze"). Light: identical pixels to the
+ * previous `alpha(background.paper, 0.48)` rendering, so light mode is unchanged.
+ */
+export const nestedCardBg = (t: { palette: { mode: PaletteMode } }) =>
+  t.palette.mode === "dark" ? "#232326" : "rgba(255,255,255,0.48)";

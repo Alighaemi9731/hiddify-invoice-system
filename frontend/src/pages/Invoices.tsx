@@ -4,7 +4,7 @@ import {
   IconButton, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, Tooltip, Typography, Divider, TablePagination, useMediaQuery,
 } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
+import { useTheme } from "@mui/material/styles";
 import DownloadIcon from "@mui/icons-material/esm/Download";
 import SendIcon from "@mui/icons-material/esm/Send";
 import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
@@ -35,6 +35,7 @@ import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import LiveRate from "../components/LiveRate";
 import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
+import { nestedCardBg } from "../theme";
 import { downloadCsv } from "../csv";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
@@ -331,7 +332,7 @@ export default function Invoices() {
           {paged.map((i: any) => (
             <Box key={i.id} sx={{
               p: 1.5, borderRadius: 3, border: "1px solid", borderColor: "divider",
-              bgcolor: (t) => alpha(t.palette.background.paper, 0.48),
+              bgcolor: nestedCardBg,
             }}>
               <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
                 <Box sx={{ minWidth: 0 }}>

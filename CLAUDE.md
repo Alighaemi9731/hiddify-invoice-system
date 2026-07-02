@@ -15,12 +15,12 @@ Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`.
 
 ## Current improvement program
 
-The 2026-06-09 audit program (`docs/REMEDIATION_PLAN.md`, B00–B10) is **complete**
-and kept as an archive. The active program is the verified-improvements roadmap
-from the 2026-07-02 whole-project review, tracked in `docs/IMPROVEMENT_PLAN.md`
-(batches I01–I12). Fix exactly one batch per release, in the documented order,
-and use `docs/RELEASE_PROCESS.md` for versioning, GitHub publication, production
-deployment, smoke checks, and rollback.
+Two programs are **complete** and archived: the 2026-06-09 audit
+(`docs/REMEDIATION_PLAN.md`, B00–B10) and the 2026-07-02 verified-improvements
+roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12). The active program is the UI/UX
+review, tracked in `docs/UIUX_PLAN.md` (batches U01–U04). Fix exactly one batch
+per release, in the documented order, and use `docs/RELEASE_PROCESS.md` for
+versioning, GitHub publication, production deployment, smoke checks, and rollback.
 Record user-visible release notes in `CHANGELOG.md`; the long milestone history
 below remains the archive for releases before this process was introduced.
 

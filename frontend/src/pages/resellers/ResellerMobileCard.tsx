@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 import { Box, Chip, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import { ResellerRow, ResellerTreeRow } from "../../api/client";
+import { nestedCardBg } from "../../theme";
 import CapacityBar from "../../components/CapacityBar";
 import TelegramLink, { telegramHref } from "../../components/TelegramLink";
 import { fmtNum } from "../../format";
@@ -32,7 +32,7 @@ export default function ResellerMobileCard({
         borderRadius: 3,
         border: "1px solid",
         borderColor: "divider",
-        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.48),
+        bgcolor: nestedCardBg,
         borderInlineStartWidth: tree && depth > 0 ? 3 : 1,
         borderInlineStartColor: tree && depth > 0 ? "primary.main" : "divider",
       }}
