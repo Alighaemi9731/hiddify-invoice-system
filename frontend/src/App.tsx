@@ -12,7 +12,7 @@ import Login from "./pages/Login";
 import Setup from "./pages/Setup";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Panels = lazy(() => import("./pages/Panels"));
-const Resellers = lazy(() => import("./pages/Resellers"));
+const Resellers = lazy(() => import("./pages/resellers"));
 const Invoices = lazy(() => import("./pages/Invoices"));
 const Payments = lazy(() => import("./pages/Payments"));
 const Debts = lazy(() => import("./pages/Debts"));

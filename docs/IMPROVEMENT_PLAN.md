@@ -162,7 +162,7 @@ Primary files:
 
 ## I08 - Frontend table/dialog/mutation refactor
 
-Priority: P3. Version: PATCH. Status: TODO. Pure refactor — released alone.
+Priority: P3. Version: PATCH. Status: DONE in `v1.50.8`. Pure refactor — released alone.
 
 - New `useToastMutation` / `useDialogState` hooks; split `Resellers.tsx`
   (~1,100 lines) into `pages/resellers/` feature components + `useResellerTree`;

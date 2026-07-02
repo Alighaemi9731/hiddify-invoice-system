@@ -10,20 +10,24 @@ import CheckIcon from "@mui/icons-material/esm/Check";
 import CloseIcon from "@mui/icons-material/esm/Close";
 import ImageIcon from "@mui/icons-material/esm/Image";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   listPayments, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
   depositCheck,
 } from "../api/client";
-import { useToast, errMsg } from "../components/Toast";
+import { useToast } from "../components/Toast";
+import { useDialogState } from "../hooks/useDialogState";
+import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { DataState } from "../components/DataState";
 import { fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
 
+// A confirm/reject/delete can flip an invoice paid↔owed, so refresh the dependent views too.
+const DEPENDENT_KEYS = ["payments", "invoices", "dashboard", "debts"];
+
 export default function Payments() {
-  const qc = useQueryClient();
   const { node, show } = useToast();
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
@@ -31,10 +35,6 @@ export default function Payments() {
     queryKey: ["payments", status],
     queryFn: () => listPayments({ status: status || undefined }),
   });
-  // A confirm/reject/delete can flip an invoice paid↔owed, so refresh the dependent views too.
-  const refresh = () => {
-    ["payments", "invoices", "dashboard", "debts"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
-  };
   const { sorted, key, dir, toggle } = useSort(data, "created_at", "desc");
   // Search by tracking number (the public «#N» the customer quotes) or reseller name.
   // Persian/Arabic digits are normalized to ASCII so a hand-typed «#۱۲» matches the code.
@@ -47,7 +47,8 @@ export default function Payments() {
     : sorted;
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
-  const [confirmRow, setConfirmRow] = useState<any>(null);
+  const confirmDlg = useDialogState<any>();
+  const confirmRow = confirmDlg.data;
 
   // For a crypto payment under review, read the actual on-chain deposit (best-effort) so the
   // operator can match it against the invoice before confirming. Fetched only when the dialog opens.
@@ -72,23 +73,35 @@ export default function Payments() {
       return `${iso(`${r.received_avax} AVAX`)} ≈ ${iso(fmtToman(r.received_toman))}${confs} — فاکتور ${iso(fmtToman(r.invoice_toman))}`;
     return `${iso(`${r.received_usdt} USDT`)}${confs} — فاکتور ${iso(`${r.invoice_usdt} USDT`)}`;
   };
-  const chainCheck = useMutation({
+  const chainCheck = useToastMutation({
+    show,
     mutationFn: (id: number) => depositCheck(id),
-    onSuccess: (r: any) => {
-      if (!r?.available) { show("واریزی از زنجیره خوانده نشد؛ از روی لینک تراکنش بررسی کنید.", "error"); return; }
+    success: (r: any): [string, "error" | "success"] => {
+      if (!r?.available) return ["واریزی از زنجیره خوانده نشد؛ از روی لینک تراکنش بررسی کنید.", "error"];
       const m = r.match === true ? " ✓ مطابق فاکتور" : r.match === false ? " ✗ مغایر با فاکتور" : "";
-      show(`واریزی: ${depLabel(r)}${m}`, r.match === false ? "error" : "success");
+      return [`واریزی: ${depLabel(r)}${m}`, r.match === false ? "error" : "success"];
     },
-    onError: (e) => show(errMsg(e), "error"),
   });
-  const reject = useMutation({ mutationFn: rejectPayment, onSuccess: (r: any) => { show(r?.message || "رد شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
-  const confirm_ = useMutation({
+  const reject = useToastMutation({
+    show,
+    mutationFn: rejectPayment,
+    success: (r: any) => r?.message || "رد شد",
+    invalidate: DEPENDENT_KEYS,
+  });
+  const confirm_ = useToastMutation({
+    show,
     mutationFn: (id: number) => confirmPayment(id),
-    onSuccess: (r: any) => { show(r?.message || "تأیید شد"); setConfirmRow(null); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    success: (r: any) => r?.message || "تأیید شد",
+    onSuccess: () => confirmDlg.close(),
+    invalidate: DEPENDENT_KEYS,
   });
 
-  const del = useMutation({ mutationFn: deletePayment, onSuccess: (r: any) => { show(r?.message || "حذف شد"); refresh(); }, onError: (e) => show(errMsg(e), "error") });
+  const del = useToastMutation({
+    show,
+    mutationFn: deletePayment,
+    success: (r: any) => r?.message || "حذف شد",
+    invalidate: DEPENDENT_KEYS,
+  });
 
   const doReject = (p: any) => {
     const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ رد آن فاکتورهای تسویه‌شده را دوباره «پرداخت‌نشده» می‌کند.)" : "";
@@ -186,7 +199,7 @@ export default function Payments() {
                       AVAX via a public Avalanche C-Chain RPC, USDT/BEP-20 via a public BSC RPC node —
                       and reports it for the manual decision (never auto-confirms). */}
                   <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
-                  <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => setConfirmRow(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
+                  <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => confirmDlg.openWith(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
                   <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
                 </TableCell>
@@ -199,7 +212,7 @@ export default function Payments() {
       </DataState>
 
       {/* A payment is for ONE invoice — just confirm it (view the receipt first if a screenshot). */}
-      <Dialog open={!!confirmRow} onClose={() => setConfirmRow(null)} fullWidth maxWidth="xs">
+      <Dialog open={confirmDlg.open} onClose={confirmDlg.close} fullWidth maxWidth="xs">
         {confirmRow && (<>
           <DialogTitle>تأیید پرداخت</DialogTitle>
           <DialogContent>
@@ -282,7 +295,7 @@ export default function Payments() {
             )}
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setConfirmRow(null)}>انصراف</Button>
+            <Button onClick={confirmDlg.close}>انصراف</Button>
             <Button variant="contained" disabled={confirm_.isPending}
               onClick={() => confirm_.mutate(confirmRow.id)}>
               تأیید پرداخت

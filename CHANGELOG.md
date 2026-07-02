@@ -8,7 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.7 - 2026-07-02
+## 1.50.8 - 2026-07-02
+
+Batch I08 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — pure frontend refactor,
+zero behavior or visual change.
+
+### Changed
+
+- **Shared dialog/mutation plumbing.** Every money page re-implemented the same
+  mutation-with-toast and dialog-open/close boilerplate; new `useToastMutation` +
+  `useDialogState` hooks centralize it (adopted by Invoices, Payments, Panels, and the
+  Resellers page), so a future fix to error toasts or cache invalidation lands once. Query
+  keys and invalidation moments are unchanged everywhere; Persian strings byte-identical.
+- **The 1,109-line Resellers page is now 9 focused files** under `pages/resellers/` (page
+  shell, desktop table, mobile card, identity/status chips, action buttons, edit +
+  capacity-bump dialogs, absent-resellers view, and a `useResellerTree` hook for the tree
+  logic). Same route, same lazy chunk, same UI.
 
 Batch I07 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — pure refactor, zero
 behavior change.

@@ -19,13 +19,15 @@ import SearchIcon from "@mui/icons-material/esm/Search";
 import InputAdornment from "@mui/material/InputAdornment";
 import SegmentedTabs from "../components/SegmentedTabs";
 import TelegramLink from "../components/TelegramLink";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
   discardDrafts, recomputeInvoice, revertInvoiceToDraft,
 } from "../api/client";
-import { useToast, errMsg } from "../components/Toast";
+import { useToast } from "../components/Toast";
+import { useDialogState } from "../hooks/useDialogState";
+import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
@@ -37,14 +39,16 @@ const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", ove
 const OWED_STATES = ["sent", "overdue", "enforced"];
 
 export default function Invoices() {
-  const qc = useQueryClient();
   const { node, show } = useToast();
   const [period, setPeriod] = useState(currentPeriod());
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
-  const [detail, setDetail] = useState<any>(null);
-  const [editRow, setEditRow] = useState<any>(null);
-  const [deferRow, setDeferRow] = useState<any>(null);
+  const detailDlg = useDialogState<any>();
+  const editDlg = useDialogState<any>();
+  const deferDlg = useDialogState<any>();
+  const detail = detailDlg.data;
+  const editRow = editDlg.data;
+  const deferRow = deferDlg.data;
   const [tab, setTab] = useState(0);
 
   const { data = [] } = useQuery({
@@ -71,9 +75,8 @@ export default function Invoices() {
   const [rowsPerPage, setRowsPerPage] = useState(50);
   useEffect(() => { setPage(0); }, [period, status, search, tab, key, dir]);
   const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
-  const refresh = () => qc.invalidateQueries({ queryKey: ["invoices"] });
   const mut = (fn: any, ok: any) =>
-    useMutation({ mutationFn: fn, onSuccess: (r: any) => { show(typeof ok === "function" ? ok(r) : ok); refresh(); }, onError: (e) => show(errMsg(e), "error") });
+    useToastMutation({ show, mutationFn: fn, success: ok, invalidate: ["invoices"] });
 
   const gen = mut(
     () => generateInvoices({ period }),
@@ -102,22 +105,26 @@ export default function Invoices() {
   );
   const unpay = mut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت قبل)");
   const toDraft = mut((id: number) => revertInvoiceToDraft(id), "به پیش‌نویس بازگردانده شد");
-  const saveDefer = useMutation({
+  const saveDefer = useToastMutation({
+    show,
     mutationFn: () => deferInvoice(deferRow.id, {
       deferred_until: deferRow.deferred_until || null, defer_note: deferRow.defer_note || "",
     }),
-    onSuccess: () => { show(deferRow.deferred_until ? "مهلت ثبت شد" : "مهلت حذف شد"); setDeferRow(null); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    success: () => (deferRow.deferred_until ? "مهلت ثبت شد" : "مهلت حذف شد"),
+    onSuccess: () => deferDlg.close(),
+    invalidate: ["invoices"],
   });
-  const saveEdit = useMutation({
+  const saveEdit = useToastMutation({
+    show,
     mutationFn: (resend: boolean) => editInvoice(editRow.id, {
       usage_gb: Number(editRow.usage_gb), price_per_gb: Number(editRow.price_per_gb),
     }).then((r) => (resend ? sendInvoice(editRow.id).then(() => r) : r)),
-    onSuccess: (_d, resend) => { show(resend ? "ویرایش و ارسال مجدد شد" : "فاکتور ویرایش شد"); setEditRow(null); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    success: (_d, resend) => (resend ? "ویرایش و ارسال مجدد شد" : "فاکتور ویرایش شد"),
+    onSuccess: () => editDlg.close(),
+    invalidate: ["invoices"],
   });
 
-  const openDetail = async (id: number) => setDetail(await getInvoice(id));
+  const openDetail = async (id: number) => detailDlg.openWith(await getInvoice(id));
   const total = filtered.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
 
   return (
@@ -241,7 +248,7 @@ export default function Invoices() {
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>
                   <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
                   {i.status !== "paid" && i.status !== "canceled" && (
-                    <Tooltip title="ویرایش"><IconButton size="small" onClick={() => setEditRow({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                    <Tooltip title="ویرایش"><IconButton size="small" onClick={() => editDlg.openWith({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
                   )}
                   {i.status !== "paid" && (
                     <Tooltip title="بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)">
@@ -269,7 +276,7 @@ export default function Invoices() {
                   {OWED_STATES.includes(i.status) && (
                     <Tooltip title={i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت"}>
                       <IconButton size="small" color={i.deferred_until ? "info" : "default"}
-                        onClick={() => setDeferRow({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
+                        onClick={() => deferDlg.openWith({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
                         <ScheduleIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -295,22 +302,22 @@ export default function Invoices() {
       )}
 
       {/* Edit dialog */}
-      <Dialog open={!!editRow} onClose={() => setEditRow(null)} fullWidth maxWidth="xs">
+      <Dialog open={editDlg.open} onClose={editDlg.close} fullWidth maxWidth="xs">
         {editRow && (<>
           <DialogTitle>ویرایش فاکتور — {editRow.reseller_name}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
               <TextField label="مصرف (گیگ)" type="number" value={editRow.usage_gb}
-                onChange={(e) => setEditRow({ ...editRow, usage_gb: e.target.value })} />
+                onChange={(e) => editDlg.setData({ ...editRow, usage_gb: e.target.value })} />
               <TextField label="قیمت هر گیگ (تومان)" type="number" value={editRow.price_per_gb}
-                onChange={(e) => setEditRow({ ...editRow, price_per_gb: e.target.value })} />
+                onChange={(e) => editDlg.setData({ ...editRow, price_per_gb: e.target.value })} />
               <Typography variant="body2" color="text.secondary">
                 مبلغ جدید: {fmtToman(Number(editRow.usage_gb || 0) * Number(editRow.price_per_gb || 0))}
               </Typography>
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setEditRow(null)}>انصراف</Button>
+            <Button onClick={editDlg.close}>انصراف</Button>
             <Button onClick={() => saveEdit.mutate(false)} disabled={saveEdit.isPending}>ذخیره</Button>
             <Button variant="contained" onClick={() => saveEdit.mutate(true)} disabled={saveEdit.isPending}>ذخیره و ارسال مجدد</Button>
           </DialogActions>
@@ -318,7 +325,7 @@ export default function Invoices() {
       </Dialog>
 
       {/* Defer dialog */}
-      <Dialog open={!!deferRow} onClose={() => setDeferRow(null)} fullWidth maxWidth="xs">
+      <Dialog open={deferDlg.open} onClose={deferDlg.close} fullWidth maxWidth="xs">
         {deferRow && (<>
           <DialogTitle>مهلت پرداخت — {deferRow.name}</DialogTitle>
           <DialogContent>
@@ -327,21 +334,21 @@ export default function Invoices() {
             </Typography>
             <Stack spacing={2} sx={{ mt: 1 }}>
               <TextField type="date" label="مهلت تا" InputLabelProps={{ shrink: true }}
-                value={deferRow.deferred_until || ""} onChange={(e) => setDeferRow({ ...deferRow, deferred_until: e.target.value })} />
+                value={deferRow.deferred_until || ""} onChange={(e) => deferDlg.setData({ ...deferRow, deferred_until: e.target.value })} />
               <TextField label="یادداشت (اختیاری)" value={deferRow.defer_note || ""}
-                onChange={(e) => setDeferRow({ ...deferRow, defer_note: e.target.value })} />
+                onChange={(e) => deferDlg.setData({ ...deferRow, defer_note: e.target.value })} />
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button color="error" onClick={() => { setDeferRow({ ...deferRow, deferred_until: "" }); setTimeout(() => saveDefer.mutate(), 0); }}>حذف مهلت</Button>
-            <Button onClick={() => setDeferRow(null)}>انصراف</Button>
+            <Button color="error" onClick={() => { deferDlg.setData({ ...deferRow, deferred_until: "" }); setTimeout(() => saveDefer.mutate(), 0); }}>حذف مهلت</Button>
+            <Button onClick={deferDlg.close}>انصراف</Button>
             <Button variant="contained" onClick={() => saveDefer.mutate()} disabled={saveDefer.isPending || !deferRow.deferred_until}>ثبت مهلت</Button>
           </DialogActions>
         </>)}
       </Dialog>
 
       {/* Detail dialog */}
-      <Dialog open={!!detail} onClose={() => setDetail(null)} fullWidth maxWidth="md">
+      <Dialog open={detailDlg.open} onClose={detailDlg.close} fullWidth maxWidth="md">
         {detail && (<>
           <DialogTitle>فاکتور #{detail.number} — {detail.reseller_name} — دوره {detail.period_label}</DialogTitle>
           <DialogContent>
@@ -369,7 +376,7 @@ export default function Invoices() {
           </DialogContent>
           <DialogActions>
             <Button onClick={() => openInvoicePdf(detail.id).catch(() => show("خطا در دریافت PDF", "error"))} startIcon={<PictureAsPdfIcon />}>دانلود PDF</Button>
-            <Button onClick={() => setDetail(null)}>بستن</Button>
+            <Button onClick={detailDlg.close}>بستن</Button>
           </DialogActions>
         </>)}
       </Dialog>

@@ -8,11 +8,12 @@ import SyncIcon from "@mui/icons-material/esm/Sync";
 import EditIcon from "@mui/icons-material/esm/Edit";
 import DeleteIcon from "@mui/icons-material/esm/Delete";
 import WifiTetheringIcon from "@mui/icons-material/esm/WifiTethering";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listPanels, createPanel, updatePanel, deletePanel, syncPanel, syncAllPanels, testPanel,
 } from "../api/client";
-import { useToast, errMsg } from "../components/Toast";
+import { useToast } from "../components/Toast";
+import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { fmtNum, fmtDateTime } from "../format";
 
@@ -61,17 +62,20 @@ export default function Panels() {
 
   // Domain move in one save: the current host drops into the aliases (so old reseller links keep
   // matching in the bot) and the new host replaces it (host change → normal re-sync).
-  const migrate = useMutation({
+  const migrate = useToastMutation({
+    show,
     mutationFn: () => {
       const newHost = migrateHost.trim();
       const aliases = Array.from(new Set([...(form.host_aliases || []), form.host].filter(Boolean)));
       return updatePanel(form.id, { host: newHost, host_aliases: aliases });
     },
-    onSuccess: () => { show("دامنه منتقل شد؛ هاستِ قبلی برای تطبیقِ لینک‌ها حفظ شد."); setOpen(false); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    success: "دامنه منتقل شد؛ هاستِ قبلی برای تطبیقِ لینک‌ها حفظ شد.",
+    onSuccess: () => setOpen(false),
+    invalidate: ["panels"],
   });
 
-  const save = useMutation({
+  const save = useToastMutation({
+    show,
     mutationFn: () => {
       // On edit, don't overwrite the stored secret fields with blanks.
       const payload: any = { ...form };
@@ -81,8 +85,9 @@ export default function Panels() {
       }
       return form.id ? updatePanel(form.id, payload) : createPanel(payload);
     },
-    onSuccess: () => { show("ذخیره شد"); setOpen(false); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    success: "ذخیره شد",
+    onSuccess: () => setOpen(false),
+    invalidate: ["panels"],
   });
 
   const applyLink = (value: string) => {
@@ -93,34 +98,32 @@ export default function Panels() {
       key: f.key || p.key, name: f.name || p.key,
     }));
   };
-  const doSync = useMutation({
+  const doSync = useToastMutation({
+    show,
     mutationFn: (id: number) => syncPanel(id),
-    onSuccess: () => {
-      show("همگام‌سازی آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info");
-      refresh();
-      // Poll a few times so the status flips to «موفق» without a manual reload.
-      [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms));
-    },
-    onError: (e) => show(errMsg(e), "error"),
+    success: ["همگام‌سازی آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info"],
+    // Poll a few times so the status flips to «موفق» without a manual reload.
+    onSuccess: () => [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms)),
+    invalidate: ["panels"],
   });
-  const doTest = useMutation({
+  const doTest = useToastMutation({
+    show,
     mutationFn: (id: number) => testPanel(id),
-    onSuccess: (r) => show(r.ok ? `اتصال موفق — ${r.admin_count} ادمین / ${r.user_count} کاربر` : `ناموفق: ${r.error}`, r.ok ? "success" : "error"),
-    onError: (e) => show(errMsg(e), "error"),
+    success: (r): [string, "success" | "error"] =>
+      [r.ok ? `اتصال موفق — ${r.admin_count} ادمین / ${r.user_count} کاربر` : `ناموفق: ${r.error}`, r.ok ? "success" : "error"],
   });
-  const doSyncAll = useMutation({
+  const doSyncAll = useToastMutation({
+    show,
     mutationFn: () => syncAllPanels(),
-    onSuccess: () => {
-      show("همگام‌سازی همهٔ پنل‌ها آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info");
-      refresh();
-      [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms));
-    },
-    onError: (e) => show(errMsg(e), "error"),
+    success: ["همگام‌سازی همهٔ پنل‌ها آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info"],
+    onSuccess: () => [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms)),
+    invalidate: ["panels"],
   });
-  const doDelete = useMutation({
+  const doDelete = useToastMutation({
+    show,
     mutationFn: (id: number) => deletePanel(id),
-    onSuccess: () => { show("حذف شد"); refresh(); },
-    onError: (e) => show(errMsg(e), "error"),
+    success: "حذف شد",
+    invalidate: ["panels"],
   });
 
   const { sorted, key, dir, toggle } = useSort(data, "key", "asc");
