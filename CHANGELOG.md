@@ -8,7 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.53.0 - 2026-07-02
+## 1.53.1 - 2026-07-02
+
+Batch I12 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — the final batch; the
+2026-07-02 improvement program (I01–I12) is complete.
+
+### Fixed
+
+- **On-demand sub-reseller/interim PDFs for a billed month now come from the locked invoice.**
+  v1.49.3 fixed this for DELIVERED invoices, but the on-demand paths (the bot's per-sub «📄 فاکتور
+  <ماه>» PDFs and the own/sub usage PDFs) still recomputed from live snapshots — and the daily
+  snapshot pruning silently shrank historic months (a sub's May PDF could lose users deleted in
+  June). For any period locked in a persisted non-draft invoice (of the node or its root), the
+  lines are now sourced from the stored `InvoiceLine` rows — including the metered-extra lines —
+  filtered to the sub's subtree; the open/unbilled month keeps the live recompute by design.
 
 Batch I11 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 

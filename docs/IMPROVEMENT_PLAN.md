@@ -214,7 +214,7 @@ Primary files:
 
 ## I12 - Per-sub PDFs from persisted invoice lines
 
-Priority: P3. Version: PATCH. Status: TODO.
+Priority: P3. Version: PATCH. Status: DONE in `v1.53.1`. **Program complete.**
 
 - Delivered invoices already render from persisted lines; fix the ON-DEMAND
   sub/interim PDF paths: when the requested period has a persisted non-draft

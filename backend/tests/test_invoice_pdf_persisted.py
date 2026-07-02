@@ -212,3 +212,53 @@ def test_concurrent_renders_are_thread_safe(tmp_path, monkeypatch):
             await engine.dispose()
 
     asyncio.run(go())
+
+
+# ── I12: on-demand sub/interim PDFs from persisted lines ────────────────────
+
+def test_on_demand_sub_lines_survive_snapshot_pruning(tmp_path):
+    """A PAST month locked in a persisted invoice: the on-demand sub-reseller PDF lines must
+    come from the stored InvoiceLine rows even when every end_user_snapshot is gone (pruned) —
+    the live recompute would return None/0 here."""
+    from app.services import reseller_report
+    from app.services.periods import parse_period
+
+    async def body(s):
+        own, inv = await _seed(s)  # sent invoice, lines exist, NO snapshots at all
+        sub = (await s.execute(
+            Reseller.__table__.select().where(Reseller.__table__.c.admin_uuid == "sub-uuid")
+        )).first()
+        sub_obj = await s.get(Reseller, sub.id)
+        period = parse_period("2026-05")
+
+        got = await reseller_report.node_invoice_pdf_lines(s, sub_obj, period, own_only=False)
+        assert got is not None, "persisted-line path must serve the locked period"
+        lines, total = got
+        # the sub's base line (30) + its metered-extra line (4) from the persisted invoice
+        assert round(total, 3) == 34.0
+        assert {ln["uuid"] for ln in lines} == {"u3", "u4"}
+
+        # own_only on the ROOT: only the root's own lines (u1, u2).
+        got_own = await reseller_report.node_invoice_pdf_lines(s, own, period, own_only=True)
+        assert got_own is not None
+        _own_lines, own_total = got_own
+        assert round(own_total, 3) == 50.567
+
+    _run(body, tmp_path)
+
+
+def test_on_demand_falls_back_to_live_for_unlocked_period(tmp_path):
+    """No non-draft invoice for the period (e.g. the open month, or only a DRAFT) → the
+    persisted path must decline and the live recompute runs (here: no snapshots → None)."""
+    from app.services import reseller_report
+    from app.services.periods import parse_period
+
+    async def body(s):
+        own, inv = await _seed(s)
+        inv.status = InvoiceStatus.draft  # a draft is recomputable — never "locked"
+        await s.commit()
+        period = parse_period("2026-05")
+        got = await reseller_report.node_invoice_pdf_lines(s, own, period, own_only=False)
+        assert got is None  # live path: no snapshots exist → nothing billable
+
+    _run(body, tmp_path)

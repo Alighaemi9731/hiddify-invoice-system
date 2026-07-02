@@ -12,7 +12,8 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import EndUserSnapshot, Panel, Reseller
+from app.models import EndUserSnapshot, Invoice, InvoiceLine, Panel, Reseller
+from app.models.enums import InvoiceStatus
 from app.services import metering, pricing
 from app.services.invoice_engine import (
     BundleResult,
@@ -111,6 +112,75 @@ async def node_invoice_own(
     return next((b for b in bundles if b.root.id == node.id), None)
 
 
+async def _persisted_lines_for_node(
+    session: AsyncSession, node: Reseller, period: Period, *, own_only: bool
+) -> tuple[list[dict], float] | None:
+    """I12: when the period is already LOCKED in a persisted, non-draft invoice covering this
+    node (the node's own invoice, or an ancestor top-level root's), source the node's PDF lines
+    from the stored `InvoiceLine` rows instead of a live snapshot recompute — daily snapshot
+    pruning (and later panel edits) otherwise silently shrinks historic on-demand sub PDFs.
+    Returns None when no covering invoice exists (open/current period, drafts, canceled) →
+    the caller uses the live path unchanged."""
+    panel_resellers = (
+        await session.execute(select(Reseller).where(Reseller.panel_id == node.panel_id))
+    ).scalars().all()
+    by_uuid = {(r.admin_uuid or "").lower(): r for r in panel_resellers}
+
+    # Climb node → parent → … (cycle-safe) and take the FIRST candidate with a locked invoice
+    # for this period. Sub-resellers have no Invoice rows, so this normally lands on the root.
+    inv: Invoice | None = None
+    inv_owner: Reseller | None = None
+    cur: Reseller | None = node
+    seen: set[int] = set()
+    while cur is not None and cur.id not in seen:
+        seen.add(cur.id)
+        inv = (
+            await session.execute(
+                select(Invoice).where(
+                    Invoice.reseller_id == cur.id,
+                    Invoice.period_label == period.label,
+                    Invoice.status.notin_((InvoiceStatus.draft, InvoiceStatus.canceled)),
+                ).limit(1)
+            )
+        ).scalars().first()
+        if inv is not None:
+            inv_owner = cur
+            break
+        parent_uuid = (cur.parent_admin_uuid or "").lower()
+        cur = by_uuid.get(parent_uuid) if parent_uuid else None
+    if inv is None or inv_owner is None:
+        return None
+
+    if own_only:
+        wanted = {(node.admin_uuid or "").lower()}
+    else:
+        wanted = {(d.admin_uuid or "").lower() for d in await node_descendants(session, node)}
+    root_uuid = (inv_owner.admin_uuid or "").lower()
+
+    rows = (
+        await session.execute(
+            select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id)
+            .order_by(InvoiceLine.usage_gb.desc())
+        )
+    ).scalars().all()
+    lines: list[dict] = []
+    for ln in rows:
+        # A line with no creator attribution belongs to the invoice owner's OWN group
+        # (same convention as the delivered-invoice grouping).
+        eff = ((ln.added_by_uuid or "") or root_uuid).lower()
+        if eff not in wanted:
+            continue
+        lines.append({
+            "name": ln.name, "uuid": ln.end_user_uuid, "start_date": ln.start_date,
+            "usage_gb": float(ln.usage_gb),
+            "sub_reseller_name": ln.sub_reseller_name or node.name,
+        })
+    total_gb = round(sum(x["usage_gb"] for x in lines), 3)
+    if not lines or total_gb <= 0:
+        return None
+    return lines, total_gb
+
+
 async def node_invoice_pdf_lines(
     session: AsyncSession, node: Reseller, period: Period, *, own_only: bool
 ) -> tuple[list[dict], float] | None:
@@ -119,7 +189,14 @@ async def node_invoice_pdf_lines(
     invoice (which adds the same extras in `invoicing._persist_bundle`). Mirrors that merge exactly:
     base snapshot lines (deleted users flagged) + per-user metering-extra lines. `own_only` → just the
     node's own users (`node_invoice_own`); else the whole subtree (`node_invoice`). Returns
-    (lines, total_gb) or None when there's nothing billable."""
+    (lines, total_gb) or None when there's nothing billable.
+
+    Persisted-first (I12): a period already locked in a non-draft invoice renders from the
+    stored invoice lines (authoritative, survives snapshot pruning; the metered extras were
+    persisted as lines at generation) — only open/unbilled periods use the live recompute."""
+    persisted = await _persisted_lines_for_node(session, node, period, own_only=own_only)
+    if persisted is not None:
+        return persisted
     bundle = await (node_invoice_own if own_only else node_invoice)(session, node, period)
     if bundle is None:
         return None
