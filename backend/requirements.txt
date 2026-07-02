@@ -1,44 +1,44 @@
 # Web framework
-fastapi>=0.111,<1.0
-uvicorn[standard]>=0.30
-pydantic>=2.7
-pydantic-settings>=2.3
-python-multipart>=0.0.9
+fastapi>=0.139.0,<1.0
+uvicorn[standard]>=0.49.0
+pydantic>=2.13.4
+pydantic-settings>=2.14.2
+python-multipart>=0.0.32
 
 # Database
-SQLAlchemy>=2.0.30
-greenlet>=3.0          # required by SQLAlchemy async
-asyncpg>=0.29          # PostgreSQL async driver (production / docker)
-aiosqlite>=0.20        # SQLite async driver (quick local runs / tests)
-alembic>=1.13
+SQLAlchemy>=2.0.51
+greenlet>=3.5.3          # required by SQLAlchemy async
+asyncpg>=0.31.0          # PostgreSQL async driver (production / docker)
+aiosqlite>=0.22.1        # SQLite async driver (quick local runs / tests)
+alembic>=1.18.5
 
 # Security
-bcrypt>=4.1
-PyJWT>=2.8
-cryptography>=42       # Fernet encryption of secret columns + JWT signing
-pyotp>=2.9             # TOTP (Google Authenticator) 2FA
-qrcode[pil]>=7.4       # QR for the 2FA setup screen
-webauthn>=2.0,<3       # Passkey / WebAuthn login (Face ID, Touch ID, security keys)
+bcrypt>=5.0.0
+PyJWT>=2.13.0
+cryptography>=49.0.0       # Fernet encryption of secret columns + JWT signing
+pyotp>=2.10.0             # TOTP (Google Authenticator) 2FA
+qrcode[pil]>=8.2       # QR for the 2FA setup screen
+webauthn>=3.0.0,<4       # Passkey / WebAuthn login (Face ID, Touch ID, security keys)
 
 # HTTP client (panel sync, BscScan)
-httpx>=0.27
+httpx>=0.28.1
 
 # Telegram bot
-aiogram>=3.7
+aiogram>=3.29.1
 
 # Scheduling
-APScheduler>=3.10
+APScheduler>=3.11.3
 # IANA tz database as a pip package — guarantees zoneinfo can resolve the scheduler's
 # timezone (Asia/Tehran) even on a slim base image that ships no system /usr/share/zoneinfo.
-tzdata>=2024.1
+tzdata>=2026.2
 
 # Invoice PDF (Persian/RTL) — same toolchain as the legacy system
-reportlab>=4.1
-arabic-reshaper>=3.0
-python-bidi>=0.4.2,<0.5
+reportlab>=5.0.0
+arabic-reshaper>=3.0.1
+python-bidi>=0.6.11,<0.7
 
 # Jalali (Persian) calendar for display
-jdatetime>=5.0
+jdatetime>=5.3.0
 
 # Optional — per-reseller HD-wallet deposit addresses (Phase: payments upgrade).
 # Pulls native deps (coincurve); install only when enabling HD wallets:
