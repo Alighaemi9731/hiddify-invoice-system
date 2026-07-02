@@ -117,7 +117,7 @@ Primary files:
 
 ## I05 - Invoice status indexes
 
-Priority: P2. Version: PATCH. Status: TODO. Migration batch — kept alone.
+Priority: P2. Version: PATCH. Status: DONE in `v1.50.4`. Migration batch — kept alone.
 
 - Add `ix_invoices_status` and compound `ix_invoices_reseller_status`
   (`reseller_id`, `status`) to `app/models/invoice.py` + one additive Alembic

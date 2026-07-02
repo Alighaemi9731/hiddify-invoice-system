@@ -8,7 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.3 - 2026-07-02
+## 1.50.4 - 2026-07-02
+
+Batch I05 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Changed
+
+- **Invoice status queries got real indexes.** Dunning, the reseller portal, and enforcement
+  constantly filter invoices on `status` (usually together with `reseller_id`), but neither
+  combination was indexed — those queries scanned the whole invoices table as it grows. Added
+  `ix_invoices_status` and the compound `ix_invoices_reseller_status` via Alembic migration
+  `e6d4a2c8b9f1` (additive DDL only; applied automatically on boot; verified up/down on
+  PostgreSQL 16 and SQLite).
 
 Batch I04 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
 

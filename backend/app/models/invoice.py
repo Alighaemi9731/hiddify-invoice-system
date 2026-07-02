@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -38,6 +39,10 @@ class Invoice(Base, TimestampMixin):
         CheckConstraint("min_sale_toman >= 0", name="ck_invoices_min_sale_nonnegative"),
         CheckConstraint("usdt_rate >= 0", name="ck_invoices_rate_nonnegative"),
         CheckConstraint("amount_usdt >= 0", name="ck_invoices_usdt_nonnegative"),
+        # Dunning/portal/enforcement constantly filter on status (often with reseller_id) —
+        # e.g. `status IN (sent, overdue, enforced)` and `reseller_id = ? AND status IN (…)`.
+        Index("ix_invoices_status", "status"),
+        Index("ix_invoices_reseller_status", "reseller_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
