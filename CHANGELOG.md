@@ -8,7 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.50.8 - 2026-07-02
+## 1.51.0 - 2026-07-02
+
+Batch I09 of the improvement program (`docs/IMPROVEMENT_PLAN.md`).
+
+### Added
+
+- **CSV export for invoices and payments.** A new «خروجی CSV» button next to the filters on both
+  pages exports the FULL filtered dataset (current period/status + the search box, up to the
+  2000-row API cap) as an Excel-friendly UTF-8-BOM CSV with Persian headers and the same status
+  labels/Jalali dates the tables show. The financial-history page's existing export now shares the
+  same `src/csv.ts` util (byte-identical output).
+- **Mobile card views for Invoices and Payments.** Below 900 px both pages now render stacked
+  cards (like the Resellers page) instead of a squeezed table — same status chips, Telegram links,
+  amounts, and the complete per-row action set (detail/edit/PDF/send/pay actions on invoices;
+  chain-check/confirm/reject/delete on payments). Desktop is pixel-unchanged.
 
 Batch I08 of the improvement program (`docs/IMPROVEMENT_PLAN.md`) — pure frontend refactor,
 zero behavior or visual change.

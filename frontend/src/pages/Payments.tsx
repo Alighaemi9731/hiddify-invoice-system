@@ -2,8 +2,10 @@ import { useState } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell,
-  TableHead, TableRow, TextField, Tooltip, Typography, Link,
+  TableHead, TableRow, TextField, Tooltip, Typography, Link, useMediaQuery,
 } from "@mui/material";
+import { alpha, useTheme } from "@mui/material/styles";
+import DownloadIcon from "@mui/icons-material/esm/Download";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import VerifiedIcon from "@mui/icons-material/esm/Verified";
 import CheckIcon from "@mui/icons-material/esm/Check";
@@ -20,7 +22,8 @@ import { useDialogState } from "../hooks/useDialogState";
 import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { DataState } from "../components/DataState";
-import { fmtToman, fmtDate, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
+import { fmtToman, fmtDate, fmtNum, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
+import { downloadCsv } from "../csv";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
 
@@ -29,6 +32,8 @@ const DEPENDENT_KEYS = ["payments", "invoices", "dashboard", "debts"];
 
 export default function Payments() {
   const { node, show } = useToast();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const { data = [], isLoading, isError, refetch } = useQuery({
@@ -42,9 +47,9 @@ export default function Payments() {
     s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
      .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
   const q = toAscii(search.trim().replace(/^#/, "")).toLowerCase();
-  const shown = q
-    ? sorted.filter((p: any) => String(p.number || "").includes(q) || (p.reseller_name || "").toLowerCase().includes(q))
-    : sorted;
+  const matchesSearch = (p: any) =>
+    String(p.number || "").includes(q) || (p.reseller_name || "").toLowerCase().includes(q);
+  const shown = q ? sorted.filter(matchesSearch) : sorted;
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const confirmDlg = useDialogState<any>();
@@ -113,6 +118,86 @@ export default function Payments() {
     if (window.confirm(`پرداختِ «${p.reseller_name || ""}» (${scope}) برای همیشه حذف شود؟${extra}`)) del.mutate(p.id);
   };
 
+  // CSV export: re-fetch the FULL dataset (the page query uses the backend default of 200;
+  // the cap is 2000) with the CURRENT status filter, apply the same client-side search,
+  // and build the file in the browser.
+  const exportCsv = useToastMutation({
+    show,
+    mutationFn: async () => {
+      const rows = await listPayments({ status: status || undefined, limit: 2000 });
+      return q ? rows.filter(matchesSearch) : rows;
+    },
+    success: (rows: any[]) => `${fmtNum(rows.length)} پرداخت در فایل CSV ذخیره شد`,
+    onSuccess: (rows: any[]) => downloadCsv(
+      "payments.csv",
+      ["#", "نماینده", "روش", "مبلغ (تومان)", "زنجیره", "TXID", "وضعیت", "تاریخ", "فاکتور (دوره)"],
+      rows.map((p: any) => [
+        p.number, p.reseller_name,
+        PAYMENT_METHOD_FA[p.method] || p.method,
+        p.total_amount_toman ?? "",
+        p.chain || "", p.txid || "",
+        PAYMENT_STATUS_FA[p.status] || p.status,
+        p.created_at ? fmtDate(p.created_at) : "",
+        p.invoice_count > 1
+          ? (p.invoices || []).map((iv: any) => iv.period).join("، ")
+          : (p.invoice_period || ""),
+      ]),
+    ),
+  });
+
+  // ---- Row pieces shared verbatim by the desktop table cells and the mobile cards ----
+
+  // Click the name → open the customer's Telegram PV (username if known, else by id).
+  const nameNode = (p: any) =>
+    p.reseller_username
+      ? <Tooltip title="باز کردن گفتگوی تلگرام"><Link href={`https://t.me/${p.reseller_username}`} target="_blank" rel="noopener" underline="hover">{p.reseller_name}</Link></Tooltip>
+      : p.reseller_chat_id
+        ? <Tooltip title="باز کردن گفتگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
+        : p.reseller_name;
+
+  const periodNode = (p: any) =>
+    p.invoice_count > 1
+      ? <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{(p.invoices || []).map((iv: any) => `دورهٔ ${iv.period}: ${fmtToman(iv.amount_toman)}`).join("\n")}</span>}>
+          <span style={{ cursor: "help" }}>{p.invoice_count} فاکتور ({(p.invoices || []).map((iv: any) => iv.period).join("، ")})</span>
+        </Tooltip>
+      : (p.invoice_period || "—");
+
+  // Click the hash → open it on the matching explorer (TON → tonscan, AVAX →
+  // snowtrace, else bscscan) so the owner can verify it manually before confirming.
+  const txidNode = (p: any) =>
+    p.txid
+      ? <Tooltip title="باز کردن در اکسپلورر برای بررسی"><Link href={p.chain === "ton" ? `https://tonscan.org/tx/${p.txid}` : p.chain === "avax" ? `https://snowtrace.io/tx/${p.txid}` : `https://bscscan.com/tx/${p.txid}`} target="_blank" rel="noopener">{p.txid.slice(0, 14)}…</Link></Tooltip>
+      : p.has_proof
+        ? <Tooltip title="مشاهدهٔ رسید"><IconButton size="small" onClick={() => openPaymentProof(p.id)}><ImageIcon fontSize="small" /></IconButton></Tooltip>
+        : "—";
+
+  const amountNode = (p: any) => (
+    <Tooltip title={
+      <span style={{ whiteSpace: "pre-line" }}>
+        {p.invoice_count > 1
+          ? (p.invoices || []).map((iv: any) => `دورهٔ ${iv.period}: ${fmtToman(iv.amount_toman)}`).join("\n")
+          : `فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}${p.invoice_equiv ? "\nمعادل: " + p.invoice_equiv : ""}`}
+      </span>
+    }>
+      <span style={{ cursor: "help" }}>
+        {p.total_amount_toman ? fmtToman(p.total_amount_toman) : "—"}
+      </span>
+    </Tooltip>
+  );
+
+  const rowActions = (p: any) => (
+    <>
+      {/* Actions stay available for every status so a wrong choice is reversible. */}
+      {/* On-chain check (read-only, free): reads the actual deposit — TON via toncenter,
+          AVAX via a public Avalanche C-Chain RPC, USDT/BEP-20 via a public BSC RPC node —
+          and reports it for the manual decision (never auto-confirms). */}
+      <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
+      <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => confirmDlg.openWith(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
+      <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
+      <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
+    </>
+  );
+
   return (
     <Box>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
@@ -130,9 +215,14 @@ export default function Payments() {
         <TextField size="small" value={search} sx={{ minWidth: { sm: 240 } }}
           placeholder="جستجوی شماره یا نام نماینده..." onChange={(e) => setSearch(e.target.value)}
           InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
+        <Button size="small" variant="outlined" startIcon={<DownloadIcon />}
+          onClick={() => exportCsv.mutate()} disabled={exportCsv.isPending || data.length === 0}>
+          خروجی CSV
+        </Button>
       </Stack>
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
+        {!isMobile ? (
         <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
@@ -152,62 +242,71 @@ export default function Payments() {
             {shown.map((p: any) => (
               <TableRow key={p.id} hover>
                 <TableCell data-label="#" dir="ltr" sx={{ color: "text.secondary", fontWeight: 600, fontFamily: "monospace" }}>#{p.number}</TableCell>
-                <TableCell data-label="نماینده">
-                  {/* Click the name → open the customer's Telegram PV (username if known, else by id). */}
-                  {p.reseller_username
-                    ? <Tooltip title="باز کردن گفتگوی تلگرام"><Link href={`https://t.me/${p.reseller_username}`} target="_blank" rel="noopener" underline="hover">{p.reseller_name}</Link></Tooltip>
-                    : p.reseller_chat_id
-                      ? <Tooltip title="باز کردن گفتگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
-                      : p.reseller_name}
-                </TableCell>
-                <TableCell data-label="فاکتور (دوره)">
-                  {p.invoice_count > 1
-                    ? <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{(p.invoices || []).map((iv: any) => `دورهٔ ${iv.period}: ${fmtToman(iv.amount_toman)}`).join("\n")}</span>}>
-                        <span style={{ cursor: "help" }}>{p.invoice_count} فاکتور ({(p.invoices || []).map((iv: any) => iv.period).join("، ")})</span>
-                      </Tooltip>
-                    : (p.invoice_period || "—")}
-                </TableCell>
+                <TableCell data-label="نماینده">{nameNode(p)}</TableCell>
+                <TableCell data-label="فاکتور (دوره)">{periodNode(p)}</TableCell>
                 <TableCell data-label="روش">{PAYMENT_METHOD_FA[p.method] || p.method}</TableCell>
-                <TableCell data-label="TXID" dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {/* Click the hash → open it on the matching explorer (TON → tonscan, AVAX →
-                      snowtrace, else bscscan) so the owner can verify it manually before confirming. */}
-                  {p.txid
-                    ? <Tooltip title="باز کردن در اکسپلورر برای بررسی"><Link href={p.chain === "ton" ? `https://tonscan.org/tx/${p.txid}` : p.chain === "avax" ? `https://snowtrace.io/tx/${p.txid}` : `https://bscscan.com/tx/${p.txid}`} target="_blank" rel="noopener">{p.txid.slice(0, 14)}…</Link></Tooltip>
-                    : p.has_proof
-                      ? <Tooltip title="مشاهدهٔ رسید"><IconButton size="small" onClick={() => openPaymentProof(p.id)}><ImageIcon fontSize="small" /></IconButton></Tooltip>
-                      : "—"}
-                </TableCell>
-                <TableCell data-label="مبلغ" dir="ltr">
-                  <Tooltip title={
-                    <span style={{ whiteSpace: "pre-line" }}>
-                      {p.invoice_count > 1
-                        ? (p.invoices || []).map((iv: any) => `دورهٔ ${iv.period}: ${fmtToman(iv.amount_toman)}`).join("\n")
-                        : `فاکتور: ${p.invoice_amount_toman ? fmtToman(p.invoice_amount_toman) : "—"}${p.invoice_equiv ? "\nمعادل: " + p.invoice_equiv : ""}`}
-                    </span>
-                  }>
-                    <span style={{ cursor: "help" }}>
-                      {p.total_amount_toman ? fmtToman(p.total_amount_toman) : "—"}
-                    </span>
-                  </Tooltip>
-                </TableCell>
+                <TableCell data-label="TXID" dir="ltr" sx={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{txidNode(p)}</TableCell>
+                <TableCell data-label="مبلغ" dir="ltr">{amountNode(p)}</TableCell>
                 <TableCell data-label="تأییدها">{p.confirmations}</TableCell>
                 <TableCell data-label="وضعیت"><Chip size="small" color={COLOR[p.status]} label={PAYMENT_STATUS_FA[p.status]} /></TableCell>
                 <TableCell data-label="تاریخ">{fmtDate(p.created_at)}</TableCell>
-                <TableCell data-label="عملیات" align="left">
-                  {/* Actions stay available for every status so a wrong choice is reversible. */}
-                  {/* On-chain check (read-only, free): reads the actual deposit — TON via toncenter,
-                      AVAX via a public Avalanche C-Chain RPC, USDT/BEP-20 via a public BSC RPC node —
-                      and reports it for the manual decision (never auto-confirms). */}
-                  <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
-                  <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => confirmDlg.openWith(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
-                  <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
-                  <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
-                </TableCell>
+                <TableCell data-label="عملیات" align="left">{rowActions(p)}</TableCell>
               </TableRow>
             ))}
             {shown.length === 0 && <TableRow><TableCell colSpan={10} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "پرداختی با این جستجو یافت نشد" : "پرداختی ثبت نشده است"}</TableCell></TableRow>}
           </TableBody>
         </Table>
+        ) : (
+        // Mobile: the same rows/actions as the table, stacked as cards (resellers pattern).
+        <Stack spacing={1.2} sx={{ p: 1.5 }}>
+          {shown.map((p: any) => (
+            <Box key={p.id} sx={{
+              p: 1.5, borderRadius: 3, border: "1px solid", borderColor: "divider",
+              bgcolor: (t) => alpha(t.palette.background.paper, 0.48),
+            }}>
+              <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" component="div" sx={{ fontWeight: 750 }} noWrap>{nameNode(p)}</Typography>
+                  <Typography variant="caption" color="text.secondary" dir="ltr" sx={{ fontFamily: "monospace" }}>
+                    #{p.number}
+                  </Typography>
+                </Box>
+                <Chip size="small" color={COLOR[p.status]} label={PAYMENT_STATUS_FA[p.status]} />
+              </Stack>
+              <Box sx={{ mt: 1.2, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">مبلغ</Typography>
+                  <Typography variant="body2" component="div" sx={{ fontWeight: 700 }}>{amountNode(p)}</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">روش</Typography>
+                  <Typography variant="body2">{PAYMENT_METHOD_FA[p.method] || p.method}</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">فاکتور (دوره)</Typography>
+                  <Typography variant="body2" component="div">{periodNode(p)}</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">تاریخ</Typography>
+                  <Typography variant="body2">{fmtDate(p.created_at)}</Typography>
+                </Box>
+              </Box>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}
+                sx={{ mt: 1.2, pt: 1, borderTop: 1, borderColor: "divider" }}>
+                <Box dir="ltr" sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {txidNode(p)}
+                </Box>
+                <Box sx={{ flexShrink: 0 }}>{rowActions(p)}</Box>
+              </Stack>
+            </Box>
+          ))}
+          {shown.length === 0 && (
+            <Typography align="center" color="text.secondary" variant="body2" sx={{ py: 5 }}>
+              {q ? "پرداختی با این جستجو یافت نشد" : "پرداختی ثبت نشده است"}
+            </Typography>
+          )}
+        </Stack>
+        )}
       </Card>
       </DataState>
 

@@ -175,7 +175,7 @@ Primary files:
 
 ## I09 - Mobile cards and CSV export
 
-Priority: P3. Version: MINOR. Status: TODO.
+Priority: P3. Version: MINOR. Status: DONE in `v1.51.0`.
 
 - Copy the Resellers mobile-card pattern to Invoices + Payments.
 - Extract the existing UTF-8-BOM CSV export from `FinancialHistory.tsx` into

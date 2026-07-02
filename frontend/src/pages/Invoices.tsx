@@ -2,8 +2,10 @@ import { useState, useEffect } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, Tooltip, Typography, Divider, TablePagination,
+  TextField, Tooltip, Typography, Divider, TablePagination, useMediaQuery,
 } from "@mui/material";
+import { alpha, useTheme } from "@mui/material/styles";
+import DownloadIcon from "@mui/icons-material/esm/Download";
 import SendIcon from "@mui/icons-material/esm/Send";
 import PictureAsPdfIcon from "@mui/icons-material/esm/PictureAsPdf";
 import CheckCircleIcon from "@mui/icons-material/esm/CheckCircle";
@@ -32,7 +34,8 @@ import { useSort, SortTh } from "../components/sortable";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import LiveRate from "../components/LiveRate";
-import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
+import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
+import { downloadCsv } from "../csv";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
 // Delivered-but-unpaid states money is collected against (mirrors the backend state machine).
@@ -40,6 +43,8 @@ const OWED_STATES = ["sent", "overdue", "enforced"];
 
 export default function Invoices() {
   const { node, show } = useToast();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const [period, setPeriod] = useState(currentPeriod());
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
@@ -67,9 +72,9 @@ export default function Invoices() {
     s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
      .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
   const q = toAscii(search.trim()).toLowerCase();
-  const filtered = q
-    ? sorted.filter((i: any) => String(i.number || "").includes(q) || (i.reseller_name || "").toLowerCase().includes(q))
-    : sorted;
+  const matchesSearch = (i: any) =>
+    String(i.number || "").includes(q) || (i.reseller_name || "").toLowerCase().includes(q);
+  const filtered = q ? sorted.filter(matchesSearch) : sorted;
   // Paginate the (often hundreds of) rows so we never render the whole month at once.
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
@@ -124,8 +129,72 @@ export default function Invoices() {
     invalidate: ["invoices"],
   });
 
+  // CSV export: re-fetch the FULL filtered dataset (the page query caps at 1000; the
+  // backend cap is 2000) with the CURRENT period/status filters, apply the same
+  // client-side search, and build the file in the browser.
+  const exportCsv = useToastMutation({
+    show,
+    mutationFn: async () => {
+      const rows = await listInvoices({ period, status: status || undefined, limit: 2000 });
+      return q ? rows.filter(matchesSearch) : rows;
+    },
+    success: (rows: any[]) => `${fmtNum(rows.length)} فاکتور در فایل CSV ذخیره شد`,
+    onSuccess: (rows: any[]) => downloadCsv(
+      `invoices-${period}.csv`,
+      ["شماره", "نماینده", "پنل", "دوره", "گیگ", "مبلغ (تومان)", "وضعیت", "تاریخ ارسال", "تاریخ پرداخت"],
+      rows.map((i: any) => [
+        i.number, i.reseller_name, i.panel_key, i.period_label, i.usage_gb, i.amount_toman,
+        INVOICE_STATUS_FA[i.status] || i.status,
+        i.sent_at ? fmtDate(i.sent_at) : "",
+        i.paid_at ? fmtDate(i.paid_at) : "",
+      ]),
+    ),
+  });
+
   const openDetail = async (id: number) => detailDlg.openWith(await getInvoice(id));
   const total = filtered.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
+
+  // The per-row operations, shared verbatim between the desktop table cell and the
+  // mobile card so both views always offer the exact same actions.
+  const rowActions = (i: any) => (
+    <>
+      <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
+      {i.status !== "paid" && i.status !== "canceled" && (
+        <Tooltip title="ویرایش"><IconButton size="small" onClick={() => editDlg.openWith({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+      )}
+      {i.status !== "paid" && (
+        <Tooltip title="بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)">
+          <IconButton size="small" disabled={recompute.isPending}
+            onClick={() => confirm("پنل همگام‌سازی و اعداد این فاکتور از روی دادهٔ فعلی پنل به‌روز شود؟") && recompute.mutate(i.id)}>
+            <AutorenewIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      <Tooltip title="PDF"><IconButton size="small" onClick={() => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error"))}><PictureAsPdfIcon fontSize="small" /></IconButton></Tooltip>
+      <Tooltip title="ارسال"><IconButton size="small" onClick={() => sendOne.mutate(i.id)}><SendIcon fontSize="small" /></IconButton></Tooltip>
+      {i.status !== "draft" && i.status !== "paid" && (
+        <Tooltip title="بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از دفتر مالی هم حذف می‌شود)">
+          <IconButton size="small" color="warning" disabled={toDraft.isPending}
+            onClick={() => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id)}>
+            <RestartAltIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {i.status === "paid" ? (
+        <Tooltip title="لغو پرداخت"><IconButton size="small" color="warning" onClick={() => unpay.mutate(i.id)}><UndoIcon fontSize="small" /></IconButton></Tooltip>
+      ) : OWED_STATES.includes(i.status) ? (
+        <Tooltip title="ثبت پرداخت"><IconButton size="small" color="success" onClick={() => pay.mutate(i.id)}><CheckCircleIcon fontSize="small" /></IconButton></Tooltip>
+      ) : null}
+      {OWED_STATES.includes(i.status) && (
+        <Tooltip title={i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت"}>
+          <IconButton size="small" color={i.deferred_until ? "info" : "default"}
+            onClick={() => deferDlg.openWith({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
+            <ScheduleIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+    </>
+  );
 
   return (
     <Box>
@@ -142,6 +211,10 @@ export default function Invoices() {
           <MenuItem value="">همه وضعیت‌ها</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
+        <Button size="small" variant="outlined" startIcon={<DownloadIcon />}
+          onClick={() => exportCsv.mutate()} disabled={exportCsv.isPending || data.length === 0}>
+          خروجی CSV
+        </Button>
         <Box sx={{ flexGrow: 1 }} />
         <LiveRate />
         <Button variant="outlined" onClick={() => {
@@ -222,6 +295,7 @@ export default function Invoices() {
       </Typography>
 
       <Card>
+        {!isMobile ? (
         <Table size="small" className="resp-table">
           <TableHead>
             <TableRow>
@@ -245,48 +319,59 @@ export default function Invoices() {
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(i.amount_toman)}</TableCell>
                 <TableCell><Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} /></TableCell>
-                <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>
-                  <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
-                  {i.status !== "paid" && i.status !== "canceled" && (
-                    <Tooltip title="ویرایش"><IconButton size="small" onClick={() => editDlg.openWith({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
-                  )}
-                  {i.status !== "paid" && (
-                    <Tooltip title="بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)">
-                      <IconButton size="small" disabled={recompute.isPending}
-                        onClick={() => confirm("پنل همگام‌سازی و اعداد این فاکتور از روی دادهٔ فعلی پنل به‌روز شود؟") && recompute.mutate(i.id)}>
-                        <AutorenewIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                  <Tooltip title="PDF"><IconButton size="small" onClick={() => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error"))}><PictureAsPdfIcon fontSize="small" /></IconButton></Tooltip>
-                  <Tooltip title="ارسال"><IconButton size="small" onClick={() => sendOne.mutate(i.id)}><SendIcon fontSize="small" /></IconButton></Tooltip>
-                  {i.status !== "draft" && i.status !== "paid" && (
-                    <Tooltip title="بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از دفتر مالی هم حذف می‌شود)">
-                      <IconButton size="small" color="warning" disabled={toDraft.isPending}
-                        onClick={() => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id)}>
-                        <RestartAltIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                  {i.status === "paid" ? (
-                    <Tooltip title="لغو پرداخت"><IconButton size="small" color="warning" onClick={() => unpay.mutate(i.id)}><UndoIcon fontSize="small" /></IconButton></Tooltip>
-                  ) : OWED_STATES.includes(i.status) ? (
-                    <Tooltip title="ثبت پرداخت"><IconButton size="small" color="success" onClick={() => pay.mutate(i.id)}><CheckCircleIcon fontSize="small" /></IconButton></Tooltip>
-                  ) : null}
-                  {OWED_STATES.includes(i.status) && (
-                    <Tooltip title={i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت"}>
-                      <IconButton size="small" color={i.deferred_until ? "info" : "default"}
-                        onClick={() => deferDlg.openWith({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
-                        <ScheduleIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                </TableCell>
+                <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>{rowActions(i)}</TableCell>
               </TableRow>
             ))}
             {filtered.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
+        ) : (
+        // Mobile: the same rows/actions as the table, stacked as cards (resellers pattern).
+        <Stack spacing={1.2} sx={{ p: 1.5 }}>
+          {paged.map((i: any) => (
+            <Box key={i.id} sx={{
+              p: 1.5, borderRadius: 3, border: "1px solid", borderColor: "divider",
+              bgcolor: (t) => alpha(t.palette.background.paper, 0.48),
+            }}>
+              <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 750 }} noWrap>{i.reseller_name}</Typography>
+                  <Typography variant="caption" color="text.secondary" dir="ltr" sx={{ fontFamily: "monospace" }}>
+                    {i.number}
+                  </Typography>
+                </Box>
+                <Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} />
+              </Stack>
+              <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mt: 1 }}>
+                <Chip size="small" variant="outlined" label={i.panel_key} />
+                <Chip size="small" variant="outlined" label={`دوره ${i.period_label}`} />
+                <TelegramLink username={i.reseller_username} chatId={i.reseller_chat_id} />
+              </Stack>
+              <Box sx={{ mt: 1.2, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">مصرف</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{fmtGb(i.usage_gb)}</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">مبلغ</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{fmtToman(i.amount_toman)}</Typography>
+                </Box>
+              </Box>
+              <Box sx={{
+                mt: 1.2, pt: 1, borderTop: 1, borderColor: "divider",
+                display: "flex", flexWrap: "wrap", justifyContent: "flex-end",
+              }}>
+                {rowActions(i)}
+              </Box>
+            </Box>
+          ))}
+          {filtered.length === 0 && (
+            <Typography align="center" color="text.secondary" variant="body2" sx={{ py: 5 }}>
+              {q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}
+            </Typography>
+          )}
+        </Stack>
+        )}
         {filtered.length > rowsPerPage && (
           <TablePagination
             component="div" count={filtered.length} page={page}

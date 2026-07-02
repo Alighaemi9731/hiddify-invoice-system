@@ -7,6 +7,7 @@ import DownloadIcon from "@mui/icons-material/esm/Download";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import { useQuery } from "@tanstack/react-query";
 import { getFinancialHistory } from "../api/client";
+import { downloadCsv } from "../csv";
 import PeriodPicker from "../components/PeriodPicker";
 import { DataState } from "../components/DataState";
 import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
@@ -32,18 +33,14 @@ export default function FinancialHistory() {
   const paid = data.filter((r: any) => r.status === "paid")
     .reduce((s: number, r: any) => s + r.amount_toman, 0);
 
-  const exportCsv = () => {
-    const head = ["پنل", "نماینده", "UUID", "دوره", "گیگ", "قیمت/گیگ", "تومان", "وضعیت", "تاریخ پرداخت", "TXID"];
-    const lines = data.map((r: any) => [
+  const exportCsv = () => downloadCsv(
+    "financial-history.csv",
+    ["پنل", "نماینده", "UUID", "دوره", "گیگ", "قیمت/گیگ", "تومان", "وضعیت", "تاریخ پرداخت", "TXID"],
+    data.map((r: any) => [
       r.panel_key, r.reseller_name, r.reseller_admin_uuid, r.period_label, r.usage_gb,
       r.price_per_gb, r.amount_toman, r.status, r.paid_at || "", r.txid || "",
-    ].map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
-    const csv = "﻿" + [head.join(","), ...lines].join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a");
-    a.href = url; a.download = "financial-history.csv"; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  };
+    ]),
+  );
 
   return (
     <Box>
