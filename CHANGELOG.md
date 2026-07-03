@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.57.2 - 2026-07-03
+
+### Fixed
+
+- **Invoice «جزئیات» dialog on mobile no longer wastes half the screen.** The line-items list was
+  pinned to a fixed 360px scroll box, so inside the full-screen mobile dialog only a few services
+  showed with a big empty area below and only that small box scrolled. On phones the list now fills
+  the whole dialog and scrolls as one, so a long invoice (hundreds of services) runs cleanly to the
+  bottom. The 360px cap is kept on desktop where the dialog is a compact centered card.
+
 ## 1.57.1 - 2026-07-03
 
 Batch P04 of the polish program (`docs/POLISH_PLAN.md`).

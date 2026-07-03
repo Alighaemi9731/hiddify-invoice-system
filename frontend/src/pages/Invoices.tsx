@@ -423,8 +423,8 @@ export default function Invoices() {
       <Dialog open={detailDlg.open} onClose={detailDlg.close} fullWidth maxWidth="md" fullScreen={xsFull}>
         {detail && (<>
           <DialogTitle>فاکتور #{detail.number} — {detail.reseller_name} — دوره {detail.period_label}</DialogTitle>
-          <DialogContent>
-            <Stack direction="row" spacing={3} sx={{ mb: 2, flexWrap: "wrap" }}>
+          <DialogContent sx={{ display: "flex", flexDirection: "column" }}>
+            <Stack direction="row" spacing={3} sx={{ mb: 2, flexWrap: "wrap", flexShrink: 0 }}>
               <Typography variant="body2">مصرف کل: <b>{fmtGb(detail.usage_gb)}</b></Typography>
               <Typography variant="body2">قیمت/گیگ: <b>{fmtNum(detail.price_per_gb)}</b></Typography>
               <Typography variant="body2">مبلغ: <b>{fmtToman(detail.amount_toman)}</b></Typography>
@@ -435,7 +435,9 @@ export default function Invoices() {
             )}
             <Divider sx={{ mb: 1 }} />
             <Typography variant="subtitle2" sx={{ mb: 1 }}>{fmtNum(detail.lines?.length)} سرویس</Typography>
-            <Box sx={{ maxHeight: 360, overflow: "auto" }}>
+            {/* Fill the remaining space on a full-screen mobile dialog (so the list runs to the
+                bottom instead of a short 360px box with empty space below); cap it on desktop. */}
+            <Box sx={{ overflow: "auto", flex: { xs: 1, sm: "unset" }, minHeight: 0, maxHeight: { xs: "none", sm: 360 } }}>
               <Table size="small" stickyHeader className="resp-table">
                 <TableHead><TableRow><TableCell>نام</TableCell><TableCell>تاریخ ساخت</TableCell><TableCell>حجم</TableCell></TableRow></TableHead>
                 <TableBody>
