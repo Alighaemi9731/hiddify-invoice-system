@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.57.1 - 2026-07-03
+
+Batch P04 of the polish program (`docs/POLISH_PLAN.md`).
+
+### Fixed
+
+- **Storefront «مصرف» line no longer looks contradictory after a renewal.** Renewing a config
+  correctly adds the new grant to the remaining quota (a renewed 10 GB plan has a 20 GB limit), but
+  the config view then showed «پلن: ۱۰ گیگ» next to «مصرف: ۱۱ از ۲۰ گیگ», which read as a mismatch.
+  When the live limit exceeds the plan size, the usage line is now tagged «(شاملِ تمدید)» so it's
+  clear the larger allowance is the accumulated result of a renewal. (Applies to both the customer's
+  my-services view and the admin's customer-subscription view.)
+
 ## 1.57.0 - 2026-07-03
 
 Batch P03 of the polish program (`docs/POLISH_PLAN.md`).

@@ -70,7 +70,7 @@ Primary files: `backend/app/services/invoicing.py`, `backend/app/services/invoic
 
 ## P04 - Storefront renewal display clarity
 
-Priority: P3. Version: PATCH. Status: TODO.
+Priority: P3. Version: PATCH. Status: DONE in `v1.57.1`.
 
 - Relabel the my-services view so a renewed plan reads unambiguously (plan gb vs current
   limit incl. renewal). Keep the accumulate behavior.

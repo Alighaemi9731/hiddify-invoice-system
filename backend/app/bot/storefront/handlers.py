@@ -84,6 +84,14 @@ def _toman(value) -> str:  # noqa: ANN001
         return "0"
 
 
+def _usage_line(used_gb: float, limit_gb: float, plan_gb: int) -> str:
+    """The «مصرف» line for a config. Renewal ADDS quota (a renewed 10-گیگ plan shows a 20-گیگ
+    limit), which reads confusingly next to «پلن: ۱۰ گیگ» — so when the live limit exceeds the
+    plan size, label it «(شاملِ تمدید)» to make clear the total allowance includes renewals."""
+    base = f"مصرف: {used_gb:.2f} از {limit_gb:.0f} گیگ"
+    return f"{base} (شاملِ تمدید)" if limit_gb > float(plan_gb) + 0.5 else base
+
+
 async def _resolve(session, bot: Bot, user) -> tuple[StorefrontBot | None, Reseller | None, bool]:  # noqa: ANN001
     """Resolve the tenant for the physical bot, plus whether `user` is the reseller-admin."""
     sf = await storefront.get_bot_by_telegram_id(session, bot.id)
@@ -577,7 +585,7 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
     if paused:
         lines.append("وضعیت: متوقف ⏸")
     if status.ok:
-        lines.append(f"مصرف: {status.used_gb:.2f} از {status.limit_gb:.0f} گیگ")
+        lines.append(_usage_line(status.used_gb, status.limit_gb, gb))
         if status.remaining_days is not None:
             lines.append(f"روزهای باقی‌مانده: {status.remaining_days}")
     else:
@@ -835,7 +843,7 @@ async def sf_admin_sub_detail(cb: CallbackQuery, bot: Bot) -> None:
     if paused:
         lines.append("وضعیت: متوقف ⏸")
     if live.ok:
-        lines.append(f"مصرف: {live.used_gb:.2f} از {live.limit_gb:.0f} گیگ")
+        lines.append(_usage_line(live.used_gb, live.limit_gb, gb))
         if live.remaining_days is not None:
             lines.append(f"روزهای باقی‌مانده: {live.remaining_days}")
     await cb.message.answer(rtl("\n".join(lines)),

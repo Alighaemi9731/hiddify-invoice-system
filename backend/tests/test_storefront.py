@@ -1114,3 +1114,16 @@ def test_customers_tab_sends_single_message(tmp_path):
         assert sent["n"] == 1   # ONE tidy message, not one-per-customer
 
     _run(body, tmp_path, "custonemsg.db")
+
+
+def test_usage_line_flags_renewal():
+    """P04: when the live limit exceeds the plan size (a renewal added quota), the usage line is
+    labeled «شاملِ تمدید» so «۱۱ از ۲۰» over a 10 GB plan isn't confusing; otherwise it's plain."""
+    from app.bot.storefront.handlers import _usage_line
+    # renewed: limit 20 > plan 10 → flagged
+    line = _usage_line(11.0, 20.0, 10)
+    assert "شاملِ تمدید" in line and "11.00 از 20" in line
+    # fresh: limit == plan → no flag
+    assert "شاملِ تمدید" not in _usage_line(3.0, 10.0, 10)
+    # tiny rounding slack doesn't trip the flag
+    assert "شاملِ تمدید" not in _usage_line(0.0, 10.2, 10)
