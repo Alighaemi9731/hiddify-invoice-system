@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell,
+  IconButton, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TextField, Tooltip, Typography, Link, useMediaQuery,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
@@ -225,7 +225,8 @@ export default function Payments() {
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         {!isMobile ? (
-        <Table size="small" className="resp-table">
+        <TableContainer sx={{ maxHeight: "calc(100vh - 300px)" }}>
+        <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 1120 }}>
           <TableHead>
             <TableRow>
               <SortTh id="id" label="#" sortKey={key} dir={dir} onSort={toggle} />
@@ -258,6 +259,7 @@ export default function Payments() {
             {shown.length === 0 && <TableRow><TableCell colSpan={10} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "پرداختی با این جستجو یافت نشد" : "پرداختی ثبت نشده است"}</TableCell></TableRow>}
           </TableBody>
         </Table>
+        </TableContainer>
         ) : (
         // Mobile: the same rows/actions as the table, stacked as cards (resellers pattern).
         <Stack spacing={1.2} sx={{ p: 1.5 }}>

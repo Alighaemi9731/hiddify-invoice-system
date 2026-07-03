@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Box, Button, Card, Chip, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead,
-  TableRow, TextField, Typography,
+  Box, Button, Card, Chip, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, TextField, Typography,
 } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/esm/Download";
 import SearchIcon from "@mui/icons-material/esm/Search";
@@ -10,6 +10,7 @@ import { getFinancialHistory } from "../api/client";
 import { downloadCsv } from "../csv";
 import PeriodPicker from "../components/PeriodPicker";
 import { DataState } from "../components/DataState";
+import { TablePager } from "../components/TablePager";
 import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
 
 const STATUS_COLOR: any = {
@@ -21,6 +22,9 @@ export default function FinancialHistory() {
   const [period, setPeriod] = useState("");   // empty = all months
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
+  const [page, setPage] = useState(0);
+  const [rpp, setRpp] = useState(50);
+  useEffect(() => setPage(0), [period, q, status]);
 
   const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["financial-history", period, q, status],
@@ -28,6 +32,7 @@ export default function FinancialHistory() {
       period: period || undefined, q: q || undefined, status: status || undefined,
     }),
   });
+  const paged = data.slice(page * rpp, page * rpp + rpp);
 
   const total = data.reduce((s: number, r: any) => s + r.amount_toman, 0);
   const paid = data.filter((r: any) => r.status === "paid")
@@ -72,40 +77,44 @@ export default function FinancialHistory() {
       </Stack>
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
-        <Table size="small" className="resp-table">
-          <TableHead>
-            <TableRow>
-              <TableCell>پنل</TableCell>
-              <TableCell>نماینده</TableCell>
-              <TableCell>دوره</TableCell>
-              <TableCell>مصرف</TableCell>
-              <TableCell>مبلغ (تومان)</TableCell>
-              <TableCell>وضعیت</TableCell>
-              <TableCell>تاریخ پرداخت</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {data.map((r: any) => (
-              <TableRow key={r.id} hover>
-                <TableCell>{r.panel_key}</TableCell>
-                <TableCell>{r.reseller_name}</TableCell>
-                <TableCell dir="ltr">{r.period_label}</TableCell>
-                <TableCell>{fmtGb(r.usage_gb)}</TableCell>
-                <TableCell>{fmtToman(r.amount_toman)}</TableCell>
-                <TableCell>
-                  <Chip size="small" color={STATUS_COLOR[r.status] || "default"}
-                    label={INVOICE_STATUS_FA[r.status] || r.status} />
-                </TableCell>
-                <TableCell>{r.paid_at ? fmtDate(r.paid_at) : "—"}</TableCell>
+        <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 260px)" } }}>
+          <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 720 } }}>
+            <TableHead>
+              <TableRow>
+                <TableCell>پنل</TableCell>
+                <TableCell>نماینده</TableCell>
+                <TableCell>دوره</TableCell>
+                <TableCell>مصرف</TableCell>
+                <TableCell>مبلغ (تومان)</TableCell>
+                <TableCell>وضعیت</TableCell>
+                <TableCell>تاریخ پرداخت</TableCell>
               </TableRow>
-            ))}
-            {data.length === 0 && (
-              <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>
-                هنوز سابقه‌ای ثبت نشده است
-              </TableCell></TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {paged.map((r: any) => (
+                <TableRow key={r.id} hover>
+                  <TableCell>{r.panel_key}</TableCell>
+                  <TableCell>{r.reseller_name}</TableCell>
+                  <TableCell dir="ltr">{r.period_label}</TableCell>
+                  <TableCell>{fmtGb(r.usage_gb)}</TableCell>
+                  <TableCell>{fmtToman(r.amount_toman)}</TableCell>
+                  <TableCell>
+                    <Chip size="small" color={STATUS_COLOR[r.status] || "default"}
+                      label={INVOICE_STATUS_FA[r.status] || r.status} />
+                  </TableCell>
+                  <TableCell>{r.paid_at ? fmtDate(r.paid_at) : "—"}</TableCell>
+                </TableRow>
+              ))}
+              {data.length === 0 && (
+                <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>
+                  هنوز سابقه‌ای ثبت نشده است
+                </TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+        <TablePager count={data.length} page={page} rpp={rpp} onPage={setPage}
+          onRpp={(v) => { setRpp(v); setPage(0); }} />
       </Card>
       </DataState>
     </Box>

@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Box, Card, Chip, Stack, Table, TableBody, TableCell, TableHead,
+  Box, Card, Chip, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TableSortLabel, Typography,
 } from "@mui/material";
 import { useQuery } from "@tanstack/react-query";
 import { getSales } from "../api/client";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
+import { TablePager } from "../components/TablePager";
 import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 import { DataState } from "../components/DataState";
 
@@ -22,6 +23,10 @@ export default function Sales() {
   });
   const total = data.reduce((s: number, r: any) => s + r.amount_toman, 0);
   const totalGb = data.reduce((s: number, r: any) => s + r.usage_gb, 0);
+  const [page, setPage] = useState(0);
+  const [rpp, setRpp] = useState(50);
+  useEffect(() => setPage(0), [period, sort, order]);
+  const paged = data.slice(page * rpp, page * rpp + rpp);
 
   const head = (id: string, label: string) => (
     <TableCell sortDirection={sort === id ? order : false}>
@@ -43,7 +48,8 @@ export default function Sales() {
       </Stack>
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
-        <Table size="small" className="resp-table">
+        <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 240px)" } }}>
+        <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 640 } }}>
           <TableHead>
             <TableRow>
               {head("name", "نماینده")}
@@ -54,7 +60,7 @@ export default function Sales() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {data.map((r: any) => (
+            {paged.map((r: any) => (
               <TableRow key={r.invoice_id} hover>
                 <TableCell>{r.reseller_name}</TableCell>
                 <TableCell>{r.panel_key}</TableCell>
@@ -66,6 +72,9 @@ export default function Sales() {
             {data.length === 0 && <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>داده‌ای برای این دوره نیست</TableCell></TableRow>}
           </TableBody>
         </Table>
+        </TableContainer>
+        <TablePager count={data.length} page={page} rpp={rpp} onPage={setPage}
+          onRpp={(v) => { setRpp(v); setPage(0); }} />
       </Card>
       </DataState>
     </Box>

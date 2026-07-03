@@ -388,7 +388,9 @@ export function makeTheme(mode: PaletteMode) {
         styleOverrides: {
           root: {
             "& .MuiTableCell-head": {
-              backgroundColor: isDark ? "rgba(41,151,255,0.10)" : "rgba(0,113,227,0.06)",
+              // OPAQUE (not a translucent tint) so a stickyHeader doesn't let scrolling rows
+              // bleed through it. Solid blue-tinted surface matching the card.
+              backgroundColor: isDark ? "#20262f" : "#eef4fc",
               color: isDark ? "#6aadff" : "#0064c8",
               fontWeight: 700,
               fontSize: 12.5,

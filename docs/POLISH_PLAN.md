@@ -46,7 +46,7 @@ Primary files: `frontend/vite.config.ts`, `frontend/src/components/ErrorBoundary
 
 ## P02 - Responsive desktop tables + pagination
 
-Priority: P1. Version: MINOR. Status: TODO.
+Priority: P1. Version: MINOR. Status: DONE in `v1.56.0`.
 
 - Wrap wide tables in a horizontally-scrollable `TableContainer` (min-width table,
   `overflowX: auto`) so columns scroll instead of being clipped at 100% zoom; stop the

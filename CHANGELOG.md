@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.56.0 - 2026-07-03
+
+Batch P02 of the polish program (`docs/POLISH_PLAN.md`).
+
+### Fixed
+
+- **Wide tables no longer clip their columns at 100% zoom.** The invoices, payments, resellers,
+  sales, financial-history, debts, and logs tables were rendered directly inside a card that clips
+  overflow, so on a normal-width screen the rightmost columns (including the row-action buttons)
+  were cut off — the owner had to drop the browser to 80% zoom. Every table now sits in a
+  horizontally-scrollable container with a minimum width, so it scrolls sideways and the action
+  column is always reachable. Headers stick to the top while scrolling on desktop.
+
+### Added
+
+- **Pagination on the long list pages.** Financial history, the sales list, the delivery/enforcement
+  logs, and the debts list used to render every row in one endless table you had to scroll to the
+  bottom of. They now paginate (25/50/100 per page) with a sticky header, so the pages stay fast and
+  scannable.
+
 ## 1.55.1 - 2026-07-03
 
 Batch P01 of the polish program (`docs/POLISH_PLAN.md`).

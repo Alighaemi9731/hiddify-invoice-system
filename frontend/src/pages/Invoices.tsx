@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow,
+  IconButton, MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, Tooltip, Typography, Divider, TablePagination, useMediaQuery,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
@@ -284,7 +284,8 @@ export default function Invoices() {
 
       <Card>
         {!isMobile ? (
-        <Table size="small" className="resp-table">
+        <TableContainer sx={{ maxHeight: "calc(100vh - 300px)" }}>
+        <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 980 }}>
           <TableHead>
             <TableRow>
               <TableCell>شماره</TableCell>
@@ -313,6 +314,7 @@ export default function Invoices() {
             {filtered.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
+        </TableContainer>
         ) : (
         // Mobile: the same rows/actions as the table, stacked as cards (resellers pattern).
         <Stack spacing={1.2} sx={{ p: 1.5 }}>

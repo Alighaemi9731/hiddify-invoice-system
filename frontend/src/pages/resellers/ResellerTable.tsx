@@ -106,8 +106,8 @@ export default function ResellerTable({
   canAddSwitch: (reseller: ResellerRow) => ReactNode;
 }) {
   return (
-    <TableContainer>
-      <Table size="small" sx={{ minWidth: 1080 }}>
+    <TableContainer sx={{ maxHeight: { xs: "none", md: "calc(100vh - 320px)" } }}>
+      <Table size="small" stickyHeader sx={{ minWidth: 1080 }}>
         <TableHead>
           <TableRow>
             <SortTh id="name" label="نماینده" sortKey={sortKey} dir={dir} onSort={onSort} />
