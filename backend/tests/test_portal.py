@@ -15,12 +15,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 from app.api import portal  # noqa: E402
 from app.core.db import Base  # noqa: E402
 from app.core.portal_auth import (  # noqa: E402
+    PORTAL_SESSION_TTL_MIN,
     create_portal_login_token,
     create_portal_session_token,
     get_current_reseller,
     verify_portal_login_token,
 )
-from app.core.security import create_access_token, get_current_subject  # noqa: E402
+from app.core.security import (  # noqa: E402
+    create_access_token,
+    decode_token,
+    get_current_subject,
+)
 from app.models import Invoice, Panel, Payment, Reseller  # noqa: E402
 from app.models.enums import InvoiceStatus, PaymentMethod, PaymentStatus  # noqa: E402
 
@@ -120,6 +125,47 @@ def test_exchange_endpoint():
         with pytest.raises(HTTPException) as noreseller:
             await portal.exchange(portal.ExchangeBody(token=create_portal_login_token(999)), s)
         assert noreseller.value.status_code == 403
+    _run(body)
+
+
+def test_refresh_slides_the_session():
+    async def body(s):
+        a, _b, _ia, _ib = await _seed(s)
+        ctx = await get_current_reseller(create_portal_session_token(111), s)
+        out = await portal.refresh(ctx)
+        assert out["token_type"] == "bearer"
+        payload = decode_token(out["access_token"])
+        assert payload["role"] == "reseller" and int(payload["sub"]) == 111
+        # ~30-day lifetime (allow a minute of clock slack).
+        assert abs((payload["exp"] - payload["iat"]) - PORTAL_SESSION_TTL_MIN * 60) < 60
+        # the fresh token still authenticates.
+        ctx2 = await get_current_reseller(out["access_token"], s)
+        assert ctx2.chat_id == 111 and ctx2.ids == [a.id]
+    _run(body)
+
+
+def test_refresh_rejects_owner_and_login_tokens():
+    async def body(s):
+        await _seed(s)
+        # owner token → can't even build a ResellerContext.
+        owner_tok = create_access_token("admin", extra={"role": "owner", "epoch": 0})
+        with pytest.raises(HTTPException):
+            await get_current_reseller(owner_tok, s)
+        # a one-time LOGIN token (no role claim) is not a session → rejected by the guard.
+        with pytest.raises(HTTPException):
+            await get_current_reseller(create_portal_login_token(111), s)
+    _run(body)
+
+
+def test_refresh_revoked_when_reseller_unbound():
+    async def body(s):
+        a, _b, _ia, _ib = await _seed(s)
+        # unbind the reseller (bot_chat_id cleared) → the session id has no rows → 401.
+        a.bot_chat_id = None
+        await s.commit()
+        with pytest.raises(HTTPException) as ei:
+            await get_current_reseller(create_portal_session_token(111), s)
+        assert ei.value.status_code == 401
     _run(body)
 
 

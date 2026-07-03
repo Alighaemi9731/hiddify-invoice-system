@@ -13,9 +13,12 @@ import UpdateToast from "./components/UpdateToast";
 import App from "./App";
 
 function Root() {
-  const [mode, setMode] = useState<PaletteMode>(
-    () => (localStorage.getItem("color_mode") as PaletteMode) || "light"
-  );
+  const [mode, setMode] = useState<PaletteMode>(() => {
+    const saved = localStorage.getItem("color_mode") as PaletteMode | null;
+    if (saved) return saved; // an explicit choice always wins
+    // First visit: follow the OS preference (the toggle persists any later change).
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
   const theme = useMemo(() => makeTheme(mode), [mode]);
   // Keep the browser/OS chrome color (address bar, iOS status bar) in step with the manual
   // light/dark toggle. The media-based <meta> tags in index.html cover first paint / OS setting.

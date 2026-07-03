@@ -9,12 +9,22 @@ const baseURL = _envBase === undefined ? "http://localhost:8000" : _envBase;
 export const portalApi = axios.create({ baseURL, timeout: 120000 });
 
 const PORTAL_TOKEN_KEY = "portal_token";
+const PORTAL_TOKEN_TS_KEY = "portal_token_ts";
+const SLIDE_AFTER_MS = 24 * 60 * 60 * 1000; // renew the 30-day session once it's a day old
 
 export const getPortalToken = () => localStorage.getItem(PORTAL_TOKEN_KEY);
 export const setPortalToken = (t: string | null) => {
-  if (t) localStorage.setItem(PORTAL_TOKEN_KEY, t);
-  else localStorage.removeItem(PORTAL_TOKEN_KEY);
+  if (t) {
+    localStorage.setItem(PORTAL_TOKEN_KEY, t);
+    localStorage.setItem(PORTAL_TOKEN_TS_KEY, String(Date.now()));
+  } else {
+    localStorage.removeItem(PORTAL_TOKEN_KEY);
+    localStorage.removeItem(PORTAL_TOKEN_TS_KEY);
+  }
 };
+
+export const portalRefresh = () =>
+  portalApi.post("/api/portal/auth/refresh").then((r) => r.data as { access_token: string });
 
 portalApi.interceptors.request.use((config) => {
   const t = getPortalToken();
@@ -22,8 +32,26 @@ portalApi.interceptors.request.use((config) => {
   return config;
 });
 
+// Sliding renewal: after any successful call, if the stored token is more than a day old, trade
+// it (once) for a fresh 30-day one so an active reseller never has to re-tap the bot. Best-effort
+// — a failed refresh just leaves the current token, and the 401 interceptor handles a dead one.
+let _refreshing = false;
+function maybeSlide(url?: string) {
+  if (_refreshing || !getPortalToken() || url?.includes("/auth/refresh")) return;
+  const ts = Number(localStorage.getItem(PORTAL_TOKEN_TS_KEY) || 0);
+  if (!ts || Date.now() - ts < SLIDE_AFTER_MS) return;
+  _refreshing = true;
+  portalRefresh()
+    .then((d) => setPortalToken(d.access_token))
+    .catch(() => {})
+    .finally(() => { _refreshing = false; });
+}
+
 portalApi.interceptors.response.use(
-  (r) => r,
+  (r) => {
+    maybeSlide(r.config?.url);
+    return r;
+  },
   (err) => {
     // A 401 means the reseller session expired/was revoked → drop it and bounce to the
     // login page (which tells them to re-tap the bot button). Never touch the owner token.

@@ -88,7 +88,7 @@ Primary files: `frontend/vite.config.ts`, `frontend/src/components/UpdateToast.t
 
 ## U04 - Portal QoL + sliding session
 
-Priority: P2. Version: MINOR. Status: TODO. Only batch touching the backend.
+Priority: P2. Version: MINOR. Status: DONE in `v1.55.0`. **Program complete.** Only batch touching the backend.
 
 - `portal_auth.py`: `PORTAL_SESSION_TTL_MIN = 30*24*60`. `portal.py`: `POST /api/portal/auth/refresh`
   (guarded by `get_current_reseller`) → fresh 30-day token; login-link mechanics untouched;

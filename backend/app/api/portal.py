@@ -84,6 +84,17 @@ async def exchange(body: ExchangeBody, session: AsyncSession = Depends(get_sessi
     return {"access_token": create_portal_session_token(chat_id), "token_type": "bearer"}
 
 
+@router.post("/auth/refresh")
+async def refresh(ctx: ResellerContext = Depends(get_current_reseller)) -> dict:
+    """Sliding renewal: trade a still-VALID reseller session for a fresh 30-day one, so an active
+    reseller never has to re-tap the bot's login link. Stateless (no DB writes). Guarded by
+    `get_current_reseller`, so it rejects an expired/invalid token, an owner token, a one-time
+    LOGIN token (no `role` claim), or a Telegram id whose reseller rows are gone — i.e. unbinding
+    or deleting the reseller revokes it immediately, regardless of the token's remaining TTL. The
+    one-time login-link mechanics are untouched."""
+    return {"access_token": create_portal_session_token(ctx.chat_id), "token_type": "bearer"}
+
+
 @router.get("/me")
 async def me(
     ctx: ResellerContext = Depends(get_current_reseller),

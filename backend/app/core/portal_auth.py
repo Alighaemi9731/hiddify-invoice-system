@@ -24,8 +24,12 @@ from app.models import Reseller
 
 PORTAL_ROLE = "reseller"
 _LOGIN_TYP = "portal_login"
-PORTAL_LOGIN_TTL_MIN = 15           # the one-time link is short-lived
-PORTAL_SESSION_TTL_MIN = 7 * 24 * 60  # the browser session lasts ~a week; re-tap the bot to renew
+PORTAL_LOGIN_TTL_MIN = 15            # the one-time link is short-lived
+# The browser session lasts 30 days and SLIDES: the portal client silently trades a still-valid
+# token for a fresh one while it's in use (POST /api/portal/auth/refresh), so an active reseller
+# never has to re-tap the bot. Revocation is immediate regardless of TTL — get_current_reseller
+# re-checks the reseller rows on every request, so unbinding/deleting the reseller 401s at once.
+PORTAL_SESSION_TTL_MIN = 30 * 24 * 60
 
 # Reads the Bearer token; tokenUrl is only for docs (the real exchange is POST /api/portal/auth/exchange).
 portal_oauth = OAuth2PasswordBearer(tokenUrl="api/portal/auth/exchange", auto_error=True)

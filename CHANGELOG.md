@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.55.0 - 2026-07-03
+
+Batch U04 of the UI/UX program (`docs/UIUX_PLAN.md`) — the final batch; the UI/UX program
+(U01–U04) is complete.
+
+### Added
+
+- **Reseller portal: 30-day sliding session.** The portal session was 7 days, so resellers had to
+  re-tap the bot's login link every week. It's now 30 days and *slides* — while the portal is in
+  use it silently trades the token for a fresh 30-day one (new `POST /api/portal/auth/refresh`), so
+  an active reseller never gets logged out. Revocation stays immediate regardless of the longer TTL
+  (every request re-checks the reseller's rows, so unbinding/deleting the reseller ends the session
+  at once); the one-time login-link mechanics are unchanged.
+- **Portal dashboard shortcuts.** If any of the reseller's accounts is suspended, a red banner now
+  says so and offers a one-tap «پرداخت بدهی». A «پرداختِ بدهی (N فاکتور)» button appears whenever
+  there's outstanding debt (opens the pay-all dialog), and a row of chips shows which payment
+  methods are currently available — no need to open an invoice to find out.
+- **Auto dark mode on first visit.** A brand-new visitor now gets light or dark to match their
+  device setting; any later manual toggle is remembered and always wins.
+
 ## 1.54.1 - 2026-07-03
 
 Batch U03 of the UI/UX program (`docs/UIUX_PLAN.md`).

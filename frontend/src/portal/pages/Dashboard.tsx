@@ -5,8 +5,11 @@ import TrendingUpIcon from "@mui/icons-material/esm/TrendingUp";
 import DataUsageIcon from "@mui/icons-material/esm/DataUsage";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import GroupIcon from "@mui/icons-material/esm/Group";
+import PaymentIcon from "@mui/icons-material/esm/Payment";
 import { useQuery } from "@tanstack/react-query";
-import { portalSummary } from "../portalClient";
+import { portalSummary, portalPayOptionsAll } from "../portalClient";
+import { usePortalAuth } from "../PortalAuthContext";
+import PayDialog from "../PayDialog";
 import StatCard, { currentPeriod } from "../../components/StatCard";
 import PeriodPicker from "../../components/PeriodPicker";
 import EChart from "../../components/EChart";
@@ -15,14 +18,33 @@ import { fmtGb, fmtNum, fmtToman } from "../../format";
 import { SectionCard, EmptyState } from "../ui";
 import { dailyTrendOption } from "../dailyTrend";
 
+const METHOD_LABELS: [keyof PayMethods, string][] = [
+  ["card", "کارت به کارت"],
+  ["usdt", "USDT (BEP-20)"],
+  ["ton", "TON"],
+  ["avax", "AVAX"],
+  ["screenshot", "رسیدِ تصویری"],
+];
+type PayMethods = { usdt: boolean; card: boolean; ton: boolean; avax: boolean; screenshot: boolean };
+
 export default function PortalDashboard() {
   const [period, setPeriod] = useState(currentPeriod());
+  const [payAll, setPayAll] = useState(false);
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
+  const { resellers } = usePortalAuth();
+  const enforcedNames = resellers.filter((r) => r.enforcement_state === "enforced").map((r) => r.name);
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["portal-summary", period],
     queryFn: () => portalSummary(period),
   });
+  // The enabled payment methods (returned even with zero payable invoices), for the info chips.
+  const { data: payOpts } = useQuery({
+    queryKey: ["portal-pay-options-all"],
+    queryFn: () => portalPayOptionsAll(),
+  });
+  const methods = payOpts?.methods;
+  const hasOutstanding = !!data && data.outstanding.count > 0;
 
   const trend = data?.trend || [];
   const perReseller = data?.per_reseller || [];
@@ -34,6 +56,19 @@ export default function PortalDashboard() {
 
   return (
     <Box>
+      {enforcedNames.length > 0 && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            hasOutstanding ? (
+              <Button color="inherit" size="small" onClick={() => setPayAll(true)}>پرداخت بدهی</Button>
+            ) : undefined
+          }
+        >
+          نمایندگیِ «{enforcedNames.join("، ")}» مسدود است. برای رفعِ مسدودی، بدهیِ معوق را پرداخت کنید.
+        </Alert>
+      )}
       {welcome && (
         <Alert severity="info" onClose={dismissWelcome} sx={{ mb: 2.5 }}>
           به پنلِ نماینده خوش آمدید! اینجا می‌توانید فاکتورها را ببینید و پرداخت کنید، زیرمجموعه‌ها و
@@ -53,7 +88,19 @@ export default function PortalDashboard() {
             برآوردِ فروشِ ماهِ جاری (شما + زیرمجموعه‌ها) و بدهیِ معوق
           </Typography>
         </Box>
-        <PeriodPicker value={period} onChange={setPeriod} />
+        <Stack direction="row" spacing={1} alignItems="center">
+          {hasOutstanding && (
+            <Button
+              variant="contained"
+              color="success"
+              startIcon={<PaymentIcon />}
+              onClick={() => setPayAll(true)}
+            >
+              پرداختِ بدهی ({fmtNum(data!.outstanding.count)} فاکتور)
+            </Button>
+          )}
+          <PeriodPicker value={period} onChange={setPeriod} />
+        </Stack>
       </Stack>
 
       {isError ? (
@@ -110,6 +157,15 @@ export default function PortalDashboard() {
             ))}
           </Grid>
 
+          {methods && (
+            <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: "wrap", rowGap: 1, alignItems: "center" }}>
+              <Typography variant="caption" color="text.secondary">روش‌های پرداخت:</Typography>
+              {METHOD_LABELS.filter(([k]) => methods[k]).map(([k, label]) => (
+                <Chip key={k} size="small" variant="outlined" label={label} />
+              ))}
+            </Stack>
+          )}
+
           <Reveal delay={0.2}>
             <Grid container spacing={2} sx={{ mt: 0.5 }}>
               <Grid item xs={12} lg={7}>
@@ -159,6 +215,8 @@ export default function PortalDashboard() {
           </Reveal>
         </>
       )}
+
+      <PayDialog invoice={null} payAll={payAll} onClose={() => setPayAll(false)} />
     </Box>
   );
 }
