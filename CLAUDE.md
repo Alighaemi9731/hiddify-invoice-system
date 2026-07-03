@@ -15,12 +15,15 @@ Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`.
 
 ## Current improvement program
 
-Two programs are **complete** and archived: the 2026-06-09 audit
-(`docs/REMEDIATION_PLAN.md`, B00–B10) and the 2026-07-02 verified-improvements
-roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12). The active program is the UI/UX
-review, tracked in `docs/UIUX_PLAN.md` (batches U01–U04). Fix exactly one batch
-per release, in the documented order, and use `docs/RELEASE_PROCESS.md` for
-versioning, GitHub publication, production deployment, smoke checks, and rollback.
+Three programs are **complete** and archived: the 2026-06-09 audit
+(`docs/REMEDIATION_PLAN.md`, B00–B10), the 2026-07-02 verified-improvements
+roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12), and the 2026-07-02 UI/UX review
+(`docs/UIUX_PLAN.md`, U01–U04, through `v1.55.0`). The active program is the
+2026-07-03 polish review, tracked in `docs/POLISH_PLAN.md` (batches P01–P05: UI
+standardization, min-sale floor, storefront clarity, backend hygiene). Fix
+exactly one batch per release, in the documented order, and use
+`docs/RELEASE_PROCESS.md` for versioning, GitHub publication, production
+deployment, smoke checks, and rollback.
 Record user-visible release notes in `CHANGELOG.md`; the long milestone history
 below remains the archive for releases before this process was introduced.
 

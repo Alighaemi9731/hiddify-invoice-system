@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.55.1 - 2026-07-03
+
+Batch P01 of the polish program (`docs/POLISH_PLAN.md`).
+
+### Fixed
+
+- **New releases now reach installed/cached clients immediately.** Diagnosis: the dark-mode
+  "haze" some owners still saw was NOT a live CSS bug (the current code renders the cards solid
+  and readable — verified locally) but a **stale service worker** serving old precached CSS; the
+  `prompt` update mode (v1.54.1) left the old worker serving until every tab closed. The service
+  worker is back to auto-updating (`autoUpdate` + `skipWaiting`), so a deploy activates on the next
+  navigation and the correct bundle loads. A one-shot chunk-error auto-reload in the error boundary
+  covers the rare case where a lazy route 404s right as the new bundle swaps in. **If you were stuck
+  on the foggy look, one hard refresh (or clearing the site's data once) pulls the fix; future
+  updates apply automatically.**
+- **The «نماینده‌های غایب» tab is reachable on mobile again.** The segmented tab control had a CSS
+  override that broke horizontal scrolling, so on narrow screens the third segment was clipped and
+  unreachable. It now scrolls; all pages using the control (Resellers list/tree/absent) are fixed.
+
 ## 1.55.0 - 2026-07-03
 
 Batch U04 of the UI/UX program (`docs/UIUX_PLAN.md`) — the final batch; the UI/UX program

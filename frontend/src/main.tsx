@@ -9,7 +9,6 @@ import { makeTheme } from "./theme";
 import { ColorModeContext } from "./colorMode";
 import { AuthProvider } from "./auth/AuthContext";
 import { queryClient } from "./api/queryClient";
-import UpdateToast from "./components/UpdateToast";
 import App from "./App";
 
 function Root() {
@@ -52,7 +51,6 @@ function Root() {
               </AuthProvider>
             </BrowserRouter>
           </QueryClientProvider>
-          <UpdateToast />
         </ThemeProvider>
       </ColorModeContext.Provider>
     </CacheProvider>

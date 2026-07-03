@@ -15,6 +15,20 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: unknown) {
+    // A lazy route can 404 right after a deploy if the service worker swapped in the new
+    // bundle and cleaned up the old hashed chunk mid-session. Recover automatically by
+    // reloading ONCE (guarded so a genuinely-broken chunk doesn't loop) — the reload pulls
+    // the current index.html + assets.
+    const msg = String(error?.message || "");
+    const isChunkError =
+      /Loading (chunk|CSS chunk|dynamically imported module)/i.test(msg) ||
+      /Importing a module script failed/i.test(msg) ||
+      error?.name === "ChunkLoadError";
+    if (isChunkError && !sessionStorage.getItem("chunk_reloaded")) {
+      sessionStorage.setItem("chunk_reloaded", "1");
+      location.reload();
+      return;
+    }
     // eslint-disable-next-line no-console
     console.error("UI error:", error, info);
   }

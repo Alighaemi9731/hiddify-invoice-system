@@ -5,14 +5,16 @@ import { VitePWA } from "vite-plugin-pwa";
 export default defineConfig({
   plugins: [
     react(),
-    // Installable PWA + offline app shell. The service worker precaches the built
-    // assets so the UI loads offline; the API is NEVER cached (financial data must stay
-    // live), so /api always hits the network. registerType "prompt" (no skipWaiting): a
-    // new deploy stays WAITING until the user taps the in-app update toast (UpdateToast.tsx).
-    // This avoids the old autoUpdate+skipWaiting hazard where cleanupOutdatedCaches deleted
-    // hashed chunks mid-session and an in-flight lazy route could 404.
+    // Installable PWA + offline app shell. The service worker precaches the built assets so
+    // the UI loads offline; the API is NEVER cached (financial data must stay live), so /api
+    // always hits the network. registerType "autoUpdate" + skipWaiting: a new deploy's SW
+    // activates IMMEDIATELY on the next navigation (sw.js is served no-cache, so the browser
+    // always revalidates it), force-refreshing the bundle. This is deliberate: the "prompt"
+    // mode left users stranded on stale precached CSS (the old SW kept serving until every tab
+    // closed). The one downside — cleanupOutdatedCaches can drop an old hashed chunk mid-session
+    // → a lazy route 404 — is fully mitigated by ErrorBoundary's one-shot chunk-error reload.
     VitePWA({
-      registerType: "prompt",
+      registerType: "autoUpdate",
       injectRegister: "auto",
       manifest: false, // keep the existing public/site.webmanifest
       workbox: {
@@ -21,6 +23,7 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api/],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
+        skipWaiting: true,
         runtimeCaching: [], // no API/runtime caching — always-fresh data
       },
     }),

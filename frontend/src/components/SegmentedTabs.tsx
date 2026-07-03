@@ -34,6 +34,8 @@ export default function SegmentedTabs({ value, onChange, tabs, fullWidth }: Prop
         backdropFilter: "blur(12px) saturate(180%)",
         WebkitBackdropFilter: "blur(12px) saturate(180%)",
         width: fullWidth ? "100%" : "fit-content",
+        maxWidth: "100%",   // never exceed the viewport → the Tabs scroller handles overflow
+        overflow: "hidden", // clip to the rounded pill; horizontal scroll lives on the scroller
       }}
     >
       <Tabs
@@ -41,10 +43,13 @@ export default function SegmentedTabs({ value, onChange, tabs, fullWidth }: Prop
         onChange={(_, v) => onChange(v)}
         variant={fullWidth ? "fullWidth" : "scrollable"}
         scrollButtons="auto"
+        allowScrollButtonsMobile
         sx={{
           minHeight: 38,
           "& .MuiTabs-indicator": { display: "none" },
-          "& .MuiTabs-scroller": { overflow: "visible !important" },
+          // NOTE: do NOT force the scroller to overflow:visible — that defeats the scrollable
+          // variant and clips the last tab on narrow screens (the absent-resellers segment was
+          // unreachable). Let MUI manage the scroller's overflow so it scrolls horizontally.
           "& .MuiTab-root": {
             minHeight: 38,
             px: 2,
