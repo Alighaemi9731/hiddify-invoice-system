@@ -75,7 +75,7 @@ Primary files: `frontend/src/components/BottomNav.tsx`,
 
 ## U03 - PWA polish
 
-Priority: P2. Version: PATCH. Status: TODO.
+Priority: P2. Version: PATCH. Status: DONE in `v1.54.1`.
 
 - `vite.config.ts`: `registerType: "prompt"`, drop `skipWaiting`. New `UpdateToast.tsx`
   (`useRegisterSW`, themed Snackbar «نسخهٔ جدید — بارگذاری مجدد», hourly update check) mounted in

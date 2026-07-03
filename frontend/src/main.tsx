@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { CacheProvider } from "@emotion/react";
 import { ThemeProvider, CssBaseline, PaletteMode } from "@mui/material";
@@ -9,6 +9,7 @@ import { makeTheme } from "./theme";
 import { ColorModeContext } from "./colorMode";
 import { AuthProvider } from "./auth/AuthContext";
 import { queryClient } from "./api/queryClient";
+import UpdateToast from "./components/UpdateToast";
 import App from "./App";
 
 function Root() {
@@ -16,6 +17,13 @@ function Root() {
     () => (localStorage.getItem("color_mode") as PaletteMode) || "light"
   );
   const theme = useMemo(() => makeTheme(mode), [mode]);
+  // Keep the browser/OS chrome color (address bar, iOS status bar) in step with the manual
+  // light/dark toggle. The media-based <meta> tags in index.html cover first paint / OS setting.
+  useEffect(() => {
+    document
+      .querySelector('meta[name="theme-color"]:not([media])')
+      ?.setAttribute("content", mode === "dark" ? "#000000" : "#f5f5f7");
+  }, [mode]);
   const ctx = useMemo(
     () => ({
       mode,
@@ -41,6 +49,7 @@ function Root() {
               </AuthProvider>
             </BrowserRouter>
           </QueryClientProvider>
+          <UpdateToast />
         </ThemeProvider>
       </ColorModeContext.Provider>
     </CacheProvider>

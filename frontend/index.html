@@ -2,7 +2,11 @@
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Standalone (installed PWA) chrome: full-screen web-app + notch-aware status bar -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>سامانه مدیریت و فاکتور نمایندگان</title>
     <!-- Branded favicon (Apple-blue invoice mark) — replaces the browser's default globe.
          The ?v= query busts the browser's sticky favicon cache when the icon changes. -->
@@ -10,7 +14,10 @@
     <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=2" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#0071e3" />
+    <!-- First-paint browser/OS chrome color; JS keeps the non-media tag in step with the toggle. -->
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f5f5f7" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

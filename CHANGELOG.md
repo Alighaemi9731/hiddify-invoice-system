@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.54.1 - 2026-07-03
+
+Batch U03 of the UI/UX program (`docs/UIUX_PLAN.md`).
+
+### Changed
+
+- **New-version prompt for the installed app.** The PWA used to swap its assets silently in the
+  background on every deploy (`autoUpdate` + `skipWaiting`), which could 404 a lazy-loaded route
+  mid-session and left users on stale code with no signal. It now stays on the running version and
+  shows a «نسخهٔ جدیدی از برنامه آماده است — بارگذاری مجدد» toast; the update applies only when the
+  user taps it (and the app re-checks for updates hourly while open). **Ops note:** after this
+  release, deploys reach an open tab when the user taps that toast (or reloads), not automatically.
+- **Notch/safe-area polish for installed PWAs.** `viewport-fit=cover` plus apple-web-app meta tags
+  and a light/dark `theme-color` pair (kept in step with the in-app toggle) so the status bar and
+  browser chrome match the theme, and the top bar clears the notch on standalone iOS/Android.
+
 ## 1.54.0 - 2026-07-03
 
 Batch U02 of the UI/UX program (`docs/UIUX_PLAN.md`).

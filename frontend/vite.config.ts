@@ -7,10 +7,12 @@ export default defineConfig({
     react(),
     // Installable PWA + offline app shell. The service worker precaches the built
     // assets so the UI loads offline; the API is NEVER cached (financial data must stay
-    // live), so /api always hits the network. autoUpdate → a new deploy is picked up and
-    // applied on the next navigation (works with nginx's no-cache index.html).
+    // live), so /api always hits the network. registerType "prompt" (no skipWaiting): a
+    // new deploy stays WAITING until the user taps the in-app update toast (UpdateToast.tsx).
+    // This avoids the old autoUpdate+skipWaiting hazard where cleanupOutdatedCaches deleted
+    // hashed chunks mid-session and an in-flight lazy route could 404.
     VitePWA({
-      registerType: "autoUpdate",
+      registerType: "prompt",
       injectRegister: "auto",
       manifest: false, // keep the existing public/site.webmanifest
       workbox: {
@@ -19,7 +21,6 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api/],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        skipWaiting: true,
         runtimeCaching: [], // no API/runtime caching — always-fresh data
       },
     }),

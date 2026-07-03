@@ -208,7 +208,7 @@ export default function PortalLayout() {
 
       <Box component="main" sx={{ flexGrow: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <AppBar position="sticky" elevation={0} color="transparent"
-          sx={{ borderBottom: "1px solid", borderColor: "divider" }}>
+          sx={{ borderBottom: "1px solid", borderColor: "divider", pt: "env(safe-area-inset-top)" }}>
           <Toolbar>
             {!isDesktop && (
               <IconButton edge="start" onClick={() => setOpen(true)} sx={{ ml: 1 }}>
