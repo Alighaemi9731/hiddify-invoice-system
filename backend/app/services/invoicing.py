@@ -330,6 +330,8 @@ async def recompute_invoice(
 
     total_gb = round(base_gb + float(extra["gb"] or 0), 3)
     base_amount = round(total_gb * price)
+    # Same first-invoiced-month exemption as generation.
+    min_sale = await _effective_min_sale(session, invoice.reseller_id, invoice.period_start, min_sale)
     floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
     amount_toman = float(min_sale) if floor_applied else float(base_amount)
 
@@ -366,6 +368,30 @@ async def recompute_invoice(
             "amount_toman": float(invoice.amount_toman), "usage_gb": float(invoice.usage_gb)}
 
 
+async def _effective_min_sale(
+    session: AsyncSession, reseller_id: int, period_start: dt.date, min_sale: int
+) -> int:
+    """The minimum-sale floor to actually apply to this reseller's invoice this month.
+
+    The floor is skipped on the reseller's FIRST invoiced month — a reseller who bought a panel
+    mid-month and is billed for a short partial period shouldn't be forced up to the minimum. It
+    applies from the SECOND invoiced month onward. "First invoiced month" = no earlier
+    (period_start < this one) delivered invoice exists — draft/canceled don't count, since a
+    draft was never billed. Returns the effective floor (0 = no floor)."""
+    if min_sale <= 0:
+        return 0
+    prior = (
+        await session.execute(
+            select(Invoice.id).where(
+                Invoice.reseller_id == reseller_id,
+                Invoice.period_start < period_start,
+                Invoice.status.notin_((InvoiceStatus.draft, InvoiceStatus.canceled)),
+            ).limit(1)
+        )
+    ).first()
+    return min_sale if prior is not None else 0
+
+
 async def _persist_bundle(
     session: AsyncSession,
     panel: Panel,
@@ -381,7 +407,8 @@ async def _persist_bundle(
     price = bundle.price_per_gb
     total_gb = round(bundle.total_gb + float(extra.get("gb", 0) or 0), 3)
     base_amount = round(total_gb * price)
-    min_sale = bundle.min_sale_toman
+    # Floor is exempt on the reseller's first invoiced month (applies from the second on).
+    min_sale = await _effective_min_sale(session, reseller.id, period.start, bundle.min_sale_toman)
     floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
     # A flat monthly storefront-bot fee (only when the reseller actually runs an active storefront)
     # is added on TOP of the usage amount, after the floor — it is not usage, so usage_gb is untouched.

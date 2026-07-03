@@ -46,13 +46,19 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
         amount_toman=f"{float(inv.amount_toman):,.0f}",
         pay_cta=_PAY_CTA,
     )
-    # When the minimum-sale floor was applied, explain it transparently.
+    # When the minimum-sale floor was applied, explain it transparently: real sale, the floor
+    # threshold, and the final billed amount — so it's clear WHY the invoice exceeds the usage.
     if getattr(inv, "floor_applied", False):
         base = float(inv.base_amount_toman or 0)
+        floor = float(inv.min_sale_toman or 0)
+        final = float(inv.amount_toman or 0)
         text += (
-            f"\n\nℹ️ توجه: مبلغ فروش واقعی شما در این دوره {base:,.0f} تومان بود که کمتر از "
-            f"حداقل مجاز است؛ بنابراین حداقل مبلغ ({float(inv.amount_toman):,.0f} تومان) "
-            f"به‌عنوان فاکتور برای شما صادر شد."
+            "\n\n"
+            "ℹ️ <b>حداقل فروش ماهانه</b> برای شما فعال است.\n"
+            f"• فروش واقعی این دوره: {base:,.0f} تومان\n"
+            f"• حداقل مبلغ قابل قبول: {floor:,.0f} تومان\n"
+            f"چون فروش این دوره کمتر از حداقل بود، مبلغِ فاکتور برابرِ حداقل "
+            f"({final:,.0f} تومان) برای شما صادر شد. مصرفِ واقعیِ شما دقیق و در فایلِ PDF آمده است."
         )
     # Prepend the public 8-digit invoice number (tap-to-copy) at the top.
     return f"🔢 شماره فاکتور: <code>{invoice_code(inv.id)}</code>\n{text}"

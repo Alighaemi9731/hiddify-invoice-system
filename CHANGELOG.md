@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.57.0 - 2026-07-03
+
+Batch P03 of the polish program (`docs/POLISH_PLAN.md`).
+
+### Changed
+
+- **Minimum-sale floor now skips a reseller's first month.** The «حداقل فروش» floor already
+  applied to a reseller's combined total (them + their sub-resellers), billed the floor amount
+  while the PDF/usage stayed the real figures, and explained itself in the invoice text. It now
+  also **exempts the reseller's very first invoiced month** — someone who buys a panel mid-month
+  and is billed for a short partial period isn't forced up to the minimum; the floor applies from
+  their second invoiced month onward. (A prior draft or canceled invoice doesn't count as a first
+  month.) The floor-explanation text is clearer too: it now lists the real sale, the minimum
+  threshold, and the final billed amount, and points to the accurate PDF. The Settings help spells
+  out the bundle-total scope and the first-month exemption.
+
 ## 1.56.0 - 2026-07-03
 
 Batch P02 of the polish program (`docs/POLISH_PLAN.md`).

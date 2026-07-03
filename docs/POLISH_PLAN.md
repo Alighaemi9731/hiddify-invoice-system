@@ -58,7 +58,7 @@ Primary files: `frontend/src/pages/{Invoices,Payments,FinancialHistory,Logs,Sale
 
 ## P03 - Min-sale floor: first-invoice grace + clearer text
 
-Priority: P2. Version: MINOR. Status: TODO. Billing — isolated.
+Priority: P2. Version: MINOR. Status: DONE in `v1.57.0`. Billing — isolated.
 
 - Skip the floor on the reseller's FIRST non-draft invoice (query prior invoices); apply
   from the next. Clearer Persian floor-explanation text on the delivered invoice only.
