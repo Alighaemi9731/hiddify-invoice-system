@@ -30,6 +30,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useColorMode } from "../colorMode";
 import { getInfo } from "../api/client";
 import ErrorBoundary from "./ErrorBoundary";
+import BottomNav from "./BottomNav";
 import { PageTransition } from "./motion";
 import { useResponsiveTableLabels } from "../responsive";
 
@@ -292,7 +293,7 @@ export default function Layout() {
                 <MenuIcon />
               </IconButton>
             )}
-            <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 800 }}>
+            <Typography variant="h6" noWrap sx={{ flexGrow: 1, fontWeight: 800, minWidth: 0 }}>
               {NAV.find((n) => n.to === loc.pathname)?.label || ""}
             </Typography>
             <Tooltip title={mode === "dark" ? "حالت روشن" : "حالت تیره"}>
@@ -305,11 +306,12 @@ export default function Layout() {
               label={username || "owner"}
               variant="outlined"
               size="small"
+              sx={{ display: { xs: "none", sm: "inline-flex" } }}
             />
           </Toolbar>
         </AppBar>
 
-        <Box sx={{ p: { xs: 2, md: 3 }, flexGrow: 1 }}>
+        <Box sx={{ p: { xs: 2, md: 3 }, pb: { xs: "calc(76px + env(safe-area-inset-bottom))", md: 3 }, flexGrow: 1 }}>
           <ErrorBoundary>
             <Suspense
               fallback={
@@ -325,6 +327,8 @@ export default function Layout() {
           </ErrorBoundary>
         </Box>
       </Box>
+
+      {!isDesktop && <BottomNav onMore={() => setOpen(true)} />}
     </Box>
   );
 }

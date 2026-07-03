@@ -59,7 +59,7 @@ Primary files: `frontend/src/theme.ts`, `frontend/src/pages/Invoices.tsx`,
 
 ## U02 - Mobile ergonomics
 
-Priority: P1. Version: MINOR. Status: TODO.
+Priority: P1. Version: MINOR. Status: DONE in `v1.54.0`.
 
 - New `BottomNav.tsx` (4 destinations + «بیشتر» → drawer, `< md` only, safe-area padding);
   Layout content bottom-padding + AppBar tidy.

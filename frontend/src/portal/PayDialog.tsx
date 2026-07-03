@@ -12,6 +12,7 @@ import {
 } from "./portalClient";
 import { useToast, errMsg } from "../components/Toast";
 import { fmtToman } from "../format";
+import { useXsFullScreen } from "../responsive";
 
 function QrBox({ value }: { value: string }) {
   return (
@@ -56,6 +57,7 @@ export default function PayDialog({
   invoice, payAll, onClose,
 }: { invoice: PortalInvoice | null; payAll?: boolean; onClose: () => void }) {
   const open = !!invoice || !!payAll;
+  const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
   const [chain, setChain] = useState<"bsc" | "ton" | "avax">("bsc");
@@ -136,7 +138,7 @@ export default function PayDialog({
   };
 
   return (
-    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
       {toast}
       <DialogTitle sx={{ fontWeight: 800 }}>
         {payAll

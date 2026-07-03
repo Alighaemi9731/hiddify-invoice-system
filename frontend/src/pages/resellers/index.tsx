@@ -41,7 +41,7 @@ import { fmtNum } from "../../format";
 import AbsentResellers from "./AbsentResellers";
 import BumpLimitsDialog from "./BumpLimitsDialog";
 import EditResellerDialog from "./EditResellerDialog";
-import { CanAddSwitch, ResellerActions } from "./ResellerActions";
+import { CanAddSwitch, ResellerActions, ResellerActionsMobile } from "./ResellerActions";
 import ResellerMobileCard from "./ResellerMobileCard";
 import ResellerTable from "./ResellerTable";
 import { countTree, useResellerTree } from "./useResellerTree";
@@ -167,18 +167,18 @@ export default function Resellers() {
   };
   const sortRows = (column: string) => { toggle(column); setPage(0); };
 
-  const actionButtons = (reseller: ResellerRow) => (
-    <ResellerActions
-      reseller={reseller}
-      onEdit={(r) => editDlg.openWith({ ...r })}
-      onBump={(r) => {
-        setBumpAmount(100);
-        bumpDlg.openWith(r);
-      }}
-      enforce={enforce}
-      restore={restore}
-    />
-  );
+  const actionArgs = (reseller: ResellerRow) => ({
+    reseller,
+    onEdit: (r: ResellerRow) => editDlg.openWith({ ...r }),
+    onBump: (r: ResellerRow) => {
+      setBumpAmount(100);
+      bumpDlg.openWith(r);
+    },
+    enforce,
+    restore,
+  });
+  const actionButtons = (reseller: ResellerRow) => <ResellerActions {...actionArgs(reseller)} />;
+  const actionButtonsMobile = (reseller: ResellerRow) => <ResellerActionsMobile {...actionArgs(reseller)} />;
 
   const canAddSwitch = (reseller: ResellerRow) => (
     <CanAddSwitch reseller={reseller} canAdd={canAdd} />
@@ -346,7 +346,7 @@ export default function Resellers() {
                   tree={tab === 1}
                   expanded={expanded.has(reseller.id)}
                   onToggle={() => toggleBranch(reseller.id)}
-                  actions={actionButtons}
+                  actions={actionButtonsMobile}
                   canAddSwitch={canAddSwitch}
                 />
               ))}

@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.54.0 - 2026-07-03
+
+Batch U02 of the UI/UX program (`docs/UIUX_PLAN.md`).
+
+### Added
+
+- **Bottom navigation bar on phones.** Below 900px a fixed tab bar gives one-tap access to the
+  four most-used pages (داشبورد، فاکتورها، پرداخت‌ها، نمایندگان) plus a «بیشتر» tab that opens the
+  full menu — no more hamburger→drawer for the common destinations. Desktop is unchanged.
+- **Touch-friendly card actions.** The mobile Invoices/Payments/Resellers cards used to pack
+  7–10 unlabeled 32px icon buttons that were undiscoverable and easy to mis-tap. Each card now
+  shows 1–2 large *labeled* primary buttons (e.g. «ثبت پرداخت»/«ارسال» on invoices, «تأیید»/«رد»
+  on payments, «ویرایش» on resellers) with the remaining actions in a ⋮ menu of icon+label
+  items. Desktop tables keep their compact icon rows unchanged.
+
+### Changed
+
+- **Edit/pay/detail dialogs go full-screen on phones** so forms and invoice line-item tables get
+  the whole viewport instead of a cramped centered box. Mobile AppBar tidied (title truncates,
+  the username chip hides on the narrowest screens); content clears the new bottom bar with
+  safe-area padding.
+
 ## 1.53.3 - 2026-07-03
 
 Batch U01 of the UI/UX program (`docs/UIUX_PLAN.md`).

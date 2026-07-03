@@ -29,6 +29,7 @@ import {
 } from "../api/client";
 import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
+import { useXsFullScreen } from "../responsive";
 import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { currentPeriod } from "../components/StatCard";
@@ -36,6 +37,7 @@ import PeriodPicker from "../components/PeriodPicker";
 import LiveRate from "../components/LiveRate";
 import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
 import { nestedCardBg } from "../theme";
+import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActionsMenu";
 import { downloadCsv } from "../csv";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
@@ -46,6 +48,7 @@ export default function Invoices() {
   const { node, show } = useToast();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+  const xsFull = useXsFullScreen();
   const [period, setPeriod] = useState(currentPeriod());
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
@@ -155,47 +158,31 @@ export default function Invoices() {
   const openDetail = async (id: number) => detailDlg.openWith(await getInvoice(id));
   const total = filtered.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
 
-  // The per-row operations, shared verbatim between the desktop table cell and the
-  // mobile card so both views always offer the exact same actions.
-  const rowActions = (i: any) => (
-    <>
-      <Tooltip title="جزئیات"><IconButton size="small" onClick={() => openDetail(i.id)}><VisibilityIcon fontSize="small" /></IconButton></Tooltip>
-      {i.status !== "paid" && i.status !== "canceled" && (
-        <Tooltip title="ویرایش"><IconButton size="small" onClick={() => editDlg.openWith({ ...i })}><EditIcon fontSize="small" /></IconButton></Tooltip>
-      )}
-      {i.status !== "paid" && (
-        <Tooltip title="بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)">
-          <IconButton size="small" disabled={recompute.isPending}
-            onClick={() => confirm("پنل همگام‌سازی و اعداد این فاکتور از روی دادهٔ فعلی پنل به‌روز شود؟") && recompute.mutate(i.id)}>
-            <AutorenewIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      )}
-      <Tooltip title="PDF"><IconButton size="small" onClick={() => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error"))}><PictureAsPdfIcon fontSize="small" /></IconButton></Tooltip>
-      <Tooltip title="ارسال"><IconButton size="small" onClick={() => sendOne.mutate(i.id)}><SendIcon fontSize="small" /></IconButton></Tooltip>
-      {i.status !== "draft" && i.status !== "paid" && (
-        <Tooltip title="بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از دفتر مالی هم حذف می‌شود)">
-          <IconButton size="small" color="warning" disabled={toDraft.isPending}
-            onClick={() => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id)}>
-            <RestartAltIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      )}
-      {i.status === "paid" ? (
-        <Tooltip title="لغو پرداخت"><IconButton size="small" color="warning" onClick={() => unpay.mutate(i.id)}><UndoIcon fontSize="small" /></IconButton></Tooltip>
-      ) : OWED_STATES.includes(i.status) ? (
-        <Tooltip title="ثبت پرداخت"><IconButton size="small" color="success" onClick={() => pay.mutate(i.id)}><CheckCircleIcon fontSize="small" /></IconButton></Tooltip>
-      ) : null}
-      {OWED_STATES.includes(i.status) && (
-        <Tooltip title={i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت"}>
-          <IconButton size="small" color={i.deferred_until ? "info" : "default"}
-            onClick={() => deferDlg.openWith({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name })}>
-            <ScheduleIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      )}
-    </>
-  );
+  // The per-row operations as a single RowAction[] — one source of truth rendered as an icon
+  // row on desktop (RowActionIcons) and as 1–2 labeled buttons + a ⋮ menu on mobile
+  // (RowActionsMenu). `primary` marks the touch-first buttons: «جزئیات» plus the one contextual
+  // money action (ثبت پرداخت for owed, ارسال for a draft).
+  const actionsFor = (i: any): RowAction[] => {
+    const owed = OWED_STATES.includes(i.status);
+    const acts: RowAction[] = [
+      { key: "detail", label: "جزئیات", icon: <VisibilityIcon fontSize="small" />, onClick: () => openDetail(i.id), primary: true },
+    ];
+    if (owed) acts.push({ key: "pay", label: "ثبت پرداخت", color: "success", icon: <CheckCircleIcon fontSize="small" />, onClick: () => pay.mutate(i.id), primary: true });
+    else if (i.status === "draft") acts.push({ key: "send", label: "ارسال", color: "primary", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id), primary: true });
+    if (i.status !== "paid" && i.status !== "canceled")
+      acts.push({ key: "edit", label: "ویرایش", icon: <EditIcon fontSize="small" />, onClick: () => editDlg.openWith({ ...i }) });
+    if (i.status !== "paid")
+      acts.push({ key: "recompute", label: "بازمحاسبه", tooltip: "بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)", icon: <AutorenewIcon fontSize="small" />, disabled: recompute.isPending, onClick: () => confirm("پنل همگام‌سازی و اعداد این فاکتور از روی دادهٔ فعلی پنل به‌روز شود؟") && recompute.mutate(i.id) });
+    acts.push({ key: "pdf", label: "PDF", icon: <PictureAsPdfIcon fontSize="small" />, onClick: () => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error")) });
+    if (i.status !== "draft") acts.push({ key: "send", label: "ارسال مجدد", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id) });
+    if (i.status !== "draft" && i.status !== "paid")
+      acts.push({ key: "todraft", label: "بازگردانی به پیش‌نویس", tooltip: "بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از دفتر مالی هم حذف می‌شود)", color: "warning", icon: <RestartAltIcon fontSize="small" />, disabled: toDraft.isPending, onClick: () => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id) });
+    if (i.status === "paid")
+      acts.push({ key: "unpay", label: "لغو پرداخت", color: "warning", icon: <UndoIcon fontSize="small" />, onClick: () => unpay.mutate(i.id) });
+    if (owed)
+      acts.push({ key: "defer", label: i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت", color: i.deferred_until ? "info" : undefined, icon: <ScheduleIcon fontSize="small" />, onClick: () => deferDlg.openWith({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name }) });
+    return acts;
+  };
 
   return (
     <Box>
@@ -320,7 +307,7 @@ export default function Invoices() {
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(i.amount_toman)}</TableCell>
                 <TableCell><Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} /></TableCell>
-                <TableCell align="left" sx={{ whiteSpace: "nowrap" }}>{rowActions(i)}</TableCell>
+                <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
             {filtered.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
@@ -358,11 +345,8 @@ export default function Invoices() {
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>{fmtToman(i.amount_toman)}</Typography>
                 </Box>
               </Box>
-              <Box sx={{
-                mt: 1.2, pt: 1, borderTop: 1, borderColor: "divider",
-                display: "flex", flexWrap: "wrap", justifyContent: "flex-end",
-              }}>
-                {rowActions(i)}
+              <Box sx={{ mt: 1.2, pt: 1, borderTop: 1, borderColor: "divider" }}>
+                <RowActionsMenu actions={actionsFor(i)} />
               </Box>
             </Box>
           ))}
@@ -388,7 +372,7 @@ export default function Invoices() {
       )}
 
       {/* Edit dialog */}
-      <Dialog open={editDlg.open} onClose={editDlg.close} fullWidth maxWidth="xs">
+      <Dialog open={editDlg.open} onClose={editDlg.close} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {editRow && (<>
           <DialogTitle>ویرایش فاکتور — {editRow.reseller_name}</DialogTitle>
           <DialogContent>
@@ -411,7 +395,7 @@ export default function Invoices() {
       </Dialog>
 
       {/* Defer dialog */}
-      <Dialog open={deferDlg.open} onClose={deferDlg.close} fullWidth maxWidth="xs">
+      <Dialog open={deferDlg.open} onClose={deferDlg.close} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {deferRow && (<>
           <DialogTitle>مهلت پرداخت — {deferRow.name}</DialogTitle>
           <DialogContent>
@@ -434,7 +418,7 @@ export default function Invoices() {
       </Dialog>
 
       {/* Detail dialog */}
-      <Dialog open={detailDlg.open} onClose={detailDlg.close} fullWidth maxWidth="md">
+      <Dialog open={detailDlg.open} onClose={detailDlg.close} fullWidth maxWidth="md" fullScreen={xsFull}>
         {detail && (<>
           <DialogTitle>فاکتور #{detail.number} — {detail.reseller_name} — دوره {detail.period_label}</DialogTitle>
           <DialogContent>

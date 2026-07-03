@@ -243,7 +243,11 @@ export function makeTheme(mode: PaletteMode) {
       },
       MuiDialog: {
         styleOverrides: {
-          paper: { ...floatSurface, borderRadius: 20 },
+          paper: {
+            ...floatSurface,
+            borderRadius: 20,
+            "&.MuiDialog-paperFullScreen": { borderRadius: 0 },
+          },
         },
       },
       MuiBackdrop: {

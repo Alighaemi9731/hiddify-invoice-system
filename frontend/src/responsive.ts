@@ -1,4 +1,11 @@
 import { useEffect } from "react";
+import { useMediaQuery, useTheme } from "@mui/material";
+
+/** True on phones (< sm) — pass to `<Dialog fullScreen>` so forms fill the screen on mobile. */
+export function useXsFullScreen(): boolean {
+  const theme = useTheme();
+  return useMediaQuery(theme.breakpoints.down("sm"));
+}
 
 /**
  * Auto-label table cells for the mobile "card" layout. For every

@@ -10,6 +10,7 @@ import {
   TextField,
 } from "@mui/material";
 import { ResellerRow } from "../../api/client";
+import { useXsFullScreen } from "../../responsive";
 
 export default function EditResellerDialog({
   form,
@@ -24,8 +25,9 @@ export default function EditResellerDialog({
   onSave: () => void;
   saving: boolean;
 }) {
+  const xsFull = useXsFullScreen();
   return (
-    <Dialog open={!!form} onClose={onClose} fullWidth maxWidth="xs">
+    <Dialog open={!!form} onClose={onClose} fullWidth maxWidth="xs" fullScreen={xsFull}>
       <DialogTitle>ویرایش نماینده {form?.name}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

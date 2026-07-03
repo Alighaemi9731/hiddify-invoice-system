@@ -10,6 +10,7 @@ import {
 } from "@mui/material";
 import { ResellerRow } from "../../api/client";
 import { fmtNum } from "../../format";
+import { useXsFullScreen } from "../../responsive";
 
 export default function BumpLimitsDialog({
   row,
@@ -26,8 +27,9 @@ export default function BumpLimitsDialog({
   onSubmit: (id: number, amount: number) => void;
   pending: boolean;
 }) {
+  const xsFull = useXsFullScreen();
   return (
-    <Dialog open={!!row} onClose={onClose} fullWidth maxWidth="xs">
+    <Dialog open={!!row} onClose={onClose} fullWidth maxWidth="xs" fullScreen={xsFull}>
       {row && (
         <>
           <DialogTitle>افزایش ظرفیت — {row.name}</DialogTitle>

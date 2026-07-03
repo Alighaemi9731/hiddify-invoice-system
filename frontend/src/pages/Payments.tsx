@@ -24,6 +24,8 @@ import { useSort, SortTh } from "../components/sortable";
 import { DataState } from "../components/DataState";
 import { fmtToman, fmtDate, fmtNum, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 import { nestedCardBg } from "../theme";
+import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActionsMenu";
+import { useXsFullScreen } from "../responsive";
 import { downloadCsv } from "../csv";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
@@ -35,6 +37,7 @@ export default function Payments() {
   const { node, show } = useToast();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+  const xsFull = useXsFullScreen();
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const { data = [], isLoading, isError, refetch } = useQuery({
@@ -186,18 +189,16 @@ export default function Payments() {
     </Tooltip>
   );
 
-  const rowActions = (p: any) => (
-    <>
-      {/* Actions stay available for every status so a wrong choice is reversible. */}
-      {/* On-chain check (read-only, free): reads the actual deposit — TON via toncenter,
-          AVAX via a public Avalanche C-Chain RPC, USDT/BEP-20 via a public BSC RPC node —
-          and reports it for the manual decision (never auto-confirms). */}
-      <Tooltip title="بررسی واریزی روی زنجیره"><span><IconButton size="small" disabled={!p.txid || chainCheck.isPending} onClick={() => chainCheck.mutate(p.id)}><VerifiedIcon fontSize="small" /></IconButton></span></Tooltip>
-      <Tooltip title={p.status === "confirmed" ? "تأییدشده" : "تأیید پرداخت"}><span><IconButton size="small" color="success" disabled={p.status === "confirmed"} onClick={() => confirmDlg.openWith(p)}><CheckIcon fontSize="small" /></IconButton></span></Tooltip>
-      <Tooltip title={p.status === "rejected" ? "ردشده" : "رد"}><span><IconButton size="small" color="error" disabled={p.status === "rejected"} onClick={() => doReject(p)}><CloseIcon fontSize="small" /></IconButton></span></Tooltip>
-      <Tooltip title="حذف کامل (برای پاک‌سازی داده‌های تستی)"><span><IconButton size="small" disabled={del.isPending} onClick={() => doDelete(p)}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
-    </>
-  );
+  // Actions stay available for every status so a wrong choice is reversible. Primary (mobile
+  // touch buttons): تأیید / رد. Overflow (⋮): on-chain check + حذف. On-chain check is a
+  // read-only, free deposit lookup (TON via toncenter, AVAX/USDT via public RPC) for the manual
+  // decision — never auto-confirms.
+  const actionsFor = (p: any): RowAction[] => [
+    { key: "confirm", label: p.status === "confirmed" ? "تأییدشده" : "تأیید", color: "success", icon: <CheckIcon fontSize="small" />, disabled: p.status === "confirmed", onClick: () => confirmDlg.openWith(p), primary: true },
+    { key: "reject", label: p.status === "rejected" ? "ردشده" : "رد", color: "error", icon: <CloseIcon fontSize="small" />, disabled: p.status === "rejected", onClick: () => doReject(p), primary: true },
+    { key: "chain", label: "بررسی واریزی روی زنجیره", icon: <VerifiedIcon fontSize="small" />, disabled: !p.txid || chainCheck.isPending, onClick: () => chainCheck.mutate(p.id) },
+    { key: "delete", label: "حذف", tooltip: "حذف کامل (برای پاک‌سازی داده‌های تستی)", icon: <DeleteOutlineIcon fontSize="small" />, disabled: del.isPending, onClick: () => doDelete(p) },
+  ];
 
   return (
     <Box>
@@ -251,7 +252,7 @@ export default function Payments() {
                 <TableCell data-label="تأییدها">{p.confirmations}</TableCell>
                 <TableCell data-label="وضعیت"><Chip size="small" color={COLOR[p.status]} label={PAYMENT_STATUS_FA[p.status]} /></TableCell>
                 <TableCell data-label="تاریخ">{fmtDate(p.created_at)}</TableCell>
-                <TableCell data-label="عملیات" align="left">{rowActions(p)}</TableCell>
+                <TableCell data-label="عملیات" align="left"><RowActionIcons actions={actionsFor(p)} /></TableCell>
               </TableRow>
             ))}
             {shown.length === 0 && <TableRow><TableCell colSpan={10} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "پرداختی با این جستجو یافت نشد" : "پرداختی ثبت نشده است"}</TableCell></TableRow>}
@@ -297,7 +298,7 @@ export default function Payments() {
                 <Box dir="ltr" sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {txidNode(p)}
                 </Box>
-                <Box sx={{ flexShrink: 0 }}>{rowActions(p)}</Box>
+                <Box sx={{ flexShrink: 0 }}><RowActionsMenu actions={actionsFor(p)} /></Box>
               </Stack>
             </Box>
           ))}
@@ -312,7 +313,7 @@ export default function Payments() {
       </DataState>
 
       {/* A payment is for ONE invoice — just confirm it (view the receipt first if a screenshot). */}
-      <Dialog open={confirmDlg.open} onClose={confirmDlg.close} fullWidth maxWidth="xs">
+      <Dialog open={confirmDlg.open} onClose={confirmDlg.close} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {confirmRow && (<>
           <DialogTitle>تأیید پرداخت</DialogTitle>
           <DialogContent>
