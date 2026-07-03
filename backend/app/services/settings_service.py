@@ -212,6 +212,10 @@ DEFS: list[SettingDef] = [
     # rows — an owed invoice's reminder logs, in-flight enforcement queue work — are never
     # pruned. Default 90 days; minimum 7. Does NOT touch the financial ledger or invoices.
     SettingDef("log_retention_days", 90, False, "schedule"),
+    # Owner-side disk/PII hygiene (daily): delete payment-proof screenshots of terminal payments +
+    # cached invoice PDFs + tire-kicker bot_users older than this. The DB rows (money facts) stay;
+    # only files/aged non-registered bot users go. 0 = off. Default 180.
+    SettingDef("owner_data_retention_days", 180, False, "schedule"),
     # usage_meters older than this many months are pruned by the daily maintenance (old periods are
     # already locked into invoices + the financial ledger). Keeps the metering table bounded. 0 = off.
     SettingDef("meter_retention_months", 6, False, "schedule"),
@@ -322,6 +326,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "meter_retention_months": (0, 120),
     "storefront_pending_order_reaper_minutes": (1, 1440),
     "storefront_stale_customer_days": (0, 3650),
+    "owner_data_retention_days": (0, 3650),
     "storefront_expiry_notify_days": (0, 60),
     "storefront_max_pending_topups": (1, 50),
     "daily_digest_hour": (0, 23),

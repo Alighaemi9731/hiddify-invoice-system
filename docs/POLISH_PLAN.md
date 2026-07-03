@@ -79,7 +79,7 @@ Primary files: `backend/app/bot/storefront/handlers.py`, `backend/tests/test_sto
 
 ## P05 - Backend hygiene
 
-Priority: P3. Version: PATCH. Status: TODO. Migration batch — released alone.
+Priority: P3. Version: PATCH. Status: DONE in `v1.57.3`. Migration batch — released alone.
 
 - `DeliveryLog.tg_message_ids` `String(255)` → `Text`; drop write-only `Invoice.pdf_path`
   (same migration). Retention sweeps in `maintenance.py` for `data/payment_proofs/`
@@ -93,3 +93,5 @@ Primary files: `backend/app/models/{logs,invoice}.py`, `backend/alembic/versions
 ## Recommended order
 
 `P01 -> P02 -> P03 -> P04 -> P05`
+
+**Program complete** through `v1.57.3` (plus the `v1.57.2` mobile invoice-detail dialog hotfix).

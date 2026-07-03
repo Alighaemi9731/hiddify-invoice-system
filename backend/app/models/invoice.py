@@ -79,8 +79,6 @@ class Invoice(Base, TimestampMixin):
     deferred_until: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     defer_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    pdf_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
-
     reseller: Mapped[Reseller] = relationship(back_populates="invoices")
     lines: Mapped[list[InvoiceLine]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan"

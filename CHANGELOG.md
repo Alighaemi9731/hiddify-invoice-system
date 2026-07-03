@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.57.3 - 2026-07-03
+
+Batch P05 of the polish program (`docs/POLISH_PLAN.md`) — backend hygiene, closes the program.
+
+### Fixed
+
+- **Invoice delivery to a large sub-reseller tree can't fail on its log write anymore.** The
+  delivery log stored all the Telegram message ids of a multi-part send (invoice text + one PDF per
+  sub-reseller) in a 255-character column; a reseller with ~25+ sub-resellers overflowed it on
+  PostgreSQL and failed the log write. The column is now unbounded text (migration
+  `e4f7b1c9a2d5`).
+
+### Added
+
+- **Owner-side disk & privacy retention.** Payment-proof screenshots and cached invoice PDFs never
+  aged out on the server, and stale bot users lingered forever. A new daily sweep (setting
+  `owner_data_retention_days`, default 180 days, 0 = off) deletes payment-proof files of already
+  confirmed/rejected payments (keeping the payment record itself), removes cached invoice PDFs
+  (regenerated on demand), prunes never-seen tire-kicker bot users that aren't a registered
+  reseller, and clears expired one-time portal-login tokens. The financial ledger is never touched.
+
+### Changed
+
+- Removed the unused write-only `invoices.pdf_path` column (same migration) and added a ledger-safety
+  note to the data-wipe path (it must stay a per-row DELETE, never a sequence-resetting TRUNCATE).
+
 ## 1.57.2 - 2026-07-03
 
 ### Fixed

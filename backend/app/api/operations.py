@@ -199,6 +199,12 @@ async def wipe_data(body: WipeBody, session: AsyncSession = Depends(get_session)
     # have NO foreign keys, so stale rows would otherwise survive a wipe and (for meters)
     # be re-billed against a freshly-seeded panel. FinancialRecord is intentionally kept
     # (durable ledger); app_users + settings are kept (owner login + config).
+    #
+    # ⚠️ LEDGER SAFETY — keep this a per-row DELETE, never `TRUNCATE ... RESTART IDENTITY`.
+    # financial_records.invoice_id is UNIQUE and mirrors the invoices id. DELETE preserves the
+    # invoices id sequence on Postgres, so new invoices get fresh ids that never collide with the
+    # kept ledger rows. TRUNCATE ... RESTART IDENTITY would reset the sequence, and the next
+    # invoice would reuse an old id and silently overwrite a historic financial_records row.
     for model in (
         InvoiceLine, Payment, DeliveryLog, EnforcementAction, Invoice,
         UsageMeter, EndUserSnapshot, SyncRun, BotUser, Reseller, Panel,

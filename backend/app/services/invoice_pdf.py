@@ -63,8 +63,6 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
         owner_name=owner_name,
         invoice_no=invoice_code(inv.id),
     )
-    inv.pdf_path = out_path
-    await session.commit()
     return out_path, f"factor_{safe}_{inv.period_label}.pdf"
 
 

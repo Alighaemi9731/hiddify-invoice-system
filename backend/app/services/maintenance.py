@@ -35,18 +35,27 @@ from sqlalchemy import CursorResult, and_, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    BotUser,
     DeliveryLog,
     EndUserSnapshot,
     EnforcementAction,
     Invoice,
     Panel,
+    Payment,
+    PortalLoginNonce,
+    Reseller,
     StorefrontCustomer,
     StorefrontOrder,
     StorefrontWalletTxn,
     SyncRun,
     UsageMeter,
 )
-from app.models.enums import EnforcementActionStatus, InvoiceStatus, PanelStatus
+from app.models.enums import (
+    EnforcementActionStatus,
+    InvoiceStatus,
+    PanelStatus,
+    PaymentStatus,
+)
 from app.services import settings_service
 from app.services.periods import current_month, previous_month
 
@@ -278,4 +287,98 @@ async def prune_stale_storefront(
     counts = {"customers": customers, "junk_orders": junk_orders, "junk_topups": junk_topups}
     if any(counts.values()):
         log.info("Storefront retention sweep (>%dd inactive): %s", days, counts)
+    return counts
+
+
+def _sweep_old_files(root: str, cutoff_ts: float) -> int:
+    """Delete files under `root` whose mtime is older than `cutoff_ts`, then any dirs left empty.
+    Best-effort (a locked/racing file is skipped). Returns the count of files removed."""
+    removed = 0
+    if not os.path.isdir(root):
+        return 0
+    for dirpath, _dirs, files in os.walk(root, topdown=False):
+        for name in files:
+            path = os.path.join(dirpath, name)
+            try:
+                if os.path.getmtime(path) < cutoff_ts:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                pass
+        try:
+            if dirpath != root and not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except OSError:
+            pass
+    return removed
+
+
+async def prune_owner_data(
+    session: AsyncSession, *, now: dt.datetime | None = None
+) -> dict[str, int]:
+    """Owner-side disk + PII hygiene (the ledger and pending work are never touched):
+
+      • Expired ``portal_login_nonce`` rows (always — they're dead once past ``expires_at``).
+      • Payment PROOF FILES of terminal (confirmed/rejected) payments older than the window are
+        deleted and their ``proof_path`` cleared — the DB row (the money fact) is KEPT; only the
+        screenshot file, needed just for the one-time manual review, is removed.
+      • Invoice PDF files on disk older than the window — they're regenerated on demand from the
+        persisted invoice lines, so they're pure cache.
+      • ``bot_users`` tire-kickers (not linked to a registered reseller) inactive past the window.
+
+    Gated by ``owner_data_retention_days`` (default 180; 0 = off for the file/bot-user parts).
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    counts = {"nonces": 0, "proof_files": 0, "invoice_pdfs": 0, "bot_users": 0}
+
+    async def _delete(stmt: Any) -> int:
+        result = await session.execute(stmt.execution_options(synchronize_session=False))
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    # Expired one-time portal login nonces — dead rows, cleaned regardless of the retention window.
+    counts["nonces"] = await _delete(
+        delete(PortalLoginNonce).where(PortalLoginNonce.expires_at < now))
+
+    raw = await settings_service.get(session, "owner_data_retention_days", 180)
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        days = 180
+    if days > 0:
+        cutoff = now - dt.timedelta(days=days)
+        # Payment proof files of terminal payments: delete the file, clear the path, keep the row.
+        terminal = (PaymentStatus.confirmed, PaymentStatus.rejected)
+        stale_proofs = (await session.execute(
+            select(Payment).where(
+                Payment.proof_path.is_not(None),
+                Payment.status.in_(terminal),
+                func.coalesce(Payment.verified_at, Payment.created_at) < cutoff,
+            )
+        )).scalars().all()
+        for pay in stale_proofs:
+            path = pay.proof_path
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            pay.proof_path = None
+            counts["proof_files"] += 1
+
+        # Invoice PDFs are regenerated on demand → pure cache; drop old ones.
+        counts["invoice_pdfs"] = _sweep_old_files("data/invoices", cutoff.timestamp())
+
+        # bot_users tire-kickers: neither seen nor kicked recently, and NOT a registered reseller.
+        registered = select(Reseller.bot_chat_id).where(Reseller.bot_chat_id.is_not(None))
+        counts["bot_users"] = await _delete(
+            delete(BotUser).where(
+                func.coalesce(BotUser.last_seen_at, BotUser.created_at) < cutoff,
+                func.coalesce(BotUser.last_kicked_at, BotUser.created_at) < cutoff,
+                BotUser.telegram_id.notin_(registered),
+            )
+        )
+    await session.commit()
+
+    if any(counts.values()):
+        log.info("Owner-data hygiene sweep: %s", counts)
     return counts

@@ -261,6 +261,8 @@ async def daily_maintenance_job() -> None:
             await maintenance.prune_stale_snapshots(session)
         async with SessionLocal() as session:
             await maintenance.prune_stale_storefront(session)
+        async with SessionLocal() as session:
+            await maintenance.prune_owner_data(session)
     except Exception:  # noqa: BLE001
         log.exception("daily_maintenance_job failed")
 
