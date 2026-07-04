@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.58.2 - 2026-07-04
+
+### Changed
+
+- **Paying an invoice is now menu-only, and «پرداخت همهٔ بدهی» is the first option.** The inline
+  «💳 پرداخت فاکتور» button under each sent invoice was removed: it started paying only that one
+  invoice, so a customer with several invoices would often settle just the one whose message they
+  happened to tap. Now the only way to pay is from the menu «💳 پرداخت فاکتور», whose first option
+  (when 2+ invoices are due) settles all outstanding debt in one transfer — with per-invoice payment
+  still available below it. The sent-invoice text and the cold-txid/photo hints were updated to point
+  to the menu instead of an under-message button. No schema/API change.
+
 ## 1.58.1 - 2026-07-04
 
 ### Fixed

@@ -64,12 +64,12 @@ async def on_document(message: Message) -> None:
 @router.message(F.photo)
 async def on_photo(message: Message) -> None:
     """A cold photo (NOT inside the pay flow) is NOT a payment — it would create stray,
-    unattributed payments. Guide the customer to the «پرداخت فاکتور» button instead. (Inside
+    unattributed payments. Guide the customer to the «پرداخت فاکتور» menu option instead. (Inside
     PayState, the receipt is handled by pay_state_photo.)"""
     async with common.SessionLocal() as session:
         await _track_user(session, message.from_user)
     await message.answer(
-        "📸 برای ثبتِ پرداخت، اول روی دکمهٔ «💳 پرداخت فاکتور» (زیرِ فاکتور یا در منو) بزنید، "
+        "📸 برای ثبتِ پرداخت، اول از منو روی «💳 پرداخت فاکتور» بزنید و فاکتور(ها) را انتخاب کنید، "
         "سپس تصویرِ رسید را بفرستید."
     )
 
@@ -102,7 +102,7 @@ async def on_text(message: Message, bot: Bot) -> None:
         # instead of silently recording a stray payment. (Inside PayState, pay_state_text handles it.)
         if _parse_txid(text, usdt=opts.usdt, ton=opts.ton, avax=opts.avax):
             await message.answer(
-                "برای ثبتِ پرداخت، اول روی دکمهٔ «💳 پرداخت فاکتور» (زیرِ فاکتور یا در منو) بزنید، "
+                "برای ثبتِ پرداخت، اول از منو روی «💳 پرداخت فاکتور» بزنید و فاکتور(ها) را انتخاب کنید، "
                 "سپس شناسهٔ تراکنش را بفرستید."
             )
             return

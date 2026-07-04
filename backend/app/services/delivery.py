@@ -22,18 +22,19 @@ log = logging.getLogger("delivery")
 
 
 # Call to action at the bottom of the sent invoice. The invoice text itself is kept lean — the
-# wallet/card/USDT/TON details are NOT embedded (they'd duplicate the pay-button view AND a TON
-# amount printed at send time goes stale by the time the customer pays). The reseller taps the
-# «💳 پرداخت فاکتور» button (attached under the message) to see the live payment details.
+# wallet/card/USDT/TON details are NOT embedded (they'd duplicate the pay view AND a TON amount
+# printed at send time goes stale by the time the customer pays). Paying is done ONLY from the
+# menu «💳 پرداخت فاکتور», whose FIRST option settles all outstanding debt in one transfer — so a
+# customer with several invoices doesn't accidentally pay just the one under a single message.
 _PAY_CTA = (
-    "برای پرداخت، روی دکمهٔ «💳 پرداخت فاکتور» زیرِ همین پیام بزنید "
-    "(یا از منوی «🧾 فاکتورهای پرداخت‌نشده»)، فاکتورِ خود را انتخاب و پرداخت کنید."
+    "برای پرداخت، از منو روی «💳 پرداخت فاکتور» بزنید؛ "
+    "گزینهٔ نخست، پرداختِ یکجای همهٔ بدهی است (یا می‌توانید هر فاکتور را جداگانه انتخاب و پرداخت کنید)."
 )
 
 
 async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Reseller) -> str:
-    """Build the payable invoice text as **HTML**. Lean by design: amount + a CTA to the pay
-    button — NO embedded wallet/card/USDT/TON (those live on the «💳 پرداخت فاکتور» path, with a
+    """Build the payable invoice text as **HTML**. Lean by design: amount + a CTA to the menu
+    pay flow — NO embedded wallet/card/USDT/TON (those live on the «💳 پرداخت فاکتور» path, with a
     live TON rate). Dynamic free text (the reseller name) is HTML-escaped."""
     import html as _html
 
@@ -132,13 +133,11 @@ async def send_invoice_content(
         bd = None
 
     full_text = text + ("\n\n" + "\n".join(_breakdown_lines(bd)) if bd else "")
-    # A «💳 پرداخت فاکتور» glass button under the invoice — the ONLY way to pay (a cold
-    # txid/photo is ignored). Not shown on an already-paid invoice (re-show of a paid one).
-    from app.bot import keyboards
-
-    markup = keyboards.pay_invoice_button(inv.id) if inv.status != InvoiceStatus.paid else None
+    # No pay button under the invoice on purpose: paying is ONLY via the menu «💳 پرداخت فاکتور»,
+    # whose first option settles ALL outstanding debt at once — so a customer with several invoices
+    # doesn't pay just this one. A cold txid/photo sent outside that flow is ignored.
     sent_ids: list[int] = []
-    msg = await bot.send_message(chat_id, rtl(full_text), parse_mode="HTML", reply_markup=markup)
+    msg = await bot.send_message(chat_id, rtl(full_text), parse_mode="HTML")
     sent_ids.append(msg.message_id)
     for path, caption in await _render_invoice_pdfs(session, inv, reseller):
         try:
