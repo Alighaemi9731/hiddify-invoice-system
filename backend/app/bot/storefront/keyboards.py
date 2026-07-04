@@ -125,15 +125,19 @@ def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
     )
 
 
-def order_actions_kb(order_id: int, renew_price: int, *, paused: bool) -> InlineKeyboardMarkup:
-    """Customer controls for one provisioned service: renew (at the current price), pause/resume, delete."""
+def order_actions_kb(
+    order_id: int, renew_price: int, *, paused: bool, is_trial: bool = False
+) -> InlineKeyboardMarkup:
+    """Customer controls for one provisioned service: renew (at the current price), pause/resume,
+    delete. Free trials get NO renew button — they're one-time (non-renewable)."""
     toggle = ("▶️ فعال‌سازی", "sftgl") if paused else ("⏸ توقف", "sftgl")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=rtl(f"🔄 تمدید ({renew_price:,} تومان)"),
-                              callback_data=f"sfrenew:{order_id}")],
-        [InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
-         InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfdel:{order_id}")],
-    ])
+    rows = []
+    if not is_trial:
+        rows.append([InlineKeyboardButton(text=rtl(f"🔄 تمدید ({renew_price:,} تومان)"),
+                                          callback_data=f"sfrenew:{order_id}")])
+    rows.append([InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
+                 InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfdel:{order_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def confirm_kb(yes_text: str, yes_cb: str, *, no_cb: str = "sfcancel") -> InlineKeyboardMarkup:
@@ -157,13 +161,17 @@ def admin_subs_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
     )
 
 
-def admin_sub_actions_kb(order_id: int, *, paused: bool) -> InlineKeyboardMarkup:
+def admin_sub_actions_kb(
+    order_id: int, *, paused: bool, is_trial: bool = False
+) -> InlineKeyboardMarkup:
     toggle = ("▶️ فعال‌سازی", "sfatgl") if paused else ("⏸ توقف", "sfatgl")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 تمدیدِ رایگان", callback_data=f"sfarenew:{order_id}")],
-        [InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
-         InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfadel:{order_id}")],
-    ])
+    rows = []
+    if not is_trial:  # trials are one-time — no free admin renew either
+        rows.append([InlineKeyboardButton(text="🔄 تمدیدِ رایگان",
+                                          callback_data=f"sfarenew:{order_id}")])
+    rows.append([InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
+                 InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfadel:{order_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def buy_confirm_kb() -> InlineKeyboardMarkup:

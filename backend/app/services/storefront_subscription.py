@@ -8,6 +8,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import SessionLocal
@@ -60,6 +61,10 @@ async def renew(
         order = await s.get(StorefrontOrder, order_id)
         if order is None or order.status not in _ACTIVE:
             return SubResult(False, "not_found")
+        # Free trials are one-time and NEVER renewable (renewing them was the abuse: price==0
+        # bypassed the wallet charge, giving a perpetual free config). Covers customer + by_admin.
+        if order.is_trial:
+            return SubResult(False, "trial")
         sf, customer, reseller, panel = await _panel_ctx(s, order)
         if not (sf and customer and reseller and panel and order.panel_user_uuid):
             return SubResult(False, "error")
@@ -171,3 +176,62 @@ async def set_enabled(
             o.status = "provisioned" if enabled else "disabled"
             await s.commit()
     return SubResult(True)
+
+
+async def reset_over_renewed_trials(
+    session: AsyncSession, *, limit: int = 5000
+) -> dict[str, int]:
+    """One-time cleanup: free-trial configs that were renewed (a now-fixed bug) had their panel
+    `usage_limit_GB` ratcheted up (1→2→3…). Reset each back to an EXACT 1 GB via the admin API and
+    normalize the stored `order.gb` to 1. Idempotent: only trials with `gb > 1` are selected, and a
+    config whose panel is already ≤1 GB is skipped (its `gb` is still normalized so it won't
+    re-match). Per-order try/except so one bad panel never aborts the sweep. A later panel sync
+    refreshes the snapshot. Returns {checked, reset, skipped, failed}."""
+    from app.services import storefront_provision
+
+    counts = {"checked": 0, "reset": 0, "skipped": 0, "failed": 0}
+    orders = (
+        await session.execute(
+            select(StorefrontOrder).where(
+                StorefrontOrder.is_trial.is_(True),
+                StorefrontOrder.status.in_(_ACTIVE),
+                StorefrontOrder.panel_user_uuid.is_not(None),
+                StorefrontOrder.gb > 1,
+            ).limit(limit)
+        )
+    ).scalars().all()
+    client = AdminApiClient()
+    for order in orders:
+        counts["checked"] += 1
+        try:
+            customer = await session.get(StorefrontCustomer, order.customer_id)
+            sf = await session.get(StorefrontBot, customer.storefront_bot_id) if customer else None
+            reseller = await session.get(Reseller, sf.reseller_id) if sf else None
+            panel = await session.get(Panel, reseller.panel_id) if reseller else None
+            uuid = order.panel_user_uuid
+            if not (sf and reseller and panel and uuid):
+                counts["skipped"] += 1
+                continue
+            live = await storefront_provision.live_status(session, sf, order)
+            if not live.ok:
+                counts["failed"] += 1   # panel read failed → leave it, retry next run
+                continue
+            if live.limit_gb > 1.0:
+                await client.patch_user(
+                    panel, uuid, {"usage_limit_GB": 1.0}, api_key=reseller.admin_uuid)
+                log.info("reset trial quota: order=%s panel=%s uuid=%s %.3f->1.0",
+                         order.id, panel.id, uuid, live.limit_gb)
+                order.gb = 1
+                await session.commit()
+                counts["reset"] += 1
+            else:
+                order.gb = 1  # panel already <=1; normalize stored gb so it won't re-select
+                await session.commit()
+                counts["skipped"] += 1
+        except Exception:  # noqa: BLE001 — never crash the loop (sync_all convention)
+            await session.rollback()
+            log.warning("reset_over_renewed_trials failed for order %s", order.id, exc_info=True)
+            counts["failed"] += 1
+            continue
+    log.info("reset_over_renewed_trials: %s", counts)
+    return counts

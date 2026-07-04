@@ -157,9 +157,12 @@ async def bundle_extra(
     admin_uuids: set[str],
     period_label: str,
     free_threshold_gb: float,
+    exclude_user_uuids: set[str] | None = None,
 ) -> dict:
     """The ABNORMAL extra GB to add to a bundle's invoice for the period, plus a
-    per-user breakdown for the notification. Returns {gb, lines, abnormal}."""
+    per-user breakdown for the notification. Returns {gb, lines, abnormal}.
+    `exclude_user_uuids` = storefront free-trial config uuids whose meter (renew-by-edit / overage)
+    must never bill — the whole trial is a free giveaway."""
     if not admin_uuids or not await is_enabled(session):
         return {"gb": 0.0, "lines": [], "abnormal": []}
     rows = (
@@ -182,6 +185,8 @@ async def bundle_extra(
     lines: list[dict] = []
     abnormal: list[dict] = []
     for m in rows:
+        if exclude_user_uuids and m.user_uuid in exclude_user_uuids:
+            continue  # free-trial config → never billed
         raw_over = float(m.overage_gb or 0)
         over = raw_over if raw_over > overage_tol else 0.0
         edit = float(m.edit_renewal_gb or 0)
@@ -269,13 +274,16 @@ async def notify_abuse_if_any(session: AsyncSession, invoice, reseller, *, bot=N
     try:
         if not await is_enabled(session):
             return
-        from app.services import notifier, owner_notify, pricing
+        from app.services import notifier, owner_notify, pricing, storefront
         from app.services.reseller_report import node_descendants
 
         descendants = await node_descendants(session, reseller)
         uuids = {d.admin_uuid for d in descendants}
         free_threshold = await pricing.get_free_threshold_gb(session)
-        extra = await bundle_extra(session, invoice.panel_id, uuids, invoice.period_label, free_threshold)
+        extra = await bundle_extra(
+            session, invoice.panel_id, uuids, invoice.period_label, free_threshold,
+            exclude_user_uuids=await storefront.trial_user_uuids(session, invoice.panel_id),
+        )
         if not extra["abnormal"]:
             return
 

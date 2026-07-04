@@ -101,6 +101,15 @@ async def run_enforcement_queue(session: AsyncSession = Depends(get_session)) ->
     return await enforcement.process_enforcement_queue(session)
 
 
+@router.post("/storefront/reset-trial-quota")
+async def reset_trial_quota(session: AsyncSession = Depends(get_session)) -> dict:
+    """One-time cleanup: reset over-renewed free-trial configs back to 1 GB on their panels
+    (the renewal-abuse fix). Idempotent — safe to re-run. Returns {checked, reset, skipped, failed}."""
+    from app.services import storefront_subscription
+
+    return await storefront_subscription.reset_over_renewed_trials(session)
+
+
 @router.post("/refresh-rate")
 async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
     """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display.

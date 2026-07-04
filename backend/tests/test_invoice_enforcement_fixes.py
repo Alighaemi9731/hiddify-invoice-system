@@ -40,7 +40,8 @@ def _run(coro_fn, tmp_path, name):
 def test_interim_pdf_lines_match_text_with_metering(tmp_path, monkeypatch):
     period = month_period(2026, 5)
 
-    async def fake_bundle_extra(session, panel_id, uuids, period_label, free_threshold):
+    async def fake_bundle_extra(session, panel_id, uuids, period_label, free_threshold,
+                                exclude_user_uuids=None):
         # A 5 GB abuse extra on one of the reseller's users.
         return {"gb": 5.0, "abnormal": [],
                 "lines": [{"user_uuid": "x1", "name": "ابر مصرف", "usage_gb": 5.0, "added_by_uuid": "A"}]}

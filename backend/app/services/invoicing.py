@@ -20,7 +20,7 @@ from app.models import (
     Reseller,
 )
 from app.models.enums import InvoiceStatus, PanelStatus
-from app.services import financial_archive, metering, pricing
+from app.services import financial_archive, metering, pricing, storefront
 from app.services.invoice_engine import BundleResult, compute_invoices
 from app.services.periods import Period
 
@@ -157,6 +157,8 @@ async def generate_invoices(
                 select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id)
             )
         ).scalars().all()
+        # Free-trial configs are a giveaway — excluded from the reseller's invoice (base + metering).
+        trial_uuids = await storefront.trial_user_uuids(session, panel.id)
 
         bundles = compute_invoices(
             resellers, users, period,
@@ -164,6 +166,7 @@ async def generate_invoices(
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
             panel_synced_at=panel.last_synced_at,
             deleted_full_quota_over_gb=deleted_over,
+            exclude_user_uuids=trial_uuids,
         )
         for bundle in bundles:
             # A reseller removed from the panel (gone in the latest sync) must not be billed
@@ -173,7 +176,8 @@ async def generate_invoices(
             # Abuse-resistant extra (overage from usage resets + renew-by-edit), added
             # on top of the normal snapshot total. See app.services.metering.
             extra = await metering.bundle_extra(
-                session, panel.id, bundle.admin_uuids, period.label, free_threshold
+                session, panel.id, bundle.admin_uuids, period.label, free_threshold,
+                exclude_user_uuids=trial_uuids,
             )
             if bundle.total_gb + extra["gb"] <= 0:
                 summary.zero_skipped += 1
@@ -240,19 +244,22 @@ async def preview_bundles(
                 select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id)
             )
         ).scalars().all()
+        trial_uuids = await storefront.trial_user_uuids(session, panel.id)
         for b in compute_invoices(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
             panel_synced_at=panel.last_synced_at,
             deleted_full_quota_over_gb=deleted_over,
+            exclude_user_uuids=trial_uuids,
         ):
             if not _reseller_present(b.root, panel):
                 continue
             # Fold in the abuse-metered extra so total_gb here equals what billing would invoice
             # (a reseller with only metered overage must NOT show up as a "zero sale").
             extra = await metering.bundle_extra(
-                session, panel.id, b.admin_uuids, period.label, free_threshold
+                session, panel.id, b.admin_uuids, period.label, free_threshold,
+                exclude_user_uuids=trial_uuids,
             )
             b.total_gb = round(b.total_gb + float(extra.get("gb", 0) or 0), 3)
             out.append((panel, b))
@@ -307,12 +314,14 @@ async def recompute_invoice(
     users = (
         await session.execute(select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id))
     ).scalars().all()
+    trial_uuids = await storefront.trial_user_uuids(session, panel.id)
     bundles = compute_invoices(
         resellers, users, period,
         default_price_per_gb=default_price, excluded_usage_gb=excluded,
         default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
         panel_synced_at=panel.last_synced_at,
         deleted_full_quota_over_gb=deleted_over,
+        exclude_user_uuids=trial_uuids,
     )
     bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
 
@@ -326,7 +335,10 @@ async def recompute_invoice(
         from app.services.reseller_report import node_descendants
         reseller = await session.get(Reseller, invoice.reseller_id)
         admin_uuids = {d.admin_uuid for d in await node_descendants(session, reseller)} if reseller else set()
-    extra = await metering.bundle_extra(session, panel.id, admin_uuids, period.label, free_threshold)
+    extra = await metering.bundle_extra(
+        session, panel.id, admin_uuids, period.label, free_threshold,
+        exclude_user_uuids=trial_uuids,
+    )
 
     total_gb = round(base_gb + float(extra["gb"] or 0), 3)
     base_amount = round(total_gb * price)

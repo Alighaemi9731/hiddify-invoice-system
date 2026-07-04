@@ -39,6 +39,25 @@ async def get_bot_by_telegram_id(session: AsyncSession, bot_telegram_id: int) ->
     ).scalars().first()
 
 
+async def trial_user_uuids(session: AsyncSession, panel_id: int) -> set[str]:
+    """Panel-scoped set of live FREE-TRIAL config `panel_user_uuid`s. These are excluded from the
+    reseller's invoice (a free giveaway) — passed to the billing engine + metering. Keyed on
+    `panel_user_uuid`, which joins to `end_user_snapshots.user_uuid` / `usage_meters.user_uuid`."""
+    from app.models import StorefrontOrder
+
+    rows = (
+        await session.execute(
+            select(StorefrontOrder.panel_user_uuid).where(
+                StorefrontOrder.panel_id == panel_id,
+                StorefrontOrder.is_trial.is_(True),
+                StorefrontOrder.status.in_(("provisioned", "disabled")),
+                StorefrontOrder.panel_user_uuid.is_not(None),
+            )
+        )
+    ).scalars().all()
+    return {u for u in rows if u}
+
+
 async def active_bots(session: AsyncSession) -> list[StorefrontBot]:
     """Enabled storefront bots the manager should be polling. Errored rows (invalid/revoked
     token) are EXCLUDED — otherwise reconcile re-validates the dead token every ~30s forever.

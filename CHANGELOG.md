@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.58.0 - 2026-07-04
+
+### Fixed
+
+- **Storefront free trials can no longer be renewed, and trial configs are never billed to the
+  reseller.** A customer taking a free 1 GB / 1 day trial could tap «تمدید» over and over — because
+  the trial price is 0, the wallet charge was skipped and each renewal added another gigabyte, so a
+  trial ratcheted up to 2, 3, … GB and (once it passed the free threshold) started counting toward
+  the reseller's invoice — including the live «فاکتور علی‌الحساب» estimate. Now:
+  - **Trials are one-time and non-renewable.** The «تمدید» button is hidden for a trial config, and
+    the renew action is rejected («⛔️ سرویسِ تستِ رایگان قابلِ تمدید نیست…») on both the customer
+    and admin paths.
+  - **Trial configs are excluded from the reseller's invoice entirely** (a free giveaway) — both the
+    base quota rule and the abuse-metering, in the real end-of-month invoice, the recompute, and the
+    interim «علی‌الحساب» estimate. So the interim invoices self-correct immediately; already-sent
+    invoices are left untouched.
+  - **One-time cleanup:** over-renewed trials across all panels are reset back to an exact 1 GB
+    (`POST /api/ops/storefront/reset-trial-quota`, idempotent). Trials now carry an explicit
+    `is_trial` flag (migration `f1a2b3c4d5e6`, existing trials backfilled).
+
 ## 1.57.3 - 2026-07-03
 
 Batch P05 of the polish program (`docs/POLISH_PLAN.md`) — backend hygiene, closes the program.

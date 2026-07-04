@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "e4f7b1c9a2d5"
+HEAD = "f1a2b3c4d5e6"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -345,3 +345,28 @@ def test_payment_settlements_backfill(tmp_path):
         "SELECT payment_id, invoice_id FROM payment_settlements").fetchall())
     conn.close()
     assert rows == {(1, 1), (1, 2), (2, 2), (3, 1)}
+
+
+def test_is_trial_backfill(tmp_path):
+    """f1a2b3c4d5e6: upgrading past e4f7b1c9a2d5 backfills storefront_orders.is_trial=true for
+    trial orders (plan_id NULL AND price_toman 0); paid orders (price>0 or a plan) stay false."""
+    db = tmp_path / "istrial.db"
+    _alembic(db, "upgrade", "e4f7b1c9a2d5")   # the revision just BEFORE is_trial
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        "INSERT INTO storefront_orders (id, customer_id, plan_id, gb, days, price_toman,"
+        " status, created_at) VALUES (?, 1, ?, ?, 1, ?, 'provisioned', CURRENT_TIMESTAMP)",
+        [
+            (1, None, 1, 0),        # trial: plan_id NULL, price 0 -> is_trial
+            (2, 5, 50, 100000),     # paid (has a plan) -> not trial
+            (3, None, 20, 90000),   # paid whose plan was deleted (plan_id NULL but price>0) -> not trial
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    rows = dict(conn.execute("SELECT id, is_trial FROM storefront_orders").fetchall())
+    conn.close()
+    assert rows == {1: 1, 2: 0, 3: 0}

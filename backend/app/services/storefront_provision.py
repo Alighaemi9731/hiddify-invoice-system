@@ -261,6 +261,7 @@ async def claim_trial(
             order = StorefrontOrder(
                 customer_id=customer.id, plan_id=None, panel_id=sf.panel_id, label="تست رایگان",
                 gb=gb, days=days, price_toman=0, status="pending", panel_user_uuid=new_uuid,
+                is_trial=True,
             )
             s.add(order)
             customer.free_trial_used = True  # CAS: claimed before provisioning, under the lock

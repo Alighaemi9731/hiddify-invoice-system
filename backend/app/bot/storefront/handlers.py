@@ -44,6 +44,7 @@ log = logging.getLogger("bot.storefront")
 
 _PER_PAGE = 8          # customers per page in the admin «مشتری‌ها» list
 _SEARCH_LIMIT = 20     # max matches shown for a customer search (refine if more)
+_TRIAL_NO_RENEW = "⛔️ سرویسِ تستِ رایگان قابلِ تمدید نیست؛ برای ادامه لطفاً یک پلن تهیه کنید."
 
 storefront_router = Router()
 storefront_router.message.filter(F.chat.type == "private")
@@ -593,7 +594,7 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
     if sub_link:
         lines += ["", "🔗 لینکِ اشتراک:", f"<code>{sub_link}</code>"]
     caption = rtl("\n".join(lines))
-    markup = kb.order_actions_kb(order_id, renew_price, paused=paused)
+    markup = kb.order_actions_kb(order_id, renew_price, paused=paused, is_trial=order.is_trial)
     # ONE message: the QR photo carries the status + link + action buttons (no separate "آماده شد" send).
     sent = False
     if sub_link:
@@ -621,6 +622,10 @@ async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
         order = await _owned_order(s, sf, cb.from_user, order_id)
         if order is None or order.status not in ("provisioned", "disabled"):
             await cb.answer("یافت نشد.", show_alert=True)
+            return
+        if order.is_trial:
+            await cb.answer()
+            await cb.message.answer(rtl(_TRIAL_NO_RENEW))
             return
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
@@ -651,6 +656,8 @@ async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
         await cb.message.answer(
             rtl(f"موجودی کافی نیست. {_toman(res.short_toman)} تومان کم دارید."),
             reply_markup=kb.wallet_kb())
+    elif res.reason == "trial":
+        await cb.message.answer(rtl(_TRIAL_NO_RENEW))
     else:
         await cb.message.answer(rtl("❌ تمدید ناموفق بود. با پشتیبانی تماس بگیرید."))
 
@@ -847,7 +854,8 @@ async def sf_admin_sub_detail(cb: CallbackQuery, bot: Bot) -> None:
         if live.remaining_days is not None:
             lines.append(f"روزهای باقی‌مانده: {live.remaining_days}")
     await cb.message.answer(rtl("\n".join(lines)),
-                            reply_markup=kb.admin_sub_actions_kb(oid, paused=paused))
+                            reply_markup=kb.admin_sub_actions_kb(oid, paused=paused,
+                                                                is_trial=order.is_trial))
     await cb.answer()
 
 
@@ -856,8 +864,13 @@ async def sf_admin_renew(cb: CallbackQuery, bot: Bot) -> None:
     oid = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-        if sf is None or not is_admin or await _admin_order(s, sf, oid) is None:
+        order = await _admin_order(s, sf, oid) if (sf and is_admin) else None
+        if sf is None or not is_admin or order is None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        if order.is_trial:
+            await cb.answer()
+            await cb.message.answer(rtl(_TRIAL_NO_RENEW))
             return
     await cb.answer()
     res = await storefront_subscription.renew(SessionLocal, order_id=oid, by_admin=True)

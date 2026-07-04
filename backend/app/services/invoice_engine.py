@@ -136,6 +136,7 @@ def billable_gb_for_user(
     free_threshold_gb: float,
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
+    exclude_user_uuids: set[str] | None = None,
 ) -> tuple[float, bool] | None:
     """The single source of truth for one user's billable GB in a period.
 
@@ -149,6 +150,10 @@ def billable_gb_for_user(
     isn't mistaken for a test one); a removed config whose CONSUMPTION is below the free threshold
     is dropped as negligible. `panel_synced_at=None` disables deletion detection (everyone billed
     on sold quota — the legacy behaviour)."""
+    # Storefront FREE-TRIAL config uuids are never billed — a free giveaway, regardless of their
+    # (possibly renewal-inflated) quota.
+    if exclude_user_uuids and getattr(u, "user_uuid", None) in exclude_user_uuids:
+        return None
     if not period.contains(u.start_date):
         return None
     gb_sold = float(u.usage_limit_gb or 0)
@@ -192,8 +197,10 @@ def compute_invoices(
     free_threshold_gb: float = 1.0,
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
+    exclude_user_uuids: set[str] | None = None,
 ) -> list[BundleResult]:
-    """Return one BundleResult per billable top-level reseller (including zero ones)."""
+    """Return one BundleResult per billable top-level reseller (including zero ones).
+    `exclude_user_uuids` = storefront free-trial config uuids to never bill."""
     children_map = build_children_map(resellers)
     roots = select_billable_roots(resellers)
 
@@ -213,7 +220,7 @@ def compute_invoices(
             for u in users_by_adder.get(uuid, []):
                 res = billable_gb_for_user(
                     u, period, excluded_usage_gb, free_threshold_gb, panel_synced_at,
-                    deleted_full_quota_over_gb,
+                    deleted_full_quota_over_gb, exclude_user_uuids,
                 )
                 if res is None:
                     continue

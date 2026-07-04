@@ -23,6 +23,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -176,6 +177,9 @@ class StorefrontOrder(Base, TimestampMixin):
     # Plain reference (no hard FK) — the panel user is keyed by (panel_id, panel_user_uuid); a pruned
     # snapshot or deleted panel must never cascade into order history.
     panel_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A free-trial config. Trials are NEVER renewable and are EXCLUDED from the reseller's invoice
+    # (a free giveaway). Set on claim_trial; paid buys leave it False.
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     label: Mapped[str | None] = mapped_column(String(64), nullable=True)  # customer-chosen config name
     gb: Mapped[int] = mapped_column(Integer, default=0)
     days: Mapped[int] = mapped_column(Integer, default=0)
