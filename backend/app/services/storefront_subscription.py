@@ -8,7 +8,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import SessionLocal
@@ -182,21 +182,32 @@ async def reset_over_renewed_trials(
     session: AsyncSession, *, limit: int = 5000
 ) -> dict[str, int]:
     """One-time cleanup: free-trial configs that were renewed (a now-fixed bug) had their panel
-    `usage_limit_GB` ratcheted up (1→2→3…). Reset each back to an EXACT 1 GB via the admin API and
-    normalize the stored `order.gb` to 1. Idempotent: only trials with `gb > 1` are selected, and a
-    config whose panel is already ≤1 GB is skipped (its `gb` is still normalized so it won't
-    re-match). Per-order try/except so one bad panel never aborts the sweep. A later panel sync
-    refreshes the snapshot. Returns {checked, reset, skipped, failed}."""
+    `usage_limit_GB` ratcheted up (1→2→3…). Reset each back to an EXACT 1 GB via the admin API.
+
+    NOTE: renewing a trial left `order.gb` at 1 (renew set `gb = order.gb`); only the panel quota
+    grew. So over-renewed trials are identified by the LATEST SNAPSHOT's `usage_limit_gb > 1`
+    (joined on panel_id + user_uuid), not `order.gb`. Then the live panel quota is confirmed before
+    the reset (idempotent: a config already ≤1 GB is skipped). Per-order try/except so one bad panel
+    never aborts the sweep. Returns {checked, reset, skipped, failed}."""
+    from app.models import EndUserSnapshot
     from app.services import storefront_provision
 
     counts = {"checked": 0, "reset": 0, "skipped": 0, "failed": 0}
     orders = (
         await session.execute(
-            select(StorefrontOrder).where(
+            select(StorefrontOrder)
+            .join(
+                EndUserSnapshot,
+                and_(
+                    EndUserSnapshot.panel_id == StorefrontOrder.panel_id,
+                    EndUserSnapshot.user_uuid == StorefrontOrder.panel_user_uuid,
+                ),
+            )
+            .where(
                 StorefrontOrder.is_trial.is_(True),
                 StorefrontOrder.status.in_(_ACTIVE),
                 StorefrontOrder.panel_user_uuid.is_not(None),
-                StorefrontOrder.gb > 1,
+                EndUserSnapshot.usage_limit_gb > 1,
             ).limit(limit)
         )
     ).scalars().all()
@@ -221,13 +232,9 @@ async def reset_over_renewed_trials(
                     panel, uuid, {"usage_limit_GB": 1.0}, api_key=reseller.admin_uuid)
                 log.info("reset trial quota: order=%s panel=%s uuid=%s %.3f->1.0",
                          order.id, panel.id, uuid, live.limit_gb)
-                order.gb = 1
-                await session.commit()
                 counts["reset"] += 1
             else:
-                order.gb = 1  # panel already <=1; normalize stored gb so it won't re-select
-                await session.commit()
-                counts["skipped"] += 1
+                counts["skipped"] += 1  # snapshot was stale; panel already ≤1 GB
         except Exception:  # noqa: BLE001 — never crash the loop (sync_all convention)
             await session.rollback()
             log.warning("reset_over_renewed_trials failed for order %s", order.id, exc_info=True)

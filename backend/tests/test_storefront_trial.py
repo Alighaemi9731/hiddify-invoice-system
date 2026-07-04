@@ -154,11 +154,18 @@ def test_reset_over_renewed_trials(tmp_path, monkeypatch):
     from app.services.storefront_provision import LiveStatus
 
     async def body(s, _S):
-        panel, r, order = await _seed(s, gb=2, is_trial=True)
-        # also a gb=1 trial (already fine) → never selected
+        from app.models import EndUserSnapshot
+
+        panel, r, order = await _seed(s, is_trial=True)  # trial, order.gb stays 1 (realistic)
+        # An over-renewed trial is identified by the SNAPSHOT quota (2 GB), not order.gb.
+        s.add(EndUserSnapshot(panel_id=panel.id, user_uuid="uu-1", added_by_uuid="a",
+                              usage_limit_gb=2.0, enable=True))
+        # A second trial whose snapshot is already 1 GB → must NOT be selected.
         s.add(StorefrontOrder(customer_id=order.customer_id, panel_id=panel.id, plan_id=None,
                               gb=1, days=1, price_toman=0, status="provisioned",
                               panel_user_uuid="ok-uu", is_trial=True))
+        s.add(EndUserSnapshot(panel_id=panel.id, user_uuid="ok-uu", added_by_uuid="a",
+                              usage_limit_gb=1.0, enable=True))
         await s.commit()
 
         calls: list[tuple] = []
@@ -174,11 +181,6 @@ def test_reset_over_renewed_trials(tmp_path, monkeypatch):
             "app.services.panel_client.admin_api.AdminApiClient.patch_user", fake_patch)
 
         counts = await storefront_subscription.reset_over_renewed_trials(s)
-        assert counts["reset"] == 1 and counts["checked"] == 1   # only the gb=2 trial
+        assert counts["reset"] == 1 and counts["checked"] == 1   # only the 2 GB-snapshot trial
         assert calls == [("uu-1", {"usage_limit_GB": 1.0}, "a")]
-        await s.refresh(order)
-        assert order.gb == 1
-        # idempotent: re-run → nothing to reset (gb is now 1)
-        counts2 = await storefront_subscription.reset_over_renewed_trials(s)
-        assert counts2 == {"checked": 0, "reset": 0, "skipped": 0, "failed": 0}
     _run(body, tmp_path, "t4.db")

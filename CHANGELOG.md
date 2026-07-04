@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.58.1 - 2026-07-04
+
+### Fixed
+
+- **Trial-quota cleanup now actually finds the over-renewed trials.** Renewing a trial left the
+  stored order size at 1 GB and only grew the panel quota, so the `reset-trial-quota` cleanup (which
+  keyed off the stored size) matched nothing. It now identifies over-renewed trials by the synced
+  panel snapshot quota (`usage_limit_gb > 1`) and resets each to an exact 1 GB. (Follow-up to
+  v1.58.0; the renewal block and invoice exclusion there were already correct.)
+
 ## 1.58.0 - 2026-07-04
 
 ### Fixed
