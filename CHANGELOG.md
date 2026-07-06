@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.0 - 2026-07-06
+
+### Added
+
+- **Storefront shop owners can appoint co-admins.** A new «🛡 مدیرانِ ربات» option in the shop bot's
+  management menu lets the owner add another Telegram account as a co-manager (by numeric id, or by
+  forwarding a message from that person). Co-admins reach the full storefront admin panel from their
+  own Telegram account and can run everything (plans, payments, top-ups, customers, broadcast, …).
+  Guardrails: only the **owning reseller** can add/remove admins (a co-admin can run the shop but
+  can't appoint others or lock the owner out), up to 10 co-admins per shop, and the newly-added admin
+  gets a heads-up message. Migration `a3c5e7b9d1f2` adds `storefront_bots.co_admin_ids`.
+
 ## 1.58.3 - 2026-07-06
 
 ### Fixed

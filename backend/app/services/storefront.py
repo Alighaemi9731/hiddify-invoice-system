@@ -77,6 +77,56 @@ def bot_token(bot: StorefrontBot) -> str | None:
     return crypto.decrypt(bot.bot_token_enc)
 
 
+# ── co-admins (extra Telegram ids allowed to manage this shop) ─────────────────
+MAX_CO_ADMINS = 10
+
+
+def co_admin_ids(bot: StorefrontBot) -> list[int]:
+    """Parse the comma-separated extra-admin Telegram ids (deduped, order-preserving)."""
+    out: list[int] = []
+    for part in (bot.co_admin_ids or "").split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            v = int(part)
+            if v not in out:
+                out.append(v)
+    return out
+
+
+def is_shop_admin(bot: StorefrontBot, reseller: Reseller | None, user_id: int) -> bool:
+    """True if `user_id` may manage this shop: the owning reseller OR an appointed co-admin."""
+    if reseller is not None and reseller.bot_chat_id == user_id:
+        return True
+    return user_id in co_admin_ids(bot)
+
+
+async def add_co_admin(session: AsyncSession, bot: StorefrontBot, telegram_id: int) -> str:
+    """Appoint a co-admin. Returns 'ok' | 'exists' | 'is_owner' | 'full'."""
+    reseller = await session.get(Reseller, bot.reseller_id)
+    if reseller is not None and reseller.bot_chat_id == telegram_id:
+        return "is_owner"
+    ids = co_admin_ids(bot)
+    if telegram_id in ids:
+        return "exists"
+    if len(ids) >= MAX_CO_ADMINS:
+        return "full"
+    ids.append(telegram_id)
+    bot.co_admin_ids = ",".join(str(i) for i in ids)
+    await session.commit()
+    return "ok"
+
+
+async def remove_co_admin(session: AsyncSession, bot: StorefrontBot, telegram_id: int) -> bool:
+    """Revoke a co-admin. Returns True if one was removed."""
+    ids = co_admin_ids(bot)
+    if telegram_id not in ids:
+        return False
+    ids = [i for i in ids if i != telegram_id]
+    bot.co_admin_ids = ",".join(str(i) for i in ids) or None
+    await session.commit()
+    return True
+
+
 async def upsert_bot(
     session: AsyncSession,
     *,

@@ -70,6 +70,7 @@ class SF(StatesGroup):
     join_channel = State()     # admin sets the forced-join channel (forward a post / send @id)
     cust_search = State()      # admin searches customers by name / telegram id
     broadcast = State()
+    add_admin = State()        # admin appoints a co-admin (numeric id or forwarded message)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -99,7 +100,8 @@ async def _resolve(session, bot: Bot, user) -> tuple[StorefrontBot | None, Resel
     if sf is None:
         return None, None, False
     reseller = await session.get(Reseller, sf.reseller_id)
-    is_admin = reseller is not None and reseller.bot_chat_id == user.id
+    # The owning reseller OR any appointed co-admin may manage the shop.
+    is_admin = storefront.is_shop_admin(sf, reseller, user.id)
     return sf, reseller, is_admin
 
 
@@ -382,10 +384,120 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             "برای تنظیم، ابتدا ربات (@" + (sf.bot_username or "—") + ") را در کانالِ خود ادمین کنید، "
             "سپس «✏️ تنظیم/تغییرِ کانال» را بزنید."),
             reply_markup=kb.join_settings_kb(sf))
+    elif action == "admins":
+        if _is_shop_owner(reseller, message.from_user.id):
+            await _send_admins_panel(ans, s, sf, reseller)
+        else:
+            await ans(rtl("فقط مدیرِ اصلیِ فروشگاه می‌تواند مدیران را مدیریت کند."))
     elif action == "preview":
         await state.update_data(sf_preview=True)
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
         await _send_customer_menu(message.answer, sf, cust, preview=True)
+
+
+# ── admin: co-admins (extra managers) ────────────────────────────────────────
+
+def _is_shop_owner(reseller, user_id: int) -> bool:  # noqa: ANN001
+    """Only the OWNING reseller manages the admin list (a co-admin can run the shop but not appoint
+    or remove admins, and can't lock the owner out)."""
+    return reseller is not None and reseller.bot_chat_id == user_id
+
+
+async def _send_admins_panel(ans, s, sf, reseller) -> None:  # noqa: ANN001
+    owner_id = reseller.bot_chat_id if reseller else None
+    co_ids = storefront.co_admin_ids(sf)
+    lines = ["🛡 مدیرانِ ربات", "", f"👑 مدیرِ اصلی: {owner_id or '—'} (شما؛ غیرقابلِ حذف)"]
+    if co_ids:
+        lines += ["", "مدیرانِ اضافه:"] + [f"• {tid}" for tid in co_ids]
+    else:
+        lines += ["", "هنوز مدیرِ اضافه‌ای ندارید."]
+    lines += ["", "«➕ افزودن مدیر» را بزنید تا یک آیدیِ دیگر هم بتواند این فروشگاه را مدیریت کند."]
+    await ans(rtl("\n".join(lines)), reply_markup=kb.admins_manage_kb(co_ids))
+
+
+@storefront_router.callback_query(F.data == "sfaddadmin")
+async def sf_add_admin_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, reseller, _a = await _resolve(s, bot, cb.from_user)
+    if sf is None or not _is_shop_owner(reseller, cb.from_user.id):
+        await cb.answer("فقط مدیرِ اصلی می‌تواند مدیر اضافه کند.", show_alert=True)
+        return
+    await state.set_state(SF.add_admin)
+    await cb.message.answer(rtl(
+        "👤 آیدیِ عددیِ تلگرامِ فرد را بفرستید،\n"
+        "یا یک پیام از او را برای همین ربات فوروارد کنید.\n\n"
+        "نکته: آن فرد باید حداقل یک‌بار ربات را /start کرده باشد تا بتواند وارد پنلِ مدیریت شود."),
+        reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.add_admin)
+async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> None:
+    # Resolve the target Telegram id from a forwarded message (privacy permitting) or a typed id.
+    target_id: int | None = None
+    origin = getattr(message, "forward_origin", None)
+    sender = getattr(origin, "sender_user", None)
+    if sender is not None and getattr(sender, "id", None):
+        target_id = int(sender.id)
+    elif getattr(message, "forward_from", None):  # legacy forward field
+        target_id = int(message.forward_from.id)
+    elif message.text:
+        t = _digits(message.text)
+        if t.lstrip("-").isdigit():
+            target_id = int(t)
+    if not target_id or target_id <= 0:
+        await message.answer(rtl(
+            "نشد. یک آیدیِ عددیِ معتبر بفرستید، یا پیامی از آن فرد را فوروارد کنید.\n"
+            "(اگر فوروارد اثری نداشت، آن فرد در تنظیماتِ حریمِ خصوصیِ تلگرام فوروارد را بسته است؛ "
+            "آیدیِ عددی‌اش را دستی بفرستید.)"),
+            reply_markup=kb.cancel_kb())
+        return
+    async with SessionLocal() as s:
+        sf, reseller, _a = await _resolve(s, bot, message.from_user)
+        if sf is None or not _is_shop_owner(reseller, message.from_user.id):
+            await state.clear()
+            await message.answer(rtl("فقط مدیرِ اصلی می‌تواند مدیر اضافه کند."),
+                                 reply_markup=kb.admin_reply_kb())
+            return
+        result = await storefront.add_co_admin(s, sf, target_id)
+        await state.clear()
+        note = {
+            "ok": f"✅ آیدیِ {target_id} به‌عنوان مدیرِ فروشگاه اضافه شد.",
+            "exists": f"این آیدی ({target_id}) از قبل مدیر است.",
+            "is_owner": "این آیدیِ خودِ شماست؛ شما مدیرِ اصلی هستید.",
+            "full": f"حداکثر {storefront.MAX_CO_ADMINS} مدیرِ اضافه مجاز است.",
+        }.get(result, "خطا در افزودنِ مدیر.")
+        await message.answer(rtl(note), reply_markup=kb.admin_reply_kb())
+        await _send_admins_panel(message.answer, s, sf, reseller)
+    if result == "ok":
+        # Best-effort: let the new admin know (only works if they've started the bot).
+        try:
+            await bot.send_message(target_id, rtl(
+                f"🛡 شما به‌عنوان مدیرِ فروشگاهِ @{sf.bot_username or ''} انتخاب شدید.\n"
+                "برای ورود به پنلِ مدیریت، /start را بزنید."))
+        except Exception:  # noqa: BLE001 — they may not have started the bot yet
+            pass
+
+
+@storefront_router.callback_query(F.data.startswith("sfdeladm:"))
+async def sf_del_admin(cb: CallbackQuery, bot: Bot) -> None:
+    try:
+        tid = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    async with SessionLocal() as s:
+        sf, reseller, _a = await _resolve(s, bot, cb.from_user)
+        if sf is None or not _is_shop_owner(reseller, cb.from_user.id):
+            await cb.answer("فقط مدیرِ اصلی می‌تواند مدیر حذف کند.", show_alert=True)
+            return
+        removed = await storefront.remove_co_admin(s, sf, tid)
+        co_ids = storefront.co_admin_ids(sf)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb.admins_manage_kb(co_ids))
+    except Exception:  # noqa: BLE001 — markup unchanged / message too old
+        pass
+    await cb.answer("حذف شد." if removed else "یافت نشد.")
 
 
 # ── CUSTOMER ──────────────────────────────────────────────────────────────────

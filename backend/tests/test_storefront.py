@@ -75,6 +75,41 @@ async def _seed(s, *, tag="1", storefront_enabled=True, with_bot=True, fee=None)
     return r, bot, cust
 
 
+def test_co_admin_add_remove_and_is_shop_admin(tmp_path):
+    """A shop owner can appoint co-admins; is_shop_admin then grants them management, and a
+    non-admin is rejected. Owner id, duplicates, and the cap are handled."""
+    async def body(s):
+        r, bot, _c = await _seed(s)
+        r.bot_chat_id = 111  # the owning reseller's Telegram id
+        await s.commit()
+
+        # No co-admins yet: only the owner is an admin.
+        assert storefront.co_admin_ids(bot) == []
+        assert storefront.is_shop_admin(bot, r, 111) is True
+        assert storefront.is_shop_admin(bot, r, 222) is False
+
+        # Appoint 222.
+        assert await storefront.add_co_admin(s, bot, 222) == "ok"
+        assert storefront.co_admin_ids(bot) == [222]
+        assert storefront.is_shop_admin(bot, r, 222) is True      # co-admin can now manage
+        # Idempotent + guards.
+        assert await storefront.add_co_admin(s, bot, 222) == "exists"
+        assert await storefront.add_co_admin(s, bot, 111) == "is_owner"
+
+        # Cap at MAX_CO_ADMINS.
+        for extra in range(300, 300 + storefront.MAX_CO_ADMINS):
+            await storefront.add_co_admin(s, bot, extra)
+        assert await storefront.add_co_admin(s, bot, 999) == "full"
+
+        # Remove.
+        assert await storefront.remove_co_admin(s, bot, 222) is True
+        assert 222 not in storefront.co_admin_ids(bot)
+        assert storefront.is_shop_admin(bot, r, 222) is False
+        assert await storefront.remove_co_admin(s, bot, 222) is False  # already gone
+
+    _run(body, tmp_path, "coadmin.db")
+
+
 def test_topup_confirm_credits_once_and_purchase_is_atomic(tmp_path):
     async def body(s):
         _r, _bot, cust = await _seed(s)

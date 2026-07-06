@@ -28,6 +28,7 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("📊 آمار", "stats"),
     ("📢 پیام همگانی", "broadcast"),
     ("💬 پشتیبانی", "support"),
+    ("🛡 مدیرانِ ربات", "admins"),
     ("👤 نمای مشتری", "preview"),
 ]
 CUSTOMER_MENU: list[tuple[str, str]] = [
@@ -74,6 +75,17 @@ def customer_reply_kb(*, is_admin_preview: bool = False, show_free_trial: bool =
 
 def cancel_kb(label: str = "✖️ انصراف") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, callback_data="sfcancel")]])
+
+
+def admins_manage_kb(co_admin_ids: list[int]) -> InlineKeyboardMarkup:
+    """Manage the shop's co-admins: add one, or remove any existing co-admin (the owning reseller is
+    the permanent main admin and is never listed here)."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="➕ افزودن مدیر", callback_data="sfaddadmin")]
+    ]
+    for tid in co_admin_ids:
+        rows.append([InlineKeyboardButton(text=f"🗑 حذف {tid}", callback_data=f"sfdeladm:{tid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── inline keyboards ──────────────────────────────────────────────────────────

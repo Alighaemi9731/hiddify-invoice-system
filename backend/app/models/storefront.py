@@ -83,6 +83,10 @@ class StorefrontBot(Base, TimestampMixin):
     free_trial_gb: Mapped[int] = mapped_column(Integer, default=1)
     free_trial_days: Mapped[int] = mapped_column(Integer, default=1)
 
+    # Extra Telegram user-ids allowed to manage this shop (comma-separated), in addition to the
+    # owning reseller's own `bot_chat_id`. Lets the shop owner appoint co-managers.
+    co_admin_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     plans: Mapped[list[StorefrontPlan]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
     )
