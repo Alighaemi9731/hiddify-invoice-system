@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.58.3 - 2026-07-06
+
+### Fixed
+
+- **A rejected payment can now be re-sent to cover MORE invoices.** When a customer had submitted a
+  transaction hash for a single invoice and the owner rejected it, re-sending the same hash — even
+  through «💳 پرداخت فاکتور» → «✅ پرداخت همهٔ بدهی» — kept re-opening the *original* single-invoice
+  coverage and ignored the new selection, so the customer could never make it cover all their debt
+  and the owner was stuck rejecting it over and over. Now, re-submitting a rejected hash *with* a
+  fresh invoice selection updates that payment's coverage to the newly-chosen set (same tracking
+  number, amount = the sum), after the same ownership/owed/one-pending-per-invoice validation. A cold
+  re-send with no new selection still re-opens the original coverage as before. Confirmed/pending
+  hashes are still never re-attributed.
+
 ## 1.58.2 - 2026-07-04
 
 ### Changed

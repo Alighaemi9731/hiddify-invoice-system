@@ -249,6 +249,38 @@ def test_submit_payment_core_duplicate_and_reopen():
     _run(body)
 
 
+def test_rejected_txid_resubmitted_expands_coverage_to_all_invoices():
+    """The reported trap: a rejected SINGLE-invoice txid, re-sent via «پرداخت همهٔ بدهی», must now
+    cover ALL the newly-selected invoices — not forever re-open the old single invoice. Same row,
+    amount = the sum."""
+    async def body(s):
+        from app.models.enums import InvoiceStatus, PaymentStatus
+        a, _b, inv_a, _ib = await _seed(s, with_payments=False)
+        inv_a2 = Invoice(reseller_id=a.id, panel_id=inv_a.panel_id,
+                         period_start=dt.date(2026, 5, 1), period_end=dt.date(2026, 5, 31),
+                         period_label="2026-05", usage_gb=8, amount_toman=80_000,
+                         status=InvoiceStatus.sent)
+        s.add(inv_a2)
+        await s.commit()
+        tx = "0x" + "1" * 64
+        # 1) pay ONE invoice, then the owner rejects it.
+        r1 = await payments_service.submit_reseller_payment(
+            s, reseller_ids={a.id}, invoice_id=inv_a.id, txid=tx, chain="bsc")
+        assert r1.status == "ok"
+        pay = r1.payment
+        pay.status = PaymentStatus.rejected
+        await s.commit()
+        # 2) re-send the SAME txid selecting BOTH invoices (as «پرداخت همهٔ بدهی» does).
+        r2 = await payments_service.submit_reseller_payment(
+            s, reseller_ids={a.id}, invoice_ids=[inv_a.id, inv_a2.id], txid=tx, chain="bsc")
+        assert r2.status == "reopened"
+        assert r2.payment.id == pay.id                       # same row re-used, not a new one
+        assert set(payments_service._settled_ids(r2.payment)) == {inv_a.id, inv_a2.id}
+        assert float(r2.payment.amount_toman) == 180_000     # 100_000 + 80_000
+        assert len(r2.invoices) == 2
+    _run(body)
+
+
 def test_submit_payment_core_not_payable():
     async def body(s):
         a, _b, inv_a, inv_b = await _seed(s, with_payments=False)

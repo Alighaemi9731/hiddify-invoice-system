@@ -173,6 +173,10 @@ async def submit_reseller_payment(
             "تعداد کمتری انتخاب کنید.",
         )
 
+    # A rejected txid re-submitted WITH a fresh invoice selection updates that row's coverage
+    # (set below); stays None for a brand-new payment or a cold resubmit with no selection.
+    reopen: Payment | None = None
+
     if txid:
         # Canonicalize + validate on the shared path so the bot AND the portal enforce identical rules.
         # BSC hashes are matched case-insensitively on-chain, so store them lowercase — otherwise
@@ -203,22 +207,29 @@ async def submit_reseller_payment(
             if existing.status == PaymentStatus.pending:
                 return SubmitResult("dup_pending", "این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
             # Rejected → re-open the SAME row (txid is unique), but only for its real owner so
-            # nobody who happens to know a tx hash can resurrect/claim another's payment. Its
-            # original invoice set is preserved (the hash identifies one real transfer; its
-            # coverage was already decided) — a new selection does not absorb it.
+            # nobody who happens to know a tx hash can resurrect/claim another's payment.
             if existing.reseller_id not in reseller_ids:
                 return SubmitResult("wrong_owner", "این شناسهٔ تراکنش به حساب شما مربوط نیست.")
-            existing.status = PaymentStatus.pending
-            if "[resubmitted]" not in (existing.note or ""):
-                existing.note = (existing.note or "") + " [resubmitted]"
-            await session.commit()
-            return SubmitResult(
-                "reopened",
-                "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
-                f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}",
-                payment=existing, notify=True,
-                owner_intro="🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.",
-            )
+            if not ids:
+                # Cold resubmit with NO fresh selection → re-open with the ORIGINAL coverage
+                # (the hash identifies one real transfer whose invoice set was already decided).
+                existing.status = PaymentStatus.pending
+                if "[resubmitted]" not in (existing.note or ""):
+                    existing.note = (existing.note or "") + " [resubmitted]"
+                await session.commit()
+                return SubmitResult(
+                    "reopened",
+                    "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
+                    f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}",
+                    payment=existing, notify=True,
+                    owner_intro="🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.",
+                )
+            # A rejected payment whose customer re-selected invoices this time (e.g. now paying
+            # «همهٔ بدهی» after the owner rejected a single-invoice attempt) → its coverage is NOT
+            # locked. Update it to the newly-chosen set after the SAME validation as a fresh
+            # payment (below). Without this, re-sending the hash forever re-opened the OLD single
+            # invoice, so the customer could never make it cover both — the exact reported trap.
+            reopen = existing
 
     if not ids:
         return SubmitResult(
@@ -260,13 +271,25 @@ async def submit_reseller_payment(
     settled_ids = ",".join(str(i.id) for i in fresh_list)
     total_usdt = float(sum(Decimal(str(i.amount_usdt or 0)) for i in fresh_list))
     total_toman = float(sum(Decimal(str(i.amount_toman or 0)) for i in fresh_list))
-    if screenshot:
+    if reopen is not None:
+        # Re-open the rejected txid row with the NEW coverage (may now span several invoices).
+        reopen.reseller_id = primary.reseller_id
+        reopen.invoice_id = primary.id
+        reopen.settled_invoice_ids = settled_ids
+        reopen.amount_usdt = total_usdt
+        reopen.amount_toman = total_toman
+        reopen.status = PaymentStatus.pending
+        if "[resubmitted]" not in (reopen.note or ""):
+            reopen.note = (reopen.note or "") + " [resubmitted]"
+        payment = reopen
+    elif screenshot:
         payment = Payment(
             reseller_id=primary.reseller_id, invoice_id=primary.id,
             settled_invoice_ids=settled_ids, amount_usdt=total_usdt, amount_toman=total_toman,
             method=PaymentMethod.screenshot, status=PaymentStatus.pending,
             note="رسید تصویری (در انتظار بررسی مالک)",
         )
+        session.add(payment)
     else:
         method = {
             "ton": PaymentMethod.ton_txid,
@@ -277,7 +300,7 @@ async def submit_reseller_payment(
             settled_invoice_ids=settled_ids, amount_usdt=total_usdt, amount_toman=total_toman,
             method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
         )
-    session.add(payment)
+        session.add(payment)
     await session.flush()
     await _sync_settlements(session, payment)
     await session.commit()
@@ -296,15 +319,20 @@ async def submit_reseller_payment(
         )
         owner_intro = "🧾 رسید پرداخت جدید — منتظر تأیید شماست."
     else:
-        label = {"ton": "GRAM", "avax": "AVAX"}.get(chain, "USDT")
+        label = {"ton": "GRAM", "avax": "AVAX"}.get(payment.chain or chain, "USDT")
         user_message = (
             f"✅ شناسهٔ تراکنش ({label}) برای {scope_fa} دریافت شد و در انتظار تأیید پشتیبانی است.\n"
             "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
             f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
         )
-        owner_intro = "💳 پرداخت جدید ثبت شد و منتظر تأیید شماست."
+        owner_intro = (
+            "🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست."
+            if reopen is not None else
+            "💳 پرداخت جدید ثبت شد و منتظر تأیید شماست."
+        )
     return SubmitResult(
-        "ok", user_message, payment=payment, invoice=primary, invoices=fresh_list,
+        "reopened" if reopen is not None else "ok",
+        user_message, payment=payment, invoice=primary, invoices=fresh_list,
         notify=True, owner_intro=owner_intro,
     )
 
