@@ -157,6 +157,43 @@ def test_reject_topup_and_manual_adjust_floor(tmp_path):
     _run(body, tmp_path, "wallet2.db")
 
 
+def test_topup_decided_once_cannot_be_flipped(tmp_path):
+    """Once one admin confirms (or rejects) a top-up, a second admin's opposite decision is a no-op —
+    no double credit and no flip (covers two admins acting on the same fish)."""
+    async def body(s):
+        _r, _bot, cust = await _seed(s)
+        # confirm → a later reject must NOT un-credit or change the status
+        t1 = await storefront_wallet.create_topup(s, cust, 100_000, method="card")
+        await storefront_wallet.confirm_topup(s, t1.id)
+        changed, t1b = await storefront_wallet.reject_topup(s, t1.id)
+        await s.refresh(cust)
+        assert changed is False and t1b.status == "confirmed"
+        assert storefront_wallet.balance(cust) == Decimal(100_000)
+
+        # reject → a later confirm must NOT credit
+        t2 = await storefront_wallet.create_topup(s, cust, 50_000, method="card")
+        await storefront_wallet.reject_topup(s, t2.id)
+        changed2, t2b = await storefront_wallet.confirm_topup(s, t2.id)
+        await s.refresh(cust)
+        assert changed2 is False and t2b.status == "rejected"
+        assert storefront_wallet.balance(cust) == Decimal(100_000)  # unchanged
+
+    _run(body, tmp_path, "wallet3.db")
+
+
+def test_admin_chat_ids_includes_owner_and_co_admins():
+    """Admin notifications fan out to the owner AND every co-admin (deduped)."""
+    from app.bot.storefront.handlers import _admin_chat_ids
+    owner = SimpleNamespace(bot_chat_id=111)
+    assert _admin_chat_ids(owner, SimpleNamespace(co_admin_ids="222,333")) == [111, 222, 333]
+    assert _admin_chat_ids(owner, SimpleNamespace(co_admin_ids="111,222")) == [111, 222]  # dedup
+    assert _admin_chat_ids(owner, None) == [111]                                          # no sf
+    assert _admin_chat_ids(owner, SimpleNamespace(co_admin_ids=None)) == [111]            # no co-admins
+    # owner who never registered in the bot (no chat id) → only the co-admins receive
+    assert _admin_chat_ids(SimpleNamespace(bot_chat_id=None),
+                           SimpleNamespace(co_admin_ids="222")) == [222]
+
+
 def test_storefront_telegram_id_columns_are_bigint():
     # Telegram bot/user ids exceed int32; the columns MUST be BigInteger or Postgres rejects them
     # ("value out of int32 range"). SQLite has no int32 cap, so only a metadata check catches this.

@@ -44,18 +44,31 @@ async def create_topup(
     return txn
 
 
+async def _get_for_update(session: AsyncSession, model, pk: int):  # noqa: ANN001, ANN202
+    """Fetch a row by id under a write lock (Postgres `SELECT … FOR UPDATE`; a no-op on SQLite,
+    where writes serialize anyway). Lets two admins decide the same top-up without a double credit."""
+    stmt = select(model).where(model.id == pk)
+    try:
+        stmt = stmt.with_for_update()
+    except Exception:  # noqa: BLE001 — dialect without row locks
+        pass
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def confirm_topup(
     session: AsyncSession, txn_id: int, *, amount_toman: int | None = None
 ) -> tuple[bool, StorefrontWalletTxn | None]:
     """Confirm a pending top-up and credit the wallet. `amount_toman` lets the admin set the credited
-    Toman (used for crypto deposits — manual, no rates). Idempotent: a second confirm is a no-op.
-    Returns (changed, txn)."""
-    txn = await session.get(StorefrontWalletTxn, txn_id)
+    Toman (used for crypto deposits — manual, no rates). Atomic + idempotent: the txn row is locked
+    and re-checked, so if a second admin taps «تأیید» concurrently they block until the first commits
+    and then see it's no longer pending → a no-op (never a double credit). Returns (changed, txn)."""
+    txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
         return False, txn
     if txn.status != "pending":
         return False, txn  # already decided — no double credit
-    customer = await session.get(StorefrontCustomer, txn.customer_id)
+    # Lock the customer row too, so two DIFFERENT top-ups for the same wallet can't lose an update.
+    customer = await _get_for_update(session, StorefrontCustomer, txn.customer_id)
     if customer is None:
         return False, txn
     # The admin may override the Toman to credit (esp. for crypto deposits, where the amount is set
@@ -74,8 +87,9 @@ async def confirm_topup(
 
 
 async def reject_topup(session: AsyncSession, txn_id: int) -> tuple[bool, StorefrontWalletTxn | None]:
-    """Reject a pending top-up (no credit). Idempotent. Returns (changed, txn)."""
-    txn = await session.get(StorefrontWalletTxn, txn_id)
+    """Reject a pending top-up (no credit). Atomic + idempotent (locks + re-checks the txn row so a
+    concurrent confirm/reject by another admin can't both act). Returns (changed, txn)."""
+    txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
         return False, txn
     if txn.status != "pending":

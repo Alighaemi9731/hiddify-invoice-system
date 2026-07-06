@@ -129,13 +129,28 @@ async def _send_customer_menu(answer, sf: StorefrontBot, customer: StorefrontCus
     )
 
 
-async def _notify_admin(bot: Bot, reseller: Reseller, text: str, **kw) -> None:  # noqa: ANN001, ANN003
-    if not reseller or not reseller.bot_chat_id:
-        return
-    try:
-        await bot.send_message(reseller.bot_chat_id, rtl(text), **kw)
-    except Exception:  # noqa: BLE001
-        log.warning("notify storefront admin failed", exc_info=True)
+def _admin_chat_ids(reseller: Reseller | None, sf: StorefrontBot | None) -> list[int]:
+    """Every Telegram id that should receive admin messages for this shop: the owning reseller plus
+    any appointed co-admins (deduped, order-preserving). Co-admins get EXACTLY what the owner gets."""
+    ids: list[int] = []
+    if reseller is not None and reseller.bot_chat_id:
+        ids.append(reseller.bot_chat_id)
+    if sf is not None:
+        for tid in storefront.co_admin_ids(sf):
+            if tid not in ids:
+                ids.append(tid)
+    return ids
+
+
+async def _notify_admin(  # noqa: ANN003
+    bot: Bot, reseller: Reseller | None, text: str, *, sf: StorefrontBot | None = None, **kw
+) -> None:
+    """Send an admin notification to the owner AND every co-admin (pass `sf` to include co-admins)."""
+    for chat_id in _admin_chat_ids(reseller, sf):
+        try:
+            await bot.send_message(chat_id, rtl(text), **kw)
+        except Exception:  # noqa: BLE001 — one blocked admin shouldn't stop the others
+            log.warning("notify storefront admin failed", exc_info=True)
 
 
 async def _deliver_config(  # noqa: ANN001
@@ -659,10 +674,11 @@ async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         "❌ ساختِ سرویس ناموفق بود؛ مبلغ به کیفِ پولِ شما بازگردانده شد. با پشتیبانی تماس بگیرید."))
     async with SessionLocal() as s:
         reseller = await s.get(Reseller, reseller_id)
+        sf = await storefront.get_bot_for_reseller(s, reseller_id)
         if reseller is not None:
             await _notify_admin(bot, reseller,
                                 f"⚠️ ساختِ سرویس برای یک مشتری ناموفق بود ({res.reason}). "
-                                "احتمالاً ظرفیتِ پنل پُر است.")
+                                "احتمالاً ظرفیتِ پنل پُر است.", sf=sf)
     await cb.answer()
 
 
@@ -1114,20 +1130,31 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
         cap = (f"🧾 شارژِ جدید #{txn.id}\nمبلغ: {_toman(amount)} ت — روش: {method}\n"
                f"مشتری: {customer.name or customer.telegram_id}"
                + (f"\nمتن/TXID: {txid}" if txid else ""))
-        if reseller and reseller.bot_chat_id:
+        # Send the proof + decide buttons to the owner AND every co-admin (whoever acts first
+        # settles it; the confirm/reject is idempotent so a second tap can't double-credit).
+        for admin_id in _admin_chat_ids(reseller, sf):
             try:
                 if message.photo:  # forward by file_id — no disk read, no leaked file handle
                     await bot.send_photo(
-                        reseller.bot_chat_id, message.photo[-1].file_id,
+                        admin_id, message.photo[-1].file_id,
                         caption=rtl(cap), reply_markup=kb.topup_decide_kb(txn.id))
                 else:
-                    await bot.send_message(reseller.bot_chat_id, rtl(cap),
+                    await bot.send_message(admin_id, rtl(cap),
                                            reply_markup=kb.topup_decide_kb(txn.id))
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — one blocked admin shouldn't stop the others
                 log.warning("notify admin of topup failed", exc_info=True)
 
 
 # ── admin: confirm / reject / set-amount ─────────────────────────────────────
+
+async def _strip_buttons(cb: CallbackQuery) -> None:
+    """Remove the inline buttons from the tapped message (so another admin's copy of the same
+    decision self-heals once anyone acts)."""
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # noqa: BLE001 — message too old / markup unchanged
+        pass
+
 
 @storefront_router.callback_query(F.data.startswith("sfok:"))
 async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
@@ -1139,9 +1166,11 @@ async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
             return
         changed, txn = await storefront_wallet.confirm_topup(s, txn_id)
         if not changed:
+            await _strip_buttons(cb)
             await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
             return
         cust = await s.get(StorefrontCustomer, txn.customer_id)
+    await _strip_buttons(cb)
     await cb.message.answer(rtl(f"✅ شارژِ #{txn_id} تأیید و کیفِ پول شارژ شد."))
     if cust:
         try:
@@ -1162,6 +1191,7 @@ async def sf_topup_no(cb: CallbackQuery, bot: Bot) -> None:
             return
         changed, txn = await storefront_wallet.reject_topup(s, txn_id)
         cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
+    await _strip_buttons(cb)
     if changed:
         await cb.message.answer(rtl(f"❌ شارژِ #{txn_id} رد شد."))
         if cust:

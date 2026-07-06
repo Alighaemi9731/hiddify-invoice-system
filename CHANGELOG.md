@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.1 - 2026-07-06
+
+### Fixed
+
+- **Co-admins now get shop notifications too, and a top-up can't be double-approved.** Completing the
+  co-admin feature (v1.59.0): a customer's wallet-charge receipt (and the provisioning-failure nudge)
+  is now delivered to the owner **and every co-admin** with the same approve/reject buttons — so a
+  co-admin is a full peer of the owner, not just able to open the panel. And approving a top-up is now
+  **atomic**: the transaction row is locked and re-checked, so if two admins tap «تأیید» at the same
+  time only the first credits the wallet (the second is a no-op) — no more risk of a double charge.
+  Once one admin confirms or rejects, the buttons on the other admins' copies clear on their next tap,
+  and an already-decided top-up can't be flipped by a second admin.
+
 ## 1.59.0 - 2026-07-06
 
 ### Added
