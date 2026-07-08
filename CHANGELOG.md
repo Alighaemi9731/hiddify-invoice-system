@@ -8,6 +8,32 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.3 - 2026-07-08
+
+Hardening batch H02 (`docs/HARDENING_PLAN.md`) — enforcement mid-payment race,
+restore-source retention, queue serialization.
+
+### Fixed
+
+- **Paying mid-suspension can no longer resurrect settled debt.** If a payment was confirmed
+  while a suspension's chunks were still being applied, the worker used to finish anyway:
+  it overwrote the payment's cancellation, stamped the now-PAID invoice as «مسدودشده», and
+  after the restore that invoice came back as «سررسیدگذشته» — so reminders chased debt that
+  was already settled, and users disabled after the payment stayed offline. The worker now
+  notices the cancellation between chunks and before finalizing, never overwrites it, only
+  stamps invoices that are still owed, re-checks debt one final time before completing, and
+  hands any late-applied chunks to the pending restore so every disabled user is re-enabled.
+- **A long-suspended (or frozen) reseller can always be restored.** The daily log cleanup
+  used to delete the completed suspension/freeze record after the retention window (default
+  90 days) — but that record is exactly what the restore needs to know which users and
+  limits to bring back. A reseller who finally paid after 90+ days got a silent no-op
+  restore; a frozen sub-reseller could never be unfrozen. The newest live suspension/freeze
+  record of any still-suspended/frozen reseller is now always kept.
+- **Queue runs are serialized.** Clicking the manual enforcement-queue run while the 5-minute
+  scheduler tick is mid-action could double-process one action and, in the worst case,
+  capture already-zeroed limits into the restore snapshot (the restore-zeros bug class). A
+  second run now reports «در حال اجرا» instead of overlapping (PostgreSQL advisory lock).
+
 ## 1.59.2 - 2026-07-08
 
 Hardening batch H01 (`docs/HARDENING_PLAN.md`) — payment verification & submission

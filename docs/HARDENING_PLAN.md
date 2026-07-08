@@ -66,7 +66,10 @@ concurrent-dup-txid-graceful.
 
 ## H02 - Enforcement mid-payment race + restore-source retention + queue lock
 
-Priority: P0 (availability of paying customers). Version: PATCH. Status: TODO. No migration.
+Priority: P0 (availability of paying customers). Version: PATCH. Status: DONE in `v1.59.3`. No migration.
+(Implementation note: when the revert lands before ANY progress was committed, queue_restore
+creates no restore — `_merge_into_pending_restore` therefore also CREATES the restore from
+the source's final progress in that case, so post-copy chunks are always undone.)
 
 - **Mid-payment race** (`services/enforcement.py:755, 848, 858-864, 981-990`): debt is
   checked once per tick; a payment confirmed mid-action makes `queue_restore` set

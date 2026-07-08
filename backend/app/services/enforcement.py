@@ -12,7 +12,7 @@ import asyncio
 import logging
 from copy import deepcopy
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy import delete as _sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -34,6 +34,10 @@ log = logging.getLogger("enforcement")
 _MAX_RETRIES = 5
 # How many per-user id lookups to run concurrently against ONE panel — small, to stay gentle.
 _ID_LOOKUP_CONCURRENCY = 8
+
+# Advisory-lock key serializing whole enforcement-queue runs (manual endpoint vs the 5-min
+# scheduler tick). Adjacent to invoicing._BILLING_LOCK_KEY (734_137_044).
+_QUEUE_LOCK_KEY = 734_137_045
 
 
 # ── low-level helpers ────────────────────────────────────────────────────────
@@ -148,6 +152,137 @@ async def _queued_snapshot(session: AsyncSession, reseller: Reseller) -> dict:
 
 
 # ── inner worker helpers ─────────────────────────────────────────────────────
+
+class _RevertedMidFlight(Exception):
+    """Raised inside a suspend/freeze worker when the action's DB row was flipped to
+    `reverted` by a concurrent payment/defer (queue_restore in another session). The worker's
+    in-memory object is stale (sessions are expire_on_commit=False), so without this check it
+    would keep disabling users, finalize `done` over the `reverted` status, and stamp a
+    now-PAID invoice as enforced — resurrecting settled debt as overdue after the restore."""
+
+
+async def _current_action_status(
+    session: AsyncSession, action_id: int
+) -> EnforcementActionStatus | None:
+    """The action's CURRENT status as committed in the DB (core-column select, so the ORM
+    identity map's stale in-memory object is bypassed)."""
+    return (
+        await session.execute(
+            select(EnforcementAction.status).where(EnforcementAction.id == action_id)
+        )
+    ).scalar_one_or_none()
+
+
+async def _merge_into_pending_restore(session: AsyncSession, action_id: int) -> None:
+    """A suspend/freeze was reverted mid-run: the payment-triggered restore copied the
+    progress it could see at that instant, but this worker may have completed one more chunk
+    after the copy — those users/admins are missing from the restore's work set and would
+    stay disabled/zeroed forever. Union the source's FINAL committed progress into the
+    still-`planned` restore (the same panel lane processes actions serially, so the restore
+    cannot have started; if it unexpectedly has, log a warning — its own retry logic covers
+    partially-applied work). Takes the id (not the ORM object): the caller rolled back,
+    which expires the in-memory object — re-load the committed truth."""
+    action = await session.get(EnforcementAction, action_id)
+    if action is None:
+        return
+    src_snapshot = action.snapshot or {}
+    src_progress = _progress(src_snapshot)
+    src_users = dict(src_snapshot.get("users") or {})
+    applied_users = (
+        set(src_progress.get("users_done") or []) - set(src_progress.get("users_missing") or [])
+    )
+    captured = dict(src_progress.get("captured_limits") or src_snapshot.get("limits") or {})
+    applied_admins = {u for u in (src_progress.get("admins_done") or []) if u in captured}
+    if not applied_users and not applied_admins:
+        return  # nothing was applied — nothing to undo
+
+    candidates = (
+        await session.execute(
+            select(EnforcementAction)
+            .where(
+                EnforcementAction.reseller_id == action.reseller_id,
+                EnforcementAction.action == EnforcementActionType.restore,
+                EnforcementAction.status.in_(
+                    [EnforcementActionStatus.planned, EnforcementActionStatus.partial]
+                ),
+            )
+            .order_by(EnforcementAction.created_at.desc(), EnforcementAction.id.desc())
+            .with_for_update()
+        )
+    ).scalars().all()
+    restore = next(
+        (r for r in candidates if (r.snapshot or {}).get("source_action_id") == action.id),
+        None,
+    )
+    if restore is None:
+        # The revert landed before ANY progress had been committed, so queue_restore saw an
+        # empty work set and created no restore — but this worker applied chunks right after
+        # the copy. Create the restore NOW from the source's final committed progress so
+        # that work is undone (otherwise those users would stay disabled forever).
+        src_order = list(src_snapshot.get("admins") or [])
+        admins = [u for u in src_order if u in applied_admins]
+        admins += [u for u in applied_admins if u not in src_order]
+        limits = {u: captured[u] for u in applied_admins}
+        users = {u: src_users.get(u, "") for u in applied_users}
+        restore = EnforcementAction(
+            reseller_id=action.reseller_id,
+            invoice_id=action.invoice_id,
+            action=EnforcementActionType.restore,
+            dry_run=False,
+            status=EnforcementActionStatus.planned,
+            snapshot={
+                "limits": limits, "admins": admins, "users": users,
+                "source_action_id": action.id,
+                "require_no_due": False, "reason": "reverted-mid-flight",
+                "progress": {
+                    "phase": "limits",
+                    "users_done": [], "users_missing": [], "users_failed": {},
+                    "user_attempts": {}, "admins_done": [], "admins_missing": [],
+                    "admins_failed": {}, "admin_attempts": {},
+                    "captured_limits": limits,
+                },
+            },
+        )
+        session.add(restore)
+        await session.commit()
+        log.info(
+            "created restore %s for mid-flight-reverted action %s (%d users, %d admins)",
+            restore.id, action.id, len(users), len(admins),
+        )
+        return
+    if restore.status != EnforcementActionStatus.planned:
+        log.warning(
+            "restore %s already started while merging mid-flight progress of %s; "
+            "late chunks are appended and will be retried by the restore's own loop",
+            restore.id, action.id,
+        )
+
+    snap = deepcopy(restore.snapshot or {})
+    merged_users = dict(snap.get("users") or {})
+    for uuid in applied_users:
+        merged_users.setdefault(uuid, src_users.get(uuid, ""))
+    merged_limits = dict(snap.get("limits") or {})
+    for uuid in applied_admins:
+        merged_limits.setdefault(uuid, captured[uuid])
+    # Keep the restore's top-down order: rebuild from the source's root→leaf admin list.
+    admin_set = set(snap.get("admins") or []) | set(merged_limits)
+    src_order = list(src_snapshot.get("admins") or [])
+    merged_admins = [u for u in src_order if u in admin_set]
+    merged_admins += [u for u in admin_set if u not in src_order]
+
+    snap["users"] = merged_users
+    snap["limits"] = merged_limits
+    snap["admins"] = merged_admins
+    prog = _progress(snap)
+    prog["captured_limits"] = merged_limits
+    restore.snapshot = snap
+    flag_modified(restore, "snapshot")
+    await session.commit()
+    log.info(
+        "merged mid-flight progress of reverted action %s into restore %s "
+        "(%d users, %d admins)", action.id, restore.id, len(merged_users), len(merged_admins),
+    )
+
 
 async def _run_user_chunks(
     *,
@@ -295,6 +430,15 @@ async def _run_user_chunks(
         await session.commit()
         remaining = [u for u in remaining if u not in done_users]
 
+        # A payment can land while chunks are flying: queue_restore (another session) flips a
+        # SUSPEND action to `reverted`. Notice it before the next panel write — a reverted
+        # suspension must stop disabling users. (Restores never self-abort; the last chunk is
+        # covered by the caller's pre-finalize check.)
+        if not enable and action.action == EnforcementActionType.disable_users and remaining:
+            current = await _current_action_status(session, action.id)
+            if current == EnforcementActionStatus.reverted:
+                raise _RevertedMidFlight
+
     # `lookup_failed` (a transient per-user id lookup error, not yet retry-exhausted) keeps the
     # action partial so the unresolved users are retried next tick.
     return total_patched, lookup_failed
@@ -330,6 +474,13 @@ async def _run_admin_limits(
     remaining = [u for u in admin_order if u not in done_admins]
     if not remaining:
         return 0, False
+
+    # Suspend/freeze only: abort before the parallel writes if the action was reverted by a
+    # concurrent payment/defer (see _RevertedMidFlight). A restore never self-aborts.
+    if is_suspend:
+        current = await _current_action_status(session, action.id)
+        if current == EnforcementActionStatus.reverted:
+            raise _RevertedMidFlight
 
     sem = asyncio.Semaphore(max(1, parallelism))
 
@@ -576,6 +727,10 @@ async def queue_restore(
             )
             .order_by(EnforcementAction.created_at.desc(), EnforcementAction.id.desc())
             .limit(1)
+            # Serialize against the queue worker: its row lock is held between chunk commits,
+            # so this read waits for the freshest committed progress before copying it (the
+            # residual one-chunk window is handled by _merge_into_pending_restore).
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if source is None:
@@ -844,6 +999,24 @@ async def _process_enforcement_action(
         await session.commit()
         return {"failed": 1}
 
+    # The last chunk isn't covered by the in-loop revert checks — re-read the DB status once
+    # more so a `done` write can never overwrite a concurrent `reverted`.
+    if await _current_action_status(session, action.id) == EnforcementActionStatus.reverted:
+        raise _RevertedMidFlight
+    # Debt can also vanish mid-run WITHOUT a queued restore (auto_restore_on_payment off, or
+    # the payment landed between the head check and here) — mirror the head check: hand the
+    # applied work to a restore instead of finalizing a suspension nobody owes for.
+    if action.invoice_id is not None and not await _has_due_invoice(session, reseller.id):
+        restore = await queue_restore(
+            session, reseller, require_no_due=False, reason="paid-mid-suspend"
+        )
+        if restore is None:
+            action.status = EnforcementActionStatus.reverted
+            await session.commit()
+            return {"skipped": 1}
+        return {"restore_queued": 1, "patched_users": result["patched_users"],
+                "patched_admins": result["patched_admins"]}
+
     reseller.enforcement_state = EnforcementState.enforced
     action.status = EnforcementActionStatus.done
     action.error = None
@@ -858,9 +1031,13 @@ async def _process_enforcement_action(
     if action.invoice_id:
         from app.models import Invoice
         from app.models.enums import InvoiceStatus
+        from app.services import invoice_state
 
         inv = await session.get(Invoice, action.invoice_id)
-        if inv is not None:
+        # Stamp only a still-OWED invoice: a payment can land while chunks are flying, and
+        # flipping a PAID invoice to enforced would resurrect it as overdue on restore —
+        # dunning would then chase settled debt.
+        if inv is not None and inv.status in invoice_state.OWED:
             inv.status = InvoiceStatus.enforced
 
     await session.commit()
@@ -1073,6 +1250,11 @@ async def _process_freeze_action(
         result["partial"] = int(action.status == EnforcementActionStatus.partial)
         result["failed"] = int(action.status == EnforcementActionStatus.failed)
         return result
+
+    # An unfreeze (queue_restore) can revert this action while the limit writes were flying —
+    # never overwrite `reverted` with `done` (see _RevertedMidFlight).
+    if await _current_action_status(session, action.id) == EnforcementActionStatus.reverted:
+        raise _RevertedMidFlight
 
     reseller.enforcement_state = EnforcementState.frozen
     action.status = EnforcementActionStatus.done
@@ -1304,6 +1486,7 @@ def _empty_queue_result() -> dict:
         "done": 0, "partial": 0, "failed": 0, "skipped": 0,
         "patched_users": 0, "failed_users": 0, "patched_admins": 0,
         "restored_users": 0, "restored_admins": 0, "restore_queued": 0,
+        "reverted_midflight": 0,
     }
 
 
@@ -1357,18 +1540,27 @@ async def _process_panel_queue(
     result = _empty_queue_result()
     result["picked"] = len(actions)
     for action in actions:
-        if action.action == EnforcementActionType.restore:
-            step = await _process_restore_action(
-                session, action, user_chunk_size=chunk, admin_parallelism=para,
-            )
-        elif action.action == EnforcementActionType.delete_admin:
-            step = await _process_delete_action(session, action, user_chunk_size=chunk)
-        elif action.action == EnforcementActionType.freeze:
-            step = await _process_freeze_action(session, action, admin_parallelism=para)
-        else:
-            step = await _process_enforcement_action(
-                session, action, user_chunk_size=chunk, admin_parallelism=para,
-            )
+        action_id = action.id  # read while fresh — a rollback below expires the object
+        try:
+            if action.action == EnforcementActionType.restore:
+                step = await _process_restore_action(
+                    session, action, user_chunk_size=chunk, admin_parallelism=para,
+                )
+            elif action.action == EnforcementActionType.delete_admin:
+                step = await _process_delete_action(session, action, user_chunk_size=chunk)
+            elif action.action == EnforcementActionType.freeze:
+                step = await _process_freeze_action(session, action, admin_parallelism=para)
+            else:
+                step = await _process_enforcement_action(
+                    session, action, user_chunk_size=chunk, admin_parallelism=para,
+                )
+        except _RevertedMidFlight:
+            # A payment/defer reverted this suspend/freeze while its chunks were flying.
+            # Never write status/snapshot over the `reverted` row; hand the chunks that
+            # landed after the restore's copy over to that pending restore instead.
+            await session.rollback()
+            await _merge_into_pending_restore(session, action_id)
+            step = {"skipped": 1, "reverted_midflight": 1}
         # A hard failure (exhausted retries) is no longer silent: ping the owner so a stuck
         # suspension/restore is visible instead of leaving debt uncollected.
         if step.get("failed"):
@@ -1409,23 +1601,6 @@ async def process_enforcement_queue(
     para = max(1, int(admin_chunk_size or cfg.get("enforcement_admin_chunk_size") or 10))
     panel_para = max(1, int(cfg.get("enforcement_panel_concurrency") or 6))
 
-    # Retention of terminal enforcement_action rows (incl. their large JSON snapshots) is
-    # handled centrally by the daily maintenance job — see app.services.maintenance.
-    panel_ids = list((
-        await session.execute(
-            select(Reseller.panel_id)
-            .join(EnforcementAction, EnforcementAction.reseller_id == Reseller.id)
-            .where(*_PENDING_ACTION_FILTER)
-            .distinct()
-        )
-    ).scalars().all())
-    panel_ids = [p for p in panel_ids if p is not None]
-
-    agg = _empty_queue_result()
-    agg["panels"] = len(panel_ids)
-    if not panel_ids:
-        return agg
-
     # Each lane needs its OWN session (an AsyncSession is NOT safe to share across tasks). Derive the
     # factory from the caller's bind so it uses the same engine in production AND in tests; fall back
     # to the app-wide SessionLocal if the session isn't engine-bound.
@@ -1434,24 +1609,73 @@ async def process_enforcement_queue(
         async_sessionmaker(bind, expire_on_commit=False, autoflush=False) if bind is not None
         else SessionLocal
     )
-    sem = asyncio.Semaphore(panel_para)
 
-    async def _lane(pid: int) -> dict:
-        async with sem:
-            try:
-                async with lane_factory() as lane_session:
-                    return await _process_panel_queue(
-                        lane_session, pid, limit=limit, chunk=chunk, para=para
-                    )
-            except Exception:  # noqa: BLE001 — one panel's failure must not abort the others
-                log.exception("enforcement queue lane failed for panel %s", pid)
-                return {}
+    # Serialize WHOLE queue runs: the per-row FOR UPDATE skip_locked evaporates at the first
+    # mid-action commit, so a manual «اجرای صف» overlapping the 5-min scheduler tick could
+    # re-pick a partial action and (worst case) re-capture already-zeroed limits into the
+    # restore snapshot (the M38 restore-zeros class). A transaction-level advisory lock on a
+    # DEDICATED session (its transaction stays open for the whole run; xact locks would die
+    # at the first chunk commit on a shared session) makes runs mutually exclusive; the loser
+    # returns an "already_running" result instead of double-processing. No-op on SQLite.
+    lock_session = None
+    try:
+        sync_bind = session.get_bind()
+    except Exception:  # noqa: BLE001 — unbound session (tests) → skip locking
+        sync_bind = None
+    if sync_bind is not None and getattr(sync_bind.dialect, "name", "") == "postgresql":
+        lock_session = lane_factory()
+        got = (
+            await lock_session.execute(
+                text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _QUEUE_LOCK_KEY}
+            )
+        ).scalar()
+        if not got:
+            await lock_session.close()
+            agg = _empty_queue_result()
+            agg["panels"] = 0
+            agg["already_running"] = 1
+            return agg
 
-    steps = await asyncio.gather(*[_lane(pid) for pid in panel_ids])
-    for step in steps:
-        for key, val in step.items():
-            agg[key] = agg.get(key, 0) + int(val or 0)
-    return agg
+    try:
+        # Retention of terminal enforcement_action rows (incl. their large JSON snapshots) is
+        # handled centrally by the daily maintenance job — see app.services.maintenance.
+        panel_ids = list((
+            await session.execute(
+                select(Reseller.panel_id)
+                .join(EnforcementAction, EnforcementAction.reseller_id == Reseller.id)
+                .where(*_PENDING_ACTION_FILTER)
+                .distinct()
+            )
+        ).scalars().all())
+        panel_ids = [p for p in panel_ids if p is not None]
+
+        agg = _empty_queue_result()
+        agg["panels"] = len(panel_ids)
+        if not panel_ids:
+            return agg
+
+        sem = asyncio.Semaphore(panel_para)
+
+        async def _lane(pid: int) -> dict:
+            async with sem:
+                try:
+                    async with lane_factory() as lane_session:
+                        return await _process_panel_queue(
+                            lane_session, pid, limit=limit, chunk=chunk, para=para
+                        )
+                except Exception:  # noqa: BLE001 — one panel's failure must not abort the others
+                    log.exception("enforcement queue lane failed for panel %s", pid)
+                    return {}
+
+        steps = await asyncio.gather(*[_lane(pid) for pid in panel_ids])
+        for step in steps:
+            for key, val in step.items():
+                agg[key] = agg.get(key, 0) + int(val or 0)
+        return agg
+    finally:
+        if lock_session is not None:
+            await lock_session.rollback()
+            await lock_session.close()
 
 
 # ── public API (thin wrappers) ───────────────────────────────────────────────

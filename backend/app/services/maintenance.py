@@ -52,6 +52,8 @@ from app.models import (
 )
 from app.models.enums import (
     EnforcementActionStatus,
+    EnforcementActionType,
+    EnforcementState,
     InvoiceStatus,
     PanelStatus,
     PaymentStatus,
@@ -126,10 +128,37 @@ async def prune_old_logs(
 
     # enforcement_actions — drop aged terminal/audit rows (incl. dry-run rows that accumulate
     # when enforcement is in its default dry-run mode). Active queue work is preserved.
+    # EXCEPTION: the newest live disable/freeze action of any reseller who is STILL
+    # enforced/frozen is the restore SOURCE — queue_restore reads its snapshot to know which
+    # users/limits to bring back. Pruning it would make restore permanently impossible (a
+    # freeze is open-ended by design, and a >90-day suspension is exactly the reseller who
+    # eventually pays). Mirrors queue_restore's source selection (latest live disable/freeze
+    # in a restorable status; max(id) ≡ latest since ids are monotonic with created_at).
+    protected_restore_sources = (
+        select(func.max(EnforcementAction.id))
+        .join(Reseller, Reseller.id == EnforcementAction.reseller_id)
+        .where(
+            Reseller.enforcement_state != EnforcementState.active,
+            EnforcementAction.action.in_(
+                [EnforcementActionType.disable_users, EnforcementActionType.freeze]
+            ),
+            EnforcementAction.dry_run.is_(False),
+            EnforcementAction.status.in_(
+                [
+                    EnforcementActionStatus.planned,
+                    EnforcementActionStatus.partial,
+                    EnforcementActionStatus.done,
+                    EnforcementActionStatus.failed,
+                ]
+            ),
+        )
+        .group_by(EnforcementAction.reseller_id)
+    )
     enforcement_actions = await _delete(
         delete(EnforcementAction).where(
             EnforcementAction.created_at < cutoff,
             EnforcementAction.status.in_(_TERMINAL_ACTIONS),
+            EnforcementAction.id.notin_(protected_restore_sources),
         )
     )
     await session.commit()
