@@ -8,6 +8,14 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.6 - 2026-07-08
+
+### Fixed
+
+- Reverted the `v1.60.5` Payments-table change: the table again fills the viewport and scrolls
+  INTERNALLY (the whole page no longer scrolls), matching the Resellers page, and the small
+  empty strip that used to sit below it is closed by extending the table's height.
+
 ## 1.60.5 - 2026-07-08
 
 ### Fixed
