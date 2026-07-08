@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, TextField, Tooltip, Typography, Link, useMediaQuery,
+  TableHead, TableRow, TablePagination, TextField, Tooltip, Typography, Link, useMediaQuery,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import DownloadIcon from "@mui/icons-material/esm/Download";
@@ -55,6 +55,12 @@ export default function Payments() {
   const matchesSearch = (p: any) =>
     String(p.number || "").includes(q) || (p.reseller_name || "").toLowerCase().includes(q);
   const shown = q ? sorted.filter(matchesSearch) : sorted;
+  // Paginate (same pattern as Invoices/Debts/Logs) so the card has a footer that anchors it
+  // and only a page of rows renders at once. Reset to page 0 whenever the filter/sort changes.
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  useEffect(() => { setPage(0); }, [status, search, key, dir]);
+  const paged = shown.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const confirmDlg = useDialogState<any>();
@@ -226,7 +232,7 @@ export default function Payments() {
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         {!isMobile ? (
-        <TableContainer sx={{ maxHeight: "calc(100vh - 300px)" }}>
+        <TableContainer>
         <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 1120 }}>
           <TableHead>
             <TableRow>
@@ -243,7 +249,7 @@ export default function Payments() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {shown.map((p: any) => (
+            {paged.map((p: any) => (
               <TableRow key={p.id} hover>
                 <TableCell data-label="#" dir="ltr" sx={{ color: "text.secondary", fontWeight: 600, fontFamily: "monospace" }}>#{p.number}</TableCell>
                 <TableCell data-label="نماینده">{nameNode(p)}</TableCell>
@@ -264,7 +270,7 @@ export default function Payments() {
         ) : (
         // Mobile: the same rows/actions as the table, stacked as cards (resellers pattern).
         <Stack spacing={1.2} sx={{ p: 1.5 }}>
-          {shown.map((p: any) => (
+          {paged.map((p: any) => (
             <Box key={p.id} sx={{
               p: 1.5, borderRadius: 3, border: "1px solid", borderColor: "divider",
               bgcolor: nestedCardBg,
@@ -311,6 +317,16 @@ export default function Payments() {
             </Typography>
           )}
         </Stack>
+        )}
+        {shown.length > rowsPerPage && (
+          <TablePagination
+            component="div" count={shown.length} page={page}
+            onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={rowsPerPage} rowsPerPageOptions={[25, 50, 100]}
+            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            labelRowsPerPage="تعداد در صفحه:"
+            labelDisplayedRows={({ from, to, count }) => `${from}–${to} از ${count}`}
+          />
         )}
       </Card>
       </DataState>

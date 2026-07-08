@@ -8,6 +8,14 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.5 - 2026-07-08
+
+### Fixed
+
+- The Payments page table now renders at natural height with pagination (like the Invoices,
+  Debts, and Logs pages), instead of sitting inside a tall fixed-height scroll area — so with
+  only a few payments the card no longer looks stranded above a large empty space.
+
 ## 1.60.4 - 2026-07-08
 
 Hardening batch H13 (`docs/HARDENING_PLAN.md`) — documentation & dead-code cleanup. Closes
