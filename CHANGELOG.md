@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.4 - 2026-07-08
+
+Hardening batch H13 (`docs/HARDENING_PLAN.md`) — documentation & dead-code cleanup. Closes
+the 2026-07-08 hardening program (H01–H13).
+
+### Added
+
+- The panel Help page now has a full **«ربات فروشگاهی»** section documenting the per-reseller
+  shop bot end to end: enabling it and its monthly fee (owner side), and plans, wallet
+  top-ups, free trials, subscription management, and the v1.59.0 co-admins (reseller side).
+- The reseller portal Help now lists AVAX as a payment method.
+
+### Changed
+
+- Removed dead frontend code (an unused API helper and unused imports) and turned on the
+  `noUnusedLocals` type-check so that class of dead code can't return.
+
 ## 1.60.3 - 2026-07-08
 
 Hardening batch H12 (`docs/HARDENING_PLAN.md`) — security & deploy hardening.

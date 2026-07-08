@@ -252,7 +252,6 @@ export const deferInvoice = (id: number, body: { deferred_until: string | null; 
 // ---- payments ----
 export const listPayments = (params: any = {}) =>
   api.get("/api/payments", { params }).then((r) => r.data);
-export const verifyPayment = (id: number) => api.post(`/api/payments/${id}/verify`).then((r) => r.data);
 export const confirmPayment = (id: number) =>
   api.post(`/api/payments/${id}/confirm`).then((r) => r.data);
 export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/reject`).then((r) => r.data);

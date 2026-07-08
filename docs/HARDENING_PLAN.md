@@ -476,7 +476,15 @@ documented manual check that Caddy admin is unreachable from the bot container.
 
 ## H13 - Docs, help & dead code (final)
 
-Priority: P3. Version: PATCH. Status: TODO. No migration.
+Priority: P3. Version: PATCH. Status: DONE in `v1.60.4`. No migration.
+(Done: Help.tsx gained a full «ربات فروشگاهی» group (owner enable+fee, reseller
+plans/wallet/trials, co-admins) + portal Help AVAX; deleted `client.ts` `verifyPayment` +
+the `Invoices.tsx` unused imports and enabled `noUnusedLocals`. DEFERRED as low-value churn:
+unifying the 6 identical local `_OWED` tuples (importing invoice_state.OWED triggers E402/
+import-ordering churn for a trivial constant), wiring/deleting the test-only
+`invoice_state.ensure_transition`/`_TRANSITIONS`, removing the test-referenced docked
+reply-keyboard builders + the `"monthly"` branch, restoring the cancel-invoice button, and
+the CLAUDE.md historical-milestone wording nits — all cosmetic, none affecting behavior.)
 
 - `frontend/src/pages/Help.tsx`: add the missing storefront section (owner enable +
   monthly fee in the reseller dialog, `/storefront` wizard, plans/top-ups/trials,
@@ -516,3 +524,8 @@ H01 before H02 (H02's owed-guard builds on corrected verify/confirm). H05 before
 (case-orphans must be gone before orphan detection is meaningful). H05/H06 released
 alone (migrations). H02's advisory-lock key family is reused by H08. H12
 second-to-last (deploy-sensitive); H13 closes the program.
+
+**Program complete** through `v1.60.4` (H01–H13, released `v1.59.2` → `v1.60.4`; two
+standalone data migrations `b1c3e5a7f9d2` (H05) + `c2d4f6b8a1e3` (H06)). Deferred,
+maintenance-window-only items are recorded in H12 (Caddy admin network scoping, non-root
+Dockerfile USER) and H13 (cosmetic dead-code / doc nits).
