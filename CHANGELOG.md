@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.7 - 2026-07-08
+
+Hardening batch H06 (`docs/HARDENING_PLAN.md`) — TON txid canonicalization. Migration
+batch (`c2d4f6b8a1e3`), released alone; rehearsed against a production clone (no TON
+payments there → no-op).
+
+### Fixed
+
+- **One TON transfer can no longer be recorded twice under different letter-casing.** A TON
+  transaction hash in hex form is the same identifier whether written upper- or lower-case,
+  but the system stored it verbatim — so the same deposit sent once as `ABC…` and once as
+  `abc…` created two separate pending payments that could each settle an invoice. Hex TON
+  hashes are now lowercased on submission (matching how BSC/AVAX hashes are already handled),
+  and a one-time migration collapses any existing duplicates, keeping the more-settled row
+  and never changing a payment's status. Base64-form TON hashes (which are genuinely
+  case-sensitive) are left untouched.
+
 ## 1.59.6 - 2026-07-08
 
 Hardening batch H05 (`docs/HARDENING_PLAN.md`) — uuid case normalization. Migration

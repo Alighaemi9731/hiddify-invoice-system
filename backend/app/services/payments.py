@@ -39,6 +39,10 @@ USDT_DECIMALS = 18
 # review rows). BSC = 0x + 64 hex; TON = hex or base64, bounded to the txid column width (80).
 BSC_TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 TON_TXID_RE = re.compile(r"[A-Za-z0-9_\-/+=]{32,80}")
+# A TON tx hash in HEX form is case-INSENSITIVE on-chain, so `ABC…` and `abc…` are the same
+# transfer — lowercase it (like BSC) so one deposit can't be stored as two rows and settle two
+# invoices. Base64(url) TON forms are case-SENSITIVE (different bytes) and must NOT be touched.
+_TON_HEX64_RE = re.compile(r"[0-9a-fA-F]{64}")
 
 # Owed = delivered but not yet paid.
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
@@ -213,6 +217,9 @@ async def submit_reseller_payment(
                 )
         elif not TON_TXID_RE.fullmatch(txid):
             return SubmitResult("invalid_txid", "هشِ تراکنشِ TON نامعتبر است.")
+        elif _TON_HEX64_RE.fullmatch(txid):
+            # Hex-form TON hash → canonicalize to lowercase (base64 forms stay as-is).
+            txid = txid.lower()
         existing = await _payment_by_txid(session, txid)
         if existing:
             if existing.status == PaymentStatus.confirmed:

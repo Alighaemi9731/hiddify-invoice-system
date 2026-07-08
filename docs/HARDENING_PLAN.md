@@ -226,7 +226,8 @@ fails before; metering/gb_cap keying), migration test with mixed-case + duplicat
 
 ## H06 - TON txid canonicalization (MIGRATION batch — released alone)
 
-Priority: P1. Version: PATCH. Status: TODO. **Migration: yes — bump HEAD pin.**
+Priority: P1. Version: PATCH. Status: DONE in `v1.59.7`. **Migration: `c2d4f6b8a1e3`, HEAD pin bumped.**
+(Rehearsed on a prod clone (PG16): 0 TON payments there → verified no-op; migration path ran clean.)
 
 - A TON tx hash in HEX form is case-insensitive on-chain, but rows are stored
   case-sensitively (`payments.py:199-200`) — one real transfer submitted as `ABC…` and
