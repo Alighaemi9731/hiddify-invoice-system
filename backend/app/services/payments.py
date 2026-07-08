@@ -17,6 +17,7 @@ from decimal import Decimal
 
 import httpx
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.codes import payment_code
@@ -50,7 +51,7 @@ class SubmitResult:
     should send the owner the rich review (built by the bot's `_payment_review_html`) with
     confirm/reject buttons, prefixed by `owner_intro`."""
 
-    status: str  # ok | reopened | dup_confirmed | dup_pending | wrong_owner | not_payable | pending_exists
+    status: str  # ok | reopened | invalid_txid | dup_confirmed | dup_pending | wrong_owner | not_payable | pending_exists
     user_message: str
     payment: Payment | None = None
     invoice: Invoice | None = None  # the primary/first invoice (back-compat single-invoice views)
@@ -136,6 +137,18 @@ async def _pending_payment_for_invoice(session: AsyncSession, invoice_id: int | 
     ).scalars().first()
 
 
+async def _payment_by_txid(session: AsyncSession, txid: str) -> Payment | None:
+    """The payment row holding this txid, locked FOR UPDATE (no-op on SQLite) so a concurrent
+    confirm/reject/resubmit of the same row serializes against this submission — without the
+    lock, the owner confirming a rejected payment at the same moment its customer resubmits the
+    hash could leave a confirmed-then-silently-demoted payment with rewritten coverage."""
+    return (
+        await session.execute(
+            select(Payment).where(Payment.txid == txid).with_for_update()
+        )
+    ).scalars().first()
+
+
 async def submit_reseller_payment(
     session: AsyncSession,
     *,
@@ -149,7 +162,9 @@ async def submit_reseller_payment(
     """Validate + create a PENDING payment for one or more OWED invoices the caller owns. Shared
     by the Telegram bot and the web portal so the safety rules are identical on both surfaces:
       * a tx hash already in the system is never duplicated (confirmed/pending blocked; a
-        REJECTED one is re-opened only for the reseller it belongs to);
+        REJECTED one is re-opened only for the reseller it belongs to, and ONLY after its
+        coverage — the fresh selection, or the original set on a cold resubmit — passes the
+        same re-validation as a fresh submission);
       * EVERY chosen invoice is re-checked under a row lock — must still belong to the caller, be
         OWED, and not be deferred to a future date. If ANY chosen invoice is no longer payable the
         WHOLE batch is rejected (atomic) — never silently pay a subset / mis-attribute money;
@@ -198,9 +213,7 @@ async def submit_reseller_payment(
                 )
         elif not TON_TXID_RE.fullmatch(txid):
             return SubmitResult("invalid_txid", "هشِ تراکنشِ TON نامعتبر است.")
-        existing = (
-            await session.execute(select(Payment).where(Payment.txid == txid))
-        ).scalars().first()
+        existing = await _payment_by_txid(session, txid)
         if existing:
             if existing.status == PaymentStatus.confirmed:
                 return SubmitResult("dup_confirmed", "این تراکنش قبلاً ثبت و تأیید شده است.")
@@ -211,19 +224,12 @@ async def submit_reseller_payment(
             if existing.reseller_id not in reseller_ids:
                 return SubmitResult("wrong_owner", "این شناسهٔ تراکنش به حساب شما مربوط نیست.")
             if not ids:
-                # Cold resubmit with NO fresh selection → re-open with the ORIGINAL coverage
-                # (the hash identifies one real transfer whose invoice set was already decided).
-                existing.status = PaymentStatus.pending
-                if "[resubmitted]" not in (existing.note or ""):
-                    existing.note = (existing.note or "") + " [resubmitted]"
-                await session.commit()
-                return SubmitResult(
-                    "reopened",
-                    "✅ شناسهٔ تراکنش دوباره برای بررسی ثبت شد؛ منتظر تأیید پشتیبانی بمانید.\n"
-                    f"🔖 شمارهٔ پیگیری: #{payment_code(existing.id)}",
-                    payment=existing, notify=True,
-                    owner_intro="🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست.",
-                )
+                # Cold resubmit with NO fresh selection → re-open with the ORIGINAL coverage,
+                # re-validated below EXACTLY like a fresh submission (ownership, owed, deferral,
+                # one-pending-per-invoice). Without the re-validation a rejected txid could
+                # resurrect coverage over invoices meanwhile paid/canceled/deferred, or stack a
+                # second pending payment onto an invoice that already has one.
+                ids = _settled_ids(existing)
             # A rejected payment whose customer re-selected invoices this time (e.g. now paying
             # «همهٔ بدهی» after the owner rejected a single-invoice attempt) → its coverage is NOT
             # locked. Update it to the newly-chosen set after the SAME validation as a fresh
@@ -239,9 +245,11 @@ async def submit_reseller_payment(
 
     # Re-validate EVERY chosen invoice under lock. Any could have been paid/canceled/reverted/
     # re-deadlined between the button tap and the proof arriving — if so, reject the whole batch.
+    # Rows are locked in SORTED id order (two concurrent submissions locking overlapping sets in
+    # opposite orders would deadlock on Postgres); the payment keeps the submission order.
     today = tehran_today()
-    fresh_list: list[Invoice] = []
-    for iid in ids:
+    fresh_by_id: dict[int, Invoice] = {}
+    for iid in sorted(ids):
         fresh = await session.get(Invoice, iid, with_for_update=True)
         if (
             fresh is None
@@ -254,7 +262,8 @@ async def submit_reseller_payment(
                 "یک یا چند فاکتورِ انتخاب‌شده دیگر قابل پرداخت نیست یا وضعیتش تغییر کرده است؛ "
                 "از منوی «💳 پرداخت فاکتور» دوباره انتخاب کنید.",
             )
-        fresh_list.append(fresh)
+        fresh_by_id[iid] = fresh
+    fresh_list: list[Invoice] = [fresh_by_id[iid] for iid in ids]
 
     held = await _pending_invoice_ids_in_sets(session, {i.id for i in fresh_list}, reseller_ids)
     if held:
@@ -273,11 +282,19 @@ async def submit_reseller_payment(
     total_toman = float(sum(Decimal(str(i.amount_toman or 0)) for i in fresh_list))
     if reopen is not None:
         # Re-open the rejected txid row with the NEW coverage (may now span several invoices).
+        # method/chain are refreshed from THIS submission: a hash first sent on the wrong
+        # network and rejected («شبکهٔ اشتباه») must not keep the stale chain — the owner review
+        # would keep linking the wrong explorer and the deposit check would read the wrong chain.
         reopen.reseller_id = primary.reseller_id
         reopen.invoice_id = primary.id
         reopen.settled_invoice_ids = settled_ids
         reopen.amount_usdt = total_usdt
         reopen.amount_toman = total_toman
+        reopen.method = {
+            "ton": PaymentMethod.ton_txid,
+            "avax": PaymentMethod.avax_txid,
+        }.get(chain, PaymentMethod.usdt_txid)
+        reopen.chain = chain
         reopen.status = PaymentStatus.pending
         if "[resubmitted]" not in (reopen.note or ""):
             reopen.note = (reopen.note or "") + " [resubmitted]"
@@ -301,7 +318,15 @@ async def submit_reseller_payment(
             method=method, chain=chain, status=PaymentStatus.pending, txid=txid,
         )
         session.add(payment)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Two concurrent FIRST-TIME submissions of the same hash can both pass the
+        # `_payment_by_txid` check (the row doesn't exist yet, so there is nothing to lock);
+        # the loser hits the unique txid constraint here. Map it to the friendly duplicate
+        # message instead of a 500 on the portal / a swallowed exception in the bot.
+        await session.rollback()
+        return SubmitResult("dup_pending", "این تراکنش قبلاً ثبت شده و در انتظار بررسی است.")
     await _sync_settlements(session, payment)
     await session.commit()
 
@@ -812,8 +837,10 @@ async def verify_payment(
 
     payment.from_address = check.from_address
     payment.to_address = check.to_address
-    payment.amount_usdt = float(check.amount_usdt)
     payment.confirmations = check.confirmations
+    # Deliberately NOT overwriting payment.amount_usdt with the on-chain deposit: the payment's
+    # amounts are the submission-time invoice-set sums (Toman/USDT pair must keep corresponding
+    # in the panel). The deposit figure lives in raw_json and the deposit_check endpoint.
 
     if check.to_address != wallet:
         payment.status = PaymentStatus.rejected
@@ -844,6 +871,29 @@ async def verify_payment(
     )
     targets = [t for t in all_in_set if t.status in _OWED]
     if not targets:
+        # No owed member. Auto-closing is only safe when the WHOLE set demonstrably exists and
+        # is already PAID (settled meanwhile — e.g. by a manual confirm). Anything else — an id
+        # missing from the DB (invoice deleted), or a member reverted to draft / canceled —
+        # must go to MANUAL review: auto-confirming would burn the unique txid on a payment
+        # that settled nothing, and the customer could never resubmit that hash against the
+        # re-issued invoice (dup_confirmed blocks it forever).
+        found_ids = {t.id for t in all_in_set}
+        all_paid = (
+            bool(all_in_set)
+            and all(t.status == InvoiceStatus.paid for t in all_in_set)
+            and not [i for i in set_ids if i not in found_ids]
+        )
+        if not all_paid:
+            payment.status = PaymentStatus.pending
+            marker = "[needs manual review: invoice unpayable]"
+            if marker not in (payment.note or ""):
+                payment.note = ((payment.note or "") + " " + marker).strip()
+            await session.commit()
+            return PaymentResult(
+                "pending", False,
+                "فاکتورهای این پرداخت اکنون قابل تسویه نیستند (پیش‌نویس/لغو/حذف‌شده)؛ "
+                "پرداخت برای بررسیِ دستی نگه داشته شد." + _ref_line(payment.id),
+            )
         payment.status = PaymentStatus.confirmed
         payment.verified_at = dt.datetime.now(dt.timezone.utc)
         await session.commit()
@@ -1022,6 +1072,58 @@ async def _mark_invoices_paid(
         await financial_archive.record(session, inv, reseller=reseller, txid=payment.txid)
 
 
+async def record_manual_payment(session: AsyncSession, invoice: Invoice) -> Payment:
+    """Create the confirmed `manual` Payment row behind a panel «ثبت پرداخت» (mark-paid).
+
+    Marking an invoice paid by hand used to leave NO payment row, so
+    `_settled_by_other_confirmed` couldn't see the settlement — rejecting an unrelated pending
+    payment that also covered the invoice would wrongly un-pay it. The row makes the manual
+    settlement first-class: visible in the panel's payments list and protective on revert.
+    Does not commit; the caller owns the transaction."""
+    payment = Payment(
+        reseller_id=invoice.reseller_id,
+        invoice_id=invoice.id,
+        settled_invoice_ids=str(invoice.id),
+        amount_toman=float(invoice.amount_toman or 0),
+        amount_usdt=float(invoice.amount_usdt or 0),
+        method=PaymentMethod.manual,
+        status=PaymentStatus.confirmed,
+        verified_at=dt.datetime.now(dt.timezone.utc),
+        note="ثبت دستی از پنل",
+    )
+    session.add(payment)
+    await session.flush()
+    await _sync_settlements(session, payment)
+    return payment
+
+
+async def retire_manual_payments(session: AsyncSession, invoice: Invoice) -> int:
+    """Reject the confirmed single-invoice `manual` rows covering this invoice (used by
+    unmark-paid). A confirmed manual row must not outlive its un-paid invoice — it would
+    wrongly shield the invoice from a later revert via `_settled_by_other_confirmed`.
+    Rows covering OTHER invoices too are left alone (the owner manages those explicitly).
+    Does not commit; returns the number of rows retired."""
+    rows = (
+        await session.execute(
+            select(Payment).where(
+                Payment.method == PaymentMethod.manual,
+                Payment.status == PaymentStatus.confirmed,
+                Payment.invoice_id == invoice.id,
+            )
+        )
+    ).scalars().all()
+    n = 0
+    for p in rows:
+        if set(_settled_ids(p)) != {invoice.id}:
+            continue
+        p.status = PaymentStatus.rejected
+        p.verified_at = None
+        if "[unmarked from panel]" not in (p.note or ""):
+            p.note = ((p.note or "") + " [unmarked from panel]").strip()
+        n += 1
+    return n
+
+
 async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentResult:
     """Owner override: mark a payment confirmed (without on-chain verification) for ALL the
     invoices it covers — a payment may settle several invoices (one transfer for several debts).
@@ -1036,10 +1138,14 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
     set_ids = _settled_ids(payment)
-    all_in_set = (
+    rows = (
         (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
         if set_ids else []
     )
+    # Keep the STORED set order (the IN(...) select returns DB order): the first id is the
+    # primary invoice shown in the panel, and a manual confirm must not silently reshuffle it.
+    _by_id = {inv.id: inv for inv in rows}
+    all_in_set = [_by_id[i] for i in set_ids if i in _by_id]
     # Don't "confirm" a payment whose invoices can't actually be settled (any reverted to draft
     # or canceled) — that would leave the payment marked confirmed while an invoice stays unpaid,
     # misleading the owner. Tell them to fix the invoice first; leave the payment pending.

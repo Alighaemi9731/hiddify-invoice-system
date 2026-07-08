@@ -8,6 +8,36 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.2 - 2026-07-08
+
+Hardening batch H01 (`docs/HARDENING_PLAN.md`) — payment verification & submission
+integrity. First batch of the 2026-07-08 full-codebase hardening program.
+
+### Fixed
+
+- **A customer's real transfer can no longer be silently burned.** If the invoice(s) behind a
+  submitted txid were meanwhile reverted to draft, canceled, or deleted, the on-chain check
+  used to auto-confirm the payment with «بدهی فعالی نبود» — consuming the unique tx hash
+  forever. It now HOLDS the payment for manual review (like the zero-amount guard); auto-close
+  still happens when every invoice in the set is genuinely paid.
+- **Re-sending a rejected txid is re-validated.** A cold resubmit (no fresh invoice selection)
+  used to reopen the payment blindly; it now passes the exact same checks as a fresh
+  submission (ownership, owed, deadline, one-pending-per-invoice), so it can't resurrect
+  coverage over paid/canceled/deferred invoices or stack a second pending payment onto an
+  invoice that already has one.
+- **Wrong-network recovery works.** Resubmitting a rejected 0x hash on the other network
+  (BSC↔AVAX) now updates the payment's chain and method, so the owner review links the right
+  explorer and the deposit check reads the right chain.
+- **«ثبت پرداخت» (mark-paid) now records a real payment row.** The manual settlement appears
+  in the payments list and protects the invoice: rejecting an unrelated pending payment that
+  also covered it no longer un-pays it. «لغو پرداخت» (unmark-paid) retires that row again.
+- Concurrency hardening on the submission path: the txid row is locked during resubmission,
+  invoice rows are locked in sorted order (no deadlocks), a simultaneous duplicate submission
+  of one hash gets the friendly «قبلاً ثبت شده» message instead of an error, and a manual
+  confirm keeps the payment's stored invoice order (the primary invoice can't silently flip).
+- The panel's USDT amount for a payment stays the invoice-set sum — the on-chain deposit
+  figure no longer overwrites it (it remains visible via «بررسی واریزی روی زنجیره»).
+
 ## 1.59.1 - 2026-07-06
 
 ### Fixed

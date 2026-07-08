@@ -207,10 +207,18 @@ async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session
     inv.paid_at = dt.datetime.now(dt.timezone.utc)
     reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
+    # The manual settlement is recorded as a real (confirmed) Payment row so the payments list
+    # shows it AND a later reject of an unrelated pending payment covering this invoice can't
+    # un-pay it (`_settled_by_other_confirmed` needs a confirmed row to see).
+    from app.services.payments import (
+        _maybe_restore,
+        _payment_received_text,
+        record_manual_payment,
+    )
+    await record_manual_payment(session, inv)
     # Manually marking an invoice paid must restore a suspended reseller, exactly like
     # confirming a payment does — but ONLY when no other debt remains (see _maybe_restore),
     # otherwise recording one cash payment would un-suspend a reseller who still owes.
-    from app.services.payments import _maybe_restore, _payment_received_text
     await _maybe_restore(session, reseller, exclude_invoice_id=inv.id)
     await session.commit()
     # Tell the reseller their invoice was confirmed paid — same acknowledgement as confirming a
@@ -239,6 +247,11 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     if inv.status == InvoiceStatus.sent:
         from app.services import dunning
         await dunning.reset_cycle(session, inv, restamp_sent_at=True)
+    # The confirmed `manual` row created by mark-paid must not survive as a confirmed payment
+    # for an invoice that is no longer paid — it would wrongly shield the invoice from a later
+    # revert (`_settled_by_other_confirmed`). Retire it in the same transaction.
+    from app.services.payments import retire_manual_payments
+    await retire_manual_payments(session, inv)
     reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()

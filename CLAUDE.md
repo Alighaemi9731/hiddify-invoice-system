@@ -15,15 +15,18 @@ Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`.
 
 ## Current improvement program
 
-Three programs are **complete** and archived: the 2026-06-09 audit
+Four programs are **complete** and archived: the 2026-06-09 audit
 (`docs/REMEDIATION_PLAN.md`, B00–B10), the 2026-07-02 verified-improvements
-roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12), and the 2026-07-02 UI/UX review
-(`docs/UIUX_PLAN.md`, U01–U04, through `v1.55.0`). The active program is the
-2026-07-03 polish review, tracked in `docs/POLISH_PLAN.md` (batches P01–P05: UI
-standardization, min-sale floor, storefront clarity, backend hygiene). Fix
-exactly one batch per release, in the documented order, and use
-`docs/RELEASE_PROCESS.md` for versioning, GitHub publication, production
-deployment, smoke checks, and rollback.
+roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12), the 2026-07-02 UI/UX review
+(`docs/UIUX_PLAN.md`, U01–U04, through `v1.55.0`), and the 2026-07-03 polish
+review (`docs/POLISH_PLAN.md`, P01–P05, through `v1.57.3`). The active program
+is the 2026-07-08 full-codebase hardening review, tracked in
+`docs/HARDENING_PLAN.md` (batches H01–H13: payment/enforcement/billing
+must-fixes, two standalone data migrations, bot/storefront correctness,
+security/deploy hardening, docs + dead code). Fix exactly one batch per
+release, in the documented order, and use `docs/RELEASE_PROCESS.md` for
+versioning, GitHub publication, production deployment, smoke checks, and
+rollback.
 Record user-visible release notes in `CHANGELOG.md`; the long milestone history
 below remains the archive for releases before this process was introduced.
 
