@@ -133,9 +133,11 @@ async def generate_invoices(
     default_min_sale = await pricing.get_default_min_sale(session)
     rate = await pricing.get_rate(session)
 
+    # An explicit panel_id must NOT bypass the enabled filter — a disabled panel is
+    # disabled for billing too.
     panel_q = select(Panel).where(Panel.enabled.is_(True))
     if panel_id is not None:
-        panel_q = select(Panel).where(Panel.id == panel_id)
+        panel_q = panel_q.where(Panel.id == panel_id)
     panels = (await session.execute(panel_q)).scalars().all()
 
     summary = GenerationSummary(period=period.label)
@@ -180,8 +182,12 @@ async def generate_invoices(
                 exclude_user_uuids=trial_uuids,
             )
             if bundle.total_gb + extra["gb"] <= 0:
-                summary.zero_skipped += 1
-                continue
+                # Zero usage still yields an invoice when the flat storefront-bot fee applies —
+                # otherwise a fee-only month is silently never billed AND a prior fee-only
+                # draft gets reconcile-deleted below. Skip only when BOTH are zero.
+                if await storefront.monthly_fee_for(session, bundle.root) <= 0:
+                    summary.zero_skipped += 1
+                    continue
             await _persist_bundle(session, panel, bundle, extra, period, rate, summary, force)
             billed_reseller_ids.add(bundle.root.id)
 
@@ -226,7 +232,7 @@ async def preview_bundles(
 
     panel_q = select(Panel).where(Panel.enabled.is_(True))
     if panel_id is not None:
-        panel_q = select(Panel).where(Panel.id == panel_id)
+        panel_q = panel_q.where(Panel.id == panel_id)
     panels = (await session.execute(panel_q)).scalars().all()
 
     out: list[tuple[Panel, BundleResult]] = []
@@ -325,59 +331,143 @@ async def recompute_invoice(
     )
     bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
 
+    reseller = await session.get(Reseller, invoice.reseller_id)
     base_gb = bundle.total_gb if bundle else 0.0
     base_lines = bundle.lines if bundle else []
     price = bundle.price_per_gb if bundle else invoice.price_per_gb
-    min_sale = bundle.min_sale_toman if bundle else 0
     if bundle:
         admin_uuids = bundle.admin_uuids
     else:
         from app.services.reseller_report import node_descendants
-        reseller = await session.get(Reseller, invoice.reseller_id)
         admin_uuids = {d.admin_uuid for d in await node_descendants(session, reseller)} if reseller else set()
     extra = await metering.bundle_extra(
         session, panel.id, admin_uuids, period.label, free_threshold,
         exclude_user_uuids=trial_uuids,
     )
 
-    total_gb = round(base_gb + float(extra["gb"] or 0), 3)
-    base_amount = round(total_gb * price)
-    # Same first-invoiced-month exemption as generation.
-    min_sale = await _effective_min_sale(session, invoice.reseller_id, invoice.period_start, min_sale)
-    floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
-    amount_toman = float(min_sale) if floor_applied else float(base_amount)
+    if reseller is None:
+        raise ValueError("reseller not found")
+    # The SAME totals math as generation (fee + floor + rounding) — see _compute_totals.
+    totals = await _compute_totals(
+        session, reseller,
+        base_gb=base_gb, base_users_count=(bundle.users_count if bundle else 0),
+        extra=extra, price=price,
+        bundle_min_sale=(bundle.min_sale_toman if bundle else 0),
+        period_start=invoice.period_start,
+    )
 
     await session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id))
-    invoice.usage_gb = total_gb
-    invoice.users_count = (bundle.users_count if bundle else 0) + len(extra["lines"])
+    invoice.usage_gb = totals.total_gb
+    invoice.users_count = totals.users_count
     invoice.price_per_gb = price
-    invoice.base_amount_toman = base_amount
-    invoice.min_sale_toman = min_sale
-    invoice.floor_applied = floor_applied
-    invoice.amount_toman = amount_toman
-    for line in base_lines:
-        # A user removed from the panel is billed on consumption and flagged in its name so the
-        # reseller sees why (same naming convention as the metering "extra" lines below).
-        nm = ((line.name or "")[:235] + " — مصرف حذف‌شده از پنل") if line.from_deleted else line.name[:255]
-        session.add(InvoiceLine(
-            invoice_id=invoice.id, end_user_uuid=line.user_uuid, name=nm,
-            start_date=line.start_date, usage_gb=line.usage_gb,
-            added_by_uuid=line.added_by_uuid,
-            sub_reseller_name=(line.sub_reseller_name or "")[:255],
-        ))
-    for el in extra["lines"]:
-        session.add(InvoiceLine(
-            invoice_id=invoice.id, end_user_uuid=el["user_uuid"],
-            name=((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
-            start_date=None, usage_gb=el["usage_gb"], added_by_uuid=el.get("added_by_uuid"),
-            sub_reseller_name="",
-        ))
+    invoice.base_amount_toman = totals.base_amount
+    invoice.min_sale_toman = totals.min_sale
+    invoice.floor_applied = totals.floor_applied
+    invoice.amount_toman = totals.amount_toman
+    _write_lines(
+        session, invoice, base_lines=base_lines, extra=extra,
+        storefront_fee=totals.storefront_fee, reseller_id=reseller.id,
+    )
     invoice.usdt_rate = rate
     invoice.amount_usdt = float(pricing.toman_to_usdt(invoice.amount_toman, rate))
     await financial_archive.record(session, invoice)
     await session.commit()
     return {"synced": synced, "found": bundle is not None,
             "amount_toman": float(invoice.amount_toman), "usage_gb": float(invoice.usage_gb)}
+
+
+@dataclass
+class InvoiceTotals:
+    """One invoice's money figures, computed by the single shared `_compute_totals`."""
+
+    total_gb: float
+    base_amount: int
+    min_sale: int
+    floor_applied: bool
+    storefront_fee: int
+    amount_toman: float
+    users_count: int
+
+
+async def _compute_totals(
+    session: AsyncSession,
+    reseller: Reseller,
+    *,
+    base_gb: float,
+    base_users_count: int,
+    extra: dict,
+    price: int,
+    bundle_min_sale: int,
+    period_start: dt.date,
+) -> InvoiceTotals:
+    """SINGLE source of truth for an invoice's money figures: usage+metering GB rounding,
+    the first-month-exempt min-sale floor, and the flat storefront-bot monthly fee.
+
+    BOTH generation (`_persist_bundle`) and «بازمحاسبه از روی پنل» (`recompute_invoice`)
+    must go through here — recompute used to rebuild the amount WITHOUT the storefront fee,
+    silently discounting the invoice and dropping its fee line. Note the fee is evaluated
+    at call time (active-bot-only billing): recomputing after the reseller's bot was
+    disabled intentionally drops the fee."""
+    from app.services import storefront as _storefront
+
+    total_gb = round(base_gb + float(extra.get("gb", 0) or 0), 3)
+    base_amount = int(round(total_gb * price))
+    min_sale = await _effective_min_sale(session, reseller.id, period_start, bundle_min_sale)
+    floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
+    storefront_fee = int(await _storefront.monthly_fee_for(session, reseller))
+    amount_toman = (float(min_sale) if floor_applied else float(base_amount)) + float(storefront_fee)
+    return InvoiceTotals(
+        total_gb=total_gb,
+        base_amount=base_amount,
+        min_sale=min_sale,
+        floor_applied=floor_applied,
+        storefront_fee=storefront_fee,
+        amount_toman=amount_toman,
+        users_count=base_users_count + len(extra.get("lines", []) or []),
+    )
+
+
+def _write_lines(
+    session: AsyncSession,
+    invoice: Invoice,
+    *,
+    base_lines: list,
+    extra: dict,
+    storefront_fee: int,
+    reseller_id: int,
+) -> None:
+    """Persist ALL of an invoice's lines (the caller has already deleted old ones): the
+    0-GB storefront-fee line, the engine's base lines (deleted users name-flagged), and the
+    metering «مصرف اضافه/تمدید» extras — identical for generation and recompute."""
+    if storefront_fee > 0:
+        session.add(InvoiceLine(
+            invoice_id=invoice.id, end_user_uuid=f"storefront_fee_{reseller_id}",
+            name="🏪 هزینهٔ ماهانهٔ ربات فروشگاهی", start_date=None, usage_gb=0,
+            added_by_uuid=None, sub_reseller_name="",
+        ))
+    for line in base_lines:
+        # A user removed from the panel is billed on consumption and flagged in its name (same
+        # convention as the metering "extra" lines below) so the reseller sees why.
+        nm = ((line.name or "")[:235] + " — مصرف حذف‌شده از پنل") if line.from_deleted else line.name[:255]
+        session.add(InvoiceLine(
+            invoice_id=invoice.id,
+            end_user_uuid=line.user_uuid,
+            name=nm,
+            start_date=line.start_date,
+            usage_gb=line.usage_gb,
+            added_by_uuid=line.added_by_uuid,
+            sub_reseller_name=(line.sub_reseller_name or "")[:255],
+        ))
+    for el in extra.get("lines", []) or []:
+        session.add(InvoiceLine(
+            invoice_id=invoice.id,
+            end_user_uuid=el["user_uuid"],
+            name=((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
+            start_date=None,
+            usage_gb=el["usage_gb"],
+            added_by_uuid=el.get("added_by_uuid"),
+            sub_reseller_name="",
+        ))
 
 
 async def _effective_min_sale(
@@ -415,20 +505,16 @@ async def _persist_bundle(
     force: bool,
 ) -> None:
     reseller: Reseller = bundle.root
-    # Combine the normal snapshot total with the abuse-metered extra, then apply the floor.
+    # Usage + metering extra, min-sale floor, and the flat storefront-bot fee — all computed
+    # by the shared _compute_totals so generation and recompute can never diverge.
     price = bundle.price_per_gb
-    total_gb = round(bundle.total_gb + float(extra.get("gb", 0) or 0), 3)
-    base_amount = round(total_gb * price)
-    # Floor is exempt on the reseller's first invoiced month (applies from the second on).
-    min_sale = await _effective_min_sale(session, reseller.id, period.start, bundle.min_sale_toman)
-    floor_applied = base_amount > 0 and min_sale > 0 and base_amount < min_sale
-    # A flat monthly storefront-bot fee (only when the reseller actually runs an active storefront)
-    # is added on TOP of the usage amount, after the floor — it is not usage, so usage_gb is untouched.
-    from app.services import storefront as _storefront
-
-    storefront_fee = await _storefront.monthly_fee_for(session, reseller)
-    amount_toman = (float(min_sale) if floor_applied else float(base_amount)) + float(storefront_fee)
-    amount_usdt = float(pricing.toman_to_usdt(amount_toman, rate))
+    totals = await _compute_totals(
+        session, reseller,
+        base_gb=bundle.total_gb, base_users_count=bundle.users_count,
+        extra=extra, price=price, bundle_min_sale=bundle.min_sale_toman,
+        period_start=period.start,
+    )
+    amount_usdt = float(pricing.toman_to_usdt(totals.amount_toman, rate))
 
     existing = (
         await session.execute(
@@ -465,57 +551,26 @@ async def _persist_bundle(
     invoice.period_start = period.start
     invoice.period_end = period.end
     invoice.period_label = period.label
-    invoice.usage_gb = total_gb
-    invoice.users_count = bundle.users_count + len(extra.get("lines", []))
+    invoice.usage_gb = totals.total_gb
+    invoice.users_count = totals.users_count
     invoice.price_per_gb = price
-    invoice.amount_toman = amount_toman
-    invoice.base_amount_toman = base_amount
-    invoice.min_sale_toman = min_sale
-    invoice.floor_applied = floor_applied
+    invoice.amount_toman = totals.amount_toman
+    invoice.base_amount_toman = totals.base_amount
+    invoice.min_sale_toman = totals.min_sale
+    invoice.floor_applied = totals.floor_applied
     invoice.usdt_rate = rate
     invoice.amount_usdt = amount_usdt
     if existing is None or existing.status == InvoiceStatus.draft:
         invoice.status = InvoiceStatus.draft
     await session.flush()
 
-    if storefront_fee > 0:
-        session.add(InvoiceLine(
-            invoice_id=invoice.id, end_user_uuid=f"storefront_fee_{reseller.id}",
-            name="🏪 هزینهٔ ماهانهٔ ربات فروشگاهی", start_date=None, usage_gb=0,
-            added_by_uuid=None, sub_reseller_name="",
-        ))
-
-    for line in bundle.lines:
-        # A user removed from the panel is billed on consumption and flagged in its name (same
-        # convention as the metering "extra" lines below) so the reseller sees why.
-        nm = ((line.name or "")[:235] + " — مصرف حذف‌شده از پنل") if line.from_deleted else line.name[:255]
-        session.add(
-            InvoiceLine(
-                invoice_id=invoice.id,
-                end_user_uuid=line.user_uuid,
-                name=nm,
-                start_date=line.start_date,
-                usage_gb=line.usage_gb,
-                added_by_uuid=line.added_by_uuid,
-                sub_reseller_name=(line.sub_reseller_name or "")[:255],
-            )
-        )
-    # Abnormal (metered) extra as explicit lines so the PDF/detail shows them.
-    for el in extra.get("lines", []):
-        session.add(
-            InvoiceLine(
-                invoice_id=invoice.id,
-                end_user_uuid=el["user_uuid"],
-                name=((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
-                start_date=None,
-                usage_gb=el["usage_gb"],
-                added_by_uuid=el.get("added_by_uuid"),
-                sub_reseller_name="",
-            )
-        )
+    _write_lines(
+        session, invoice, base_lines=bundle.lines, extra=extra,
+        storefront_fee=totals.storefront_fee, reseller_id=reseller.id,
+    )
 
     # Mirror into the durable financial ledger (survives wipes / panel removal).
     await financial_archive.record(session, invoice, panel=panel, reseller=reseller)
 
-    summary.total_amount_toman += amount_toman
+    summary.total_amount_toman += totals.amount_toman
     summary.invoice_ids.append(invoice.id)

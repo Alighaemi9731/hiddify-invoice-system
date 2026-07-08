@@ -174,8 +174,9 @@ def billable_gb_for_user(
         gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
         # A removed config whose CONSUMPTION is below the free threshold is negligible (e.g. a
         # config renewed by delete+recreate that was barely used, or one that used a few MB) →
-        # not billed, just like a test config.
-        if gb <= free_threshold_gb:
+        # not billed, just like a test config. Same epsilon policy as _excluded so the two
+        # sides of the free-threshold boundary can never disagree.
+        if gb <= free_threshold_gb + 1e-9:
             return None
         # A removed config that consumed REAL traffic (>= the cutoff) is billed the FULL sold
         # quota — the reseller can't delete it to be charged only the used portion. Below the

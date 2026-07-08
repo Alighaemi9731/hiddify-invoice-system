@@ -37,12 +37,11 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
     panel = await session.get(Panel, inv.panel_id)
     if reseller is None or panel is None:
         raise ValueError("invoice references a missing reseller or panel")
-    lines = (
-        await session.execute(
-            select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id)
-            .order_by(InvoiceLine.usage_gb.desc())
-        )
-    ).scalars().all()
+    # Use the RECONCILED grouped lines (own first, then subs, plus the transparent
+    # «تعدیل فاکتور» row after a manual usage_gb edit) so this single-bundle PDF's rows
+    # always sum to the printed total — same guarantee as the per-node PDFs.
+    grouped = await _grouped_invoice_lines(session, inv, reseller)
+    flat = [row for g in grouped for row in g["lines"]]
     owner_name = await settings_service.get(session, "owner_name", "") or ""
 
     safe = _safe_name(reseller.name)
@@ -53,12 +52,7 @@ async def render_invoice_pdf(session: AsyncSession, inv: Invoice) -> tuple[str, 
         out_path,
         reseller_name=reseller.name, panel_label=panel.key, period_label=inv.period_label,
         period_start=inv.period_start, period_end=inv.period_end,
-        lines=[
-            {"name": line.name, "uuid": line.end_user_uuid, "start_date": line.start_date,
-             "usage_gb": float(line.usage_gb),
-             "sub_reseller_name": line.sub_reseller_name or reseller.name}
-            for line in lines
-        ],
+        lines=flat,
         total_gb=float(inv.usage_gb),
         owner_name=owner_name,
         invoice_no=invoice_code(inv.id),
@@ -168,7 +162,16 @@ async def invoice_node_breakdown(
     subs: list[dict] = []
     for g in grouped:
         gb = round(sum(float(ln["usage_gb"]) for ln in g["lines"]), 3)
-        entry = {"gb": gb, "users": len(g["lines"])}
+        # The storefront-fee and reconciliation-adjustment rows are billing artifacts, not
+        # services — they must not inflate the user counts shown in the breakdown.
+        entry = {
+            "gb": gb,
+            "users": sum(
+                1 for ln in g["lines"]
+                if not str(ln.get("uuid") or "").startswith("storefront_fee_")
+                and (ln.get("name") or "") != "تعدیل فاکتور"
+            ),
+        }
         if g["is_own"]:
             own = entry
         else:

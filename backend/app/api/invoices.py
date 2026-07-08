@@ -107,6 +107,10 @@ async def discard_drafts(
     """Delete DRAFT invoices (never sent) — for a period, a panel, or all. Sent/paid/
     overdue/enforced invoices are never touched. Use to throw away a draft run you
     don't want to keep or send."""
+    # Serialize with generation/recompute — otherwise a discard interleaving a running
+    # «صدور فاکتورها» could delete a draft between that run's read and its update.
+    from app.services.invoicing import _serialize_billing
+    await _serialize_billing(session)
     q = select(Invoice.id).where(Invoice.status == InvoiceStatus.draft)
     if period:
         q = q.where(Invoice.period_label == period)
@@ -367,11 +371,15 @@ async def recompute_invoice(
         raise HTTPException(404, "Invoice not found")
     try:
         result = await invoicing.recompute_invoice(session, inv, sync_first=sync)
-    except ValueError:
-        raise HTTPException(
-            400,
-            "فاکتور پرداخت‌شده را نمی‌توان بازمحاسبه کرد؛ ابتدا «لغو پرداخت» را بزنید.",
-        ) from None
+    except ValueError as exc:
+        # Distinguish the user's state error from internal lookup failures — mapping every
+        # ValueError to the paid-invoice message hid real "panel/reseller not found" errors.
+        if "paid invoice" in str(exc):
+            raise HTTPException(
+                400,
+                "فاکتور پرداخت‌شده را نمی‌توان بازمحاسبه کرد؛ ابتدا «لغو پرداخت» را بزنید.",
+            ) from None
+        raise HTTPException(409, f"بازمحاسبه ممکن نیست: {exc}") from None
     inv = await session.get(Invoice, invoice_id)
     if inv is None:
         raise HTTPException(404, "Invoice not found after recompute")

@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.4 - 2026-07-08
+
+Hardening batch H03 (`docs/HARDENING_PLAN.md`) — one shared totals computation for
+invoice generation and recompute.
+
+### Fixed
+
+- **«بازمحاسبه از روی پنل» no longer drops the storefront-bot monthly fee.** Recomputing an
+  invoice that included the flat shop-bot fee used to rebuild the amount without it (and
+  remove the fee line) — a 700k invoice (500k usage + 200k fee) silently became 500k, and
+  the financial ledger was re-recorded with the wrong amount. Generation and recompute now
+  share one totals computation, so they can never diverge again.
+- **A month with an active shop bot but zero VPN sales is still billed the bot fee.** The
+  zero-usage skip used to suppress the whole invoice (and even delete a previously
+  generated fee-only draft); now a fee-only invoice is generated and survives
+  regeneration.
+- Per-node breakdown user counts no longer count the fee/adjustment rows as users; the
+  single-bundle PDF now renders from the reconciled lines so its rows always sum to the
+  printed total even after a manual amount edit.
+- «حذف پیش‌نویس‌ها» is serialized with invoice generation (no interleaved delete);
+  recompute errors are reported accurately (a missing panel no longer shows the
+  "paid invoice" message); an explicitly-selected disabled panel is no longer billable;
+  the free-threshold comparison uses the same epsilon on both boundaries.
+
 ## 1.59.3 - 2026-07-08
 
 Hardening batch H02 (`docs/HARDENING_PLAN.md`) — enforcement mid-payment race,

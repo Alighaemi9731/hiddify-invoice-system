@@ -116,7 +116,9 @@ chunk-2 users present in the restore snapshot), `test_maintenance.py`
 
 ## H03 - Billing totals unification: recompute fee + fee-only months
 
-Priority: P0 (money — recompute silently discounts). Version: PATCH. Status: TODO. No migration.
+Priority: P0 (money — recompute silently discounts). Version: PATCH. Status: DONE in `v1.59.4`. No migration.
+(Decision: `preview_bundles`/«فروش صفر» intentionally still lists fee-only resellers as
+zero SALES — the fee is not a sale; only invoice generation changed.)
 
 - Extract shared helpers in `services/invoicing.py`: `_compute_totals(...)` (gb
   rounding, base amount, `_effective_min_sale` floor, `storefront.monthly_fee_for`,
