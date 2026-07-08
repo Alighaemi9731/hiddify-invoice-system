@@ -20,7 +20,7 @@ import PersonOffIcon from "@mui/icons-material/esm/PersonOff";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import InputAdornment from "@mui/material/InputAdornment";
 import SegmentedTabs from "../components/SegmentedTabs";
-import TelegramLink from "../components/TelegramLink";
+import TelegramLink, { telegramHref } from "../components/TelegramLink";
 import { useQuery } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
@@ -267,7 +267,7 @@ export default function Invoices() {
           <Table size="small" className="resp-table">
             <TableHead>
               <TableRow>
-                <TableCell>نماینده</TableCell><TableCell align="center">تلگرام</TableCell><TableCell>پنل</TableCell>
+                <TableCell>نماینده</TableCell><TableCell>پنل</TableCell>
                 <TableCell>زیرمجموعه‌ها</TableCell><TableCell>ربات</TableCell>
               </TableRow>
             </TableHead>
@@ -275,13 +275,19 @@ export default function Invoices() {
               {zero.map((z: any) => (
                 <TableRow key={z.reseller_id} hover>
                   <TableCell>{z.reseller_name}</TableCell>
-                  <TableCell align="center"><TelegramLink username={z.reseller_username} chatId={z.reseller_chat_id} /></TableCell>
                   <TableCell>{z.panel_key}</TableCell>
                   <TableCell>{fmtNum(z.sub_resellers)}</TableCell>
-                  <TableCell>{z.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}</TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      {z.registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" label="—" />}
+                      {telegramHref(z.reseller_username, z.reseller_chat_id) && (
+                        <TelegramLink username={z.reseller_username} chatId={z.reseller_chat_id} />
+                      )}
+                    </Stack>
+                  </TableCell>
                 </TableRow>
               ))}
-              {zero.length === 0 && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>همه نماینده‌ها در این دوره فروش داشته‌اند</TableCell></TableRow>}
+              {zero.length === 0 && <TableRow><TableCell colSpan={4} align="center" sx={{ py: 4, color: "text.secondary" }}>همه نماینده‌ها در این دوره فروش داشته‌اند</TableCell></TableRow>}
             </TableBody>
           </Table>
         </Card>

@@ -8,6 +8,14 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.8 - 2026-07-09
+
+### Changed
+
+- Resellers tab: merged the separate «تلگرام» and «ربات» columns into one — the Telegram
+  link now sits inline next to the «متصل / متصل نیست» status, saving a column (the mobile card
+  already showed them together). Mirrored in the Invoices «فروش صفر» tab.
+
 ## 1.60.7 - 2026-07-09
 
 ### Fixed

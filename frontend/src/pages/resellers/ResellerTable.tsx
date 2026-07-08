@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import {
   Chip,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -11,7 +12,7 @@ import {
 } from "@mui/material";
 import { ResellerRow, ResellerTreeRow } from "../../api/client";
 import CapacityBar from "../../components/CapacityBar";
-import TelegramLink from "../../components/TelegramLink";
+import TelegramLink, { telegramHref } from "../../components/TelegramLink";
 import { Dir, SortTh } from "../../components/sortable";
 import { fmtNum } from "../../format";
 import { ConnectionStatus, EnforcementStatus, ResellerIdentity } from "./ResellerIdentity";
@@ -51,7 +52,6 @@ function ResellerTableRow({
           onToggle={onToggle}
         />
       </TableCell>
-      <TableCell align="center"><TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} /></TableCell>
       <TableCell>
         <Chip size="small" label={reseller.panel_key} variant="outlined" />
       </TableCell>
@@ -68,7 +68,14 @@ function ResellerTableRow({
         <CapacityBar used={reseller.users_count} max={reseller.panel_max_users} />
       </TableCell>
       <TableCell>{canAddSwitch(reseller)}</TableCell>
-      <TableCell><ConnectionStatus connected={reseller.registered} /></TableCell>
+      <TableCell>
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <ConnectionStatus connected={reseller.registered} />
+          {telegramHref(reseller.username, reseller.bot_chat_id) && (
+            <TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} />
+          )}
+        </Stack>
+      </TableCell>
       <TableCell><EnforcementStatus state={reseller.enforcement_state} /></TableCell>
       <TableCell>
         {reseller.exclude_from_billing
@@ -111,7 +118,6 @@ export default function ResellerTable({
         <TableHead>
           <TableRow>
             <SortTh id="name" label="نماینده" sortKey={sortKey} dir={dir} onSort={onSort} />
-            <TableCell align="center">تلگرام</TableCell>
             <SortTh id="panel_key" label="پنل" sortKey={sortKey} dir={dir} onSort={onSort} />
             <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={sortKey} dir={dir} onSort={onSort} />
             <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={sortKey} dir={dir} onSort={onSort} />
@@ -146,7 +152,7 @@ export default function ResellerTable({
             ))}
           {currentCount === 0 && (
             <TableRow>
-              <TableCell colSpan={10} align="center" sx={{ py: 7, color: "text.secondary" }}>
+              <TableCell colSpan={9} align="center" sx={{ py: 7, color: "text.secondary" }}>
                 نماینده‌ای با این فیلتر پیدا نشد.
               </TableCell>
             </TableRow>
