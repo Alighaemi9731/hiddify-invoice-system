@@ -106,6 +106,14 @@ async def monthly_invoicing_job() -> None:
                     "(بررسی و سپس «صدور فاکتورهای دوره» را برای آن‌ها بزنید):\n"
                     + "\n".join(f"• {p}" for p in summary.skipped_panels)
                 )
+            # Surface resellers that fell through the hierarchy entirely (parent deleted / a
+            # parent cycle) — they were NOT billed and the shortfall is otherwise silent.
+            if summary.unbilled_subtrees:
+                msg += (
+                    "\n\n⚠️ نماینده‌های زیر به هیچ باندلی وصل نشدند (نمایندهٔ بالادستی حذف شده "
+                    "یا حلقهٔ والد دارند) و فاکتور نشدند؛ سلسله‌مراتب را در پنل اصلاح کنید:\n"
+                    + "\n".join(f"• {p}" for p in summary.unbilled_subtrees)
+                )
             await owner_notify.notify_owner(session, msg)
     except Exception:  # noqa: BLE001
         log.exception("monthly_invoicing_job failed")

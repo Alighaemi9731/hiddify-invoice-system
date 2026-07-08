@@ -315,7 +315,12 @@ Tests: `test_enforcement_dunning.py` (failed-requeues), `test_freeze.py`
 
 ## H09 - Billing engine hardening + rates
 
-Priority: P2. Version: PATCH. Status: TODO. No migration.
+Priority: P2. Version: PATCH. Status: DONE in `v1.60.0`. No migration.
+(exclude_from_billing on a non-root is now blocked at the API (409); the frontend still
+shows the toggle but the backend rejects it — hiding it per-row in the tree deferred as a
+pure-cosmetic follow-up. `_reseller_present` was also made tz-safe, fixing a latent
+naive/aware crash the orphan test surfaced. MINOR bump: `unbilled_subtrees` is a new
+reported capability.)
 
 - Orphan/cyclic subtrees are silently unbilled while listed as main resellers
   (`invoice_engine.py:109-113` vs `reseller_stats.py:37-40`): after root selection,

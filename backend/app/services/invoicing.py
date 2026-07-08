@@ -59,13 +59,24 @@ def _panel_billable(panel: Panel) -> tuple[bool, str]:
     return True, ""
 
 
+def _as_utc(value: dt.datetime | None) -> dt.datetime | None:
+    """Normalize a possibly-naive datetime to tz-aware UTC. SQLite (and older imported rows)
+    return naive datetimes even for tz-aware columns; comparing one against a tz-aware value
+    raises. Treat naive as UTC (all timestamps are stamped in UTC)."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=dt.timezone.utc)
+    return value
+
+
 def _reseller_present(reseller: Reseller, panel: Panel) -> bool:
     """True if the reseller was seen in the panel's latest sync. A reseller (admin) removed
     from the panel keeps an older last_seen_at than the panel's last_synced_at, so it's no
     longer billed (instead of being invoiced forever on lingering data)."""
-    if reseller.last_seen_at is None or panel.last_synced_at is None:
+    seen = _as_utc(reseller.last_seen_at)
+    synced = _as_utc(panel.last_synced_at)
+    if seen is None or synced is None:
         return True  # not enough info → don't silently drop
-    return reseller.last_seen_at >= panel.last_synced_at - _PRESENCE_SKEW
+    return seen >= synced - _PRESENCE_SKEW
 
 
 @dataclass
@@ -82,6 +93,10 @@ class GenerationSummary:
     skipped_panels: list[str] = field(default_factory=list)
     # DRAFT invoices removed because the reseller's usage dropped to zero / they were removed.
     reconciled_zero: int = 0
+    # Present, non-owner, non-excluded resellers that are NEITHER a billable root NOR a
+    # descendant of one (parent deleted, or a parent cycle) — so they're silently never billed.
+    # Each entry is "<panel key>: <reseller name> (<admin_uuid>)".
+    unbilled_subtrees: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.invoice_ids is None:
@@ -190,6 +205,20 @@ async def generate_invoices(
                     continue
             await _persist_bundle(session, panel, bundle, extra, period, rate, summary, force)
             billed_reseller_ids.add(bundle.root.id)
+
+        # Detect resellers that fall through billing entirely: a non-owner, non-excluded,
+        # PRESENT reseller whose admin_uuid is in NO bundle (its parent was deleted, or it sits
+        # in a parent cycle) is silently never invoiced. Surface it so the owner can fix the
+        # hierarchy instead of losing that revenue quietly.
+        covered = {u for b in bundles for u in b.admin_uuids}
+        for rr in resellers:
+            if rr.is_owner or rr.exclude_from_billing:
+                continue
+            if rr.admin_uuid in covered or not _reseller_present(rr, panel):
+                continue
+            summary.unbilled_subtrees.append(
+                f"{panel.key}: {rr.name or '—'} ({rr.admin_uuid})"
+            )
 
     # Reconcile stale DRAFT invoices: a reseller that had a draft for this period from a prior
     # run but is now zero / removed gets no bundle above — its leftover draft would otherwise

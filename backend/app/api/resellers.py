@@ -512,6 +512,22 @@ async def update_reseller(
         # null OR 0 → use the global default fee (NULL); a positive value overrides.
         r.storefront_monthly_fee_toman = data["storefront_monthly_fee_toman"] or None
     if data.get("exclude_from_billing") is not None:
+        # «معاف از فاکتور» only makes sense on a TOP-LEVEL reseller — a sub is billed via its
+        # parent's bundle, so the flag on a sub is silently ignored by the engine. Reject
+        # setting it True on a non-root so the UI can't imply an effect it doesn't have.
+        if data["exclude_from_billing"] and not r.exclude_from_billing:
+            from app.services.reseller_stats import top_level_roots
+
+            siblings = (
+                await session.execute(select(Reseller).where(Reseller.panel_id == r.panel_id))
+            ).scalars().all()
+            root_ids = {x.id for x in top_level_roots(siblings)}
+            if r.id not in root_ids:
+                raise HTTPException(
+                    409,
+                    "«معاف از فاکتور» فقط برای نماینده‌های سطح‌اول معنا دارد؛ زیرمجموعه از طریق "
+                    "نمایندهٔ بالادستی‌اش محاسبه می‌شود.",
+                )
         r.exclude_from_billing = data["exclude_from_billing"]
     if data.get("storefront_enabled") is not None:
         r.storefront_enabled = data["storefront_enabled"]

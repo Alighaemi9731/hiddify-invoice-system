@@ -404,7 +404,8 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
         sub_users = await _users_for(sub_uuids)
         sgb, scnt = await _billable_gb_with_metering(
             session, reseller.panel_id, sub_uuids, sub_users,
-            period, free_threshold, excluded, psa, exclude_user_uuids=trial_uuids,
+            period, free_threshold, excluded, psa, deleted_over,
+            exclude_user_uuids=trial_uuids,
         )
         if scnt == 0 and sgb == 0:
             continue  # skip sub-resellers with no sales this period (keeps the report tidy)

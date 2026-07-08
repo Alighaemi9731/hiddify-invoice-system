@@ -116,7 +116,11 @@ def money(n: float) -> str:
 
 
 def gb(n: float) -> str:
-    return _fa_digits(f"{round(n):,}")
+    # Render one decimal for a fractional value so the line items visibly SUM to the total —
+    # `round()` turned three 1.4 GB lines into ۱+۱+۱ under a total of «۴». Whole values stay clean.
+    v = float(n or 0)
+    text = f"{v:,.0f}" if abs(v - round(v)) < 1e-9 else f"{v:,.1f}"
+    return _fa_digits(text)
 
 
 def _font_or_default(name: str) -> str:

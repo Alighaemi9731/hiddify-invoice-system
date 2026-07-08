@@ -74,3 +74,4 @@ class GenerateResult(BaseModel):
     invoice_ids: list[int] = Field(default_factory=list)
     skipped_panels: list[str] = Field(default_factory=list)
     reconciled_zero: int = 0
+    unbilled_subtrees: list[str] = Field(default_factory=list)

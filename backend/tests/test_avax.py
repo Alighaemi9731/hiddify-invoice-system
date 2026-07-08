@@ -166,8 +166,13 @@ def test_get_avax_toman_manual_auto_split():
         engine, factory = await _session()
         try:
             async with factory() as s:
+                import datetime as _dt
                 await settings_service.set_value(s, "avax_toman_manual", 500_000)
                 await settings_service.set_value(s, "avax_toman_auto", 620_000)
+                # A FRESH cache stamp so the H09 staleness guard accepts the auto rate.
+                await settings_service.set_value(
+                    s, "avax_toman_auto_at",
+                    _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
 
                 await settings_service.set_value(s, "avax_rate_mode", "auto")
                 assert await rates.get_avax_toman(s) == 620_000

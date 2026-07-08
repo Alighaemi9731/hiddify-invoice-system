@@ -114,7 +114,12 @@ def apply(
             meter.quota_added_gb = float(meter.quota_added_gb or 0) + new_limit
         return
 
-    # Quota increase = new sale / top-up / renewal-by-edit (start_date unchanged).
+    # Quota increase = new sale / top-up / renewal-by-edit (start_date unchanged). A DECREASE
+    # (add <= 0) is intentionally ignored: metering only ADDS the abuse the snapshot rule misses,
+    # never credits back. `meter_provisioned_gb` stays at the high-water mark so a later real
+    # overage is still measured against what was actually provisioned; an owner-corrected
+    # over-provision simply isn't refunded here (the base snapshot rule already bills the final,
+    # lower quota). This is by design — see docs/… and CLAUDE.md metering notes.
     add = new_limit - prev_limit
     if add > _EPS:
         meter.quota_added_gb = float(meter.quota_added_gb or 0) + add

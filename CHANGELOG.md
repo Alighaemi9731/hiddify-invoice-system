@@ -8,6 +8,33 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.0 - 2026-07-08
+
+Hardening batch H09 (`docs/HARDENING_PLAN.md`) — billing engine hardening + rates.
+
+### Added
+
+- **Resellers that fall through billing are now reported.** If a reseller's upstream parent
+  was deleted on the panel (or the hierarchy has a parent loop), that reseller and its
+  customers used to be silently never invoiced. The monthly run now lists any such
+  "unbilled" reseller in the owner notification (and in the manual generate result) so the
+  hierarchy can be fixed.
+
+### Fixed
+
+- A deleted or half-provisioned free-trial config now stays excluded from the reseller's
+  invoice forever (it could previously leak back in via the deleted-user rule).
+- The interim breakdown for a sub-reseller now matches the real invoice for deleted users
+  (it was under-counting them).
+- TON and AVAX rates now fall back to the manual rate when the cached live rate goes stale
+  (as USDT already did) — so a frozen source can't keep quoting a weeks-old amount; setting
+  the max-age to 0 disables the check as documented.
+- Invoice PDFs render one decimal for fractional GB values so the line items visibly sum to
+  the total (three 1.4 GB lines no longer print as ۱+۱+۱ under «۴»).
+- «معاف از فاکتور» is now rejected on a sub-reseller (it only applies to a top-level
+  reseller; a sub is billed through its parent).
+- Fixed a latent timezone-comparison crash in the reseller-present billing check.
+
 ## 1.59.9 - 2026-07-08
 
 Hardening batch H08 (`docs/HARDENING_PLAN.md`) — enforcement & dunning correctness.

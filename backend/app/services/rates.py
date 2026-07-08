@@ -144,6 +144,10 @@ async def refresh_ton_rate(session: AsyncSession) -> int | None:
         log.warning("fetched TON rate %s is >3× off the previous %s — ignored", rate, prev)
         return None
     await settings_service.set_value(session, "ton_toman_auto", rate)
+    await settings_service.set_value(
+        session, "ton_toman_auto_at",
+        dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    )
     return rate
 
 
@@ -152,12 +156,21 @@ async def get_ton_toman(session: AsyncSession) -> int:
     `manual` → the owner-set `ton_toman_manual`; `auto` → the last cached live rate, falling back
     to the manual rate when the live one is missing. 0 if nothing usable."""
     cfg = await settings_service.get_many(
-        session, ["ton_rate_mode", "ton_toman_manual", "ton_toman_auto"]
+        session, ["ton_rate_mode", "ton_toman_manual", "ton_toman_auto",
+                  "ton_toman_auto_at", "rate_max_age_hours"]
     )
     manual = _pos_int(cfg.get("ton_toman_manual")) or 0
     if str(cfg.get("ton_rate_mode") or "auto").lower() == "manual":
         return manual
-    return (_pos_int(cfg.get("ton_toman_auto")) or 0) or manual
+    auto = _pos_int(cfg.get("ton_toman_auto")) or 0
+    # Mirror the USDT staleness guard: a cached auto rate older than rate_max_age_hours is not
+    # trusted (Wallex delisted the symbol once, freezing the rate for weeks) — fall back to the
+    # manual rate. This is not display-only: it prices the amount the customer is told to send
+    # and drives the on-chain «مطابق/مغایر» verdict.
+    max_age = _rate_max_age(cfg.get("rate_max_age_hours"))
+    if auto > 0 and _rate_is_fresh(cfg.get("ton_toman_auto_at"), max_age):
+        return auto
+    return manual or auto
 
 
 # AVAX has no Toman market on Wallex/Tetherland (the only sources reachable from the prod host),
@@ -205,6 +218,10 @@ async def refresh_avax_rate(session: AsyncSession) -> int | None:
         log.warning("derived AVAX rate %s is >3× off the previous %s — ignored", rate, prev)
         return None
     await settings_service.set_value(session, "avax_toman_auto", rate)
+    await settings_service.set_value(
+        session, "avax_toman_auto_at",
+        dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    )
     return rate
 
 
@@ -213,12 +230,18 @@ async def get_avax_toman(session: AsyncSession) -> int:
     `manual` → the owner-set `avax_toman_manual`; `auto` → the last cached live rate, falling back
     to the manual rate when the live one is missing. 0 if nothing usable."""
     cfg = await settings_service.get_many(
-        session, ["avax_rate_mode", "avax_toman_manual", "avax_toman_auto"]
+        session, ["avax_rate_mode", "avax_toman_manual", "avax_toman_auto",
+                  "avax_toman_auto_at", "rate_max_age_hours"]
     )
     manual = _pos_int(cfg.get("avax_toman_manual")) or 0
     if str(cfg.get("avax_rate_mode") or "auto").lower() == "manual":
         return manual
-    return (_pos_int(cfg.get("avax_toman_auto")) or 0) or manual
+    auto = _pos_int(cfg.get("avax_toman_auto")) or 0
+    # Same staleness guard as TON/USDT (see get_ton_toman).
+    max_age = _rate_max_age(cfg.get("rate_max_age_hours"))
+    if auto > 0 and _rate_is_fresh(cfg.get("avax_toman_auto_at"), max_age):
+        return auto
+    return manual or auto
 
 
 def _rate_is_fresh(stamp: str | None, max_age_hours: float) -> bool:
@@ -237,6 +260,18 @@ def _rate_is_fresh(stamp: str | None, max_age_hours: float) -> bool:
         ts = ts.replace(tzinfo=dt.timezone.utc)
     age = dt.datetime.now(dt.timezone.utc) - ts
     return age <= dt.timedelta(hours=max_age_hours)
+
+
+def _rate_max_age(raw) -> float:
+    """The configured max cached-rate age in hours: a missing/unparseable value defaults to 48,
+    but an explicit 0 stays 0 (disables the staleness check). `x or 48` used to turn 0 into 48,
+    making the documented "0 = disabled" branch unreachable."""
+    if raw is None or raw == "":
+        return 48.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 48.0
 
 
 async def get_effective_rate(session: AsyncSession) -> int:
@@ -261,7 +296,7 @@ async def get_effective_rate(session: AsyncSession) -> int:
     manual = _int(cfg.get("toman_per_usdt"))
     if str(cfg.get("rate_mode") or "manual").lower() == "auto":
         auto = _int(cfg.get("toman_per_usdt_auto"))
-        max_age = _int(cfg.get("rate_max_age_hours")) or 48
+        max_age = _rate_max_age(cfg.get("rate_max_age_hours"))
         if auto > 0 and _rate_is_fresh(cfg.get("toman_per_usdt_auto_at"), max_age):
             return auto
         if auto > 0:

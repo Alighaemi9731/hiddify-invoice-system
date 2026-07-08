@@ -45,12 +45,16 @@ async def trial_user_uuids(session: AsyncSession, panel_id: int) -> set[str]:
     `panel_user_uuid`, which joins to `end_user_snapshots.user_uuid` / `usage_meters.user_uuid`."""
     from app.models import StorefrontOrder
 
+    # ANY trial order that ever had a real panel config (panel_user_uuid set) is a giveaway
+    # forever — do NOT filter on status. A trial the customer deleted (status "deleted") or one
+    # whose provisioning half-failed after the panel user was created (status "failed") still
+    # leaves an end_user_snapshot row; restricting to provisioned/disabled let those lingering
+    # snapshots leak back into the reseller's invoice via the deleted-user rule.
     rows = (
         await session.execute(
             select(StorefrontOrder.panel_user_uuid).where(
                 StorefrontOrder.panel_id == panel_id,
                 StorefrontOrder.is_trial.is_(True),
-                StorefrontOrder.status.in_(("provisioned", "disabled")),
                 StorefrontOrder.panel_user_uuid.is_not(None),
             )
         )
