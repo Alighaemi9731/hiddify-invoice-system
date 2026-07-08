@@ -17,6 +17,7 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, ReplyKeyboardRemove
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.bot import keyboards, texts
 from app.core.db import SessionLocal
@@ -304,7 +305,13 @@ async def _track_user(session, user) -> None:
         row.username = user.username
         row.first_name = user.first_name
         row.last_seen_at = now
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # aiogram 3 processes updates concurrently and MemoryStorage has no per-user lock,
+        # so two near-simultaneous first messages from the same user can both insert the
+        # unique telegram_id. The loser's row is already tracked — swallow it.
+        await session.rollback()
 
 
 async def _join_link(bot: Bot, chat_id: str, static_link: str, one_time: bool) -> str | None:

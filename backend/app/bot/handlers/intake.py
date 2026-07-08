@@ -208,6 +208,77 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=No
     return "\n".join(lines)
 
 
+# Telegram's hard cap for photo captions. A «پرداخت همهٔ بدهی» review with many invoices
+# (plus rtl()'s invisible bidi marks, which count) can exceed it — send_photo then raises
+# and, before H04, the owner received NOTHING for a pending payment.
+_TG_CAPTION_MAX = 1024
+_TG_MESSAGE_MAX = 4096
+
+
+def _split_caption(full: str) -> tuple[str, str | None]:
+    """Fit `full` into a photo caption: returns (caption, follow_up_text_or_None). Cuts at a
+    line boundary (rtl() isolates and the review's HTML tags never span lines, so a newline
+    cut can't break either), with a defensive unbalanced-<a> strip."""
+    if len(full) <= _TG_CAPTION_MAX:
+        return full, None
+    cut = full.rfind("\n", 0, _TG_CAPTION_MAX - 2)
+    if cut < 100:  # no usable newline — hard cut (defensive; reviews are line-structured)
+        cut = _TG_CAPTION_MAX - 2
+    caption = full[:cut].rstrip()
+    if caption.count("<a") > caption.count("</a>"):
+        caption = caption[: caption.rfind("<a")].rstrip()
+    return caption + "\n…", full[:_TG_MESSAGE_MAX]
+
+
+async def send_owner_review(
+    session,
+    bot,
+    *,
+    intro: str,
+    review_html: str,
+    photo=None,  # Telegram file_id (str) or FSInputFile; None → text only
+    reply_markup=None,
+) -> bool:
+    """The ONE delivery path for owner payment reviews (new proof intake + the in-bot view).
+
+    Guarantees the owner can never miss a pending payment (a pending payment also freezes
+    dunning for its invoices): photo captions are truncated to Telegram's 1024-char cap at a
+    line boundary — with the FULL review following as a second message — and ANY photo-send
+    failure falls back to the text review (the old code keyed that fallback on the DISK-save
+    flag, so a saved-but-unforwardable photo notified nobody). Returns True if anything was
+    delivered."""
+    owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
+    if not owner_chat:
+        return False
+    chat_id = int(owner_chat)
+    full = rtl((intro + "\n\n" if intro else "") + review_html)
+    if photo is not None:
+        caption, follow_up = _split_caption(full)
+        try:
+            await bot.send_photo(
+                chat_id, photo, caption=caption, parse_mode="HTML", reply_markup=reply_markup,
+            )
+            if follow_up is not None:
+                await bot.send_message(
+                    chat_id, follow_up, parse_mode="HTML", disable_web_page_preview=True,
+                )
+            return True
+        except Exception:  # noqa: BLE001 — the text fallback below must always fire
+            log.warning("owner review photo send failed; falling back to text", exc_info=True)
+            full = (full + "\n\n" + rtl("(ارسال تصویرِ رسید ناموفق بود؛ آن را در پنل ببینید.)"))[
+                :_TG_MESSAGE_MAX
+            ]
+    try:
+        await bot.send_message(
+            chat_id, full[:_TG_MESSAGE_MAX], parse_mode="HTML",
+            disable_web_page_preview=True, reply_markup=reply_markup,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("owner review text send failed", exc_info=True)
+        return False
+
+
 async def _handle_txid(
     message: Message,
     session,
@@ -234,8 +305,12 @@ async def _handle_txid(
     )
     await message.answer(rtl(result.user_message))
     if result.notify and result.payment is not None:
+        # Attribute the review to the reseller row the payment actually belongs to — a
+        # multi-panel customer's resellers[0] can be a DIFFERENT row (wrong name shown).
+        primary = next(
+            (r for r in resellers if r.id == result.payment.reseller_id), resellers[0])
         review = await _payment_review_html(
-            session, result.payment, reseller=resellers[0], invs=result.invoices)
+            session, result.payment, reseller=primary, invs=result.invoices)
         await owner_notify.notify_owner(
             session, result.owner_intro + "\n\n" + review,
             html=True, reply_markup=keyboards.owner_payment_detail_keyboard(result.payment.id))
@@ -270,34 +345,26 @@ async def _handle_payment_proof(
     proof_dir = "data/payment_proofs"
     os.makedirs(proof_dir, exist_ok=True)
     proof_path = f"{proof_dir}/payment_{payment.id}.jpg"
-    saved = False
     try:
         await message.bot.download(photo, destination=proof_path)
         payment.proof_path = proof_path
         await session.commit()
-        saved = True
     except Exception:  # noqa: BLE001 — keep the pending payment even if the file fails
         log.warning("failed to save payment proof for payment %s", payment.id, exc_info=True)
 
     await message.answer(rtl(result.user_message))
 
     # Forward the screenshot to the owner so they can confirm from Telegram + the panel.
-    owner_chat = str(await settings_service.get(session, "owner_chat_id", "") or "").strip()
-    if owner_chat:
-        review = await _payment_review_html(
-            session, payment, reseller=resellers[0], invs=result_invoices)
-        caption = rtl("🧾 رسید پرداخت جدید — منتظر تأیید شماست.\n\n" + review)
-        kb = keyboards.owner_payment_detail_keyboard(payment.id)
-        try:
-            await message.bot.send_photo(
-                int(owner_chat), photo.file_id, caption=caption,
-                parse_mode="HTML", reply_markup=kb,
-            )
-        except Exception:  # noqa: BLE001
-            log.warning("failed to forward payment proof to owner", exc_info=True)
-            if not saved:
-                await message.bot.send_message(
-                    int(owner_chat),
-                    rtl(review + "\n\n(ارسال تصویرِ رسید ناموفق بود؛ آن را در پنل ببینید.)"),
-                    parse_mode="HTML", reply_markup=kb,
-                )
+    # send_owner_review handles the >1024-char caption case and ALWAYS falls back to the
+    # text review when the photo can't be sent (the old inline code only fell back when the
+    # DISK save had failed — a saved file + failed forward notified nobody).
+    primary = next((r for r in resellers if r.id == payment.reseller_id), resellers[0])
+    review = await _payment_review_html(
+        session, payment, reseller=primary, invs=result_invoices)
+    await send_owner_review(
+        session, message.bot,
+        intro="🧾 رسید پرداخت جدید — منتظر تأیید شماست.",
+        review_html=review,
+        photo=photo.file_id,
+        reply_markup=keyboards.owner_payment_detail_keyboard(payment.id),
+    )

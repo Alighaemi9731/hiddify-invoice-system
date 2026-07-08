@@ -151,7 +151,7 @@ persist-vs-recompute agreement on identical inputs.
 
 ## H04 - Owner payment-review delivery (bot)
 
-Priority: P0 (big pay-all payments invisible to the owner). Version: PATCH. Status: TODO. No migration.
+Priority: P0 (big pay-all payments invisible to the owner). Version: PATCH. Status: DONE in `v1.59.5`. No migration.
 
 - New `send_owner_review(bot, chat_id, *, intro, review_html, photo=None,
   reply_markup=None)` in `app/bot/handlers/common.py`: builds `rtl(intro + review)`;

@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.5 - 2026-07-08
+
+Hardening batch H04 (`docs/HARDENING_PLAN.md`) — owner payment-review delivery.
+
+### Fixed
+
+- **A large «پرداخت همهٔ بدهی» receipt can no longer vanish.** When a customer paid many
+  invoices at once, the review sent to the owner could exceed Telegram's 1024-character
+  photo-caption limit, so the send failed — and because the fallback checked the wrong
+  condition, the owner got **no notification at all** while the pending payment silently
+  froze dunning for those invoices. All owner payment reviews now go through one path that
+  truncates the caption to a clean line boundary (with the full review as a follow-up
+  message) and **always** falls back to a text message if the photo can't be sent. The
+  same fix makes big receipts reviewable from the «پرداخت‌های در انتظار» button.
+- **Confirm/reject always acks now.** Deciding on a very old review message used to throw
+  after the confirm/reject had already been recorded, leaving the buttons live and
+  invitable to a re-tap; the message edit is now fully guarded.
+- The owner review shows the correct reseller name for a multi-panel customer; an
+  over-long registration link tag can no longer break registration; a rare duplicate
+  first-contact insert is handled silently.
+
 ## 1.59.4 - 2026-07-08
 
 Hardening batch H03 (`docs/HARDENING_PLAN.md`) — one shared totals computation for

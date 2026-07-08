@@ -21,9 +21,8 @@ from app.bot.handlers.common import (
     _reshow_menu,
     router,
 )
-from app.bot.handlers.intake import _payment_review_html
+from app.bot.handlers.intake import _payment_review_html, send_owner_review
 from app.bot.handlers.views import _dispatch_owner, _owner_stats
-from app.bot.rtl import rtl
 from app.models import BotUser, Invoice, Panel, Payment, Reseller
 from app.models.enums import EnforcementState, PaymentStatus
 
@@ -88,19 +87,21 @@ async def cb_owner_payment_view(cb: CallbackQuery, bot: Bot) -> None:
             await cb.message.answer("این پرداخت دیگر در انتظار نیست (شاید قبلاً رسیدگی شده).")
             await cb.answer()
             return
-        text = rtl(await _payment_review_html(s, pay))
+        review = await _payment_review_html(s, pay)
         kb = keyboards.owner_payment_detail_keyboard(pay.id)
         # If there's a proof image, send it with the detail as caption; else just the text.
+        # send_owner_review truncates a >1024-char caption (big «پرداخت همهٔ بدهی» sets used
+        # to make this raise → the payment was unreviewable from the bot) and falls back to
+        # text on any photo failure.
         proof = pay.proof_path
+        photo = None
         if proof and os.path.exists(proof):
             from aiogram.types import FSInputFile
 
-            await cb.message.answer_photo(
-                FSInputFile(proof), caption=text, parse_mode="HTML", reply_markup=kb
-            )
-        else:
-            await cb.message.answer(text, parse_mode="HTML", reply_markup=kb,
-                                    disable_web_page_preview=True)
+            photo = FSInputFile(proof)
+        await send_owner_review(
+            s, bot, intro="", review_html=review, photo=photo, reply_markup=kb,
+        )
     await cb.answer()
 
 
@@ -113,10 +114,13 @@ async def _finalize_review_message(cb: CallbackQuery, status_line: str) -> bool:
     msg = cb.message
     if msg is None:
         return False
-    base = msg.html_text or ""
-    body = f"{base}\n\n{status_line}"
     kb = keyboards.owner_payment_decided_keyboard()
     try:
+        # Inside the try: an InaccessibleMessage (review too old) has NO html_text — the
+        # attribute read used to raise AFTER confirm/reject had committed, so the owner got
+        # no ✅/❌ ack and the live buttons invited a re-tap.
+        base = msg.html_text or ""
+        body = f"{base}\n\n{status_line}"
         if msg.caption is not None or msg.photo:
             await msg.edit_caption(caption=body[:1024], reply_markup=kb, parse_mode="HTML")
         else:

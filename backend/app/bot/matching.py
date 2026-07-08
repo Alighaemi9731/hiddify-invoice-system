@@ -100,4 +100,8 @@ def parse_link(text: str) -> ParsedLink | None:
         segs = [s for s in parsed.path.split("/") if s]
         uuid_idx = next((i for i, seg in enumerate(segs) if unquote(seg).lower() == uuid), None)
         path = normalize_path("/".join(segs[:uuid_idx])) if uuid_idx is not None else None
+    # Clamp the tag to the Reseller.link_tag column width (String(255)) — an overlong
+    # #fragment would otherwise blow up the registration commit on Postgres with no reply.
+    if tag is not None:
+        tag = tag[:255]
     return ParsedLink(uuid=uuid, host=host, path=path, tag=tag)
