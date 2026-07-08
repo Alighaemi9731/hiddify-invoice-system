@@ -58,6 +58,17 @@ class InvoiceDefer(BaseModel):
     defer_note: str | None = None
 
 
+class BulkDefer(BaseModel):
+    ids: list[int]
+    deferred_until: dt.date | None = None  # null clears the deferral for the whole set
+    defer_note: str | None = None
+
+
+class BulkDeferResult(BaseModel):
+    done: int
+    skipped: list[dict]  # [{id, reason}] — invoices that couldn't be deferred
+
+
 class GenerateRequest(BaseModel):
     period: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")  # "YYYY-MM"
     panel_id: int | None = Field(default=None, gt=0)

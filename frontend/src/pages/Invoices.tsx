@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Autocomplete, Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Autocomplete, Box, Button, Card, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, Typography, Divider, TablePagination, useMediaQuery,
 } from "@mui/material";
@@ -25,7 +25,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
-  listResellers, discardDrafts, recomputeInvoice, revertInvoiceToDraft,
+  listResellers, bulkDeferInvoices, discardDrafts, recomputeInvoice, revertInvoiceToDraft,
 } from "../api/client";
 import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
@@ -100,8 +100,22 @@ export default function Invoices() {
   // Paginate the (often hundreds of) rows so we never render the whole month at once.
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
-  useEffect(() => { setPage(0); }, [period, status, search, tab, key, dir, resellerFilter]);
+  // Row selection for bulk actions (extend deadline). Cleared whenever the data context changes
+  // so a stale selection from another month/reseller can't leak into a bulk action.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  useEffect(() => { setPage(0); setSelectedIds(new Set()); }, [period, status, search, tab, key, dir, resellerFilter]);
   const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  const pageIds = paged.map((i: any) => i.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const toggleId = (id: number) => setSelectedIds((prev) => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+  const toggleAllPage = () => setSelectedIds((prev) => {
+    const n = new Set(prev);
+    if (allPageSelected) pageIds.forEach((id) => n.delete(id));
+    else pageIds.forEach((id) => n.add(id));
+    return n;
+  });
   const mut = (fn: any, ok: any) =>
     useToastMutation({ show, mutationFn: fn, success: ok, invalidate: ["invoices"] });
   // Money-changing mutations must also refresh Payments/Dashboard/Debts (a mark-paid/unpay
@@ -140,13 +154,22 @@ export default function Invoices() {
   // a setState + setTimeout(0) landing before the mutation reads it (fragile under concurrent
   // React scheduling — the old code could submit the STALE deadline). Money-relevant (a defer
   // pauses dunning), so use the dependent invalidation set.
+  // Shared by the single «مهلت پرداخت» row action and the bulk «تمدید مهلت گروهی» — when
+  // deferRow.ids is set it's the bulk path (several invoices at once).
   const saveDefer = useToastMutation<any, string>({
     show,
-    mutationFn: (until: string) => deferInvoice(deferRow.id, {
-      deferred_until: until || null, defer_note: deferRow.defer_note || "",
-    }),
-    success: (_d, until) => (until ? "مهلت ثبت شد" : "مهلت حذف شد"),
-    onSuccess: () => deferDlg.close(),
+    mutationFn: (until: string) => deferRow?.ids
+      ? bulkDeferInvoices({ ids: deferRow.ids, deferred_until: until || null, defer_note: deferRow.defer_note || "" })
+      : deferInvoice(deferRow.id, { deferred_until: until || null, defer_note: deferRow.defer_note || "" }),
+    success: (d: any, until) => {
+      if (deferRow?.ids) {
+        const skipped = d?.skipped?.length || 0;
+        return `مهلتِ ${fmtNum(d?.done || 0)} فاکتور اعمال شد` +
+          (skipped ? ` — ${fmtNum(skipped)} فاکتور رد شد (قابلِ تعیین مهلت نبود)` : "");
+      }
+      return until ? "مهلت ثبت شد" : "مهلت حذف شد";
+    },
+    onSuccess: () => { if (deferRow?.ids) setSelectedIds(new Set()); deferDlg.close(); },
     invalidate: MONEY_KEYS,
   });
   const saveEdit = useToastMutation({
@@ -335,9 +358,20 @@ export default function Invoices() {
         </Card>
       ) : (
       <>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        {fmtNum(filtered.length)} فاکتور{q ? ` (از ${fmtNum(sorted.length)})` : ""} — جمع: {fmtToman(total)}
-      </Typography>
+      {selectedIds.size > 0 ? (
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Chip color="primary" label={`${fmtNum(selectedIds.size)} فاکتور انتخاب شد`}
+            onDelete={() => setSelectedIds(new Set())} />
+          <Button size="small" variant="contained" startIcon={<ScheduleIcon fontSize="small" />}
+            onClick={() => deferDlg.openWith({ ids: [...selectedIds], deferred_until: "", defer_note: "" })}>
+            تمدید مهلت گروهی
+          </Button>
+        </Stack>
+      ) : (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {fmtNum(filtered.length)} فاکتور{q ? ` (از ${fmtNum(sorted.length)})` : ""} — جمع: {fmtToman(total)}
+        </Typography>
+      )}
 
       <Card>
         {!isMobile ? (
@@ -345,6 +379,11 @@ export default function Invoices() {
         <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 980 }}>
           <TableHead>
             <TableRow>
+              <TableCell padding="checkbox">
+                <Checkbox size="small" checked={allPageSelected}
+                  indeterminate={!allPageSelected && pageIds.some((id) => selectedIds.has(id))}
+                  onChange={toggleAllPage} />
+              </TableCell>
               <TableCell>شماره</TableCell>
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell align="center">تلگرام</TableCell>
@@ -358,7 +397,10 @@ export default function Invoices() {
           </TableHead>
           <TableBody>
             {paged.map((i: any) => (
-              <TableRow key={i.id} hover>
+              <TableRow key={i.id} hover selected={selectedIds.has(i.id)}>
+                <TableCell padding="checkbox">
+                  <Checkbox size="small" checked={selectedIds.has(i.id)} onChange={() => toggleId(i.id)} />
+                </TableCell>
                 <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }} dir="ltr">{i.number}</TableCell>
                 <TableCell>{i.reseller_name}</TableCell>
                 <TableCell align="center"><TelegramLink username={i.reseller_username} chatId={i.reseller_chat_id} /></TableCell>
@@ -370,7 +412,7 @@ export default function Invoices() {
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
-            {filtered.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 9 : 8} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
+            {filtered.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 10 : 9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>
@@ -458,10 +500,14 @@ export default function Invoices() {
       {/* Defer dialog */}
       <Dialog open={deferDlg.open} onClose={deferDlg.close} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {deferRow && (<>
-          <DialogTitle>مهلت پرداخت — {deferRow.name}</DialogTitle>
+          <DialogTitle>
+            {deferRow.ids ? `تمدید مهلت گروهی — ${fmtNum(deferRow.ids.length)} فاکتور` : `مهلت پرداخت — ${deferRow.name}`}
+          </DialogTitle>
           <DialogContent>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              تا تاریخ انتخاب‌شده، یادآوری و مسدودسازی این فاکتور متوقف می‌شود. فاکتورهای دیگر و دادهٔ پنل تغییری نمی‌کنند.
+              {deferRow.ids
+                ? "تا تاریخ انتخاب‌شده، یادآوری و مسدودسازیِ همهٔ فاکتورهای انتخاب‌شده متوقف می‌شود. فاکتورهایی که قابلِ تعیین مهلت نیستند (پیش‌نویس/پرداخت‌شده/لغوشده) رد می‌شوند."
+                : "تا تاریخ انتخاب‌شده، یادآوری و مسدودسازی این فاکتور متوقف می‌شود. فاکتورهای دیگر و دادهٔ پنل تغییری نمی‌کنند."}
             </Typography>
             <Stack spacing={2} sx={{ mt: 1 }}>
               <TextField type="date" label="مهلت تا" InputLabelProps={{ shrink: true }}

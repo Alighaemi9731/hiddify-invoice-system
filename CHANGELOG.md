@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.61.0 - 2026-07-09
+
+### Added
+
+- Invoices tab: tick several invoices and extend/change their payment deadline together with
+  one «تمدید مهلت گروهی» button. Each invoice runs through the same deadline logic as the
+  single action; any that can't be deferred (draft/paid/canceled) are reported as skipped and
+  the rest are applied. Pairs with the new reseller search — pick a reseller, see all their
+  invoices, tick, and extend all their deadlines at once. Money is never moved.
+
 ## 1.60.9 - 2026-07-09
 
 ### Added

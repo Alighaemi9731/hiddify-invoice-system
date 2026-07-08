@@ -22,6 +22,8 @@ from app.models import (
 )
 from app.models.enums import DeliveryKind, EnforcementState, InvoiceStatus
 from app.schemas.invoice import (
+    BulkDefer,
+    BulkDeferResult,
     GenerateRequest,
     GenerateResult,
     InvoiceDefer,
@@ -291,24 +293,17 @@ async def edit_invoice(
     return _to_out(inv, reseller.name, panel.key)
 
 
-@router.post("/{invoice_id}/defer", response_model=InvoiceOut)
-async def defer_invoice(
-    invoice_id: int, body: InvoiceDefer, session: AsyncSession = Depends(get_session)
-) -> InvoiceOut:
-    """Set (or clear) a payment deadline. Setting a future deadline RESTARTS the whole
-    dunning cycle from that date: prior reminders are cleared so they re-fire, an
-    overdue invoice goes back to 'sent', and an already-suspended reseller is restored
-    for the new grace window. Other invoices and panel data are unaffected."""
-    inv = await session.get(Invoice, invoice_id)
-    if not inv:
-        raise HTTPException(404, "Invoice not found")
-    invoice_state.ensure_can_defer(inv.status)
-    reseller, panel = await _invoice_context(session, inv)
+async def _apply_defer(
+    session: AsyncSession, inv: Invoice, reseller, panel,  # noqa: ANN001
+    deferred_until, defer_note,  # noqa: ANN001
+) -> None:
+    """Apply a payment-deadline change to ONE invoice (no commit) — the shared core of the
+    single and bulk defer endpoints so they can't diverge. The caller has already validated
+    the transition with `invoice_state.ensure_can_defer` and looked up reseller/panel."""
+    inv.deferred_until = deferred_until
+    inv.defer_note = defer_note
 
-    inv.deferred_until = body.deferred_until
-    inv.defer_note = body.defer_note
-
-    if body.deferred_until and body.deferred_until > tehran_today():
+    if deferred_until and deferred_until > tehran_today():
         # Wipe prior reminder/warning marks so the cycle starts fresh from the deadline.
         await session.execute(
             delete(DeliveryLog).where(
@@ -355,8 +350,51 @@ async def defer_invoice(
                     pass
 
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
+
+
+@router.post("/{invoice_id}/defer", response_model=InvoiceOut)
+async def defer_invoice(
+    invoice_id: int, body: InvoiceDefer, session: AsyncSession = Depends(get_session)
+) -> InvoiceOut:
+    """Set (or clear) a payment deadline. Setting a future deadline RESTARTS the whole
+    dunning cycle from that date: prior reminders are cleared so they re-fire, an
+    overdue invoice goes back to 'sent', and an already-suspended reseller is restored
+    for the new grace window. Other invoices and panel data are unaffected."""
+    inv = await session.get(Invoice, invoice_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_defer(inv.status)
+    reseller, panel = await _invoice_context(session, inv)
+    await _apply_defer(session, inv, reseller, panel, body.deferred_until, body.defer_note)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
+
+
+@router.post("/bulk-defer", response_model=BulkDeferResult)
+async def bulk_defer(
+    body: BulkDefer, session: AsyncSession = Depends(get_session)
+) -> BulkDeferResult:
+    """Set/extend the payment deadline for SEVERAL invoices at once (tick-select in the UI).
+    Each invoice is validated with the SAME `ensure_can_defer` guard the single endpoint uses;
+    a non-owed (draft/paid/canceled) or missing invoice is reported in `skipped`, never
+    silently applied. Money is never moved. One commit for the whole set."""
+    done = 0
+    skipped: list[dict] = []
+    for iid in dict.fromkeys(body.ids):  # dedupe, preserve order
+        inv = await session.get(Invoice, iid)
+        if inv is None:
+            skipped.append({"id": iid, "reason": "یافت نشد"})
+            continue
+        try:
+            invoice_state.ensure_can_defer(inv.status)
+        except invoice_state.InvoiceStateError:
+            skipped.append({"id": iid, "reason": "قابلِ تعیین مهلت نیست (پیش‌نویس/پرداخت‌شده/لغوشده)"})
+            continue
+        reseller, panel = await _invoice_context(session, inv)
+        await _apply_defer(session, inv, reseller, panel, body.deferred_until, body.defer_note)
+        done += 1
+    await session.commit()
+    return BulkDeferResult(done=done, skipped=skipped)
 
 
 @router.post("/{invoice_id}/recompute")

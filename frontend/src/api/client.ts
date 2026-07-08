@@ -248,6 +248,8 @@ export const recomputeInvoice = (id: number) => api.post(`/api/invoices/${id}/re
 export const revertInvoiceToDraft = (id: number) => api.post(`/api/invoices/${id}/revert-to-draft`).then((r) => r.data);
 export const deferInvoice = (id: number, body: { deferred_until: string | null; defer_note?: string }) =>
   api.post(`/api/invoices/${id}/defer`, body).then((r) => r.data);
+export const bulkDeferInvoices = (body: { ids: number[]; deferred_until: string | null; defer_note?: string }) =>
+  api.post(`/api/invoices/bulk-defer`, body).then((r) => r.data as { done: number; skipped: { id: number; reason: string }[] });
 
 // ---- payments ----
 export const listPayments = (params: any = {}) =>
