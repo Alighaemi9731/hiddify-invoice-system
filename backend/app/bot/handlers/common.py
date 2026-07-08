@@ -255,6 +255,43 @@ def _iso(value) -> str:
     return f"⁨{value}⁩"
 
 
+def iso_html(value) -> str:
+    """Like `_iso`, but HTML-ESCAPES the value first. Use for panel/user-sourced strings that
+    land in a `parse_mode="HTML"` message — a reseller name / panel key / link tag containing
+    `<`, `>` or `&` would otherwise break Telegram's entity parsing and the whole message would
+    fail to send (the flow appears dead)."""
+    import html as _html
+
+    return _iso(_html.escape(str(value)))
+
+
+def _safe_int(data: str | None, idx: int = 1, sep: str = ":") -> int | None:
+    """Parse `int(data.split(sep)[idx])` from callback data, returning None instead of raising
+    on forged/malformed data (callback data is client-controllable). Callers answer with a
+    graceful notice instead of crashing the handler."""
+    if not data:
+        return None
+    parts = data.split(sep)
+    if idx >= len(parts):
+        return None
+    try:
+        return int(parts[idx])
+    except (TypeError, ValueError):
+        return None
+
+
+async def clear_stale_flow(state) -> None:  # noqa: ANN001 — FSMContext
+    """Clear any in-progress FSM flow (e.g. PayState's chosen invoice ids) when the user starts
+    a NEW, unrelated interaction. Without this, a stale `pay_invoice_ids` selection leaks: a
+    txid/receipt the user sends later attaches to the OLD invoice set. Call at every non-flow
+    entry point (terminal slash commands, menu/invoice-view callbacks). MUST NOT be called from
+    flow-continuation handlers (the pay selection/network callbacks, the SF.* setup wizard,
+    support/broadcast/owner-reply text handlers, capacity/cap pickers) — they need the state.
+    No-op when there is no active state."""
+    if await state.get_state() is not None:
+        await state.clear()
+
+
 async def _is_owner_user(session, user) -> bool:
     """Owner identification, hardened against @username takeover.
 

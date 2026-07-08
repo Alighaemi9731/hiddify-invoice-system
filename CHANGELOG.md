@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.2 - 2026-07-08
+
+Hardening batch H11 (`docs/HARDENING_PLAN.md`) — bot state hygiene & UX correctness.
+
+### Fixed
+
+- **A payment can no longer be attached to the wrong invoice after navigating away.** If a
+  customer opened the pay flow for one invoice, then viewed a different invoice or opened
+  another menu before sending their transaction hash, the hash could be recorded against the
+  first invoice. Opening an invoice, the invoice list, the interim invoice, panels, portal,
+  or registration now clears the pending pay selection first.
+- Malformed or tampered button data no longer crashes a handler (GB-cap and remove-link
+  buttons); a very large GB cap is clamped so it can't error the database.
+- A reseller/panel name containing `<`, `>` or `&` no longer breaks the «پنل‌های من» view
+  or the storefront-setup prompt (the text is now HTML-escaped).
+- Small fixes: the membership «بررسی عضویت» button tolerates a double-tap, and the
+  remove-link button no longer answers twice.
+
 ## 1.60.1 - 2026-07-08
 
 Hardening batch H10 (`docs/HARDENING_PLAN.md`) — storefront money & co-admin safety.

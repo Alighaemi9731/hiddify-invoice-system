@@ -87,7 +87,8 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.message(Command("invoices"))
-async def cmd_invoices(message: Message) -> None:
+async def cmd_invoices(message: Message, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     async with common.SessionLocal() as s:
         await _send_invoices(message.answer, message.from_user.id, s)
         await _reshow_menu(message, s, message.from_user)
@@ -102,21 +103,24 @@ async def cmd_pay(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("panels"))
-async def cmd_panels(message: Message) -> None:
+async def cmd_panels(message: Message, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     async with common.SessionLocal() as s:
         await _send_panels(message.answer, message.from_user.id, s)
         await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(Command("portal"))
-async def cmd_portal(message: Message) -> None:
+async def cmd_portal(message: Message, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     async with common.SessionLocal() as s:
         await _send_portal_link(message.answer, message.from_user.id, s)
         await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(Command("interim"))
-async def cmd_interim(message: Message, bot: Bot) -> None:
+async def cmd_interim(message: Message, bot: Bot, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     async with common.SessionLocal() as s:
         await _send_self_interim(message.answer, message.from_user.id, s, bot=bot)
         await _reshow_menu(message, s, message.from_user)
@@ -131,14 +135,16 @@ async def cmd_support(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("removelink"))
-async def cmd_removelink(message: Message) -> None:
+async def cmd_removelink(message: Message, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     async with common.SessionLocal() as s:
         await _send_removelink(message.answer, message.from_user.id, s)
         # No menu re-show: the result is a link picker (tap to remove) — a menu would bury it.
 
 
 @router.message(Command("subs"))
-async def cmd_subs(message: Message) -> None:
+async def cmd_subs(message: Message, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     async with common.SessionLocal() as s:
         await _send_sub_panels(message.answer, message.from_user.id, s)
         # No menu re-show: the result is a sub-panel picker — a menu would bury it.
@@ -152,8 +158,9 @@ async def cmd_storefront(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("register"))
-async def cmd_register(message: Message) -> None:
+async def cmd_register(message: Message, state: FSMContext) -> None:
     """Prompt for the panel link (same as the «🔗 ثبت لینک پنل من» menu action)."""
+    await common.clear_stale_flow(state)
     await message.answer(
         "لطفاً لینک پنل خود را ارسال کنید (شامل دامنه و شناسه).",
         reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),

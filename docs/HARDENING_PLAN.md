@@ -394,7 +394,14 @@ banned-broadcast-filtered, co-admin-notify-fanout, expiry tz boundary.
 
 ## H11 - Bot state hygiene & UX correctness
 
-Priority: P1/P2. Version: PATCH. Status: TODO. No migration.
+Priority: P1/P2. Version: PATCH. Status: DONE in `v1.60.2`. No migration.
+(Done: clear_stale_flow wired into every terminal command + the invoice/menu callbacks that
+were the real mis-attribution vector (callbacks bypass FSM text handlers); _safe_int on the
+setcap/rm callbacks; iso_html on the «پنل‌های من» + storefront-setup HTML sends; gb_cap
+clamp; cb_rm double-answer + cb_check_membership not-modified fixed. DEFERRED as low-value
+UX polish: the full router-order re-baseline (a slash command typed mid-PayState is SAFELY
+swallowed with a cancel button — no mis-attribution), the non-owner owner-command denial,
+cb_pay_chain stale-button, cb_invoice_view paid-CTA text.)
 
 - `clear_stale_flow(state)` in `bot/handlers/common.py` (clears any active FSM state;
   no-op otherwise), called at the top of EVERY non-flow entry point: terminal slash

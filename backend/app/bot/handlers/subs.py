@@ -176,11 +176,17 @@ async def cb_sub_cap(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+# Postgres INTEGER max is 2^31-1; clamp the monthly GB cap well under it so a forged/typo'd
+# huge number can't overflow the column (an unhandled DB error with no reply to the user).
+_MAX_GB_CAP = 1_000_000_000
+
+
 async def _apply_sub_cap(answer, session, chat_id: int, sub_id: int | None, gb: int) -> None:
     sub = await session.get(Reseller, sub_id) if sub_id else None
     if not sub or not await _owns_sub(session, chat_id, sub):
         await answer("دسترسی ندارید.")
         return
+    gb = max(0, min(int(gb), _MAX_GB_CAP))
     sub.gb_cap = gb or None
     sub.gb_cap_alerted_period = None  # re-arm the alert for the new ceiling
     await session.commit()
@@ -193,8 +199,11 @@ async def _apply_sub_cap(answer, session, chat_id: int, sub_id: int | None, gb: 
 @router.callback_query(F.data.startswith("setcap:"))
 async def cb_set_cap(cb: CallbackQuery) -> None:
     """A preset GB-cap tap → set it directly, no typing (gb=0 clears the cap)."""
-    parts = cb.data.split(":")
-    sub_id, gb = int(parts[1]), int(parts[2])
+    sub_id = common._safe_int(cb.data, 1)
+    gb = common._safe_int(cb.data, 2)
+    if sub_id is None or gb is None:
+        await cb.answer("داده نامعتبر.", show_alert=True)
+        return
     async with common.SessionLocal() as s:
         await _apply_sub_cap(cb.message.answer, s, cb.from_user.id, sub_id, gb)
     await cb.answer()

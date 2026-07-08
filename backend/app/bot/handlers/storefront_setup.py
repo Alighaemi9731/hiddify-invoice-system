@@ -360,7 +360,8 @@ async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "menu:invoices")
-async def cb_invoices(cb: CallbackQuery) -> None:
+async def cb_invoices(cb: CallbackQuery, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)  # leaving the pay flow → drop its stale invoice set
     async with common.SessionLocal() as s:
         await _send_invoices(cb.message.answer, cb.from_user.id, s)
         await _reshow_menu(cb.message, s, cb.from_user)
@@ -368,11 +369,13 @@ async def cb_invoices(cb: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("inv:"))
-async def cb_invoice_view(cb: CallbackQuery, bot: Bot) -> None:
+async def cb_invoice_view(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     """Re-send the full content of one of the caller's invoices (text + per-node PDFs)."""
-    try:
-        inv_id = int(cb.data.split(":", 1)[1])
-    except (ValueError, IndexError):
+    # Viewing an invoice is NOT the pay flow — clear any stale PayState so a txid sent after
+    # this can't be mis-attributed to a previously-selected invoice.
+    await common.clear_stale_flow(state)
+    inv_id = common._safe_int(cb.data)
+    if inv_id is None:
         await cb.answer()
         return
     await cb.answer("در حال ارسال فاکتور…")
@@ -395,7 +398,8 @@ async def cb_invoice_view(cb: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data == "menu:interim")
-async def cb_interim(cb: CallbackQuery, bot: Bot) -> None:
+async def cb_interim(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
+    await common.clear_stale_flow(state)
     await cb.answer("در حال ساخت فاکتور علی‌الحساب…")
     async with common.SessionLocal() as s:
         await _send_self_interim(cb.message.answer, cb.from_user.id, s, bot=bot)
@@ -672,7 +676,10 @@ async def cb_removelink(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("rm:"))
 async def cb_rm(cb: CallbackQuery) -> None:
-    rid = int(cb.data.split(":")[1])
+    rid = common._safe_int(cb.data)
+    if rid is None:
+        await cb.answer("داده نامعتبر.", show_alert=True)
+        return
     async with common.SessionLocal() as s:
         r = await s.get(Reseller, rid)
         if r and r.bot_chat_id == cb.from_user.id:
@@ -681,9 +688,10 @@ async def cb_rm(cb: CallbackQuery) -> None:
             r.registered_at = None
             await s.commit()
             await cb.message.answer(f"✅ لینک «{r.name}» حذف شد.")
+            await cb.answer()
         else:
+            # Single answer on the not-found path (the trailing cb.answer() double-answered).
             await cb.answer("یافت نشد.", show_alert=True)
-    await cb.answer()
 
 
 @router.callback_query(F.data == "noop")

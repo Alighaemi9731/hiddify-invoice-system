@@ -22,6 +22,7 @@ from app.bot.handlers.common import (
     _iso,
     _resellers_for_chat,
     _top_level_resellers,
+    iso_html,
     log,
 )
 from app.bot.rtl import rtl
@@ -76,8 +77,10 @@ async def _storefront_target_line(session, r: Reseller) -> str:  # noqa: ANN001
     """A one-liner naming which account/panel this storefront bot will sell from — always shown so the
     owner knows the target before sending the token."""
     panel = await session.get(Panel, r.panel_id)
-    return (f"🏪 رباتِ فروشگاهی برای حسابِ «{r.name or '—'}» روی پنلِ "
-            f"«{panel.key if panel else '?'}» راه‌اندازی می‌شود.\n\n")
+    # HTML-escaped: this line is sent with parse_mode="HTML"; an admin name containing `<`
+    # would otherwise break entity parsing and the storefront-setup prompt never sends.
+    return (f"🏪 رباتِ فروشگاهی برای حسابِ «{iso_html(r.name or '—')}» روی پنلِ "
+            f"«{iso_html(panel.key if panel else '?')}» راه‌اندازی می‌شود.\n\n")
 
 
 async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMContext) -> None:  # noqa: ANN001
@@ -473,7 +476,10 @@ async def _send_panels(answer, chat_id: int, session) -> None:
         tag = f" (#{r.link_tag})" if r.link_tag else ""
         link = panel.admin_link(r.admin_uuid, tag=r.link_tag)
         lines.append("")  # blank line between panels for readability
-        lines.append(f"‏• پنل {_iso((panel.name or panel.key) + tag)} — زیرمجموعه‌ها: {subs}")
+        # HTML-escape the panel name/tag (a name with `<` would break entity parsing → the
+        # whole «پنل‌های من» message fails to send and the view looks dead).
+        lines.append(
+            f"‏• پنل {iso_html((panel.name or panel.key) + tag)} — زیرمجموعه‌ها: {subs}")
         lines.append(f"‏🔗 <code>{html.escape(link)}</code>")
     await answer(rtl("\n".join(lines)), parse_mode="HTML")
 
