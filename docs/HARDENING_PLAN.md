@@ -185,7 +185,11 @@ long-caption view path, inaccessible-message finalize.
 
 ## H05 - UUID case normalization (MIGRATION batch — released alone)
 
-Priority: P1 (silent unbilling). Version: PATCH. Status: TODO. **Migration: yes — bump HEAD pin.**
+Priority: P1 (silent unbilling). Version: PATCH. Status: DONE in `v1.59.6`. **Migration: `b1c3e5a7f9d2`, HEAD pin bumped.**
+(Rehearsed against a restored prod clone on Postgres 16: prod data is already all-lowercase,
+so the migration is a verified no-op there — but the full path incl. the JSON snapshot
+rewrite ran clean and row counts were preserved. Normalization added at the `parse_backup`
+ingest choke point covers both the backup-JSON and admin-API adapters.)
 
 - Billing compares uuids case-SENSITIVELY (`invoice_engine.py:76-114`
   `build_children_map`/`select_billable_roots`/`users_by_adder`;

@@ -11,6 +11,18 @@ from typing import Any
 log = logging.getLogger("panel.parse")
 
 
+def _norm_uuid(value: Any) -> str | None:
+    """Canonicalize a Hiddify uuid to lowercase (trimmed). Hiddify normally emits lowercase
+    uuids, but a case-mismatched parent_admin_uuid / added_by_uuid detaches a subtree from its
+    billing bundle (the tree/PDF layers already compare lowercase). Normalizing at this single
+    ingest choke point keeps the billing engine and the display layers in agreement.
+    Returns None for a blank input so a NULL parent stays NULL."""
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    return s or None
+
+
 def _to_int(value: Any, default: int | None = None) -> int | None:
     try:
         if value is None or value == "":
@@ -132,9 +144,9 @@ def parse_backup(payload: dict) -> PanelData:
             continue
         try:
             admins.append(PanelAdmin(
-                uuid=a.get("uuid", ""),
+                uuid=_norm_uuid(a.get("uuid", "")) or "",
                 name=a.get("name") or "",
-                parent_admin_uuid=a.get("parent_admin_uuid"),
+                parent_admin_uuid=_norm_uuid(a.get("parent_admin_uuid")),
                 mode=a.get("mode") or "agent",
                 comment=a.get("comment"),
                 telegram_id=_to_int(a.get("telegram_id")),
@@ -151,9 +163,9 @@ def parse_backup(payload: dict) -> PanelData:
             continue
         try:
             users.append(PanelUser(
-                uuid=u.get("uuid", ""),
+                uuid=_norm_uuid(u.get("uuid", "")) or "",
                 name=u.get("name") or "",
-                added_by_uuid=u.get("added_by_uuid"),
+                added_by_uuid=_norm_uuid(u.get("added_by_uuid")),
                 start_date=_to_date(u.get("start_date")),
                 usage_limit_gb=_to_float(u.get("usage_limit_GB")),
                 current_usage_gb=_to_float(u.get("current_usage_GB")),

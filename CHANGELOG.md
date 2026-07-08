@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.6 - 2026-07-08
+
+Hardening batch H05 (`docs/HARDENING_PLAN.md`) — uuid case normalization. Migration
+batch (`b1c3e5a7f9d2`), released alone; rehearsed against a restored production clone on
+PostgreSQL 16 (no-op there — production uuids are already lowercase).
+
+### Fixed
+
+- **A reseller whose panel emitted a differently-cased uuid can no longer be silently
+  left out of billing.** The billing engine compared admin/user uuids case-sensitively
+  while the reseller tree and PDFs compared them lowercase, so a case-mismatched
+  parent/creator uuid could detach a whole sub-tree from its billing bundle — those users
+  were never invoiced. Uuids are now lowercased as panel data is ingested, and a one-time
+  migration canonicalizes existing rows (merging any case-duplicate resellers, keeping the
+  latest snapshot/meter, and never merging two settled invoices). No effect on
+  already-lowercase installs.
+
 ## 1.59.5 - 2026-07-08
 
 Hardening batch H04 (`docs/HARDENING_PLAN.md`) — owner payment-review delivery.
