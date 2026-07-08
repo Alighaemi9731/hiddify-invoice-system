@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.9 - 2026-07-08
+
+Hardening batch H08 (`docs/HARDENING_PLAN.md`) — enforcement & dunning correctness.
+
+### Fixed
+
+- **A suspension that hard-failed (e.g. the panel was unreachable) is retried instead of
+  stuck forever.** Such an action used to block every future attempt for that invoice while
+  never actually running; it's now reset and re-attempted on the next dunning run.
+- **Restoring a paid reseller no longer disturbs an independently frozen/suspended
+  sub-reseller.** A parent's restore skips any descendant that is under its own separate
+  freeze/suspension and keeps that descendant's recovery data intact.
+- **A restored admin whose real limit was genuinely 0 is restored as 0** (not overwritten
+  from an old snapshot).
+- **A panel sync during suspension no longer records the zeroed enforcement limits** as the
+  reseller's real quota — so the capacity display stays honest and a later restore can't pick
+  up zeros.
+- **Reverting an invoice to draft now clears its reminder history**, so re-issuing and
+  re-sending it starts a fresh reminder cycle instead of jumping straight to enforcement.
+- The manual «اجرای یادآوری‌ها» run and the daily scheduled run can no longer overlap and
+  double-send a reminder (they're serialized); the financial history now reflects
+  overdue/enforced status changes; the dry-run enforcement log re-arms correctly after a
+  live suspend/restore cycle.
+
 ## 1.59.8 - 2026-07-08
 
 Hardening batch H07 (`docs/HARDENING_PLAN.md`) — reseller override clearing + frontend

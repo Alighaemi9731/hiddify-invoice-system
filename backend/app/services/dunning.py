@@ -15,7 +15,7 @@ import datetime as dt
 import logging
 
 from aiogram import Bot
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
@@ -24,11 +24,19 @@ from app.models import DeliveryLog, EnforcementAction, Invoice, Payment, Reselle
 from app.models.enums import (
     DeliveryKind,
     DeliveryStatus,
+    EnforcementActionStatus,
     EnforcementState,
     InvoiceStatus,
     PaymentStatus,
 )
-from app.services import enforcement, notifier, owner_notify, periods, settings_service
+from app.services import (
+    enforcement,
+    financial_archive,
+    notifier,
+    owner_notify,
+    periods,
+    settings_service,
+)
 
 log = logging.getLogger("dunning")
 
@@ -79,7 +87,44 @@ async def _msg(session: AsyncSession, key: str, inv: Invoice, reseller: Reseller
     )
 
 
+# Advisory-lock key serializing whole dunning runs (the daily scheduler job vs the manual
+# «اجرای یادآوری‌ها» endpoint). Adjacent to invoicing._BILLING_LOCK_KEY (…044) and
+# enforcement._QUEUE_LOCK_KEY (…045).
+_DUNNING_LOCK_KEY = 734_137_046
+
+
 async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) -> dict:
+    """Serialize whole dunning runs so the daily scheduler job and a manual run can't overlap
+    and double-send a reminder (each reads committed DeliveryLog before either commits its own).
+    A transaction-level lock won't do — run_dunning commits mid-run — so hold a session-level
+    advisory lock on a DEDICATED connection for the whole run; a second caller returns
+    `{"skipped": "already_running"}`. No-op on SQLite (single-writer / tests)."""
+    bind = session.bind
+    if bind is None or getattr(bind.dialect, "name", "") != "postgresql":
+        return await _run_dunning_impl(session, now=now)
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    lock_session = async_sessionmaker(bind, expire_on_commit=False)()
+    try:
+        got = (
+            await lock_session.execute(
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": _DUNNING_LOCK_KEY}
+            )
+        ).scalar()
+        if not got:
+            return {"skipped": "already_running"}
+        return await _run_dunning_impl(session, now=now)
+    finally:
+        try:
+            await lock_session.execute(
+                text("SELECT pg_advisory_unlock(:k)"), {"k": _DUNNING_LOCK_KEY}
+            )
+        finally:
+            await lock_session.close()
+
+
+async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = None) -> dict:
     now = now or dt.datetime.now(dt.timezone.utc)
     # Day counting is TEHRAN-calendar based (like every deadline/eligibility check since B06).
     # Raw `.date()` here extracted the UTC day: a sent_at in the Tehran 00:00–03:29 window
@@ -190,6 +235,9 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                 )
                 if inv.status == InvoiceStatus.sent:
                     inv.status = InvoiceStatus.overdue
+                    # Mirror the status flip into the ledger so «تاریخچهٔ مالی» doesn't keep
+                    # showing "sent" for an overdue invoice (money facts are unchanged).
+                    await financial_archive.record(session, inv, reseller=reseller)
                     await session.commit()
                 counts["warning"] += 1
                 if dl.status == DeliveryStatus.sent:
@@ -201,10 +249,16 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
                 # guard it would log a fresh EnforcementAction every single day. In
                 # dry-run, log at most once per invoice; live failures still retry.
                 if not bool(cfg.get("enforcement_enabled")):
+                    # Match only a DRY-RUN row for THIS invoice — the old check matched ANY
+                    # action (incl. live/reverted rows from a past live cycle later disabled),
+                    # so the dry-run intent would never be re-logged after such a cycle.
                     already = (
                         await session.execute(
                             select(EnforcementAction.id)
-                            .where(EnforcementAction.invoice_id == inv.id)
+                            .where(
+                                EnforcementAction.invoice_id == inv.id,
+                                EnforcementAction.status == EnforcementActionStatus.dry_run,
+                            )
                             .limit(1)
                         )
                     ).first()

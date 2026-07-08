@@ -432,6 +432,13 @@ async def revert_to_draft(
         raise HTTPException(
             400, "این فاکتور پرداخت‌شده است؛ ابتدا «لغو پرداخت» را بزنید، بعد به پیش‌نویس برگردانید."
         )
+    # Clear the reminder/warning delivery marks BEFORE dropping sent_at, so a later
+    # revert→regenerate→resend gets a FRESH dunning cycle. Without this, the old reminder rows
+    # survive: _done_kinds still counts reminder1/2/warning as sent, so the re-sent invoice
+    # skips every reminder yet enforcement fires on day D+5 anyway — a suspension with no fresh
+    # warning. (reset_cycle deletes the reminder DeliveryLog rows.)
+    from app.services import dunning
+    await dunning.reset_cycle(session, inv)
     inv.status = InvoiceStatus.draft
     inv.sent_at = None
     inv.deferred_until = None

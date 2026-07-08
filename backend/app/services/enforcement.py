@@ -512,8 +512,15 @@ async def _run_admin_limits(
                     return admin_uuid, str(exc)[:300], None
             else:
                 lim = captured_limits.get(admin_uuid) or {}
-                mu = lim.get("max_users") or admin.max_users_snapshot
-                mau = lim.get("max_active_users") or admin.max_active_users_snapshot
+                # A captured limit of 0 is a REAL value (an admin legitimately at max_users=0),
+                # not "missing" — `x or snapshot` wrongly overrode it with the snapshot. Use an
+                # explicit None check so a genuine 0 is restored as 0.
+                mu = lim.get("max_users")
+                if mu is None:
+                    mu = admin.max_users_snapshot
+                mau = lim.get("max_active_users")
+                if mau is None:
+                    mau = admin.max_active_users_snapshot
                 if mu is None or mau is None:
                     return admin_uuid, "saved admin limits are incomplete", None
                 try:
@@ -622,6 +629,22 @@ async def queue_enforcement(
             )
         ).scalar_one_or_none()
         if existing is not None:
+            # A hard-`failed` suspend (retries exhausted, e.g. the panel was unreachable) would
+            # otherwise be returned forever while the worker only executes planned/partial — so
+            # dunning re-requests it daily and it never runs again. Reset it to planned with
+            # cleared attempt counters, exactly like queue_restore does for a failed restore.
+            if existing.status == EnforcementActionStatus.failed:
+                snap = existing.snapshot or {}
+                prog = _progress(snap)
+                prog["users_failed"] = {}
+                prog["user_attempts"] = {}
+                prog["admins_failed"] = {}
+                prog["admin_attempts"] = {}
+                existing.snapshot = snap
+                existing.status = EnforcementActionStatus.planned
+                existing.error = None
+                flag_modified(existing, "snapshot")
+                await session.commit()
             return existing
 
     if not is_dry and reseller.enforcement_state == EnforcementState.enforced:
@@ -1039,6 +1062,10 @@ async def _process_enforcement_action(
         # dunning would then chase settled debt.
         if inv is not None and inv.status in invoice_state.OWED:
             inv.status = InvoiceStatus.enforced
+            # Mirror the flip into the ledger so «تاریخچهٔ مالی» reflects the real state.
+            from app.services import financial_archive
+
+            await financial_archive.record(session, inv, reseller=reseller)
 
     await session.commit()
     log.info(
@@ -1094,10 +1121,19 @@ async def _process_restore_action(
     client = AdminApiClient()
     descendants = await _bundle(session, reseller)
     by_uuid = {d.admin_uuid: d for d in descendants}
+    # A descendant that is INDEPENDENTLY frozen/suspended (its own enforcement_state != active,
+    # set by a separate action — e.g. its parent froze it) must NOT be re-opened by THIS
+    # reseller's restore: doing so would lift a limit the descendant is meant to keep and would
+    # destroy its recovery snapshot. Exclude such descendants from the limit-restore order and
+    # preserve their snapshots at finalize. (The root itself is always restored.)
+    independently_enforced = {
+        d.admin_uuid for d in descendants
+        if d.id != reseller.id and d.enforcement_state != EnforcementState.active
+    }
     limits: dict[str, dict] = dict(snapshot.get("limits") or {})
     # Top-down (root → leaf): parent quotas restored first so children's quota
     # is meaningful as soon as they get it back.
-    admins = list(snapshot.get("admins") or limits)
+    admins = [u for u in (snapshot.get("admins") or limits) if u not in independently_enforced]
     done_admins: set[str] = set(progress.get("admins_done") or [])
     failed_admins: dict[str, str] = dict(progress.get("admins_failed") or {})
     admin_attempts: dict[str, int] = dict(progress.get("admin_attempts") or {})
@@ -1149,6 +1185,10 @@ async def _process_restore_action(
     # ── Finalize ─────────────────────────────────────────────────────────────
     reseller.enforcement_state = EnforcementState.active
     for descendant in descendants:
+        # Keep the recovery snapshot of an independently frozen/suspended descendant — it was
+        # NOT restored above and still needs its snapshot to be lifted by its own action.
+        if descendant.admin_uuid in independently_enforced:
+            continue
         descendant.max_users_snapshot = None
         descendant.max_active_users_snapshot = None
 

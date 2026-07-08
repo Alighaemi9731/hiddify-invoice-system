@@ -279,7 +279,9 @@ visual harness on the reseller edit dialog.
 
 ## H08 - Enforcement & dunning correctness set
 
-Priority: P1. Version: PATCH. Status: TODO. No migration.
+Priority: P1. Version: PATCH. Status: DONE in `v1.59.9`. No migration.
+(Ledger decision: overdue/enforced status flips now mirror into `financial_records` via
+`financial_archive.record` — money facts unchanged, only the mirrored status.)
 
 - Failed live enforcement is never retried and blocks re-queueing forever
   (`enforcement.py:449-461` includes `failed` in the dedup but the worker only picks

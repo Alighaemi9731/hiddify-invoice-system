@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
-from app.models.enums import PanelStatus, SyncSource, SyncStatus
+from app.models.enums import EnforcementState, PanelStatus, SyncSource, SyncStatus
 from app.services.panel_client import BackupJsonClient, PanelClient, PanelData
 
 log = logging.getLogger("sync")
@@ -115,8 +115,15 @@ async def _upsert_resellers(
         r.comment = a.comment
         r.is_owner = a.is_owner
         r.panel_telegram_id = a.telegram_id
-        r.panel_max_users = a.max_users
-        r.panel_max_active_users = a.max_active_users
+        # While a reseller is suspended/frozen its ON-PANEL limits are the ZEROED enforcement
+        # values, not its real quota — recording them would make the capacity UI lie and, worse,
+        # feed a restore-from-DB fallback the zeros (restore-zeros, the M38 bug class). Only
+        # refresh panel_max_* while the reseller is active; a real quota change during suspension
+        # lands on the next sync after restore. (A brand-new row's state is not yet defaulted →
+        # treat None as active so its first limits ARE recorded.)
+        if r.enforcement_state in (None, EnforcementState.active):
+            r.panel_max_users = a.max_users
+            r.panel_max_active_users = a.max_active_users
         r.can_add_admin = a.can_add_admin
         r.last_seen_at = now
 
