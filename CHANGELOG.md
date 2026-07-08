@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.9 - 2026-07-09
+
+### Added
+
+- Invoices tab: a reseller search box («فاکتورهای یک نماینده — همهٔ ماه‌ها»). Pick a reseller
+  and the list switches to EVERY invoice they have across all months (a period column is
+  added), with the same per-row actions — so you can review and act on one reseller's whole
+  invoice history in one place instead of flipping through months. Clear the chip to return to
+  the normal per-month view.
+
 ## 1.60.8 - 2026-07-09
 
 ### Changed

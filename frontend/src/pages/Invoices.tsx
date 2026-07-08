@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Autocomplete, Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, Typography, Divider, TablePagination, useMediaQuery,
 } from "@mui/material";
@@ -25,7 +25,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
-  discardDrafts, recomputeInvoice, revertInvoiceToDraft,
+  listResellers, discardDrafts, recomputeInvoice, revertInvoiceToDraft,
 } from "../api/client";
 import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
@@ -61,9 +61,26 @@ export default function Invoices() {
   const deferRow = deferDlg.data;
   const [tab, setTab] = useState(0);
 
+  // "One reseller, all periods" mode: pick a reseller from the autocomplete → the list shows
+  // EVERY invoice they have across every month (the backend list endpoint takes reseller_id
+  // without a period), so you can act on all of them in one place. Null = the normal
+  // period-scoped view.
+  const [resellerFilter, setResellerFilter] = useState<{ id: number; name: string } | null>(null);
+  const inResellerMode = !!resellerFilter;
+  const [rInput, setRInput] = useState("");
+  const rOptions = useQuery({
+    queryKey: ["reseller-search", rInput],
+    queryFn: () => listResellers({ q: rInput.trim() || undefined, limit: 20 }),
+    enabled: rInput.trim().length >= 1,
+  });
+
   const { data = [] } = useQuery({
-    queryKey: ["invoices", period, status],
-    queryFn: () => listInvoices({ period, status: status || undefined, limit: 1000 }),
+    queryKey: inResellerMode
+      ? ["invoices", "reseller", resellerFilter!.id, status]
+      : ["invoices", period, status],
+    queryFn: () => inResellerMode
+      ? listInvoices({ reseller_id: resellerFilter!.id, status: status || undefined, limit: 1000 })
+      : listInvoices({ period, status: status || undefined, limit: 1000 }),
   });
   const { data: zero = [] } = useQuery({
     queryKey: ["zero-invoices", period],
@@ -83,7 +100,7 @@ export default function Invoices() {
   // Paginate the (often hundreds of) rows so we never render the whole month at once.
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
-  useEffect(() => { setPage(0); }, [period, status, search, tab, key, dir]);
+  useEffect(() => { setPage(0); }, [period, status, search, tab, key, dir, resellerFilter]);
   const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
   const mut = (fn: any, ok: any) =>
     useToastMutation({ show, mutationFn: fn, success: ok, invalidate: ["invoices"] });
@@ -196,7 +213,22 @@ export default function Invoices() {
   return (
     <Box>
       <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }} alignItems="center">
-        <PeriodPicker value={period} onChange={setPeriod} />
+        {!inResellerMode && <PeriodPicker value={period} onChange={setPeriod} />}
+        <Autocomplete
+          size="small"
+          sx={{ minWidth: { xs: "100%", md: 240 } }}
+          options={rOptions.data || []}
+          getOptionLabel={(o: any) => o?.name || ""}
+          isOptionEqualToValue={(o: any, v: any) => o.id === v.id}
+          value={resellerFilter as any}
+          onChange={(_, v: any) => setResellerFilter(v ? { id: v.id, name: v.name } : null)}
+          onInputChange={(_, v) => setRInput(v)}
+          loading={rOptions.isFetching}
+          noOptionsText={rInput.trim() ? "نماینده‌ای پیدا نشد" : "نام نماینده را بنویسید"}
+          renderInput={(params) => (
+            <TextField {...params} placeholder="فاکتورهای یک نماینده (همهٔ ماه‌ها)" />
+          )}
+        />
         <Select
           size="small"
           value={status}
@@ -214,36 +246,46 @@ export default function Invoices() {
         </Button>
         <Box sx={{ flexGrow: 1 }} />
         <LiveRate />
-        <Button variant="outlined" onClick={() => {
-          // Guard against billing an incomplete month: the normal action is to issue the
-          // PREVIOUS (completed) month. Generating the current/future month would invoice only
-          // the services created so far — confirm before proceeding.
-          if (period >= currentPeriod() && !confirm(
-            `دورهٔ ${period} هنوز تمام نشده؛ فاکتورِ این دوره ناقص می‌شود (فقط سرویس‌های ثبت‌شده تا امروز). معمولاً باید دورهٔ ماهِ گذشته را صادر کنید. ادامه می‌دهید؟`
-          )) return;
-          gen.mutate();
-        }} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
-        <Button variant="outlined" color="warning" onClick={() => {
-          if (confirm(`همهٔ پیش‌نویس‌های دوره ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده می‌مانند)`)) discard.mutate();
-        }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>
-        <Button variant="contained" startIcon={<SendIcon />} disabled={sendAll.isPending}
-          onClick={() => {
-            if (confirm(`فاکتورهای پیش‌نویسِ دورهٔ ${period} برای همهٔ نماینده‌ها ارسال شوند؟ این عمل به همهٔ نماینده‌ها پیام می‌فرستد و قابلِ بازگشت نیست.`))
-              sendAll.mutate();
-          }}>ارسال همه پیش‌نویس‌ها</Button>
+        {!inResellerMode && <>
+          <Button variant="outlined" onClick={() => {
+            // Guard against billing an incomplete month: the normal action is to issue the
+            // PREVIOUS (completed) month. Generating the current/future month would invoice only
+            // the services created so far — confirm before proceeding.
+            if (period >= currentPeriod() && !confirm(
+              `دورهٔ ${period} هنوز تمام نشده؛ فاکتورِ این دوره ناقص می‌شود (فقط سرویس‌های ثبت‌شده تا امروز). معمولاً باید دورهٔ ماهِ گذشته را صادر کنید. ادامه می‌دهید؟`
+            )) return;
+            gen.mutate();
+          }} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
+          <Button variant="outlined" color="warning" onClick={() => {
+            if (confirm(`همهٔ پیش‌نویس‌های دوره ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده می‌مانند)`)) discard.mutate();
+          }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>
+          <Button variant="contained" startIcon={<SendIcon />} disabled={sendAll.isPending}
+            onClick={() => {
+              if (confirm(`فاکتورهای پیش‌نویسِ دورهٔ ${period} برای همهٔ نماینده‌ها ارسال شوند؟ این عمل به همهٔ نماینده‌ها پیام می‌فرستد و قابلِ بازگشت نیست.`))
+                sendAll.mutate();
+            }}>ارسال همه پیش‌نویس‌ها</Button>
+        </>}
       </Stack>
 
       <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }} alignItems={{ md: "center" }}>
-        <SegmentedTabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { label: "فاکتورها", icon: <ReceiptLongIcon fontSize="small" /> },
-            { label: "نمایندگان با فاکتور صفر", icon: <PersonOffIcon fontSize="small" /> },
-          ]}
-        />
+        {inResellerMode ? (
+          <Chip
+            color="primary"
+            onDelete={() => { setResellerFilter(null); setRInput(""); }}
+            label={`همهٔ فاکتورهای «${resellerFilter!.name}» — ${fmtNum(filtered.length)} فاکتور`}
+          />
+        ) : (
+          <SegmentedTabs
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { label: "فاکتورها", icon: <ReceiptLongIcon fontSize="small" /> },
+              { label: "نمایندگان با فاکتور صفر", icon: <PersonOffIcon fontSize="small" /> },
+            ]}
+          />
+        )}
         <Box sx={{ flexGrow: 1 }} />
-        {tab === 0 && (
+        {(inResellerMode || tab === 0) && (
           <TextField
             size="small"
             value={search}
@@ -259,7 +301,7 @@ export default function Invoices() {
         )}
       </Stack>
 
-      {tab === 1 ? (
+      {(!inResellerMode && tab === 1) ? (
         <Card>
           <Typography variant="body2" color="text.secondary" sx={{ p: 2, pb: 0 }}>
             {fmtNum(zero.length)} نماینده در دوره {period} هیچ فروشی نداشته‌اند.
@@ -307,6 +349,7 @@ export default function Invoices() {
               <SortTh id="reseller_name" label="نماینده" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell align="center">تلگرام</TableCell>
               <SortTh id="panel_key" label="پنل" sortKey={key} dir={dir} onSort={toggle} />
+              {inResellerMode && <SortTh id="period_label" label="دوره" sortKey={key} dir={dir} onSort={toggle} />}
               <SortTh id="usage_gb" label="مصرف" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="amount_toman" label="مبلغ (تومان)" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="status" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
@@ -320,13 +363,14 @@ export default function Invoices() {
                 <TableCell>{i.reseller_name}</TableCell>
                 <TableCell align="center"><TelegramLink username={i.reseller_username} chatId={i.reseller_chat_id} /></TableCell>
                 <TableCell>{i.panel_key}</TableCell>
+                {inResellerMode && <TableCell dir="ltr">{i.period_label}</TableCell>}
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(i.amount_toman)}</TableCell>
                 <TableCell><Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} /></TableCell>
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
-            {filtered.length === 0 && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
+            {filtered.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 9 : 8} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>
