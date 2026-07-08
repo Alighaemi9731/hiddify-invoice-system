@@ -226,7 +226,10 @@ export default function Payments() {
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card sx={{ overflow: "hidden" }}>
         {!isMobile ? (
-        <TableContainer sx={{ maxHeight: { xs: "none", md: "calc(100vh - 230px)" } }}>
+        // Fixed (viewport-based) height, not maxHeight: the card fills the page even when there
+        // are only a few payments (maxHeight lets it shrink to the rows, leaving a gap below).
+        // Rows sit at the top; the table scrolls INTERNALLY and the page stays put.
+        <TableContainer sx={{ height: { xs: "auto", md: "calc(100vh - 180px)" } }}>
         <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 1120 }}>
           <TableHead>
             <TableRow>

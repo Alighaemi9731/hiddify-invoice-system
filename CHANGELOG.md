@@ -8,6 +8,15 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.7 - 2026-07-09
+
+### Fixed
+
+- The Payments table now fills the full page height even when there are only a few payments
+  (it uses a fixed viewport-based height instead of a max-height that let the card shrink to a
+  few rows and leave an empty strip below). The table still scrolls internally with the page
+  fixed.
+
 ## 1.60.6 - 2026-07-08
 
 ### Fixed
