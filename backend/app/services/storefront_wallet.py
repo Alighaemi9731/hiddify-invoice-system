@@ -103,7 +103,13 @@ async def reject_topup(session: AsyncSession, txn_id: int) -> tuple[bool, Storef
 async def manual_adjust(
     session: AsyncSession, customer: StorefrontCustomer, amount_toman_signed: int, *, note: str = ""
 ) -> StorefrontWalletTxn:
-    """Admin manually credits (+) or debits (−) a customer's wallet. Never drives the balance below 0."""
+    """Admin manually credits (+) or debits (−) a customer's wallet. Never drives the balance below 0.
+
+    Re-reads the customer under a row lock before the read-modify-write so two admins adjusting
+    the same wallet at once (realistic now that co-admins share the panel) can't lose an update."""
+    locked = await _get_for_update(session, StorefrontCustomer, customer.id)
+    if locked is not None:
+        customer = locked
     delta = Decimal(str(int(amount_toman_signed)))
     new_balance = balance(customer) + delta
     if new_balance < 0:

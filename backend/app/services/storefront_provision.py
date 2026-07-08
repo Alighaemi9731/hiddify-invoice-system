@@ -213,11 +213,23 @@ async def purchase(
                 res = await provision(s, sf, customer, gb=gb, days=days, label=label,
                                       user_uuid=new_uuid)
 
-        # 3) short txn — finalize: provisioned (+link) or failed (+refund)
+        # 3) short txn — finalize: provisioned (+link) or failed (+refund). The pending-order
+        #    reaper may have already finalized this order if provisioning ran long (>15 min):
+        #    only act while it is still `pending` (CAS), and guard the refund with
+        #    order_has_refund — otherwise a slow provision could double-refund or, worse,
+        #    provision AND leave the reaper's refund standing (a paid-for-nothing / free config).
         async with session_factory() as s:
-            o = await s.get(StorefrontOrder, order_id)
+            o = await s.get(StorefrontOrder, order_id, with_for_update=True)
             if o is None:
                 return PurchaseResult(False, reason="error")
+            if o.status != "pending":
+                # The reaper already decided this order — respect its outcome.
+                if o.status == "provisioned" and o.sub_link:
+                    return PurchaseResult(True, order_id=order_id, sub_link=o.sub_link,
+                                          gb=gb, days=days, label=label)
+                return PurchaseResult(False, order_id=order_id, reason="reaped",
+                                      message="سفارش توسط سیستم نهایی شد", gb=gb, days=days,
+                                      label=label)
             if res.ok and res.sub_link:
                 o.status = "provisioned"
                 o.panel_user_uuid = res.uuid or new_uuid
@@ -226,8 +238,9 @@ async def purchase(
                 return PurchaseResult(True, order_id=order_id, sub_link=res.sub_link,
                                       gb=gb, days=days, label=label)
             o.status = "failed"
-            await storefront_wallet.refund(s, customer_id, price, order_id=order_id,
-                                           note=f"provision {res.reason}")
+            if o.price_toman and not await storefront_wallet.order_has_refund(s, order_id):
+                await storefront_wallet.refund(s, customer_id, price, order_id=order_id,
+                                               note=f"provision {res.reason}")
             await s.commit()
             return PurchaseResult(False, order_id=order_id, reason=res.reason or "error",
                                   message=res.message, gb=gb, days=days, label=label)
@@ -338,6 +351,11 @@ async def reap_pending_orders(
             if order.price_toman and not await storefront_wallet.order_has_refund(session, order.id):
                 await storefront_wallet.refund(session, order.customer_id, int(order.price_toman),
                                                order_id=order.id, note="reaper: provision lost")
+            # A reaped-failed FREE TRIAL must free the one-time flag so the customer can retry —
+            # a trial has no refund path (price 0), so without this they'd be stuck unable to
+            # re-claim (same recovery claim_trial does on its own provisioning failure).
+            if order.is_trial and customer.free_trial_used:
+                customer.free_trial_used = False
             order.status = "failed"
             await session.commit()
             counts["refunded"] += 1

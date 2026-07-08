@@ -57,7 +57,12 @@ def _days_left(
     if (order.days or 0) > 0:
         anchor = order.last_renewed_at or order.created_at
         if anchor is not None:
-            return (anchor.date() + dt.timedelta(days=int(order.days)) - today).days
+            # anchor is a UTC timestamp; take the TEHRAN-local day (raw .date() gave the UTC
+            # day, so an order created 00:00–03:29 Tehran expired a day early and the final
+            # «امروز منقضی می‌شود» reminder could be skipped). Same fix as the dunning bug.
+            from app.services.periods import to_local_date
+
+            return (to_local_date(anchor) + dt.timedelta(days=int(order.days)) - today).days
     return None
 
 

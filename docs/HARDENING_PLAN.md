@@ -355,7 +355,11 @@ sub-interim-matches-invoice (deleted user ≥ cutoff), rate-staleness fallback
 
 ## H10 - Storefront money & co-admin completion
 
-Priority: P1 (double-credit). Version: PATCH. Status: TODO. No migration.
+Priority: P1 (double-credit). Version: PATCH. Status: DONE in `v1.60.1`. No migration.
+(confirm_topup/reject_topup already locked+re-checked as of v1.59.1; H10 added the same lock
+to manual_adjust, the provision step-3 CAS + refund guard, the co-admin notify fan-out was
+already shipped in v1.59.1, and the banned/invalid co-admin guards + broadcast filter +
+reaper trial reset + expiry tz here.)
 
 - `storefront_wallet.py:47-73` `confirm_topup` + `:89-107` `manual_adjust`: plain
   read-modify-write — owner + co-admin double-tapping the same pending top-up

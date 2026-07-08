@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.1 - 2026-07-08
+
+Hardening batch H10 (`docs/HARDENING_PLAN.md`) — storefront money & co-admin safety.
+
+### Fixed
+
+- **A purchase whose provisioning ran long can no longer be refunded twice or leave a
+  charged-but-empty order.** The final step of a purchase now checks whether the background
+  reaper already finalized the order and defers to it, and only refunds once.
+- **A manual wallet adjustment locks the customer row**, so two admins editing the same
+  wallet at once can't lose an update.
+- **A free trial that the reaper had to fail is now re-claimable** (its one-time flag is
+  reset — a trial has no refund path, so otherwise the customer was stuck).
+- A shop broadcast no longer reaches banned customers; a banned customer (or a non-numeric
+  id) can't be appointed as a co-admin.
+- A shop config's expiry countdown now uses the Tehran day, so an order created just after
+  midnight Tehran time no longer expires a day early (and its final "expires today" reminder
+  isn't skipped).
+
 ## 1.60.0 - 2026-07-08
 
 Hardening batch H09 (`docs/HARDENING_PLAN.md`) — billing engine hardening + rates.

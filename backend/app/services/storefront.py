@@ -105,7 +105,11 @@ def is_shop_admin(bot: StorefrontBot, reseller: Reseller | None, user_id: int) -
 
 
 async def add_co_admin(session: AsyncSession, bot: StorefrontBot, telegram_id: int) -> str:
-    """Appoint a co-admin. Returns 'ok' | 'exists' | 'is_owner' | 'full'."""
+    """Appoint a co-admin. Returns 'ok' | 'exists' | 'is_owner' | 'full' | 'invalid' | 'banned'."""
+    # A Telegram user-id is always a positive integer — reject junk in the service layer, not
+    # only in the handler (defense in depth for the portal/API/future callers).
+    if not isinstance(telegram_id, int) or telegram_id <= 0:
+        return "invalid"
     reseller = await session.get(Reseller, bot.reseller_id)
     if reseller is not None and reseller.bot_chat_id == telegram_id:
         return "is_owner"
@@ -114,6 +118,19 @@ async def add_co_admin(session: AsyncSession, bot: StorefrontBot, telegram_id: i
         return "exists"
     if len(ids) >= MAX_CO_ADMINS:
         return "full"
+    # Appointing a currently-BANNED customer as co-admin would silently un-ban them for admin
+    # use (the ban gate short-circuits admins) — a confusing hidden state. Refuse it.
+    banned = (
+        await session.execute(
+            select(StorefrontCustomer.id).where(
+                StorefrontCustomer.storefront_bot_id == bot.id,
+                StorefrontCustomer.telegram_id == telegram_id,
+                StorefrontCustomer.banned.is_(True),
+            ).limit(1)
+        )
+    ).first()
+    if banned:
+        return "banned"
     ids.append(telegram_id)
     bot.co_admin_ids = ",".join(str(i) for i in ids)
     await session.commit()
@@ -276,11 +293,16 @@ async def get_or_create_customer(
 
 
 async def list_customers(session: AsyncSession, storefront_bot_id: int) -> list[StorefrontCustomer]:
+    """Non-banned customers of a shop (used by broadcast). Banned customers are excluded —
+    a broadcast must not reach someone the admin blocked (matches the expiry-reminder sweep)."""
     return list(
         (
             await session.execute(
                 select(StorefrontCustomer)
-                .where(StorefrontCustomer.storefront_bot_id == storefront_bot_id)
+                .where(
+                    StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+                    StorefrontCustomer.banned.is_(False),
+                )
                 .order_by(StorefrontCustomer.created_at.desc())
             )
         ).scalars().all()

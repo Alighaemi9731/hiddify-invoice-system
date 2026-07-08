@@ -481,6 +481,8 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             "exists": f"این آیدی ({target_id}) از قبل مدیر است.",
             "is_owner": "این آیدیِ خودِ شماست؛ شما مدیرِ اصلی هستید.",
             "full": f"حداکثر {storefront.MAX_CO_ADMINS} مدیرِ اضافه مجاز است.",
+            "invalid": "آیدیِ نامعتبر است؛ یک عددِ مثبت بفرستید.",
+            "banned": "این کاربر مسدود است؛ ابتدا رفعِ مسدودی کنید، سپس مدیر کنید.",
         }.get(result, "خطا در افزودنِ مدیر.")
         await message.answer(rtl(note), reply_markup=kb.admin_reply_kb())
         await _send_admins_panel(message.answer, s, sf, reseller)
