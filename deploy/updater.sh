@@ -41,6 +41,12 @@ write_status() {
 run_update() {
   rm -f "$REQUEST"
   write_status "running" "در حال دریافت آخرین نسخه و بازسازی…"
+  # Rotate the append-only host log before it grows unbounded (Docker's log caps don't apply
+  # to this host file). Keep one previous copy; truncate once it passes ~1 MiB.
+  if [[ -f "$UPDATE_DIR/update.log" ]] && \
+     [[ "$(wc -c <"$UPDATE_DIR/update.log" 2>/dev/null || echo 0)" -gt 1048576 ]]; then
+    mv -f "$UPDATE_DIR/update.log" "$UPDATE_DIR/update.log.1"
+  fi
   # Resolve latest once, then download and verify that exact release asset. No mutable
   # branch script is ever piped into a root shell.
   if DEST="$REPO_DIR" RELEASE_TAG=latest IN_PANEL_UPDATE=1 \

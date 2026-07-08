@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.60.3 - 2026-07-08
+
+Hardening batch H12 (`docs/HARDENING_PLAN.md`) — security & deploy hardening.
+
+### Fixed
+
+- The login rate-limiter's memory can no longer be grown without bound by an attacker
+  sending a unique username per request (buckets are evicted and hard-capped).
+- The unauthenticated captcha endpoint is throttled per IP so it can't be used as a
+  CPU/memory amplifier.
+- Caddy (the single web ingress) now has a healthcheck, so a wedged proxy is detected and
+  restarted instead of silently taking the site down.
+- Deploy hygiene: the rollback script warns that database migrations aren't rolled back;
+  the installer creates `.env` with locked-down permissions before writing secrets into it;
+  the in-panel updater rotates its host log; the fresh-server bootstrap script now clearly
+  says to use the checksum-verified installer for all updates; the deploy README documents
+  the (already shipped) optional backup passphrase and configurable backup interval.
+
+### Deferred (need a maintenance window)
+
+- Scoping the Caddy admin API to a backend-only network and running the backend/bot
+  containers as a non-root user — both risk disrupting the live single-server stack (HTTPS
+  and volume permissions) and are internal defense-in-depth; tracked in
+  `docs/HARDENING_PLAN.md` H12.
+
 ## 1.60.2 - 2026-07-08
 
 Hardening batch H11 (`docs/HARDENING_PLAN.md`) — bot state hygiene & UX correctness.

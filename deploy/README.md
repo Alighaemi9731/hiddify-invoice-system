@@ -51,19 +51,24 @@ sudo bash deploy/rollback.sh v1.37.46                                           
 ```
 
 ## Backups
-Automatic backups (DB + settings) are sent to the owner's
-Telegram PV every 2 hours, and can be downloaded/sent on demand from
-**Account & Backup**. To restore: upload a backup zip there, or send it to the bot,
-then restart both application processes so they reload the restored encryption key:
+Automatic backups (DB + settings) are sent to the owner's Telegram PV on a
+configurable interval (`backup_interval_hours` in Settings; default every few
+hours), and can be downloaded/sent on demand from **Account & Backup**. After a
+successful restore the backend and bot **self-restart** to reload the restored
+encryption key; if you restore by hand, restart them yourself:
 
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.prod.yml restart backend bot
 ```
 
-Before relying on a backup, verify that the ZIP contains a non-empty PostgreSQL dump.
-Treat every backup archive as highly sensitive: it carries the encryption material
-needed for cross-server restore and is not currently password-protected.
-The hardened backup/restore work is tracked in `docs/REMEDIATION_PLAN.md` B02.
+Restore is atomic (`psql --single-transaction`, with a pre-restore safety dump), and
+the backend refuses to produce a backup that has no usable database image.
+
+Treat every backup archive as highly sensitive — it carries the encryption material
+needed for a cross-server restore. **Optional passphrase encryption is available**: set
+`backup_passphrase` in Settings and the archive is encrypted (PBKDF2 → Fernet) before it
+leaves the server. It is off by default; enable it if backups are stored or forwarded
+anywhere outside the owner's own Telegram chat.
 
 ## Release and deploy
 

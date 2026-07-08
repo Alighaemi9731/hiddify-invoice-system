@@ -69,6 +69,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   c "Generating $ENV_FILE …"
   SECRET_KEY="$(rand 48 44)"
   DB_PASS="$(rand 24 24)"
+  # Create the file 600 BEFORE writing any secret into it — otherwise there is a brief window
+  # where the SECRET_KEY / DB password sit in a world-readable file (umask default) until the
+  # chmod below. `install -m 600 /dev/null` makes an empty 0600 file first.
+  install -m 600 /dev/null "$ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 APP_ENV=production
 SECRET_KEY=$SECRET_KEY

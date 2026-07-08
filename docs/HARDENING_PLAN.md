@@ -438,8 +438,14 @@ justification, `_safe_int`/paychain/invoice-view cases in `test_bot_resilience.p
 
 ## H12 - Security & deploy hardening
 
-Priority: P2. Version: PATCH. Status: TODO. No migration. Deploy-sensitive — verify the
-setup wizard + HTTPS still work in production smoke.
+Priority: P2. Version: PATCH. Status: DONE in `v1.60.3`. No migration. Deploy-sensitive.
+(Done: loginsec bucket eviction + hard cap; per-IP captcha throttle; caddy healthcheck;
+rollback.sh migration warning; install.sh 600-before-write; updater.sh log rotation;
+bootstrap.sh loud "updates use the verified path" warning; README backup-passphrase/interval
+fix. DEFERRED to a maintenance window (both risk breaking the LIVE single-server stack —
+HTTPS/domain-setup and volume permissions — and are internal defense-in-depth against an
+already-compromised owner/container): Caddy admin network scoping and the non-root
+Dockerfile USER. Documented here so they aren't lost.)
 
 - `core/loginsec.py:31-71`: `_buckets` grows without bound (a bucket per failed
   `(username, IP)` and per username, evicted only on successful login) — add

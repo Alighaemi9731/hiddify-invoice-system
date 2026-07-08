@@ -140,6 +140,15 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    # Caddy is the single ingress; without a healthcheck a wedged Caddy (config-reload
+    # deadlock / FD exhaustion) keeps reporting "running" while the site is down. Probe its
+    # admin endpoint (localhost only, always up when Caddy is healthy).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   db_data:

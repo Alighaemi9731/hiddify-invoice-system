@@ -17,6 +17,22 @@
 # ============================================================================
 set -euo pipefail
 
+cat >&2 <<'WARN'
+────────────────────────────────────────────────────────────────────────────
+  ⚠️  This bootstrap pulls the mutable `main` branch and runs it as root. Use it
+  ONLY for the very FIRST install on a brand-new server (establishing trust).
+  For every UPDATE afterwards use the checksum-verified path instead — it
+  downloads one immutable, SHA-256-verified GitHub Release and never pipes
+  mutable branch code into a root shell:
+
+      sudo bash deploy/release-installer.sh          # update to latest
+      sudo bash deploy/rollback.sh vX.Y.Z            # roll back
+
+  (Re-running this bootstrap on an existing install would replace the verified
+  checkout with un-verified `main` — don't.)
+────────────────────────────────────────────────────────────────────────────
+WARN
+
 REPO="${REPO:-git@github.com:Alighaemi9731/hiddify-invoice-system.git}"
 KEY="${KEY:-$HOME/.ssh/invoice_deploy}"
 DEST="${DEST:-/opt/hiddify-invoice-system}"

@@ -29,6 +29,30 @@ class _Bucket:
 
 
 _buckets: dict[str, _Bucket] = {}
+# Hard cap on the number of tracked buckets. Without eviction, an unauthenticated attacker
+# POSTing a unique random username per request grows _buckets without bound until restart
+# (each failed attempt — even a failed captcha — creates one). Evict elapsed buckets on
+# insert, and if still over the cap drop the oldest-expiring ones.
+_MAX_BUCKETS = 50_000
+
+
+def _evict_buckets(now: float) -> None:
+    """Drop buckets whose window AND lockout have both elapsed; if still over the cap, drop the
+    entries closest to expiry. O(n) but only walks when inserting a NEW key."""
+    dead = [
+        k for k, b in _buckets.items()
+        if b.locked_until < now and (not b.fails or now - max(b.fails) >= WINDOW_SECONDS)
+    ]
+    for k in dead:
+        _buckets.pop(k, None)
+    if len(_buckets) > _MAX_BUCKETS:
+        # Keep the freshest (highest lockout / most recent failure); drop the rest.
+        def _freshness(item: tuple[str, _Bucket]) -> float:
+            b = item[1]
+            return max(b.locked_until, max(b.fails) if b.fails else 0.0)
+
+        for k, _b in sorted(_buckets.items(), key=_freshness)[: len(_buckets) - _MAX_BUCKETS]:
+            _buckets.pop(k, None)
 
 
 def _ip_key(username: str, ip: str) -> str:
@@ -56,6 +80,7 @@ def record_failure(username: str, ip: str) -> int:
     hits its cap. Returns the per-IP remaining attempts before lockout (0 = now locked)."""
     now = time.time()
     ip_remaining = MAX_ATTEMPTS
+    _evict_buckets(now)  # bound the map before we may insert new keys
     for k, cap, is_ip in ((_ip_key(username, ip), MAX_ATTEMPTS, True),
                           (_user_key(username), GLOBAL_MAX_ATTEMPTS, False)):
         b = _buckets.setdefault(k, _Bucket())
@@ -90,6 +115,30 @@ def _gc_captchas() -> None:
     now = time.time()
     for cid in [c for c, (_, exp) in _captchas.items() if exp < now]:
         _captchas.pop(cid, None)
+
+
+# Per-IP throttle for the UNAUTHENTICATED captcha endpoint: rendering a PNG (PIL, 280 speckle
+# points) is a cheap CPU/memory amplifier if hammered. Allow a generous burst for a real
+# login page, then reject.
+_CAPTCHA_MAX_PER_WINDOW = 30
+_CAPTCHA_WINDOW = 60.0
+_captcha_hits: dict[str, list[float]] = {}
+
+
+def captcha_allowed(ip: str) -> bool:
+    """True if this IP may fetch another captcha now. Sliding-window; self-evicting."""
+    now = time.time()
+    # Opportunistic cleanup so this map can't grow without bound either.
+    if len(_captcha_hits) > _MAX_BUCKETS:
+        for k in [k for k, v in _captcha_hits.items() if not v or now - v[-1] > _CAPTCHA_WINDOW]:
+            _captcha_hits.pop(k, None)
+    hits = [t for t in _captcha_hits.get(ip or "?", []) if now - t < _CAPTCHA_WINDOW]
+    if len(hits) >= _CAPTCHA_MAX_PER_WINDOW:
+        _captcha_hits[ip or "?"] = hits
+        return False
+    hits.append(now)
+    _captcha_hits[ip or "?"] = hits
+    return True
 
 
 def new_captcha() -> tuple[str, str]:

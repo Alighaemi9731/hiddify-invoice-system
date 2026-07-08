@@ -61,7 +61,11 @@ def _token_for(user: AppUser) -> str:
 
 
 @router.get("/captcha", response_model=CaptchaOut)
-async def get_captcha() -> CaptchaOut:
+async def get_captcha(request: Request) -> CaptchaOut:
+    # Unauthenticated + renders a PNG → throttle per IP so it can't be used as a CPU/memory
+    # amplifier (the real login page needs only a handful per minute).
+    if not loginsec.captcha_allowed(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="درخواست بیش از حد؛ کمی بعد دوباره تلاش کنید.")
     cid, img = loginsec.new_captcha()
     return CaptchaOut(captcha_id=cid, image=img)
 

@@ -9,6 +9,17 @@ TAG="${1:-}"
   exit 1
 }
 
+cat >&2 <<'WARN'
+────────────────────────────────────────────────────────────────────────────
+  ⚠️  DATABASE MIGRATIONS ARE NOT ROLLED BACK.
+  Rolling back only restores older CODE; the schema stays at whatever the newer
+  release migrated it to. Additive migrations are usually tolerated by older
+  code, but if the release you are leaving contained a migration (see its
+  CHANGELOG entry), restore the pre-upgrade pg_dump you took before deploying
+  if the app misbehaves after this rollback.
+────────────────────────────────────────────────────────────────────────────
+WARN
+
 RELEASE_TAG="$TAG" \
 DEST="$REPO_DIR" \
 RELEASE_CACHE_DIR="${RELEASE_CACHE_DIR:-$REPO_DIR/update/releases}" \
