@@ -497,19 +497,24 @@ async def update_reseller(
     r = await session.get(Reseller, reseller_id)
     if not r:
         raise HTTPException(404, "Reseller not found")
-    if body.price_per_gb is not None:
-        r.price_per_gb = body.price_per_gb or None
-    if body.min_sale_toman is not None:
-        # Keep an explicit 0 ("no minimum-sale floor") as 0 — `or None` used to coerce it to
-        # None, silently reverting the reseller to the global default floor.
-        r.min_sale_toman = int(body.min_sale_toman)
-    if body.exclude_from_billing is not None:
-        r.exclude_from_billing = body.exclude_from_billing
-    if body.storefront_enabled is not None:
-        r.storefront_enabled = body.storefront_enabled
-    if body.storefront_monthly_fee_toman is not None:
-        # 0 = use the global default fee (NULL); a positive value overrides per-reseller.
-        r.storefront_monthly_fee_toman = body.storefront_monthly_fee_toman or None
+    # Gate on PRESENCE (model_fields_set), not truthiness: the edit dialog sends explicit
+    # JSON null to CLEAR a per-reseller override back to the global default. `is not None`
+    # couldn't tell an explicit null from an absent field, so «خالی = پیش‌فرض» silently did
+    # nothing (a stale price/min-sale/fee override survived, with a false success toast).
+    data = body.model_dump(exclude_unset=True)
+    if "price_per_gb" in data:
+        # null OR 0 → clear to the global default; a positive value overrides.
+        r.price_per_gb = data["price_per_gb"] or None
+    if "min_sale_toman" in data:
+        # null → clear to the global default; 0 is the distinct "no floor" state; >0 overrides.
+        r.min_sale_toman = data["min_sale_toman"]
+    if "storefront_monthly_fee_toman" in data:
+        # null OR 0 → use the global default fee (NULL); a positive value overrides.
+        r.storefront_monthly_fee_toman = data["storefront_monthly_fee_toman"] or None
+    if data.get("exclude_from_billing") is not None:
+        r.exclude_from_billing = data["exclude_from_billing"]
+    if data.get("storefront_enabled") is not None:
+        r.storefront_enabled = data["storefront_enabled"]
     await session.commit()
     default_price = await pricing.get_default_price_per_gb(session)
     panel = await session.get(Panel, r.panel_id)

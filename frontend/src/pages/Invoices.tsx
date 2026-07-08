@@ -32,6 +32,7 @@ import { useDialogState } from "../hooks/useDialogState";
 import { useXsFullScreen } from "../responsive";
 import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
+import { MONEY_KEYS } from "../queryKeys";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import LiveRate from "../components/LiveRate";
@@ -86,6 +87,10 @@ export default function Invoices() {
   const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
   const mut = (fn: any, ok: any) =>
     useToastMutation({ show, mutationFn: fn, success: ok, invalidate: ["invoices"] });
+  // Money-changing mutations must also refresh Payments/Dashboard/Debts (a mark-paid/unpay
+  // here flips state those views show) — the same dependent set Payments.tsx uses.
+  const moneyMut = (fn: any, ok: any) =>
+    useToastMutation({ show, mutationFn: fn, success: ok, invalidate: MONEY_KEYS });
 
   const gen = mut(
     () => generateInvoices({ period }),
@@ -107,21 +112,25 @@ export default function Invoices() {
   );
   const sendAll = mut(() => sendPeriod(period), (r: any) => `ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون ربات، ${r.failed || 0} ناموفق`);
   const sendOne = mut((id: number) => sendInvoice(id), (r: any) => `ارسال: ${r.delivery_status}`);
-  const pay = mut((id: number) => markInvoicePaid(id), "به‌عنوان پرداخت‌شده ثبت شد");
-  const recompute = mut(
+  const pay = moneyMut((id: number) => markInvoicePaid(id), "به‌عنوان پرداخت‌شده ثبت شد");
+  const recompute = moneyMut(
     (id: number) => recomputeInvoice(id),
     (r: any) => `بازمحاسبه شد: ${fmtGb(r.usage_gb)} — ${fmtToman(r.amount_toman)}` + (r.synced ? "" : " (همگام‌سازی پنل ناموفق بود؛ از دادهٔ قبلی محاسبه شد)"),
   );
-  const unpay = mut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت قبل)");
-  const toDraft = mut((id: number) => revertInvoiceToDraft(id), "به پیش‌نویس بازگردانده شد");
-  const saveDefer = useToastMutation({
+  const unpay = moneyMut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت قبل)");
+  const toDraft = moneyMut((id: number) => revertInvoiceToDraft(id), "به پیش‌نویس بازگردانده شد");
+  // Takes the deadline as an argument so «حذف مهلت» can pass "" directly instead of relying on
+  // a setState + setTimeout(0) landing before the mutation reads it (fragile under concurrent
+  // React scheduling — the old code could submit the STALE deadline). Money-relevant (a defer
+  // pauses dunning), so use the dependent invalidation set.
+  const saveDefer = useToastMutation<any, string>({
     show,
-    mutationFn: () => deferInvoice(deferRow.id, {
-      deferred_until: deferRow.deferred_until || null, defer_note: deferRow.defer_note || "",
+    mutationFn: (until: string) => deferInvoice(deferRow.id, {
+      deferred_until: until || null, defer_note: deferRow.defer_note || "",
     }),
-    success: () => (deferRow.deferred_until ? "مهلت ثبت شد" : "مهلت حذف شد"),
+    success: (_d, until) => (until ? "مهلت ثبت شد" : "مهلت حذف شد"),
     onSuccess: () => deferDlg.close(),
-    invalidate: ["invoices"],
+    invalidate: MONEY_KEYS,
   });
   const saveEdit = useToastMutation({
     show,
@@ -311,7 +320,7 @@ export default function Invoices() {
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
-            {filtered.length === 0 && <TableRow><TableCell colSpan={9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
+            {filtered.length === 0 && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>
@@ -412,9 +421,9 @@ export default function Invoices() {
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button color="error" onClick={() => { deferDlg.setData({ ...deferRow, deferred_until: "" }); setTimeout(() => saveDefer.mutate(), 0); }}>حذف مهلت</Button>
+            <Button color="error" onClick={() => saveDefer.mutate("")}>حذف مهلت</Button>
             <Button onClick={deferDlg.close}>انصراف</Button>
-            <Button variant="contained" onClick={() => saveDefer.mutate()} disabled={saveDefer.isPending || !deferRow.deferred_until}>ثبت مهلت</Button>
+            <Button variant="contained" onClick={() => saveDefer.mutate(deferRow.deferred_until)} disabled={saveDefer.isPending || !deferRow.deferred_until}>ثبت مهلت</Button>
           </DialogActions>
         </>)}
       </Dialog>

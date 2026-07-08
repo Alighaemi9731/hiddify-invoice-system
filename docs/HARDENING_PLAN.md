@@ -250,7 +250,9 @@ collision test (keeper/NULL-loser/notes).
 
 ## H07 - PATCH null-vs-absent semantics + frontend forms
 
-Priority: P1 (billing-relevant, false success). Version: PATCH. Status: TODO. No migration.
+Priority: P1 (billing-relevant, false success). Version: PATCH. Status: DONE in `v1.59.8`. No migration.
+(Panels PATCH left on `is not None` — its fields can't be nulled, so null = no-op is already
+correct there; only the reseller override-clear path was the bug.)
 
 - `api/resellers.py:500-512` (`update_reseller`) gates every field on `is not None`, so
   the explicit JSON `null` the edit dialog sends to clear

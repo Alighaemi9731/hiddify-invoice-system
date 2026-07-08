@@ -27,11 +27,12 @@ import { nestedCardBg } from "../theme";
 import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActionsMenu";
 import { useXsFullScreen } from "../responsive";
 import { downloadCsv } from "../csv";
+import { MONEY_KEYS } from "../queryKeys";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
 
 // A confirm/reject/delete can flip an invoice paid↔owed, so refresh the dependent views too.
-const DEPENDENT_KEYS = ["payments", "invoices", "dashboard", "debts"];
+const DEPENDENT_KEYS = MONEY_KEYS;
 
 export default function Payments() {
   const { node, show } = useToast();

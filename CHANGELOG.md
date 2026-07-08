@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.59.8 - 2026-07-08
+
+Hardening batch H07 (`docs/HARDENING_PLAN.md`) — reseller override clearing + frontend
+form fixes.
+
+### Fixed
+
+- **Emptying a per-reseller price / min-sale / storefront-fee override now actually clears
+  it.** The edit dialog promised «خالی = پیش‌فرض», but the backend ignored the clear and kept
+  the old value while showing «ذخیره شد» — so, for example, a one-off 500,000 T min-sale
+  floor set on a reseller stuck to every future invoice with no way to remove it from the UI.
+  Clearing a field now returns the reseller to the global default (0 in the min-sale field
+  still means the distinct "no floor" state).
+- «حذف مهلت» (clear a payment deadline) now submits reliably instead of depending on a
+  timing quirk that could re-submit the old deadline.
+- Marking an invoice paid / unpaid / reverting to draft on the Invoices page now refreshes
+  the Payments, Dashboard, and Debts views too.
+- Clearing a numeric field in Settings no longer silently stages a 0 (e.g. clearing the
+  USDT rate can't accidentally save rate 0); the empty field is left untouched until you
+  type a value. Fixed a cosmetic column-span on the empty invoice table.
+
 ## 1.59.7 - 2026-07-08
 
 Hardening batch H06 (`docs/HARDENING_PLAN.md`) — TON txid canonicalization. Migration

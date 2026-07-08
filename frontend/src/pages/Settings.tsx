@@ -433,7 +433,9 @@ export default function Settings() {
       return <TextField key={f.key} label={f.label} type="number" value={v ?? 0} fullWidth size="small"
         inputProps={bounded ? { min: f.min, max: f.max } : undefined}
         helperText={[f.help, range].filter(Boolean).join(" — ") || undefined}
-        onChange={(e) => setVal(f.key, Number(e.target.value))} />;
+        // An emptied field must stay UNTOUCHED, not silently stage 0 — `Number("")` is 0, and
+        // saving a spuriously-zeroed rate/threshold is easy to miss. Ignore the empty string.
+        onChange={(e) => { if (e.target.value !== "") setVal(f.key, Number(e.target.value)); }} />;
     }
     return <TextField key={f.key} label={f.label} value={v ?? ""} fullWidth size="small"
       inputProps={f.dir === "ltr" ? { dir: "ltr" } : undefined}
