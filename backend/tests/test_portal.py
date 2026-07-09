@@ -616,3 +616,37 @@ def test_capacity_request_keyboard_variants():
     no_amount = [b.callback_data for row in kb.capacity_request_keyboard(7, 0).inline_keyboard for b in row]
     assert not any(d.startswith("capok:") for d in no_amount)  # nothing to approve without an amount
     assert "capmore:7" in no_amount and "capno:7" in no_amount
+
+
+def test_sales_by_month_aggregates_and_delta():
+    """#16 — the portal monthly-sales endpoint sums own+subtree per month (oldest→newest) and
+    computes the current-vs-previous delta. 10 GB this month vs 5 GB last → current = 2× previous."""
+    import datetime as _dt
+
+    from app.models import EndUserSnapshot
+    from app.services.periods import current_month
+
+    async def body(s):
+        a, _b, _ia, _ib = await _seed(s, with_payments=False)
+        ctx_a = await get_current_reseller(create_portal_session_token(111), s)
+        cur = current_month()
+        prev_last = cur.start - _dt.timedelta(days=1)
+        sd_prev = _dt.date(prev_last.year, prev_last.month, 1)
+        s.add_all([
+            EndUserSnapshot(panel_id=a.panel_id, user_uuid="su-cur", added_by_uuid=a.admin_uuid,
+                            usage_limit_gb=10, current_usage_gb=0, start_date=cur.start,
+                            enable=True, is_active=True),
+            EndUserSnapshot(panel_id=a.panel_id, user_uuid="su-prev", added_by_uuid=a.admin_uuid,
+                            usage_limit_gb=5, current_usage_gb=0, start_date=sd_prev,
+                            enable=True, is_active=True),
+        ])
+        await s.commit()
+
+        out = await portal.sales_by_month(months=3, ctx=ctx_a, session=s)
+        labels = [m["label"] for m in out["months"]]
+        assert len(labels) == 3 and labels == sorted(labels)          # oldest→newest
+        assert out["months"][-1]["amount_toman"] > 0                  # current month billed
+        prev = out["summary"]["previous_toman"]
+        assert prev > 0 and out["summary"]["current_toman"] == 2 * prev
+        assert out["summary"]["delta_pct"] == 100.0
+    _run(body)

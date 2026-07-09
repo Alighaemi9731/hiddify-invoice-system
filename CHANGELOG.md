@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.67.0 - 2026-07-09
+
+### Added
+
+- **Monthly sales chart in the reseller portal.** The portal Dashboard now shows a «فروش ماهانه»
+  bar chart of the reseller's sales — their own plus all their sub-resellers — over the last six
+  months, with a «نسبت به ماه قبل» up/down comparison chip. A reseller who can see their growth sells
+  more. New `GET /api/portal/sales-by-month` reuses `reseller_report.node_report` (the same
+  subtree-scoped, metering-aware source as the interim estimate) and the existing ECharts adapter;
+  no schema change.
+
 ## 1.66.0 - 2026-07-09
 
 ### Added

@@ -7,7 +7,7 @@ import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import GroupIcon from "@mui/icons-material/esm/Group";
 import PaymentIcon from "@mui/icons-material/esm/Payment";
 import { useQuery } from "@tanstack/react-query";
-import { portalSummary, portalPayOptionsAll } from "../portalClient";
+import { portalSummary, portalPayOptionsAll, portalSalesByMonth } from "../portalClient";
 import { usePortalAuth } from "../PortalAuthContext";
 import PayDialog from "../PayDialog";
 import StatCard, { currentPeriod } from "../../components/StatCard";
@@ -17,6 +17,7 @@ import { CountUp, Reveal } from "../../components/motion";
 import { fmtGb, fmtNum, fmtToman } from "../../format";
 import { SectionCard, EmptyState } from "../ui";
 import { dailyTrendOption } from "../dailyTrend";
+import { monthlyTrendOption } from "../monthlyTrend";
 
 const METHOD_LABELS: [keyof PayMethods, string][] = [
   ["card", "کارت به کارت"],
@@ -50,6 +51,15 @@ export default function PortalDashboard() {
   const perReseller = data?.per_reseller || [];
   const trendEmpty = !trend.length || trend.every((d) => !d.amount_toman);
   const trendOption = dailyTrendOption(theme, trend);
+
+  const { data: monthly } = useQuery({
+    queryKey: ["portal-sales-by-month"],
+    queryFn: () => portalSalesByMonth(6),
+  });
+  const monthlyRows = monthly?.months || [];
+  const monthlyEmpty = !monthlyRows.length || monthlyRows.every((m) => !m.amount_toman);
+  const monthlyOption = monthlyTrendOption(theme, monthlyRows);
+  const deltaPct = monthly?.summary.delta_pct ?? null;
 
   const [welcome, setWelcome] = useState(() => !localStorage.getItem("portal_welcome_dismissed"));
   const dismissWelcome = () => { localStorage.setItem("portal_welcome_dismissed", "1"); setWelcome(false); };
@@ -212,6 +222,31 @@ export default function PortalDashboard() {
                 </SectionCard>
               </Grid>
             </Grid>
+          </Reveal>
+
+          <Reveal delay={0.28}>
+            <Box sx={{ mt: 2 }}>
+              <SectionCard
+                title="فروش ماهانه (شش ماه اخیر)"
+                action={deltaPct != null ? (
+                  <Chip
+                    size="small"
+                    color={deltaPct >= 0 ? "success" : "error"}
+                    label={`${deltaPct >= 0 ? "▲" : "▼"} ${fmtNum(Math.abs(deltaPct))}٪ نسبت به ماه قبل`}
+                    sx={{ fontWeight: 700 }}
+                  />
+                ) : undefined}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+                  فروشِ شما و زیرمجموعه‌ها در شش ماه اخیر
+                </Typography>
+                {monthlyEmpty ? (
+                  <EmptyState>فروشی در ماه‌های اخیر ثبت نشده است.</EmptyState>
+                ) : (
+                  <EChart option={monthlyOption} height={300} ariaLabel="فروش ماهانه" />
+                )}
+              </SectionCard>
+            </Box>
           </Reveal>
         </>
       )}

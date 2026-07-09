@@ -174,6 +174,39 @@ async def summary(
     }
 
 
+@router.get("/sales-by-month")
+async def sales_by_month(
+    months: int = 6,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Monthly sales (own + all sub-resellers) across the caller's reseller rows, oldest→newest,
+    plus a current-vs-previous comparison. Reuses `reseller_report.node_report` (subtree-scoped,
+    metering-aware) — the same source the «interim» estimate and the /subs report use."""
+    months = max(2, min(int(months or 6), 12))
+    agg: dict[str, dict] = {}
+    for r in ctx.resellers:
+        rep = await reseller_report.node_report(session, r, months=months)
+        for m in rep.get("months", []):
+            row = agg.setdefault(
+                m["label"], {"label": m["label"], "amount_toman": 0, "gb": 0.0, "new_services": 0})
+            row["amount_toman"] += int(m["amount_toman"])
+            row["gb"] += float(m["gb"])
+            row["new_services"] += int(m["new_services"])
+    # node_report yields newest-first; YYYY-MM labels sort correctly → oldest→newest for the chart.
+    rows = [agg[k] for k in sorted(agg)]
+    for row in rows:
+        row["gb"] = round(row["gb"], 2)
+    labels_desc = sorted(agg, reverse=True)
+    cur = agg[labels_desc[0]]["amount_toman"] if labels_desc else 0
+    prev = agg[labels_desc[1]]["amount_toman"] if len(labels_desc) > 1 else 0
+    delta_pct = round((cur - prev) / prev * 100, 1) if prev > 0 else None
+    return {
+        "months": rows,
+        "summary": {"current_toman": cur, "previous_toman": prev, "delta_pct": delta_pct},
+    }
+
+
 # ------------------------------ invoices ------------------------------
 @router.get("/invoices")
 async def invoices(

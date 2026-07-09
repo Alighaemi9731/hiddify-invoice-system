@@ -90,6 +90,14 @@ export interface PortalSummary {
 export const portalSummary = (period?: string) =>
   portalApi.get("/api/portal/summary", { params: { period } }).then((r) => r.data as PortalSummary);
 
+export interface PortalMonthlySales {
+  months: { label: string; amount_toman: number; gb: number; new_services: number }[];
+  summary: { current_toman: number; previous_toman: number; delta_pct: number | null };
+}
+export const portalSalesByMonth = (months = 6) =>
+  portalApi.get("/api/portal/sales-by-month", { params: { months } })
+    .then((r) => r.data as PortalMonthlySales);
+
 // ---- invoices ----
 export interface PortalInvoice {
   id: number;
