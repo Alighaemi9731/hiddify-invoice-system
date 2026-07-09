@@ -953,6 +953,7 @@ async def verify_payment(
         r = await session.get(Reseller, targets[0].reseller_id)
         if r is not None:
             await notifier.send_to_reseller(session, r, msg, kind=DeliveryKind.payment_ack)
+            await _send_receipt(session, r, payment)
     return PaymentResult("confirmed", True, msg)
 
 
@@ -979,6 +980,21 @@ async def _payment_received_text(session: AsyncSession, period: str, code: int |
     # dangling double space).
     period = (period or "").strip() or "—"
     return await texts.render(session, "tpl_payment_received", period=period) + _ref_line(code)
+
+
+async def _send_receipt(session: AsyncSession, reseller: Reseller | None, payment: Payment) -> None:
+    """Best-effort PDF receipt to the reseller after a payment is confirmed. A render/send failure
+    must NEVER break confirmation, so everything is wrapped — the text ack is the source of truth."""
+    if reseller is None:
+        return
+    try:
+        from app.services import receipt_pdf
+
+        path, _name = await receipt_pdf.render_payment_receipt_pdf(session, payment)
+        await notifier.send_document_to_reseller(
+            session, reseller, path, caption="🧾 رسید پرداخت شما")
+    except Exception:  # noqa: BLE001
+        log.warning("payment receipt send failed for payment %s", payment.id, exc_info=True)
 
 
 async def _payment_rejected_text(session: AsyncSession, period: str, code: int | None = None) -> str:
@@ -1190,6 +1206,7 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
             session, reseller, await _payment_received_text(session, period, payment.id),
             kind=DeliveryKind.payment_ack, invoice_id=payment.invoice_id,
         )
+        await _send_receipt(session, reseller, payment)
     return PaymentResult("confirmed", True, "Confirmed")
 
 

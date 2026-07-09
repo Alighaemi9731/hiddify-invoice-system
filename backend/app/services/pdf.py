@@ -312,3 +312,143 @@ def build_invoice_pdf(
 
     doc.build(elems)
     return output_path
+
+
+def build_receipt_pdf(
+    output_path: str,
+    *,
+    reseller_name: str,
+    owner_name: str,
+    receipt_no: str,
+    issued_at: dt.date,
+    amount_toman: float,
+    method_label: str,
+    invoices: list[dict],
+    chain: str = "",
+    txid: str = "",
+) -> str:
+    """A payment RECEIPT for a reseller (unlike the invoice PDF, this DOES show money — it's the
+    reseller's own confirmed payment to the owner). Green header, tracking number, the invoice
+    period(s) settled + amount, method, and the on-chain txid when present."""
+    reg = _font_or_default(FONT)
+    bold = _font_or_default(BOLD)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    doc = SimpleDocTemplate(
+        output_path, pagesize=A4,
+        topMargin=16 * mm, bottomMargin=16 * mm, leftMargin=14 * mm, rightMargin=14 * mm,
+        title=f"receipt-{receipt_no}",
+    )
+    rightMuted = ParagraphStyle("rm", fontName=reg, fontSize=9, alignment=2, textColor=MUTED, leading=14)
+    val = ParagraphStyle("v", fontName=reg, fontSize=10, alignment=2, textColor=INK, leading=16)
+    ltr_val = ParagraphStyle("lv", fontName=reg, fontSize=10, alignment=0, textColor=INK, leading=16)
+    th = ParagraphStyle("th", fontName=bold, fontSize=9.5, alignment=1, textColor=colors.white, leading=14)
+    cellC = ParagraphStyle("cc", fontName=reg, fontSize=10, alignment=1, textColor=INK, leading=15)
+    elems: list = []
+
+    # ---------- header band (green = paid) ----------
+    title = Paragraph(rtl("رسید پرداخت"),
+                      ParagraphStyle("t", fontName=bold, fontSize=19, textColor=colors.white,
+                                     alignment=2, leading=26))
+    brand = Paragraph(rtl(owner_name or "سامانه مدیریت نمایندگان"),
+                      ParagraphStyle("b", fontName=bold, fontSize=12, textColor=colors.white,
+                                     alignment=0, leading=18))
+    header = Table([[brand, title]], colWidths=[60 * mm, 122 * mm])
+    header.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), GREEN),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 14), ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14), ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+    ]))
+    elems += [header, Spacer(1, 12)]
+
+    elems += [Paragraph(rtl(f"شمارهٔ پیگیری: {_fa_digits(receipt_no)}"),
+                        ParagraphStyle("ino", fontName=bold, fontSize=11, alignment=2,
+                                       textColor=GREEN, leading=16)), Spacer(1, 6)]
+
+    # ---------- meta grid ----------
+    def kv(label, value, vstyle=val):
+        return [Paragraph(rtl(value) if isinstance(value, str) else value, vstyle),
+                Paragraph(rtl(label), rightMuted)]
+
+    def kv_ltr(label, value):
+        return [Paragraph(value, ltr_val), Paragraph(rtl(label), rightMuted)]
+
+    meta = Table(
+        [
+            kv("نماینده", reseller_name, ParagraphStyle("vn", fontName=bold, fontSize=11, alignment=2, textColor=PRIMARY)) +
+            kv("روش پرداخت", method_label),
+            kv_ltr("تاریخ", _fa_digits(issued_at.strftime("%Y-%m-%d"))) +
+            kv("وضعیت", "تأیید شد ✓", ParagraphStyle("ok", fontName=bold, fontSize=10, alignment=2, textColor=GREEN)),
+        ],
+        colWidths=[46 * mm, 45 * mm, 46 * mm, 45 * mm],
+    )
+    meta.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PRIMARY_LT),
+        ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    elems += [meta, Spacer(1, 14)]
+
+    # ---------- settled invoices ----------
+    head = [Paragraph(rtl("ردیف"), th), Paragraph(rtl("دورهٔ فاکتور"), th), Paragraph(rtl("مبلغ (تومان)"), th)]
+    data: list[list[Any]] = [head]
+    for idx, inv in enumerate(invoices, 1):
+        data.append([
+            Paragraph(_fa_digits(str(idx)), cellC),
+            Paragraph(_fa_digits(str(inv.get("period", "") or "—")), cellC),
+            Paragraph(money(float(inv.get("amount_toman", 0))), cellC),
+        ])
+    if not invoices:
+        data.append([Paragraph(_fa_digits("1"), cellC), Paragraph(rtl("پرداخت"), cellC),
+                     Paragraph(money(amount_toman), cellC)])
+    table = Table(data, colWidths=[20 * mm, 90 * mm, 77 * mm], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), PRIMARY),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, STRIPE]),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+        ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elems += [table, Spacer(1, 12)]
+
+    # ---------- total (green) ----------
+    grand = Table(
+        [[Paragraph(rtl(f"{money(amount_toman)} تومان"),
+                    ParagraphStyle("g", fontName=bold, fontSize=15, alignment=2, textColor=colors.white)),
+          Paragraph(rtl("مبلغ کل پرداخت"),
+                    ParagraphStyle("gl", fontName=bold, fontSize=11, alignment=2, textColor=colors.white))]],
+        colWidths=[60 * mm, 55 * mm],
+    )
+    grand.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), GREEN),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 9), ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+    ]))
+    summary_block = Table([["", grand]], colWidths=[72 * mm, 115 * mm])
+    summary_block.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    elems += [summary_block, Spacer(1, 12)]
+
+    # ---------- on-chain txid (LTR, wraps long hashes) ----------
+    if txid:
+        chain_label = {"ton": "TON", "avax": "AVAX", "bsc": "BSC"}.get(chain, (chain or "").upper())
+        if chain_label:
+            elems.append(Paragraph(rtl(f"شبکه: {chain_label}"), rightMuted))
+        elems.append(Paragraph(
+            f"TXID: {txid}",
+            ParagraphStyle("tx", fontName="Courier", fontSize=8, alignment=0, textColor=MUTED, leading=12)))
+        elems.append(Spacer(1, 10))
+
+    elems.append(Paragraph(
+        rtl(f"این رسید به‌صورت خودکار در تاریخ {_fa_digits(issued_at.strftime('%Y-%m-%d'))} صادر شده است."),
+        ParagraphStyle("f", fontName=reg, fontSize=8, alignment=1, textColor=MUTED)))
+
+    doc.build(elems)
+    return output_path

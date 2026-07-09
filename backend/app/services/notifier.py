@@ -11,6 +11,7 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import FSInputFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.telegram import build_bot
@@ -68,3 +69,37 @@ async def send_to_reseller(
         log.warning("Delivery to reseller %s (%s): %s — %s",
                     reseller.id, reseller.name, status.value, error)
     return entry
+
+
+async def send_document_to_reseller(
+    session: AsyncSession,
+    reseller: Reseller,
+    path: str,
+    *,
+    caption: str = "",
+    bot: Bot | None = None,
+) -> bool:
+    """Best-effort: send a reseller a document (e.g. a payment-receipt PDF). Returns True on send.
+    Not logged as a DeliveryLog row (the accompanying text ack already is) and never raises."""
+    if reseller.bot_chat_id is None:
+        return False
+    own_bot = bot is None
+    if bot is None:
+        bot = await build_bot(session)
+    if bot is None:
+        return False
+    from app.bot.rtl import rtl
+    try:
+        await bot.send_document(
+            reseller.bot_chat_id, FSInputFile(path),
+            caption=rtl(caption) if caption else None,
+        )
+        return True
+    except TelegramForbiddenError:
+        return False
+    except Exception:  # noqa: BLE001 — supplementary to the text ack; never break the caller
+        log.warning("document send to reseller %s failed", reseller.id, exc_info=True)
+        return False
+    finally:
+        if own_bot and bot is not None:
+            await bot.session.close()

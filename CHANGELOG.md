@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.62.0 - 2026-07-09
+
+### Added
+
+- **Automatic PDF receipt to the reseller when their payment is confirmed.** As soon as a payment is
+  confirmed — whether the owner taps «تأیید» in the bot, confirms it in the panel, or it clears the
+  optional on-chain check — the reseller now also receives a clean Persian PDF receipt (green header,
+  tracking number, the invoice period(s) settled with amounts, total toman, method, and the txid).
+  It's a professional record and a reference for any dispute. Rendered off the event loop by
+  `receipt_pdf.render_payment_receipt_pdf` (reusing the invoice PDF engine) and sent best-effort, so a
+  render/send hiccup never blocks confirmation. No schema change.
+
 ## 1.61.1 - 2026-07-09
 
 ### Fixed
