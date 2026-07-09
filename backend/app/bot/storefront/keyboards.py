@@ -26,7 +26,6 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("🧾 شارژهای در انتظار", "topups"),
     ("👥 مشتری‌ها", "customers"),
     ("📊 آمار", "stats"),
-    ("🖼 پوستر فروشگاه", "poster"),
     ("📢 پیام همگانی", "broadcast"),
     ("💬 پشتیبانی", "support"),
     ("🛡 مدیرانِ ربات", "admins"),

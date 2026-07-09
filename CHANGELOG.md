@@ -8,6 +8,14 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.68.0 - 2026-07-10
+
+### Removed
+
+- **Removed the one-tap shop poster** (added in v1.64.0). The «🖼 پوستر فروشگاه» option is gone from the
+  storefront admin menu, along with its service (`storefront_poster.py`), the menu entry, the admin
+  handler, and its test. No schema change; nothing else is affected.
+
 ## 1.67.0 - 2026-07-09
 
 ### Added
