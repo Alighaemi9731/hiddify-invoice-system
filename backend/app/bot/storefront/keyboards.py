@@ -29,6 +29,7 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("📢 پیام همگانی", "broadcast"),
     ("💬 پشتیبانی", "support"),
     ("🛡 مدیرانِ ربات", "admins"),
+    ("🔴 وضعیت فروشگاه", "shopstate"),
     ("👤 نمای مشتری", "preview"),
 ]
 CUSTOMER_MENU: list[tuple[str, str]] = [
@@ -255,6 +256,16 @@ def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"وضعیت: {state} (تغییر)", callback_data="sftrialtog")],
         [InlineKeyboardButton(text="✏️ تغییرِ حجم/مدت", callback_data="sftrialset")],
+    ])
+
+
+def shop_state_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
+    """Admin toggles «temporarily closed» on/off and edits the closed message. When closed,
+    customers can't buy/renew (they see the message) but the bot stays online."""
+    toggle_text = "🟢 بازکردنِ فروشگاه" if bot.shop_closed else "🔴 بستنِ موقتِ فروشگاه"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_text, callback_data="sfshoptog")],
+        [InlineKeyboardButton(text="✏️ متنِ پیامِ بسته‌بودن", callback_data="sfshopmsg")],
     ])
 
 

@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.63.0 - 2026-07-09
+
+### Added
+
+- **«فروشگاه موقتاً بسته» — a temporary-closed switch for storefront shops.** A new «🔴 وضعیت فروشگاه»
+  option in the shop's management menu lets the admin flip the shop closed with one tap (and set a
+  custom reason message). While closed, customers can't buy, renew, or claim a free trial — they see
+  the message instead — but the bot stays online and «سرویس‌های من» / «کیف پول» keep working. Useful
+  when the panel is down or the admin is restocking, without the drop-off of a fully offline bot.
+  Migration `b7d9e1f3a5c2` adds `storefront_bots.shop_closed` + `closed_text`.
+
 ## 1.62.0 - 2026-07-09
 
 ### Added

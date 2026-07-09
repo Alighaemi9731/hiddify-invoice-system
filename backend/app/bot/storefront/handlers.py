@@ -67,6 +67,7 @@ class SF(StatesGroup):
     adjust_amount = State()    # admin manual wallet edit; data: customer_id, sign
     support = State()
     welcome = State()          # admin sets the storefront welcome text
+    closed_text = State()      # admin sets the «shop temporarily closed» message
     join_channel = State()     # admin sets the forced-join channel (forward a post / send @id)
     cust_search = State()      # admin searches customers by name / telegram id
     broadcast = State()
@@ -404,6 +405,14 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             await _send_admins_panel(ans, s, sf, reseller)
         else:
             await ans(rtl("فقط مدیرِ اصلیِ فروشگاه می‌تواند مدیران را مدیریت کند."))
+    elif action == "shopstate":
+        state_fa = "🔴 بسته" if sf.shop_closed else "🟢 باز"
+        await ans(rtl(
+            f"وضعیتِ فروشگاه: {state_fa}\n\n"
+            "وقتی «بسته» باشد، مشتری‌ها نمی‌توانند خرید یا تمدید کنند و پیامِ زیر را می‌بینند؛ ربات "
+            "روشن می‌ماند و «سرویس‌های من» و «کیف پول» همچنان کار می‌کند.\n\n"
+            f"پیامِ فعلی: {sf.closed_text or _SHOP_CLOSED_DEFAULT}"),
+            reply_markup=kb.shop_state_kb(sf))
     elif action == "preview":
         await state.update_data(sf_preview=True)
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
@@ -519,9 +528,21 @@ async def sf_del_admin(cb: CallbackQuery, bot: Bot) -> None:
 
 # ── CUSTOMER ──────────────────────────────────────────────────────────────────
 
+_SHOP_CLOSED_DEFAULT = (
+    "🔴 فروشگاه موقتاً بسته است؛ خرید و تمدیدِ سرویس در دسترس نیست. لطفاً بعداً دوباره سر بزنید."
+)
+
+
+def _shop_closed_text(sf: StorefrontBot) -> str:
+    return (sf.closed_text or "").strip() or _SHOP_CLOSED_DEFAULT
+
+
 async def _customer_action(action, message, state, s, sf, customer, bot) -> None:  # noqa: ANN001
     ans = message.answer
     if action == "buy":
+        if sf.shop_closed:  # «temporarily closed» → no buying (bot stays online for the rest)
+            await ans(rtl(_shop_closed_text(sf)))
+            return
         plans = await storefront.list_plans(s, sf.id, only_enabled=True)
         if not plans:
             await ans(rtl("در حال حاضر پلنی برای فروش موجود نیست."))
@@ -561,6 +582,11 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
 async def _claim_free_trial(message, sf_id: int, customer_id: int, bot: Bot) -> None:  # noqa: ANN001
     """Claim the one-time free trial via the concurrency-safe service (compare-and-set + atomic
     provision), then deliver the config. No DB connection is held across the panel/Telegram I/O."""
+    async with SessionLocal() as s:
+        sf = await s.get(StorefrontBot, sf_id)
+    if sf is not None and sf.shop_closed:  # closed → no new configs, incl. free trials
+        await message.answer(rtl(_shop_closed_text(sf)))
+        return
     await message.answer(rtl("🎁 در حال ساختِ تستِ رایگان…"))
     res = await storefront_provision.claim_trial(SessionLocal, sf_id=sf_id, customer_id=customer_id)
     if res.ok and res.sub_link:
@@ -584,6 +610,10 @@ async def sf_buy(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         sf, _reseller, _ = await _resolve(s, bot, cb.from_user)
         if sf is None:
             await cb.answer()
+            return
+        if sf.shop_closed:
+            await cb.answer()
+            await cb.message.answer(rtl(_shop_closed_text(sf)))
             return
         customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
         plan = await s.get(StorefrontPlan, plan_id)
@@ -652,6 +682,10 @@ async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         sf, reseller, _ = await _resolve(s, bot, cb.from_user)
         if sf is None:
             await cb.answer()
+            return
+        if sf.shop_closed:
+            await cb.answer()
+            await cb.message.answer(rtl(_shop_closed_text(sf)))
             return
         customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
         sf_id, customer_id, reseller_id = sf.id, customer.id, sf.reseller_id
@@ -753,6 +787,10 @@ async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
         if order is None or order.status not in ("provisioned", "disabled"):
             await cb.answer("یافت نشد.", show_alert=True)
             return
+        if sf.shop_closed:
+            await cb.answer()
+            await cb.message.answer(rtl(_shop_closed_text(sf)))
+            return
         if order.is_trial:
             await cb.answer()
             await cb.message.answer(rtl(_TRIAL_NO_RENEW))
@@ -775,6 +813,10 @@ async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
         sf, _r, _ = await _resolve(s, bot, cb.from_user)
         if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        if sf.shop_closed:
+            await cb.answer()
+            await cb.message.answer(rtl(_shop_closed_text(sf)))
             return
     await cb.answer()
     await cb.message.answer(rtl("⏳ در حال تمدید…"))
@@ -1697,6 +1739,48 @@ async def sf_join_toggle(cb: CallbackQuery, bot: Bot) -> None:
         await s.commit()
         await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
     await cb.answer("فعال شد." if sf.channel_required else "غیرفعال شد.")
+
+
+@storefront_router.callback_query(F.data == "sfshoptog")
+async def sf_shop_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    """Admin flips «shop temporarily closed» on/off."""
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        sf.shop_closed = not sf.shop_closed
+        await s.commit()
+        now_closed = sf.shop_closed
+        await cb.message.edit_reply_markup(reply_markup=kb.shop_state_kb(sf))
+    await cb.answer("فروشگاه بسته شد." if now_closed else "فروشگاه باز شد.")
+
+
+@storefront_router.callback_query(F.data == "sfshopmsg")
+async def sf_shop_msg(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Admin edits the message customers see while the shop is closed."""
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if sf is None or not is_admin:
+        await cb.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await state.set_state(SF.closed_text)
+    await cb.message.answer(rtl(
+        "متنِ پیامی که هنگامِ بسته‌بودنِ فروشگاه به مشتری نشان داده می‌شود را بفرستید.\n"
+        f"فعلی: {sf.closed_text or _SHOP_CLOSED_DEFAULT}"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.closed_text, F.text)
+async def sf_closed_set(message: Message, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            return
+        sf.closed_text = (message.text or "").strip()[:1000] or None
+        await s.commit()
+    await message.answer(rtl("✅ پیامِ بسته‌بودنِ فروشگاه ذخیره شد."), reply_markup=kb.admin_reply_kb())
 
 
 @storefront_router.callback_query(F.data == "sfjoinclear")

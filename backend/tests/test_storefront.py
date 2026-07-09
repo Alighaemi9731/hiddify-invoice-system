@@ -110,6 +110,44 @@ def test_co_admin_add_remove_and_is_shop_admin(tmp_path):
     _run(body, tmp_path, "coadmin.db")
 
 
+def test_shop_closed_blocks_buy(tmp_path):
+    """A «temporarily closed» shop shows the closed message and does NOT list plans; an open shop
+    lists plans as before. Also covers the closed-text helper (custom vs default)."""
+    from app.bot.storefront import handlers as H
+    from app.models import StorefrontPlan
+
+    async def body(s):
+        _r, bot, cust = await _seed(s)
+        s.add(StorefrontPlan(storefront_bot_id=bot.id, title="P", gb=10, days=30,
+                             price_toman=50000, enabled=True))
+        await s.commit()
+
+        assert H._shop_closed_text(bot) == H._SHOP_CLOSED_DEFAULT      # default when unset
+        bot.closed_text = "فعلاً بسته‌ایم"
+        assert H._shop_closed_text(bot) == "فعلاً بسته‌ایم"            # custom text
+
+        sent: list = []
+
+        class FakeMsg:
+            async def answer(self, text: str = "", **kw):  # noqa: ANN003
+                sent.append((text, kw.get("reply_markup")))
+
+        # Closed → one message, NO plans keyboard.
+        bot.shop_closed = True
+        await s.commit()
+        await H._customer_action("buy", FakeMsg(), None, s, bot, cust, None)
+        assert len(sent) == 1 and sent[0][1] is None
+
+        # Open → plans are listed (a keyboard is attached).
+        bot.shop_closed = False
+        await s.commit()
+        sent.clear()
+        await H._customer_action("buy", FakeMsg(), None, s, bot, cust, None)
+        assert len(sent) == 1 and sent[0][1] is not None
+
+    _run(body, tmp_path, "shopclosed.db")
+
+
 def test_topup_confirm_credits_once_and_purchase_is_atomic(tmp_path):
     async def body(s):
         _r, _bot, cust = await _seed(s)

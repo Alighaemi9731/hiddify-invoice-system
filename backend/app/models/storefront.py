@@ -87,6 +87,12 @@ class StorefrontBot(Base, TimestampMixin):
     # owning reseller's own `bot_chat_id`. Lets the shop owner appoint co-managers.
     co_admin_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # «Temporarily closed» switch: when on, customers can't buy/renew (they see `closed_text`), but
+    # the bot stays online and the rest of the menu (my services, wallet) still works. Distinct from
+    # `enabled` (which stops the bot's polling entirely).
+    shop_closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    closed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     plans: Mapped[list[StorefrontPlan]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
     )
