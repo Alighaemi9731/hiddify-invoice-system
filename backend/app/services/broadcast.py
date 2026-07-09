@@ -25,9 +25,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.telegram import build_bot
-from app.models import EndUserSnapshot, Invoice, Panel, Reseller
-from app.models.enums import InvoiceStatus
+from app.models import EndUserSnapshot, Invoice, Panel, Payment, Reseller
+from app.models.enums import EnforcementState, InvoiceStatus, PaymentStatus
 from app.services import owner_notify, reseller_stats
+from app.services.periods import today as tehran_today
 
 log = logging.getLogger("broadcast")
 
@@ -73,8 +74,22 @@ def current_status() -> dict[str, Any]:
     return dict(_status)
 
 # Audience filters (each applied ON TOP of the base set). `panel_id` is an independent,
-# combinable restriction (one panel, or all panels when None).
-AUDIENCES = ("all", "debtors", "zero_sale", "few_active", "invoice_below")
+# combinable restriction (one panel, or all panels when None). Debt-lifecycle filters:
+#   debtors         — ANY owed invoice (sent/overdue/enforced)
+#   overdue         — an invoice dunning already marked overdue/enforced AND due now
+#                     (no future payment deadline shields it)
+#   deferred        — an owed invoice with a payment deadline still in the FUTURE
+#                     (the owner granted a مهلت that hasn't arrived yet)
+#   pending_payment — a payment awaiting the owner's confirm (در انتظارِ تأیید)
+#   paid_up         — NO owed invoices at all (خوش‌حساب — thanks/promos)
+# Access-state filters: enforced (معلق), frozen (توقفِ ساختِ کاربر).
+# Sales/activity: zero_sale, few_active(<N), invoice_below(<X), invoice_above(≥X),
+# new_resellers (created within N days).
+AUDIENCES = (
+    "all", "debtors", "overdue", "deferred", "pending_payment", "paid_up",
+    "enforced", "frozen",
+    "zero_sale", "few_active", "invoice_below", "invoice_above", "new_resellers",
+)
 
 
 class Recipient(TypedDict):
@@ -130,26 +145,73 @@ async def _bundle_amounts(
     return out
 
 
+async def _owed_ids(session: AsyncSession) -> set[int]:
+    """reseller_ids with at least one owed (sent/overdue/enforced) invoice."""
+    return set((await session.execute(
+        select(Invoice.reseller_id).where(Invoice.status.in_(_OWED)).distinct()
+    )).scalars().all())
+
+
 async def _matching_roots(
     session: AsyncSession, audience: str, panel_id: int | None, threshold: float | None
 ) -> list[Reseller]:
     """The base set narrowed by the chosen filter (and the optional single-panel restriction)."""
     roots = await reseller_stats.load_billable_roots(session, panel_id)
+    today = tehran_today()
     if audience == "debtors":
-        owed = set((await session.execute(
-            select(Invoice.reseller_id).where(Invoice.status.in_(_OWED)).distinct()
-        )).scalars().all())
+        owed = await _owed_ids(session)
         return [r for r in roots if r.id in owed]
+    if audience == "paid_up":
+        owed = await _owed_ids(session)
+        return [r for r in roots if r.id not in owed]
+    if audience == "overdue":
+        # Dunning already flagged it overdue/enforced AND it's due NOW — a payment deadline set
+        # in the future shields the invoice (the whole cycle restarts from that deadline).
+        rows = (await session.execute(
+            select(Invoice.reseller_id, Invoice.deferred_until).where(
+                Invoice.status.in_((InvoiceStatus.overdue, InvoiceStatus.enforced)))
+        )).all()
+        ids = {rid for rid, deadline in rows if deadline is None or deadline <= today}
+        return [r for r in roots if r.id in ids]
+    if audience == "deferred":
+        # Owed with a payment deadline still in the FUTURE («هنوز به مهلتشان نرسیده‌ایم»).
+        ids = set((await session.execute(
+            select(Invoice.reseller_id).where(
+                Invoice.status.in_(_OWED), Invoice.deferred_until > today).distinct()
+        )).scalars().all())
+        return [r for r in roots if r.id in ids]
+    if audience == "pending_payment":
+        ids = set((await session.execute(
+            select(Payment.reseller_id).where(Payment.status == PaymentStatus.pending).distinct()
+        )).scalars().all())
+        return [r for r in roots if r.id in ids]
+    if audience == "enforced":
+        return [r for r in roots if r.enforcement_state == EnforcementState.enforced]
+    if audience == "frozen":
+        return [r for r in roots if r.enforcement_state == EnforcementState.frozen]
+    if audience == "new_resellers":
+        days = int(threshold) if threshold is not None else 30
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+
+        def _created(r: Reseller) -> dt.datetime | None:
+            c = r.created_at
+            return c.replace(tzinfo=dt.timezone.utc) if (c is not None and c.tzinfo is None) else c
+
+        # Unknown creation date ≠ new — exclude rather than guess.
+        return [r for r in roots
+                if (created := _created(r)) is not None and created >= cutoff]
     if audience == "few_active":
         limit = int(threshold or 0)
         active = await _active_counts(session)
         return [r for r in roots if active.get((r.panel_id, r.admin_uuid), 0) < limit]
-    if audience in ("zero_sale", "invoice_below"):
+    if audience in ("zero_sale", "invoice_below", "invoice_above"):
         amounts = await _bundle_amounts(session, panel_id)
         if audience == "zero_sale":
             return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[0] <= 0]
-        below = float(threshold or 0)
-        return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[1] < below]
+        toman = float(threshold or 0)
+        if audience == "invoice_above":
+            return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[1] >= toman]
+        return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[1] < toman]
     return roots  # "all"
 
 

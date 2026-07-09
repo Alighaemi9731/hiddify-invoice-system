@@ -223,10 +223,13 @@ def cap_bump_keyboard(reseller_id: int) -> InlineKeyboardMarkup:
 
 
 def broadcast_audience_keyboard() -> InlineKeyboardMarkup:
+    """The bot's compact audience picker (the panel's Broadcast page carries the FULL filter set)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="👥 همه نمایندگان", callback_data="bcaud:all")],
             [InlineKeyboardButton(text="💰 بدهکاران", callback_data="bcaud:debtors")],
+            [InlineKeyboardButton(text="⏰ سررسیدگذشته‌ها", callback_data="bcaud:overdue")],
+            [InlineKeyboardButton(text="📅 مهلت‌دارها (به مهلت نرسیده)", callback_data="bcaud:deferred")],
             [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="bcaud:zero_sale")],
             [InlineKeyboardButton(text="🖥 نمایندگان یک پنل", callback_data="bcaud:panel")],
         ]

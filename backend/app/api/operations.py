@@ -80,9 +80,16 @@ class DomainBody(BaseModel):
 
 class BroadcastBody(BaseModel):
     text: str = ""
-    audience: str = "all"          # all | debtors | zero_sale | few_active | invoice_below
+    audience: str = "all"          # one of broadcast_service.AUDIENCES (validated in the endpoints)
     panel_id: int | None = None    # optional single-panel restriction (combinable)
-    threshold: float | None = None  # few_active: max active users; invoice_below: max Toman
+    # few_active: max active users • invoice_below/above: Toman • new_resellers: days (default 30)
+    threshold: float | None = None
+
+
+def _validate_audience(audience: str) -> None:
+    """An unknown audience must NEVER silently fall back to «all» (a typo would message everyone)."""
+    if audience not in broadcast_service.AUDIENCES:
+        raise HTTPException(400, "فیلترِ گیرندگان نامعتبر است.")
 
 
 class PanelMigrationBody(BaseModel):
@@ -250,6 +257,7 @@ async def broadcast(
     """Resolve recipients fast, launch the send in the BACKGROUND, and return immediately. The
     result summary is delivered to the owner's Telegram when it finishes (and is also visible via
     the live status endpoint). Avoids the request timeout on large audiences."""
+    _validate_audience(body.audience)
     reachable, unregistered = await broadcast_service.resolve_recipients(
         session, body.audience, body.panel_id, body.threshold)
     if body.text.strip() and reachable:
@@ -269,6 +277,7 @@ async def broadcast_preview(
 ) -> broadcast_service.BroadcastResult:
     """Resolve who WOULD receive the broadcast (no message sent), so the owner can verify the
     filter and see the exact recipient list before sending."""
+    _validate_audience(body.audience)
     return await broadcast_service.preview(
         session, audience=body.audience, panel_id=body.panel_id, threshold=body.threshold
     )

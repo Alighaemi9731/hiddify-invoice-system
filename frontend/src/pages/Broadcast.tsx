@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem, Select,
   Chip, Divider, Table, TableBody, TableCell, TableHead, TableRow, Collapse,
-  FormControlLabel, Switch, Link, Tooltip, IconButton,
+  FormControlLabel, Switch, Link, Tooltip, IconButton, ListSubheader,
 } from "@mui/material";
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
@@ -18,13 +18,34 @@ import { fmtNum, fmtToman } from "../format";
 
 // Audience filters — each is applied ON TOP of the base set (resellers in the main «نمایندگان»
 // list that are not exempt from billing and are on an active panel). The panel filter is combinable.
-const AUDIENCES: { value: string; label: string; threshold?: { label: string; def: number } }[] = [
-  { value: "all", label: "همه نمایندگان" },
-  { value: "debtors", label: "بدهکاران (فاکتور پرداخت‌نشده)" },
-  { value: "zero_sale", label: "فروش صفرِ این ماه" },
-  { value: "few_active", label: "کم‌تر از N کاربرِ فعال", threshold: { label: "کم‌تر از این تعداد کاربرِ فعال", def: 10 } },
-  { value: "invoice_below", label: "فاکتورِ این ماه زیرِ مبلغ", threshold: { label: "فاکتور کم‌تر از این مبلغ (تومان)", def: 100000 } },
+// Grouped by lifecycle so the owner targets exactly the right stage (debt state / access / activity).
+const AUDIENCES: { value: string; label: string; group: string; hint?: string; threshold?: { label: string; def: number } }[] = [
+  { value: "all", label: "همه نمایندگان", group: "عمومی" },
+
+  { value: "debtors", label: "بدهکاران (هر فاکتورِ پرداخت‌نشده)", group: "بدهی و پرداخت" },
+  { value: "overdue", label: "سررسیدگذشته‌ها (فاکتورِ معوق)", group: "بدهی و پرداخت",
+    hint: "فاکتورهایی که واردِ چرخهٔ یادآوری شده‌اند و الان سررسیدشان گذشته است" },
+  { value: "deferred", label: "مهلت‌دارها (هنوز به مهلت نرسیده)", group: "بدهی و پرداخت",
+    hint: "بدهکارانی که مهلتِ پرداخت گرفته‌اند و مهلتشان هنوز نرسیده است" },
+  { value: "pending_payment", label: "پرداختِ در انتظارِ تأیید", group: "بدهی و پرداخت",
+    hint: "رسید/تراکنش فرستاده‌اند و منتظرِ تأییدِ شما هستند" },
+  { value: "paid_up", label: "خوش‌حساب‌ها (بدونِ بدهی)", group: "بدهی و پرداخت",
+    hint: "هیچ فاکتورِ بازی ندارند — مناسبِ تشکر یا پیشنهادِ ویژه" },
+
+  { value: "enforced", label: "معلق‌شده‌ها", group: "وضعیتِ دسترسی" },
+  { value: "frozen", label: "فریزشده‌ها (توقفِ ساختِ کاربر)", group: "وضعیتِ دسترسی" },
+
+  { value: "zero_sale", label: "فروش صفرِ این ماه", group: "فروش و فعالیت" },
+  { value: "invoice_below", label: "فاکتورِ این ماه زیرِ مبلغ", group: "فروش و فعالیت",
+    threshold: { label: "فاکتور کم‌تر از این مبلغ (تومان)", def: 100000 } },
+  { value: "invoice_above", label: "فاکتورِ این ماه بالای مبلغ (VIP)", group: "فروش و فعالیت",
+    threshold: { label: "فاکتور دست‌کم این مبلغ (تومان)", def: 1000000 } },
+  { value: "few_active", label: "کم‌تر از N کاربرِ فعال", group: "فروش و فعالیت",
+    threshold: { label: "کم‌تر از این تعداد کاربرِ فعال", def: 10 } },
+  { value: "new_resellers", label: "تازه‌واردها (ثبت‌نامِ اخیر)", group: "فروش و فعالیت",
+    threshold: { label: "ثبت‌نام در این چند روزِ اخیر", def: 30 } },
 ];
+const AUDIENCE_GROUPS = [...new Set(AUDIENCES.map((a) => a.group))];
 
 const STATUS_FA: Record<string, string> = {
   sent: "ارسال شد", blocked: "مسدود کرده", failed: "ناموفق", unregistered: "بدون ربات", pending: "—",
@@ -164,8 +185,14 @@ export default function Broadcast() {
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap">
             <Select size="small" value={audience}
               onChange={(e) => onFilterChange(() => setAudience(e.target.value))}
-              sx={{ minWidth: 240, "& .MuiSelect-select": { py: "7px !important" } }}>
-              {AUDIENCES.map((a) => <MenuItem key={a.value} value={a.value}>{a.label}</MenuItem>)}
+              renderValue={(v) => AUDIENCES.find((a) => a.value === v)?.label ?? v}
+              sx={{ minWidth: 260, "& .MuiSelect-select": { py: "7px !important" } }}>
+              {AUDIENCE_GROUPS.flatMap((g) => [
+                <ListSubheader key={`h-${g}`} sx={{ lineHeight: "32px", fontWeight: 700 }}>{g}</ListSubheader>,
+                ...AUDIENCES.filter((a) => a.group === g).map((a) => (
+                  <MenuItem key={a.value} value={a.value}>{a.label}</MenuItem>
+                )),
+              ])}
             </Select>
             <Select size="small" value={panelId} displayEmpty
               onChange={(e) => onFilterChange(() => setPanelId(e.target.value))}
@@ -184,6 +211,12 @@ export default function Broadcast() {
             <Button variant="outlined" startIcon={<GroupIcon />} disabled={preview.isPending}
               onClick={() => preview.mutate()}>پیش‌نمایشِ گیرندگان</Button>
           </Stack>
+
+          {audDef?.hint && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: -1, mb: 2 }}>
+              ℹ️ {audDef.hint}
+            </Typography>
+          )}
 
           {report && (
             <Alert severity="info" sx={{ mb: 2 }}

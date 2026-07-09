@@ -97,3 +97,69 @@ def test_few_active_filter(tmp_path):
         assert {r["reseller_id"] for r in reachable} == {b.id}
         assert {r["reseller_id"] for r in unreg} == {d.id}
     _run(body, tmp_path)
+
+
+def test_debt_lifecycle_and_state_filters(tmp_path):
+    """The professional segments: overdue (due now), deferred (deadline in future), pending_payment,
+    paid_up, enforced/frozen, invoice_above, and new_resellers — each selects exactly its stage."""
+    from app.models import Payment
+    from app.models.enums import EnforcementState, PaymentMethod, PaymentStatus
+
+    async def body(s):
+        a, b, _c, _d, _sub = await _seed(s)
+        # a: no invoices yet → paid_up. b: has an OVERDUE invoice due now (from _seed).
+        panel_id = a.panel_id
+        today = dt.date.today()
+
+        def inv(rid, status, deferred=None, label="2026-05"):
+            return Invoice(reseller_id=rid, panel_id=panel_id,
+                           period_start=dt.date(2026, 5, 1), period_end=dt.date(2026, 5, 31),
+                           period_label=label, usage_gb=1, amount_toman=10_000,
+                           status=status, deferred_until=deferred)
+
+        def root(uuid, name, chat, **kw):
+            return Reseller(panel_id=panel_id, admin_uuid=uuid, name=name, parent_admin_uuid="own",
+                            bot_chat_id=chat, last_seen_at=NOW, **kw)
+
+        # e: overdue-status invoice BUT deadline in the future → deferred, NOT overdue.
+        e = root("e", "RootE-deferred", 105)
+        # f: enforced reseller; g: frozen reseller.
+        f = root("f", "RootF-enforced", 106, enforcement_state=EnforcementState.enforced)
+        g = root("g", "RootG-frozen", 107, enforcement_state=EnforcementState.frozen)
+        s.add_all([e, f, g])
+        await s.flush()
+        s.add(inv(e.id, InvoiceStatus.overdue, deferred=today + dt.timedelta(days=5)))
+        # b also gets a pending payment (awaiting the owner's confirm).
+        s.add(Payment(reseller_id=b.id, method=PaymentMethod.screenshot,
+                      status=PaymentStatus.pending))
+        await s.commit()
+
+        async def ids(audience, threshold=None):
+            reachable, unreg = await bc.resolve_recipients(s, audience, None, threshold)
+            return {r["reseller_id"] for r in reachable} | {r["reseller_id"] for r in unreg}
+
+        assert await ids("overdue") == {b.id}            # e's deadline shields it
+        assert await ids("deferred") == {e.id}
+        assert await ids("pending_payment") == {b.id}
+        assert b.id not in await ids("paid_up")          # debtor is NOT paid-up
+        assert a.id in await ids("paid_up")              # no invoices → paid-up
+        assert e.id not in await ids("paid_up")
+        assert await ids("enforced") == {f.id}
+        assert await ids("frozen") == {g.id}
+        # new_resellers: everyone seeded just now is "new" within 30 days; nobody within 0 days.
+        assert a.id in await ids("new_resellers", 30)
+        assert await ids("new_resellers", 0) == set()
+    _run(body, tmp_path)
+
+
+def test_invoice_above_filter(tmp_path):
+    """invoice_above (VIP) picks bundles at/over the Toman threshold this month."""
+    async def body(s):
+        a, b, _c, d, _sub = await _seed(s)
+        # a's current-month bundle: 15 users × 0 GB… _seed users have no usage_limit_gb/start_date,
+        # so nobody has sales → above-0 matches all, above-1 matches none.
+        assert {r["reseller_id"] for r in (await bc.resolve_recipients(s, "invoice_above", None, 0))[0]} \
+            == {r["reseller_id"] for r in (await bc.resolve_recipients(s, "all", None, None))[0]}
+        reachable, unreg = await bc.resolve_recipients(s, "invoice_above", None, 1)
+        assert reachable == [] and unreg == []
+    _run(body, tmp_path)

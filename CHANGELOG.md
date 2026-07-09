@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.69.0 - 2026-07-10
+
+### Added
+
+- **Professional audience filters for the owner broadcast.** «پیام همگانی» now targets the exact
+  lifecycle stage, grouped in the panel as:
+  - **بدهی و پرداخت:** بدهکاران، **سررسیدگذشته‌ها** (فاکتور معوقِ due-now — a future payment deadline
+    shields it)، **مهلت‌دارها** (بدهکارانی که مهلت گرفته‌اند و هنوز به مهلتشان نرسیده‌ایم)، پرداختِ در
+    انتظارِ تأیید، و خوش‌حساب‌ها (بدون بدهی — برای تشکر/پیشنهاد ویژه).
+  - **وضعیت دسترسی:** معلق‌شده‌ها و فریزشده‌ها.
+  - **فروش و فعالیت:** فروش صفر، فاکتورِ زیر/بالای مبلغ (VIP)، کم‌تر از N کاربر فعال، و تازه‌واردها
+    (ثبت‌نام در N روز اخیر).
+
+  All filters stay combinable with the single-panel restriction and the recipient preview. The bot's
+  «پیام همگانی» picker also gained سررسیدگذشته‌ها and مهلت‌دارها. An unknown audience value is now
+  rejected with 400 instead of silently falling back to «همه». No schema change.
+
 ## 1.68.0 - 2026-07-10
 
 ### Removed

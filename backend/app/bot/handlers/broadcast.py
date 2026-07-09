@@ -16,7 +16,13 @@ from app.bot.rtl import rtl
 from app.models import Panel
 
 # --------------------------- broadcast (owner) ---------------------------
-_AUDIENCE_FA = {"all": "همه نمایندگان", "debtors": "بدهکاران", "zero_sale": "فروش صفر این ماه"}
+_AUDIENCE_FA = {
+    "all": "همه نمایندگان",
+    "debtors": "بدهکاران",
+    "overdue": "سررسیدگذشته‌ها",
+    "deferred": "مهلت‌دارها (هنوز به مهلت نرسیده)",
+    "zero_sale": "فروش صفر این ماه",
+}
 
 
 async def _audience_label(session, audience: str, panel_id: int | None) -> str:
