@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.61.1 - 2026-07-09
+
+### Fixed
+
+- The reseller search on the Invoices tab now surfaces the reseller you mean. When many
+  resellers share a term (e.g. "ali" matches 50+), the exact and prefix matches are now ranked
+  first instead of being buried alphabetically past the result limit, so searching "ali"
+  returns the reseller literally named «ali». The dropdown also shows each result's panel so
+  same-named resellers on different panels are distinguishable, and the list no longer
+  re-filters the server results on the client.
+
 ## 1.61.0 - 2026-07-09
 
 ### Added

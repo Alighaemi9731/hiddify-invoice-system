@@ -6,8 +6,8 @@ from collections import defaultdict
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from sqlalchemy import case, func, or_, select
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
@@ -208,7 +208,20 @@ async def list_resellers(
         query = query.where(Reseller.bot_chat_id.is_(None))
     if q:
         query = query.where(or_(Reseller.name.ilike(f"%{q}%"), Reseller.admin_uuid.ilike(f"%{q}%")))
-    query = query.order_by(Reseller.name).limit(limit).offset(offset)
+        # Relevance ordering so a search surfaces the intended reseller even when dozens share
+        # the term (e.g. "ali" matches 50+ names): EXACT name match first, then names that
+        # START WITH the term, then everything else — all case-insensitive — then alphabetically.
+        # Without this, `ORDER BY name` alone buried the exact match past the `limit` window, so
+        # searching "ali" never returned the reseller literally named "ali".
+        ql = q.strip().lower()
+        rank = case(
+            (func.lower(Reseller.name) == ql, 0),
+            (func.lower(Reseller.name).like(f"{ql}%"), 1),
+            else_=2,
+        )
+        query = query.order_by(rank, Reseller.name).limit(limit).offset(offset)
+    else:
+        query = query.order_by(Reseller.name).limit(limit).offset(offset)
     rows = list((await session.execute(query)).tuples().all())
     if root_keys is not None:
         rows = [(r, key) for r, key in rows if (r.panel_id, r.admin_uuid) in root_keys]

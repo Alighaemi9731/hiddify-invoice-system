@@ -70,7 +70,7 @@ export default function Invoices() {
   const [rInput, setRInput] = useState("");
   const rOptions = useQuery({
     queryKey: ["reseller-search", rInput],
-    queryFn: () => listResellers({ q: rInput.trim() || undefined, limit: 20 }),
+    queryFn: () => listResellers({ q: rInput.trim() || undefined, limit: 30 }),
     enabled: rInput.trim().length >= 1,
   });
 
@@ -241,7 +241,14 @@ export default function Invoices() {
           size="small"
           sx={{ minWidth: { xs: "100%", md: 240 } }}
           options={rOptions.data || []}
+          // Search is server-side (with relevance ordering); don't let MUI re-filter the
+          // fetched options client-side (it would hide server matches whose label doesn't
+          // literally contain the typed text, and fights the async update).
+          filterOptions={(x) => x}
           getOptionLabel={(o: any) => o?.name || ""}
+          renderOption={(props, o: any) => (
+            <li {...props} key={o.id}>{o.name}{o.panel_key ? ` — ${o.panel_key}` : ""}</li>
+          )}
           isOptionEqualToValue={(o: any, v: any) => o.id === v.id}
           value={resellerFilter as any}
           onChange={(_, v: any) => setResellerFilter(v ? { id: v.id, name: v.name } : null)}
