@@ -8,6 +8,15 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.64.0 - 2026-07-09
+
+### Added
+
+- **One-tap shop poster.** A new «🖼 پوستر فروشگاه» option in the storefront admin menu generates a
+  clean branded PNG — the shop name, a QR code, and the `t.me/<bot>` link — ready to post in a story
+  or group, or print. Free advertising the reseller can hand out in seconds. Built with the QR helper
+  + the bundled Vazirmatn fonts; no schema change.
+
 ## 1.63.0 - 2026-07-09
 
 ### Added

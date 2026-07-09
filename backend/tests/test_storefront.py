@@ -148,6 +148,20 @@ def test_shop_closed_blocks_buy(tmp_path):
     _run(body, tmp_path, "shopclosed.db")
 
 
+def test_build_poster_png():
+    """#10 — the shop poster renders valid PNG bytes at the expected size for a Persian shop name."""
+    import io
+
+    from PIL import Image
+
+    from app.services import storefront_poster
+
+    png = storefront_poster.build_poster_png("فروشگاهِ علی نت", "ali_shop_bot")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"                 # PNG signature
+    im = Image.open(io.BytesIO(png))
+    assert im.format == "PNG" and im.size == (820, 1000)
+
+
 def test_topup_confirm_credits_once_and_purchase_is_atomic(tmp_path):
     async def body(s):
         _r, _bot, cust = await _seed(s)

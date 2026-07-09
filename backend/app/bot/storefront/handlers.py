@@ -405,6 +405,19 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             await _send_admins_panel(ans, s, sf, reseller)
         else:
             await ans(rtl("فقط مدیرِ اصلیِ فروشگاه می‌تواند مدیران را مدیریت کند."))
+    elif action == "poster":
+        username = sf.bot_username
+        if not username:
+            await ans(rtl("آدرسِ ربات هنوز مشخص نیست؛ چند لحظه بعد دوباره امتحان کنید."))
+        else:
+            import asyncio
+
+            from app.services import storefront_poster
+            shop_name = (reseller.name if reseller else None) or f"@{username}"
+            png = await asyncio.to_thread(storefront_poster.build_poster_png, shop_name, username)
+            await message.answer_photo(
+                BufferedInputFile(png, filename="poster.png"),
+                caption=rtl("🖼 پوسترِ فروشگاهِ شما — در استوری/گروه به اشتراک بگذارید یا چاپ کنید."))
     elif action == "shopstate":
         state_fa = "🔴 بسته" if sf.shop_closed else "🟢 باز"
         await ans(rtl(
