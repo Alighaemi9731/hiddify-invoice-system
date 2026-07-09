@@ -615,6 +615,30 @@ async def _claim_free_trial(message, sf_id: int, customer_id: int, bot: Bot) -> 
 
 # ── buy → name → confirm → wallet debit → provision ──────────────────────────
 
+@storefront_router.callback_query(F.data == "sfbuylist")
+async def sf_buy_list(cb: CallbackQuery, bot: Bot) -> None:
+    """Open the plan list — the button on the «free trial ended → buy» proactive nudge."""
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
+        if customer.banned:
+            await cb.answer("دسترسیِ شما مسدود شده است.", show_alert=True)
+            return
+        if sf.shop_closed:
+            await cb.answer()
+            await cb.message.answer(rtl(_shop_closed_text(sf)))
+            return
+        plans = await storefront.list_plans(s, sf.id, only_enabled=True)
+    if not plans:
+        await cb.message.answer(rtl("در حال حاضر پلنی برای فروش موجود نیست."))
+    else:
+        await cb.message.answer(rtl("🛒 یک سرویس را انتخاب کنید:"),
+                                reply_markup=kb.buy_plans_kb(plans))
+    await cb.answer()
+
 @storefront_router.callback_query(F.data.startswith("sfbuy:"))
 async def sf_buy(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """Step 1: a plan is tapped. Check the balance, then ask the customer to NAME this service."""

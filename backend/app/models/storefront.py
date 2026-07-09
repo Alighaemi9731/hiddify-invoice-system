@@ -202,3 +202,10 @@ class StorefrontOrder(Base, TimestampMixin):
     # again once `last_renewed_at` is newer than this stamp. NULL = never notified.
     expiry_alerted_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # When the «free trial ended → buy a plan» nudge was sent (once per trial). NULL = never.
+    trial_ended_alerted_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    # When the «~80% of your volume used» warning was sent. Re-armed by a renewal (fresh quota) the
+    # same way `expiry_alerted_at` is. NULL = never.
+    usage_alerted_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)

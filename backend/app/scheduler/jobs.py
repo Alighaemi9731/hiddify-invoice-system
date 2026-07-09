@@ -293,14 +293,21 @@ async def storefront_reaper_job() -> None:
 
 
 async def storefront_expiry_job() -> None:
-    """Daily near-expiry reminders for storefront customers (renew button included)."""
-    try:
-        from app.services import storefront_expiry
+    """Daily proactive storefront notices: near-expiry reminders, «free trial ended → buy» nudges,
+    and «~80% volume used → renew» warnings. Each runs independently so one failing never blocks
+    the others."""
+    from app.services import storefront_expiry
 
-        async with SessionLocal() as session:
-            await storefront_expiry.notify_expiring(session)
-    except Exception:  # noqa: BLE001
-        log.exception("storefront_expiry_job failed")
+    for name, fn in (
+        ("notify_expiring", storefront_expiry.notify_expiring),
+        ("notify_trial_ended", storefront_expiry.notify_trial_ended),
+        ("notify_usage_high", storefront_expiry.notify_usage_high),
+    ):
+        try:
+            async with SessionLocal() as session:
+                await fn(session)
+        except Exception:  # noqa: BLE001
+            log.exception("storefront_expiry_job: %s failed", name)
 
 
 async def rate_refresh_job() -> None:

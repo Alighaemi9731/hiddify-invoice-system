@@ -112,6 +112,7 @@ async def notify_expiring(
             .join(StorefrontBot, StorefrontBot.id == StorefrontCustomer.storefront_bot_id)
             .where(
                 StorefrontOrder.status == "provisioned",
+                StorefrontOrder.is_trial.is_(False),  # trials get the «trial ended» nudge instead
                 StorefrontCustomer.banned.is_(False),
                 StorefrontBot.enabled.is_(True),
                 StorefrontBot.status != "errored",
@@ -176,6 +177,198 @@ async def notify_expiring(
                 pass
     if counts["due"]:
         log.info("storefront expiry reminders: %s", counts)
+    return counts
+
+
+async def _load_snaps(session: AsyncSession, rows) -> dict:  # noqa: ANN001
+    """One-query snapshot lookup for every (panel_id, uuid) in `rows` (order⋈customer⋈bot tuples)."""
+    keys = {(o.panel_id, o.panel_user_uuid) for o, _c, _b in rows
+            if o.panel_id is not None and o.panel_user_uuid}
+    snaps: dict[tuple[int, str], EndUserSnapshot] = {}
+    if keys:
+        for sn in (
+            await session.execute(
+                select(EndUserSnapshot).where(
+                    EndUserSnapshot.user_uuid.in_([u for (_p, u) in keys])
+                )
+            )
+        ).scalars().all():
+            snaps[(sn.panel_id, sn.user_uuid)] = sn
+    return snaps
+
+
+def _buy_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🛒 خرید سرویس", callback_data="sfbuylist")
+    ]])
+
+
+def _trial_ended_msg(label: str | None) -> str:
+    name = f"«{label}» " if label else ""
+    return (
+        f"🎁 سرویسِ تستِ رایگانِ {name}شما به پایان رسید.\n"
+        "اگر راضی بودید، می‌توانید از دکمهٔ زیر یک پلن تهیه کنید و ادامه دهید."
+    )
+
+
+async def notify_trial_ended(
+    session: AsyncSession, *, bot_factory: BotFactory | None = None
+) -> dict:
+    """Nudge customers whose FREE TRIAL just expired to buy a plan — once per trial
+    (`trial_ended_alerted_at`). No discount, just a friendly «trial ended → buy» with a buy button."""
+    counts = {"checked": 0, "due": 0, "sent": 0, "failed": 0}
+    factory = bot_factory or _default_bot_factory
+    today = tehran_today()
+    now = dt.datetime.now(dt.timezone.utc)
+    rows = (
+        await session.execute(
+            select(StorefrontOrder, StorefrontCustomer, StorefrontBot)
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontOrder.customer_id)
+            .join(StorefrontBot, StorefrontBot.id == StorefrontCustomer.storefront_bot_id)
+            .where(
+                StorefrontOrder.status == "provisioned",
+                StorefrontOrder.is_trial.is_(True),
+                StorefrontOrder.trial_ended_alerted_at.is_(None),
+                StorefrontCustomer.banned.is_(False),
+                StorefrontBot.enabled.is_(True),
+                StorefrontBot.status != "errored",
+            )
+        )
+    ).all()
+    if not rows:
+        return counts
+    snaps = await _load_snaps(session, rows)
+    bots: dict[int, Bot] = {}
+    try:
+        for order, customer, sf_bot in rows:
+            counts["checked"] += 1
+            snap = snaps.get((order.panel_id, order.panel_user_uuid or ""))
+            days_left = _days_left(order, snap, today)
+            if days_left is None or days_left >= 0:  # trial not expired yet
+                continue
+            counts["due"] += 1
+            try:
+                bot = bots.get(sf_bot.id)
+                if bot is None:
+                    token = storefront.bot_token(sf_bot)
+                    if not token:
+                        counts["failed"] += 1
+                        continue
+                    bot = await factory(token)
+                    bots[sf_bot.id] = bot
+                await bot.send_message(
+                    customer.telegram_id, _trial_ended_msg(order.label),
+                    reply_markup=_buy_keyboard())
+                counts["sent"] += 1
+            except Exception:  # noqa: BLE001 — blocked/dead: stamp anyway below
+                counts["failed"] += 1
+                log.warning("trial-ended nudge failed (order %s)", order.id, exc_info=True)
+            order.trial_ended_alerted_at = now  # once per trial, even on send failure
+        await session.commit()
+    finally:
+        for bot in bots.values():
+            try:
+                await bot.session.close()
+            except Exception:  # noqa: BLE001
+                pass
+    if counts["due"]:
+        log.info("storefront trial-ended nudges: %s", counts)
+    return counts
+
+
+_USAGE_THRESHOLD = 0.8
+
+
+def _aware(value: dt.datetime | None) -> dt.datetime | None:
+    """Coerce a possibly naive timestamp (SQLite loses tz) to aware UTC for safe comparison."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=dt.timezone.utc)
+    return value
+
+
+def _usage_needs_alert(order: StorefrontOrder) -> bool:
+    """Never alerted, or renewed since the last alert (fresh quota re-arms it)."""
+    if order.usage_alerted_at is None:
+        return True
+    lr, ua = _aware(order.last_renewed_at), _aware(order.usage_alerted_at)
+    return lr is not None and ua is not None and lr > ua
+
+
+def _usage_high_msg(label: str | None, used_gb: float, limit_gb: float) -> str:
+    name = f"«{label}» " if label else ""
+    pct = int(round(used_gb / limit_gb * 100)) if limit_gb else 0
+    return (
+        f"⚠️ حجمِ سرویسِ {name}شما رو به پایان است (حدود {pct}٪ مصرف شده).\n"
+        "برای جلوگیری از قطعی، از دکمهٔ زیر تمدید کنید."
+    )
+
+
+async def notify_usage_high(
+    session: AsyncSession, *, bot_factory: BotFactory | None = None
+) -> dict:
+    """Warn customers whose PAID config has used ≥80% of its volume, with a renew button — once per
+    quota cycle (`usage_alerted_at`, re-armed by a renewal). Trials are excluded (they get the
+    trial-ended nudge). Volume comes from the synced snapshot (no per-user panel call)."""
+    counts = {"checked": 0, "due": 0, "sent": 0, "failed": 0}
+    factory = bot_factory or _default_bot_factory
+    now = dt.datetime.now(dt.timezone.utc)
+    rows = (
+        await session.execute(
+            select(StorefrontOrder, StorefrontCustomer, StorefrontBot)
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontOrder.customer_id)
+            .join(StorefrontBot, StorefrontBot.id == StorefrontCustomer.storefront_bot_id)
+            .where(
+                StorefrontOrder.status == "provisioned",
+                StorefrontOrder.is_trial.is_(False),
+                StorefrontCustomer.banned.is_(False),
+                StorefrontBot.enabled.is_(True),
+                StorefrontBot.status != "errored",
+            )
+        )
+    ).all()
+    if not rows:
+        return counts
+    snaps = await _load_snaps(session, rows)
+    bots: dict[int, Bot] = {}
+    try:
+        for order, customer, sf_bot in rows:
+            counts["checked"] += 1
+            snap = snaps.get((order.panel_id, order.panel_user_uuid or ""))
+            if snap is None:
+                continue
+            limit_gb = float(snap.usage_limit_gb or 0)
+            used_gb = float(snap.current_usage_gb or 0)
+            if limit_gb <= 0 or used_gb / limit_gb < _USAGE_THRESHOLD:
+                continue
+            if not _usage_needs_alert(order):
+                continue
+            counts["due"] += 1
+            try:
+                bot = bots.get(sf_bot.id)
+                if bot is None:
+                    token = storefront.bot_token(sf_bot)
+                    if not token:
+                        counts["failed"] += 1
+                        continue
+                    bot = await factory(token)
+                    bots[sf_bot.id] = bot
+                await bot.send_message(
+                    customer.telegram_id, _usage_high_msg(order.label, used_gb, limit_gb),
+                    reply_markup=_renew_keyboard(order.id))
+                counts["sent"] += 1
+            except Exception:  # noqa: BLE001
+                counts["failed"] += 1
+                log.warning("usage-high warning failed (order %s)", order.id, exc_info=True)
+            order.usage_alerted_at = now
+        await session.commit()
+    finally:
+        for bot in bots.values():
+            try:
+                await bot.session.close()
+            except Exception:  # noqa: BLE001
+                pass
+    if counts["due"]:
+        log.info("storefront usage-high warnings: %s", counts)
     return counts
 
 

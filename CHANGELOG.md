@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.66.0 - 2026-07-09
+
+### Added
+
+- **Two proactive customer notices in storefront shops** (daily, always on):
+  - **«تستت تمام شد» — free-trial-ended nudge.** When a customer's free trial expires, they get one
+    friendly message («تستِ رایگانِ شما به پایان رسید — اگر راضی بودید یک پلن تهیه کنید») with a
+    «🛒 خرید سرویس» button that opens the plan list. Sent once per trial; no discount, just the nudge.
+  - **«حجمت رو به اتمامه» — 80%-usage warning.** When a paid config passes 80% of its volume, the
+    customer gets a warning with a «🔄 تمدید» button — sent once per quota cycle and re-armed after a
+    renewal. Volume is read from the synced snapshot (no extra panel calls).
+
+  Both run in the existing daily storefront job. Free trials no longer get the (dead-end) renew
+  reminder — they get the buy nudge instead. Migration `d1f3b5a7c9e2` adds the two dedup stamps.
+
 ## 1.65.0 - 2026-07-09
 
 ### Added

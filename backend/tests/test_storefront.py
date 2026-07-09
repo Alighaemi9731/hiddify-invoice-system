@@ -148,6 +148,90 @@ def test_shop_closed_blocks_buy(tmp_path):
     _run(body, tmp_path, "shopclosed.db")
 
 
+class _NoticeBotSession:
+    async def close(self):
+        return None
+
+
+class _NoticeBot:
+    def __init__(self):
+        self.sent: list = []
+        self.session = _NoticeBotSession()
+
+    async def send_message(self, chat_id, text, **kw):  # noqa: ANN003
+        self.sent.append((chat_id, text, kw.get("reply_markup")))
+
+
+def test_notify_trial_ended(tmp_path):
+    """#3 — an expired free trial gets one «trial ended → buy» nudge, then dedups."""
+    import datetime as _dt
+
+    from app.models import StorefrontOrder
+    from app.services import storefront_expiry
+
+    async def body(s):
+        _r, bot, cust = await _seed(s)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        s.add(StorefrontOrder(customer_id=cust.id, panel_id=bot.panel_id, plan_id=None,
+                              gb=1, days=1, price_toman=0, status="provisioned",
+                              panel_user_uuid="tu", is_trial=True,
+                              created_at=now - _dt.timedelta(days=5)))
+        await s.commit()
+
+        made: list = []
+
+        async def factory(token):
+            b = _NoticeBot()
+            made.append(b)
+            return b
+
+        c = await storefront_expiry.notify_trial_ended(s, bot_factory=factory)
+        assert c["sent"] == 1 and made[0].sent[0][0] == cust.telegram_id
+        assert made[0].sent[0][2] is not None                # buy button attached
+        c2 = await storefront_expiry.notify_trial_ended(s, bot_factory=factory)
+        assert c2["due"] == 0                                # dedup: not sent again
+
+    _run(body, tmp_path, "trialended.db")
+
+
+def test_notify_usage_high(tmp_path):
+    """#7 — a paid config at ≥80% usage gets one renew warning; dedups; re-arms after a renewal."""
+    import datetime as _dt
+
+    from app.models import EndUserSnapshot, StorefrontOrder
+    from app.services import storefront_expiry
+
+    async def body(s):
+        _r, bot, cust = await _seed(s)
+        order = StorefrontOrder(customer_id=cust.id, panel_id=bot.panel_id, plan_id=1,
+                                gb=10, days=30, price_toman=50000, status="provisioned",
+                                panel_user_uuid="pu", is_trial=False)
+        s.add(order)
+        s.add(EndUserSnapshot(panel_id=bot.panel_id, user_uuid="pu", added_by_uuid="x",
+                              usage_limit_gb=10, current_usage_gb=8.5, enable=True))
+        await s.commit()
+
+        made: list = []
+
+        async def factory(token):
+            b = _NoticeBot()
+            made.append(b)
+            return b
+
+        c = await storefront_expiry.notify_usage_high(s, bot_factory=factory)
+        assert c["sent"] == 1 and made[0].sent[0][0] == cust.telegram_id
+        c2 = await storefront_expiry.notify_usage_high(s, bot_factory=factory)
+        assert c2["due"] == 0                                       # dedup
+        # a renewal re-arms the warning
+        await s.refresh(order)
+        order.last_renewed_at = _dt.datetime.now(_dt.timezone.utc)
+        await s.commit()
+        c3 = await storefront_expiry.notify_usage_high(s, bot_factory=factory)
+        assert c3["due"] == 1                                       # re-armed
+
+    _run(body, tmp_path, "usagehigh.db")
+
+
 def test_customers_in_segment(tmp_path):
     """#8 — each broadcast segment selects the right non-banned customers."""
     import datetime as _dt
