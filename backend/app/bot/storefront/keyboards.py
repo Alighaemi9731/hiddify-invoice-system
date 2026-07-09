@@ -260,6 +260,16 @@ def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     ])
 
 
+def broadcast_segment_kb() -> InlineKeyboardMarkup:
+    """Admin picks WHO a broadcast targets before composing it."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 همهٔ مشتری‌ها", callback_data="sfbcseg:all")],
+        [InlineKeyboardButton(text="⛔️ منقضی‌شده‌ها", callback_data="sfbcseg:expired")],
+        [InlineKeyboardButton(text="😴 ۳۰ روز غیرفعال", callback_data="sfbcseg:inactive30")],
+        [InlineKeyboardButton(text="🎁 تست‌گرفته، نخریده", callback_data="sfbcseg:trial_no_purchase")],
+    ])
+
+
 def shop_state_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     """Admin toggles «temporarily closed» on/off and edits the closed message. When closed,
     customers can't buy/renew (they see the message) but the bot stays online."""

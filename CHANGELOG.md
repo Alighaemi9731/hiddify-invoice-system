@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.65.0 - 2026-07-09
+
+### Added
+
+- **Targeted (segmented) broadcast in storefront shops.** «📢 پیام همگانی» now first asks WHO to
+  reach: everyone, **منقضی‌شده‌ها** (customers with an expired config), **۳۰ روز غیرفعال** (no activity
+  in 30 days), or **تست‌گرفته، نخریده** (used the free trial but never bought). The admin sees the
+  recipient count before sending, so a win-back or upsell offer lands on exactly the right group
+  instead of blasting the whole list. No schema change.
+
 ## 1.64.0 - 2026-07-09
 
 ### Added

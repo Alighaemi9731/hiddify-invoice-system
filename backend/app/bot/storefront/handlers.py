@@ -379,8 +379,8 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             f"⏸ شارژِ در انتظار تأیید: {st_.pending_topups}\n"
             f"🏦 موجودی کیف پول مشتری‌ها: {st_.wallet_liability_toman:,.0f} تومان"))
     elif action == "broadcast":
-        await state.set_state(SF.broadcast)
-        await ans(rtl("متنِ پیامِ همگانی به مشتری‌ها را بفرستید:"), reply_markup=kb.cancel_kb())
+        await ans(rtl("📢 پیامِ همگانی — گیرندگان را انتخاب کنید:"),
+                  reply_markup=kb.broadcast_segment_kb())
     elif action == "support":
         await state.set_state(SF.support)
         await ans(rtl(
@@ -1827,15 +1827,50 @@ async def sf_join_check(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer("✅ عضویت تأیید شد.")
 
 
+_SEGMENT_FA = {
+    "all": "همهٔ مشتری‌ها",
+    "expired": "مشتریانِ منقضی‌شده",
+    "inactive30": "۳۰ روز غیرفعال‌ها",
+    "trial_no_purchase": "تست‌گرفته‌های نخریده",
+}
+
+
+@storefront_router.callback_query(F.data.startswith("sfbcseg:"))
+async def sf_broadcast_segment(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Admin chose the broadcast audience → stash it, show the recipient count, ask for the text."""
+    segment = cb.data.split(":", 1)[1]
+    if segment not in _SEGMENT_FA:
+        await cb.answer()
+        return
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        n = len(await storefront.customers_in_segment(s, sf.id, segment))
+    if n == 0:
+        await state.clear()
+        await cb.message.answer(rtl(f"در گروهِ «{_SEGMENT_FA[segment]}» مشتری‌ای نیست."))
+    else:
+        await state.set_state(SF.broadcast)
+        await state.update_data(bc_segment=segment)
+        await cb.message.answer(rtl(
+            f"📢 گیرنده: {_SEGMENT_FA[segment]} ({n} نفر)\nاکنون متنِ پیام را بفرستید:"),
+            reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
 @storefront_router.message(SF.broadcast, F.text)
 async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
-    await state.clear()
     text = message.text or ""
+    data = await state.get_data()
+    segment = data.get("bc_segment") or "all"
+    await state.clear()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        custs = await storefront.list_customers(s, sf.id)
+        custs = await storefront.customers_in_segment(s, sf.id, segment)
     sent = 0
     for c in custs:
         try:
@@ -1844,7 +1879,9 @@ async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(0.05)
-    await message.answer(rtl(f"📢 به {sent} مشتری ارسال شد."), reply_markup=kb.admin_reply_kb())
+    scope = _SEGMENT_FA.get(segment, "مشتری‌ها")
+    await message.answer(rtl(f"📢 به {sent} نفر ({scope}) ارسال شد."),
+                         reply_markup=kb.admin_reply_kb())
 
 
 # ── generic cancel ────────────────────────────────────────────────────────────

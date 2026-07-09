@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
@@ -307,6 +307,85 @@ async def list_customers(session: AsyncSession, storefront_bot_id: int) -> list[
             )
         ).scalars().all()
     )
+
+
+async def _expired_customers(
+    session: AsyncSession, storefront_bot_id: int
+) -> list[StorefrontCustomer]:
+    """Non-banned customers who have at least one PROVISIONED config that is already expired
+    (days-left < 0), computed with the same snapshot-based math as the near-expiry sweep."""
+    from app.models import EndUserSnapshot, StorefrontOrder
+    from app.services import storefront_expiry
+    from app.services.periods import today as tehran_today
+
+    rows = (
+        await session.execute(
+            select(StorefrontOrder, StorefrontCustomer)
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontOrder.customer_id)
+            .where(
+                StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+                StorefrontCustomer.banned.is_(False),
+                StorefrontOrder.status == "provisioned",
+            )
+        )
+    ).all()
+    if not rows:
+        return []
+    uuids = [o.panel_user_uuid for o, _c in rows if o.panel_user_uuid]
+    snaps: dict[tuple[int, str], EndUserSnapshot] = {}
+    if uuids:
+        for sn in (
+            await session.execute(
+                select(EndUserSnapshot).where(EndUserSnapshot.user_uuid.in_(uuids))
+            )
+        ).scalars().all():
+            snaps[(sn.panel_id, sn.user_uuid)] = sn
+    today = tehran_today()
+    seen: dict[int, StorefrontCustomer] = {}
+    for order, cust in rows:
+        snap = (snaps.get((order.panel_id, order.panel_user_uuid or ""))
+                if order.panel_id is not None else None)
+        days_left = storefront_expiry._days_left(order, snap, today)
+        if days_left is not None and days_left < 0 and cust.id not in seen:
+            seen[cust.id] = cust
+    return list(seen.values())
+
+
+async def customers_in_segment(
+    session: AsyncSession, storefront_bot_id: int, segment: str
+) -> list[StorefrontCustomer]:
+    """Non-banned customers of a shop matching a broadcast SEGMENT, so the admin can target an offer:
+      all               — everyone (== list_customers)
+      inactive30        — no activity (last_seen, else created) in the last 30 days
+      trial_no_purchase — used the free trial but never bought a paid plan
+      expired           — has a provisioned config that is already expired
+    """
+    from app.models import StorefrontOrder
+
+    if segment == "all":
+        return await list_customers(session, storefront_bot_id)
+    if segment == "expired":
+        return await _expired_customers(session, storefront_bot_id)
+
+    base = select(StorefrontCustomer).where(
+        StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+        StorefrontCustomer.banned.is_(False),
+    ).order_by(StorefrontCustomer.created_at.desc())
+
+    if segment == "inactive30":
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+        activity = func.coalesce(StorefrontCustomer.last_seen_at, StorefrontCustomer.created_at)
+        base = base.where(activity < cutoff)
+    elif segment == "trial_no_purchase":
+        paid = exists().where(
+            StorefrontOrder.customer_id == StorefrontCustomer.id,
+            StorefrontOrder.is_trial.is_(False),
+            StorefrontOrder.status.in_(("provisioned", "disabled")),
+        )
+        base = base.where(StorefrontCustomer.free_trial_used.is_(True), ~paid)
+    else:
+        return []
+    return list((await session.execute(base)).scalars().all())
 
 
 async def count_customers(session: AsyncSession, storefront_bot_id: int) -> int:

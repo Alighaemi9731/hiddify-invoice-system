@@ -148,6 +148,52 @@ def test_shop_closed_blocks_buy(tmp_path):
     _run(body, tmp_path, "shopclosed.db")
 
 
+def test_customers_in_segment(tmp_path):
+    """#8 — each broadcast segment selects the right non-banned customers."""
+    import datetime as _dt
+
+    from app.models import StorefrontCustomer, StorefrontOrder
+
+    async def body(s):
+        _r, bot, _c0 = await _seed(s)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        active = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1001, last_seen_at=now)
+        inactive = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1002,
+                                      last_seen_at=now - _dt.timedelta(days=40))
+        trial = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1003,
+                                   last_seen_at=now, free_trial_used=True)
+        trial_bought = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1004,
+                                          last_seen_at=now, free_trial_used=True)
+        expired = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1005, last_seen_at=now)
+        banned = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=1006, banned=True)
+        s.add_all([active, inactive, trial, trial_bought, expired, banned])
+        await s.flush()
+        # a paid config for trial_bought → excluded from trial_no_purchase
+        s.add(StorefrontOrder(customer_id=trial_bought.id, panel_id=bot.panel_id, plan_id=1,
+                              gb=10, days=30, price_toman=50000, status="provisioned",
+                              panel_user_uuid="pu-bought", is_trial=False))
+        # an expired config for `expired` (created 40d ago, 1-day plan, no snapshot → fallback math)
+        s.add(StorefrontOrder(customer_id=expired.id, panel_id=bot.panel_id, plan_id=None,
+                              gb=10, days=1, price_toman=0, status="provisioned",
+                              panel_user_uuid="pu-exp", is_trial=False,
+                              created_at=now - _dt.timedelta(days=40)))
+        await s.commit()
+
+        def tids(rows):
+            return sorted(c.telegram_id for c in rows)
+
+        all_ = tids(await storefront.customers_in_segment(s, bot.id, "all"))
+        assert 1006 not in all_ and {1001, 1002, 1003, 1004, 1005}.issubset(set(all_))
+        inact = tids(await storefront.customers_in_segment(s, bot.id, "inactive30"))
+        assert 1002 in inact and 1001 not in inact
+        tnp = tids(await storefront.customers_in_segment(s, bot.id, "trial_no_purchase"))
+        assert 1003 in tnp and 1004 not in tnp
+        exp = tids(await storefront.customers_in_segment(s, bot.id, "expired"))
+        assert exp == [1005]
+
+    _run(body, tmp_path, "segments.db")
+
+
 def test_build_poster_png():
     """#10 — the shop poster renders valid PNG bytes at the expected size for a Persian shop name."""
     import io
