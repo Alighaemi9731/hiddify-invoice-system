@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.69.5 - 2026-07-11
+
+### Changed
+
+- **The reseller-portal monthly sales chart loads much lighter (N05).** The endpoint used to
+  run the full per-node report for every reseller row — reloading the panel's reseller tree,
+  all subtree snapshots, and the pricing settings per row, plus one metering query per month
+  (up to 12), and computing a capacity section the chart never shows. It now uses a lean
+  aggregate: the node context loads once per row and ONE metering query covers all months.
+  The numbers are guaranteed unchanged — a parity test asserts the new aggregate equals the
+  old report's month rows exactly (including metered-abuse extras), since these are
+  reseller-visible money figures. New tests also cover multi-panel accounts (rows are summed)
+  and the first-month case (`delta_pct = null`, no divide-by-zero). No schema change.
+
 ## 1.69.4 - 2026-07-11
 
 ### Fixed

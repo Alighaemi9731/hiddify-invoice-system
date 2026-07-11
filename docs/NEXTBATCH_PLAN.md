@@ -370,7 +370,13 @@ STOP if: N01 has not shipped (no `send_with_flood_control` in
 
 ## N05 - Portal sales-by-month: one lean aggregate instead of N×full node_report
 
-Priority: P2 (reseller-facing hot path; grows with data volume). Version: PATCH. Status: TODO. No migration.
+Priority: P2 (reseller-facing hot path; grows with data volume). Version: PATCH. Status: DONE in `v1.69.5`. No migration.
+(Implemented as planned: `_NodeCtx` + `node_months(_ctx=)` in reseller_report,
+`_extra_from_rows` + `bundle_extra_many` in metering (bundle_extra now delegates),
+portal calls `node_months`. Parity test — including a seeded UsageMeter abuse row —
+fails pre-batch (AttributeError) and gates the money math; the multi-row and
+delta-None endpoint tests close the TEST-04 gap as coverage guards.
+`_billable_gb_with_metering` stays — interim_breakdown and gb_cap still use it.)
 
 **Why.** The portal dashboard chart (`v1.67.0`) calls the full `node_report` once per
 reseller row per request. Each call re-loads ALL of the panel's resellers, ALL

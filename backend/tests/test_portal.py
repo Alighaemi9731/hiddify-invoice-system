@@ -650,3 +650,81 @@ def test_sales_by_month_aggregates_and_delta():
         assert prev > 0 and out["summary"]["current_toman"] == 2 * prev
         assert out["summary"]["delta_pct"] == 100.0
     _run(body)
+
+
+def test_node_months_parity_with_node_report():
+    """N05 parity gate: node_months (the portal chart's lean aggregate — node context
+    loaded once, ONE UsageMeter query for all months) must equal
+    node_report()['months'] EXACTLY, including the metered-abuse extra — these are
+    reseller-visible money figures and must never drift from the invoice math."""
+    import datetime as _dt
+
+    from app.models import EndUserSnapshot, UsageMeter
+    from app.services import reseller_report
+    from app.services.periods import current_month
+
+    async def body(s):
+        a, _b, _ia, _ib = await _seed(s, with_payments=False)
+        cur = current_month()
+        prev_last = cur.start - _dt.timedelta(days=1)
+        s.add_all([
+            EndUserSnapshot(panel_id=a.panel_id, user_uuid="pm-1", added_by_uuid=a.admin_uuid,
+                            usage_limit_gb=20, current_usage_gb=1, start_date=cur.start,
+                            enable=True, is_active=True),
+            EndUserSnapshot(panel_id=a.panel_id, user_uuid="pm-2", added_by_uuid=a.admin_uuid,
+                            usage_limit_gb=7, current_usage_gb=0,
+                            start_date=_dt.date(prev_last.year, prev_last.month, 1),
+                            enable=True, is_active=True),
+            # A metered-abuse row exercises the bundle_extra_many path (4 GB > tolerance).
+            UsageMeter(panel_id=a.panel_id, period_label=cur.label, added_by_uuid=a.admin_uuid,
+                       user_uuid="pm-1", name="u", overage_gb=4.0, edit_renewal_gb=0,
+                       renew_used_gb=0),
+        ])
+        await s.commit()
+
+        months = await reseller_report.node_months(s, a, months=3)
+        report = await reseller_report.node_report(s, a, months=3)
+        assert months == report["months"]                      # byte-identical money rows
+        cur_row = next(m for m in months if m["label"] == cur.label)
+        assert cur_row["gb"] == 24.0                           # 20 base + 4 metered overage
+        assert cur_row["new_services"] == 2                    # snapshot + meter line
+    _run(body)
+
+
+def test_sales_by_month_multirow_and_zero_prev_delta():
+    """N05 (TEST-04 gap): the endpoint sums across ALL the caller's reseller rows
+    (one person on two panels), and a zero previous month yields delta_pct None
+    instead of a divide-by-zero."""
+    import datetime as _dt  # noqa: F401
+
+    from app.models import EndUserSnapshot
+    from app.services.periods import current_month
+
+    async def body(s):
+        a, _b, _ia, _ib = await _seed(s, with_payments=False)
+        p2 = Panel(key="p2", host="p2.invalid", proxy_path_enc="x", owner_uuid="o2")
+        s.add(p2)
+        await s.flush()
+        a2 = Reseller(panel_id=p2.id, admin_uuid="A2", name="Ali2", bot_chat_id=111)
+        s.add(a2)
+        await s.flush()
+        cur = current_month()
+        s.add_all([
+            EndUserSnapshot(panel_id=a.panel_id, user_uuid="mr-1", added_by_uuid=a.admin_uuid,
+                            usage_limit_gb=10, start_date=cur.start, enable=True,
+                            is_active=True),
+            EndUserSnapshot(panel_id=p2.id, user_uuid="mr-2", added_by_uuid="A2",
+                            usage_limit_gb=15, start_date=cur.start, enable=True,
+                            is_active=True),
+        ])
+        await s.commit()
+
+        ctx = await get_current_reseller(create_portal_session_token(111), s)
+        assert len(ctx.resellers) == 2                         # both rows belong to 111
+        out = await portal.sales_by_month(months=3, ctx=ctx, session=s)
+        cur_row = next(m for m in out["months"] if m["label"] == cur.label)
+        assert cur_row["gb"] == 25.0                           # 10 + 15 across the rows
+        assert cur_row["amount_toman"] == 25_000
+        assert out["summary"]["previous_toman"] == 0
+        assert out["summary"]["delta_pct"] is None             # no divide-by-zero
+    _run(body)

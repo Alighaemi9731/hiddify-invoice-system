@@ -156,36 +156,18 @@ def apply(
         meter.overage_gb = float(meter.overage_gb or 0) + overage
 
 
-async def bundle_extra(
-    session: AsyncSession,
-    panel_id: int,
-    admin_uuids: set[str],
-    period_label: str,
+def _extra_from_rows(
+    rows,
     free_threshold_gb: float,
-    exclude_user_uuids: set[str] | None = None,
+    overage_tol: float,
+    exclude_user_uuids: set[str] | None,
 ) -> dict:
-    """The ABNORMAL extra GB to add to a bundle's invoice for the period, plus a
-    per-user breakdown for the notification. Returns {gb, lines, abnormal}.
-    `exclude_user_uuids` = storefront free-trial config uuids whose meter (renew-by-edit / overage)
-    must never bill — the whole trial is a free giveaway."""
-    if not admin_uuids or not await is_enabled(session):
-        return {"gb": 0.0, "lines": [], "abnormal": []}
-    rows = (
-        await session.execute(
-            select(UsageMeter).where(
-                UsageMeter.panel_id == panel_id,
-                UsageMeter.period_label == period_label,
-                UsageMeter.added_by_uuid.in_(admin_uuids),
-            )
-        )
-    ).scalars().all()
+    """Pure per-row extra math shared by bundle_extra / bundle_extra_many.
 
-    # A user keeps consuming for a couple of minutes after hitting their quota (xray cuts off
-    # lazily), so a few hundred MB of "overage" is normal, not abuse. Threshold (NOT subtract):
-    # overage at/below the tolerance is pure soft-cutoff slack → ignored entirely; above it, it's
-    # real over-consumption → the FULL overage is billed. Real reset-abuse is many GB → billed.
-    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 0.5) or 0)
-
+    A user keeps consuming for a couple of minutes after hitting their quota (xray cuts off
+    lazily), so a few hundred MB of "overage" is normal, not abuse. Threshold (NOT subtract):
+    overage at/below the tolerance is pure soft-cutoff slack → ignored entirely; above it, it's
+    real over-consumption → the FULL overage is billed. Real reset-abuse is many GB → billed."""
     total = 0.0
     lines: list[dict] = []
     abnormal: list[dict] = []
@@ -221,6 +203,60 @@ async def bundle_extra(
                 "reset_count": int(m.reset_count or 0), "billed_gb": round(abuse, 3),
             })
     return {"gb": round(total, 3), "lines": lines, "abnormal": abnormal}
+
+
+async def bundle_extra(
+    session: AsyncSession,
+    panel_id: int,
+    admin_uuids: set[str],
+    period_label: str,
+    free_threshold_gb: float,
+    exclude_user_uuids: set[str] | None = None,
+) -> dict:
+    """The ABNORMAL extra GB to add to a bundle's invoice for the period, plus a
+    per-user breakdown for the notification. Returns {gb, lines, abnormal}.
+    `exclude_user_uuids` = storefront free-trial config uuids whose meter (renew-by-edit / overage)
+    must never bill — the whole trial is a free giveaway."""
+    out = await bundle_extra_many(
+        session, panel_id, admin_uuids, [period_label], free_threshold_gb,
+        exclude_user_uuids=exclude_user_uuids,
+    )
+    return out[period_label]
+
+
+async def bundle_extra_many(
+    session: AsyncSession,
+    panel_id: int,
+    admin_uuids: set[str],
+    period_labels: list[str],
+    free_threshold_gb: float,
+    exclude_user_uuids: set[str] | None = None,
+) -> dict[str, dict]:
+    """`bundle_extra` for SEVERAL periods with ONE UsageMeter query (`period_label IN …`,
+    grouped per label in Python; the per-row math is the shared `_extra_from_rows`).
+    Returns {label: {gb, lines, abnormal}} with an entry for EVERY requested label."""
+    if not period_labels:
+        return {}
+    if not admin_uuids or not await is_enabled(session):
+        return {lbl: {"gb": 0.0, "lines": [], "abnormal": []} for lbl in period_labels}
+    rows = (
+        await session.execute(
+            select(UsageMeter).where(
+                UsageMeter.panel_id == panel_id,
+                UsageMeter.period_label.in_(period_labels),
+                UsageMeter.added_by_uuid.in_(admin_uuids),
+            )
+        )
+    ).scalars().all()
+    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 0.5) or 0)
+    by_label: dict[str, list] = {lbl: [] for lbl in period_labels}
+    for m in rows:
+        if m.period_label in by_label:
+            by_label[m.period_label].append(m)
+    return {
+        lbl: _extra_from_rows(by_label[lbl], free_threshold_gb, overage_tol, exclude_user_uuids)
+        for lbl in period_labels
+    }
 
 
 def _abuse_text(period: str, abnormal: list[dict]) -> str:

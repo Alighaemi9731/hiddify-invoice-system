@@ -181,13 +181,14 @@ async def sales_by_month(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Monthly sales (own + all sub-resellers) across the caller's reseller rows, oldest→newest,
-    plus a current-vs-previous comparison. Reuses `reseller_report.node_report` (subtree-scoped,
-    metering-aware) — the same source the «interim» estimate and the /subs report use."""
+    plus a current-vs-previous comparison. Uses `reseller_report.node_months` (subtree-scoped,
+    metering-aware, parity-tested against node_report's months) — the lean aggregate: the node
+    context loads once per row and ONE UsageMeter query covers all months, instead of the full
+    node_report (cap/enabled-users section + one metering query per month) per row."""
     months = max(2, min(int(months or 6), 12))
     agg: dict[str, dict] = {}
     for r in ctx.resellers:
-        rep = await reseller_report.node_report(session, r, months=months)
-        for m in rep.get("months", []):
+        for m in await reseller_report.node_months(session, r, months=months):
             row = agg.setdefault(
                 m["label"], {"label": m["label"], "amount_toman": 0, "gb": 0.0, "new_services": 0})
             row["amount_toman"] += int(m["amount_toman"])

@@ -7,6 +7,7 @@ snapshots, the same way the invoice engine does for a bundle.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 from typing import TypedDict
 
 from sqlalchemy import select
@@ -291,7 +292,22 @@ async def _billable_gb_with_metering(
     return round(base_gb + float(extra.get("gb", 0) or 0), 3), cnt + len(extra.get("lines", []))
 
 
-async def node_report(session: AsyncSession, reseller: Reseller, *, months: int = 3) -> dict:
+@dataclass
+class _NodeCtx:
+    """Everything the per-node month math needs, loaded ONCE per node (the panel's
+    reseller tree, the subtree's snapshots, and the pricing settings)."""
+    descendants: list[Reseller]
+    uuids: set[str]
+    users: list[EndUserSnapshot]
+    price: int
+    free_threshold: float
+    excluded: set[float]
+    psa: dt.datetime | None
+    deleted_over: float
+    trial_uuids: set[str]
+
+
+async def _node_ctx(session: AsyncSession, reseller: Reseller) -> _NodeCtx:
     descendants = await node_descendants(session, reseller)
     uuids = {d.admin_uuid for d in descendants}
     users = (
@@ -302,27 +318,56 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
             )
         )
     ).scalars().all()
-
     default_price = await pricing.get_default_price_per_gb(session)
-    price = int(reseller.price_per_gb or default_price)
-    free_threshold = await pricing.get_free_threshold_gb(session)
-    excluded = await pricing.get_excluded_usage_gb(session)
-    psa = await _panel_synced_at(session, reseller.panel_id)
-    deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
-    trial_uuids = await storefront.trial_user_uuids(session, reseller.panel_id)
+    return _NodeCtx(
+        descendants=list(descendants),
+        uuids=uuids,
+        users=list(users),
+        price=int(reseller.price_per_gb or default_price),
+        free_threshold=await pricing.get_free_threshold_gb(session),
+        excluded=await pricing.get_excluded_usage_gb(session),
+        psa=await _panel_synced_at(session, reseller.panel_id),
+        deleted_over=await pricing.get_deleted_full_quota_over_gb(session),
+        trial_uuids=await storefront.trial_user_uuids(session, reseller.panel_id),
+    )
 
+
+async def node_months(
+    session: AsyncSession, reseller: Reseller, *, months: int,
+    _ctx: _NodeCtx | None = None,
+) -> list[MonthSummary]:
+    """The by-month sales summaries of `node_report` WITHOUT its cap/enabled-users
+    section: the node context is loaded once and the metered extra for ALL months comes
+    from ONE UsageMeter query (`bundle_extra_many`). The portal sales chart calls this
+    per reseller row. Output is exactly `node_report(...)["months"]` (parity-tested in
+    tests/test_portal.py) — these are money figures shown to resellers and must never
+    drift from the invoice math."""
+    ctx = _ctx or await _node_ctx(session, reseller)
+    periods = _last_months(months)
+    extras = await metering.bundle_extra_many(
+        session, reseller.panel_id, ctx.uuids, [p.label for p in periods],
+        ctx.free_threshold, exclude_user_uuids=ctx.trial_uuids,
+    )
     by_month: list[MonthSummary] = []
-    for p in _last_months(months):
-        gb, cnt = await _billable_gb_with_metering(
-            session, reseller.panel_id, uuids, users, p, free_threshold, excluded, psa,
-            deleted_over, exclude_user_uuids=trial_uuids,
+    for p in periods:
+        base_gb, cnt = _billable_gb_for_period(
+            ctx.users, p, ctx.free_threshold, ctx.excluded, ctx.psa, ctx.deleted_over,
+            ctx.trial_uuids,
         )
+        extra = extras.get(p.label) or {"gb": 0.0, "lines": []}
+        gb = round(base_gb + float(extra.get("gb", 0) or 0), 3)
         by_month.append({
             "label": p.label,
             "gb": gb,
-            "amount_toman": round(gb * price),
-            "new_services": cnt,
+            "amount_toman": round(gb * ctx.price),
+            "new_services": cnt + len(extra.get("lines", [])),
         })
+    return by_month
+
+
+async def node_report(session: AsyncSession, reseller: Reseller, *, months: int = 3) -> dict:
+    ctx = await _node_ctx(session, reseller)
+    by_month = await node_months(session, reseller, months=months, _ctx=ctx)
 
     # Current-month progress against the parent-set GB cap (the bot shows this so the
     # parent can see how much of the sub's monthly quota is used).
@@ -335,10 +380,10 @@ async def node_report(session: AsyncSession, reseller: Reseller, *, months: int 
     return {
         "name": reseller.name,
         "admin_uuid": reseller.admin_uuid,
-        "sub_count": max(0, len(descendants) - 1),
-        "total_users": len(users),
-        "enabled_users": sum(1 for u in users if u.enable),
-        "price_per_gb": price,
+        "sub_count": max(0, len(ctx.descendants) - 1),
+        "total_users": len(ctx.users),
+        "enabled_users": sum(1 for u in ctx.users if u.enable),
+        "price_per_gb": ctx.price,
         "enforcement_state": reseller.enforcement_state.value,
         "months": by_month,
         "gb_cap": cap,
