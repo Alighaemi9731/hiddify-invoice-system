@@ -8,6 +8,17 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.69.2 - 2026-07-11
+
+### Fixed
+
+- **«تمدید مهلت گروهی» no longer aborts the whole batch on a broken invoice reference (N02).**
+  If one selected invoice pointed at a reseller/panel row that no longer exists, the entire
+  bulk operation failed with an opaque 409 and nothing was applied — contradicting the
+  endpoint's documented skip semantics. Such an invoice is now reported in `skipped`
+  («نماینده یا پنلِ فاکتور حذف شده است») and the rest of the batch applies normally. The
+  single-invoice endpoints keep their intentional 409. No schema change.
+
 ## 1.69.1 - 2026-07-11
 
 ### Fixed

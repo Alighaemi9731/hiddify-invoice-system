@@ -390,7 +390,13 @@ async def bulk_defer(
         except invoice_state.InvoiceStateError:
             skipped.append({"id": iid, "reason": "قابلِ تعیین مهلت نیست (پیش‌نویس/پرداخت‌شده/لغوشده)"})
             continue
-        reseller, panel = await _invoice_context(session, inv)
+        # A dangling reseller/panel reference must not abort the whole batch — the
+        # single-invoice endpoints intentionally 409 via _invoice_context; here it's a skip.
+        reseller = await session.get(Reseller, inv.reseller_id)
+        panel = await session.get(Panel, inv.panel_id)
+        if reseller is None or panel is None:
+            skipped.append({"id": iid, "reason": "نماینده یا پنلِ فاکتور حذف شده است"})
+            continue
         await _apply_defer(session, inv, reseller, panel, body.deferred_until, body.defer_note)
         done += 1
     await session.commit()

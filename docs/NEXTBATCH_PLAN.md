@@ -152,7 +152,9 @@ same spirit as the expiry test and say so in the release notes).
 
 ## N02 - Bulk-defer: skip invoices with missing context instead of aborting the batch
 
-Priority: P2 (contract violation, low real-world frequency). Version: PATCH. Status: TODO. No migration.
+Priority: P2 (contract violation, low real-world frequency). Version: PATCH. Status: DONE in `v1.69.2`. No migration.
+(Regression test constructs the dangling state by deleting a second panel row after its
+invoice exists; verified failing pre-batch — old code 409s at `_invoice_context`.)
 
 **Why.** `POST /api/invoices/bulk-defer` promises per-invoice skip semantics but a
 single invoice whose reseller/panel row is gone aborts the entire batch with an

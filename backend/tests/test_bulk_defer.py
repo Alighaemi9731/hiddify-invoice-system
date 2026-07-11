@@ -88,6 +88,45 @@ def test_bulk_defer_applies_to_owed_and_skips_others(tmp_path):
     _run(body, tmp_path, "b1.db")
 
 
+def test_bulk_defer_skips_dangling_invoice_instead_of_aborting(tmp_path):
+    """N02 regression: an invoice whose panel row is gone must land in `skipped`, not
+    abort the whole batch with a 409 (pre-N02 `_invoice_context` raised uncaught inside
+    the loop and NOTHING was applied)."""
+    async def body(s):
+        r = await _seed(s)
+        good1 = _inv(r.id, label="2026-01", status=InvoiceStatus.sent)
+        good2 = _inv(r.id, label="2026-02", status=InvoiceStatus.overdue)
+        s.add_all([good1, good2])
+        await s.flush()
+        # A second panel that then disappears — its invoice keeps the dangling panel_id
+        # (constructible on SQLite tests, which don't enforce the FK; on Postgres the
+        # panel FK has no CASCADE so app-level deletion order can leave the same state).
+        s.add(Panel(id=2, key="p2", host="h2", proxy_path_enc="x", owner_uuid="o"))
+        dangling = _inv(r.id, label="2026-03", status=InvoiceStatus.sent)
+        dangling.panel_id = 2
+        s.add(dangling)
+        await s.flush()
+        await s.execute(Panel.__table__.delete().where(Panel.__table__.c.id == 2))
+        await s.commit()
+
+        deadline = dt.date.today() + dt.timedelta(days=30)
+        res = await invoices_api.bulk_defer(
+            BulkDefer(ids=[good1.id, dangling.id, good2.id],
+                      deferred_until=deadline, defer_note="مهلت گروهی"),
+            session=s,
+        )
+        assert res.done == 2
+        assert [x["id"] for x in res.skipped] == [dangling.id]
+        assert "حذف" in res.skipped[0]["reason"]
+        await s.refresh(good1)
+        await s.refresh(good2)
+        await s.refresh(dangling)
+        assert good1.deferred_until == deadline and good2.deferred_until == deadline
+        assert dangling.deferred_until is None             # untouched
+
+    _run(body, tmp_path, "b3.db")
+
+
 def test_bulk_defer_clear_deadline(tmp_path):
     async def body(s):
         r = await _seed(s)
