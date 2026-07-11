@@ -8,6 +8,18 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.69.4 - 2026-07-11
+
+### Fixed
+
+- **Storefront «پیام همگانی» is now reliable and non-blocking (N04).** The shop broadcast used
+  to send inside the Telegram handler itself — the admin's bot froze for the whole send on a
+  large customer list, and a Telegram flood-wait (429) was silently swallowed, dropping those
+  recipients with no retry. The send now runs in the background under the same flood-control
+  policy as the owner broadcast (rate limit + bounded 429 retry; blocked customers counted,
+  never retried): the admin gets an immediate «ارسال شروع شد» and then a final summary
+  (موفق/مسدود/ناموفق) in the same chat. No schema change.
+
 ## 1.69.3 - 2026-07-11
 
 ### Fixed

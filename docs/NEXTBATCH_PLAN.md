@@ -290,7 +290,12 @@ STOP if: any OTHER caller of `resolve_recipients`/`preview` passes audiences out
 
 ## N04 - Storefront segmented broadcast through the shared flood-control sender
 
-Priority: P2. Version: PATCH. Status: TODO. No migration. Depends on: N01 (uses `send_with_flood_control`).
+Priority: P2. Version: PATCH. Status: DONE in `v1.69.4`. No migration. Depends on: N01 (uses `send_with_flood_control`).
+(The regression test drives `_sf_broadcast_bg` directly — 429-retried-then-delivered,
+blocked-counted-loop-continues, admin summary with keyboard; on pre-batch code it fails
+with AttributeError since the background sender did not exist and the old inline loop
+dropped throttled recipients. The empty-segment race now answers «مشتری‌ای نیست» in the
+handler as well, not only in the segment picker.)
 
 **Why.** The reseller-facing shop broadcast (`v1.65.0`) reimplements fan-out as a
 foreground loop inside the aiogram handler: the admin's bot is unresponsive for the

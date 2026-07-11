@@ -32,6 +32,7 @@ from app.models import (
     StorefrontPlan,
 )
 from app.services import (
+    broadcast,
     settings_service,
     storefront,
     storefront_provision,
@@ -1871,6 +1872,31 @@ async def sf_broadcast_segment(cb: CallbackQuery, state: FSMContext, bot: Bot) -
     await cb.answer()
 
 
+async def _sf_broadcast_bg(bot: Bot, admin_chat_id: int, chat_ids: list[int],
+                           text: str, scope: str) -> None:
+    """Background fan-out for the shop broadcast under the SHARED flood-control policy
+    (`broadcast.send_with_flood_control`: rate limit + bounded 429 retry; a blocked
+    customer is counted, never retried; a throttled recipient is no longer silently
+    dropped). Reports the final counts to the admin chat. Must never raise — it runs
+    as a fire-and-forget task."""
+    try:
+        limiter = broadcast.rate_limiter()
+        counts = {"sent": 0, "blocked": 0, "failed": 0}
+        body = rtl(text)
+        for cid in chat_ids:
+            outcome = await broadcast.send_with_flood_control(bot, cid, body, limiter)
+            counts[outcome] += 1
+        summary = f"📢 به {counts['sent']} نفر ({scope}) ارسال شد."
+        if counts["blocked"]:
+            summary += f"\n🚫 {counts['blocked']} نفر ربات را مسدود کرده‌اند."
+        if counts["failed"]:
+            summary += f"\n❌ {counts['failed']} ارسال ناموفق بود."
+        await bot.send_message(admin_chat_id, rtl(summary),
+                               reply_markup=kb.admin_reply_kb())
+    except Exception:  # noqa: BLE001 — a background task must never die silently
+        log.exception("storefront broadcast background send failed")
+
+
 @storefront_router.message(SF.broadcast, F.text)
 async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
     text = message.text or ""
@@ -1881,18 +1907,20 @@ async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        custs = await storefront.customers_in_segment(s, sf.id, segment)
-    sent = 0
-    for c in custs:
-        try:
-            await bot.send_message(c.telegram_id, rtl(text))
-            sent += 1
-        except Exception:  # noqa: BLE001
-            pass
-        await asyncio.sleep(0.05)
+        chat_ids = [c.telegram_id
+                    for c in await storefront.customers_in_segment(s, sf.id, segment)]
     scope = _SEGMENT_FA.get(segment, "مشتری‌ها")
-    await message.answer(rtl(f"📢 به {sent} نفر ({scope}) ارسال شد."),
-                         reply_markup=kb.admin_reply_kb())
+    if not chat_ids:
+        await message.answer(rtl(f"در گروهِ «{scope}» مشتری‌ای نیست."),
+                             reply_markup=kb.admin_reply_kb())
+        return
+    # Send in the BACKGROUND (mirrors the owner bot's _do_broadcast) so the admin's bot
+    # stays responsive during a large send; the summary arrives here when it finishes.
+    asyncio.create_task(_sf_broadcast_bg(bot, message.chat.id, chat_ids, text, scope))
+    await message.answer(
+        rtl(f"📢 ارسال به {len(chat_ids)} نفر ({scope}) در پس‌زمینه شروع شد؛ "
+            "خلاصهٔ نتیجه همین‌جا می‌آید."),
+        reply_markup=kb.admin_reply_kb())
 
 
 # ── generic cancel ────────────────────────────────────────────────────────────

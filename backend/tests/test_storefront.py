@@ -1367,3 +1367,46 @@ def test_usage_line_flags_renewal():
     assert "شاملِ تمدید" not in _usage_line(3.0, 10.0, 10)
     # tiny rounding slack doesn't trip the flag
     assert "شاملِ تمدید" not in _usage_line(0.0, 10.2, 10)
+
+
+def test_sf_broadcast_bg_flood_control_and_summary():
+    """N04: the shop broadcast fan-out uses the SHARED flood-control policy — a 429
+    recipient is retried and DELIVERED in the same run (pre-N04 the inline handler loop
+    swallowed the exception and silently dropped them), a blocked customer is counted
+    and skipped without stopping the loop, and the admin chat gets a final summary with
+    the admin keyboard."""
+    from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+    from aiogram.methods import SendMessage
+
+    from app.bot.storefront import handlers as H
+
+    def _m():
+        return SendMessage(chat_id=1, text="x")
+
+    class FakeBot:
+        def __init__(self):
+            self.sent: list[tuple[int, str, object]] = []
+            self._retried = False
+
+        async def send_message(self, chat_id, text, reply_markup=None, parse_mode=None):
+            if chat_id == 1 and not self._retried:
+                self._retried = True
+                raise TelegramRetryAfter(method=_m(), message="flood", retry_after=0)
+            if chat_id == 2:
+                raise TelegramForbiddenError(method=_m(), message="blocked")
+            self.sent.append((chat_id, text, reply_markup))
+
+    async def go():
+        bot = FakeBot()
+        await H._sf_broadcast_bg(bot, 900, [1, 2, 3], "پیام ویژه", "همه")
+        chat_ids = [c for c, _t, _k in bot.sent]
+        # 1 → delivered after one 429; 2 → blocked (skipped, loop continues);
+        # 3 → delivered; 900 → the admin summary, last.
+        assert chat_ids == [1, 3, 900]
+        summary_text, summary_kb = bot.sent[-1][1], bot.sent[-1][2]
+        assert "🚫" in summary_text          # blocked count reported
+        assert "❌" not in summary_text      # no hard failures
+        assert "2" in summary_text           # sent == 2
+        assert summary_kb is not None        # admin reply keyboard attached
+
+    asyncio.run(go())
