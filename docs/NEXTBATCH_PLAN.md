@@ -207,7 +207,10 @@ STOP if: the loop body at `:383-395` no longer matches the excerpt (drift).
 
 ## N03 - Broadcast audience fail-safety: threshold required, no silent fall-through to «all»
 
-Priority: P2 (server-side footgun; currently mitigated by the frontend + preview). Version: PATCH. Status: TODO. No migration.
+Priority: P2 (server-side footgun; currently mitigated by the frontend + preview). Version: PATCH. Status: DONE in `v1.69.3`. No migration.
+(`test_invoice_above_filter` re-baselined with in-diff justification; the three behavioral
+regressions — threshold-collapse, unknown-audience, validator-400 — fail pre-batch by
+stash-run; the panel-scope and real-usage tests are coverage guards closing the TEST-03 gap.)
 
 **Why.** Two independent gaps compose into "message every billable reseller by
 accident": (1) `invoice_above` with a missing threshold matches *everyone* — the

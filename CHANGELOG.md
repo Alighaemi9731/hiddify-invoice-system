@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.69.3 - 2026-07-11
+
+### Fixed
+
+- **Broadcast audience filters can no longer accidentally target everyone (N03).** Two
+  server-side gaps closed: «فاکتور بالای X» with a missing/zero threshold used to match every
+  billable reseller (`>= 0`), and any unknown audience value inside the service silently fell
+  back to «همه». Now the three threshold filters (فاکتور بالای/زیر مبلغ، کم‌تر از N کاربر فعال)
+  require a positive threshold — the API rejects the request with 400 and the service resolves
+  to nobody — and an unrecognized audience resolves to nobody (the bot's internal «یک پنل»
+  alias keeps working). The panel UI already always sends a threshold, so nothing changes for
+  normal use. New tests cover the panel restriction combined with audiences and the sales-amount
+  filters against real seeded usage. No schema change.
+
 ## 1.69.2 - 2026-07-11
 
 ### Fixed

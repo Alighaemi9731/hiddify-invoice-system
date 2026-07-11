@@ -124,6 +124,10 @@ def current_status() -> dict[str, Any]:
 # Access-state filters: enforced (معلق), frozen (توقفِ ساختِ کاربر).
 # Sales/activity: zero_sale, few_active(<N), invoice_below(<X), invoice_above(≥X),
 # new_resellers (created within N days).
+# few_active/invoice_below/invoice_above REQUIRE a positive threshold — without one they
+# resolve to NOBODY (never to everyone), and the API rejects the request with 400.
+# An audience string outside this tuple (plus the bot-only "panel" alias) also resolves
+# to NOBODY — there is no silent fall-through to «all».
 AUDIENCES = (
     "all", "debtors", "overdue", "deferred", "pending_payment", "paid_up",
     "enforced", "frozen",
@@ -240,18 +244,33 @@ async def _matching_roots(
         return [r for r in roots
                 if (created := _created(r)) is not None and created >= cutoff]
     if audience == "few_active":
-        limit = int(threshold or 0)
+        if threshold is None or threshold <= 0:
+            return []  # a missing threshold must never widen the audience
         active = await _active_counts(session)
+        limit = int(threshold)
         return [r for r in roots if active.get((r.panel_id, r.admin_uuid), 0) < limit]
-    if audience in ("zero_sale", "invoice_below", "invoice_above"):
+    if audience == "zero_sale":
         amounts = await _bundle_amounts(session, panel_id)
-        if audience == "zero_sale":
-            return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[0] <= 0]
-        toman = float(threshold or 0)
+        return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[0] <= 0]
+    if audience in ("invoice_below", "invoice_above"):
+        if threshold is None or threshold <= 0:
+            # invoice_above with a missing threshold would otherwise be ">= 0" == EVERY
+            # billable root — the dangerous direction. Collapse to nobody for ALL callers
+            # (the API additionally rejects the request with 400).
+            return []
+        amounts = await _bundle_amounts(session, panel_id)
+        toman = float(threshold)
         if audience == "invoice_above":
             return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[1] >= toman]
         return [r for r in roots if amounts.get(r.id, (0.0, 0.0))[1] < toman]
-    return roots  # "all"
+    if audience in ("all", "panel"):
+        # "panel" is the BOT's alias for «one panel's resellers»: the narrowing already
+        # happened in load_billable_roots(panel_id); no further filter applies.
+        return roots
+    # An unknown audience must NEVER fall through to «all» — a typo'd callback or a
+    # future keyboard bug would otherwise message every reseller.
+    log.warning("broadcast: unknown audience %r resolves to NOBODY", audience)
+    return []
 
 
 async def resolve_recipients(
