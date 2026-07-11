@@ -15,16 +15,22 @@ Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`.
 
 ## Current improvement program
 
-Five programs are **complete** and archived: the 2026-06-09 audit
+Six programs are **complete** and archived: the 2026-06-09 audit
 (`docs/REMEDIATION_PLAN.md`, B00–B10), the 2026-07-02 verified-improvements
 roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12), the 2026-07-02 UI/UX review
 (`docs/UIUX_PLAN.md`, U01–U04, through `v1.55.0`), the 2026-07-03 polish
-review (`docs/POLISH_PLAN.md`, P01–P05, through `v1.57.3`), and the 2026-07-08
+review (`docs/POLISH_PLAN.md`, P01–P05, through `v1.57.3`), the 2026-07-08
 full-codebase hardening review (`docs/HARDENING_PLAN.md`, H01–H13, through
 `v1.60.4` — payment/enforcement/billing must-fixes, two standalone data
 migrations `b1c3e5a7f9d2`+`c2d4f6b8a1e3`, bot/storefront correctness,
 security/deploy hardening, docs + dead code; two deploy-infra items deferred to
-a maintenance window, see H12). No active program is open. For the next one,
+a maintenance window, see H12), and the 2026-07-11 post-v1.60.4
+feature-hardening batch (`docs/NEXTBATCH_PLAN.md`, N01–N05, through `v1.69.5`
+— storefront notice delivery/transaction reliability, bulk-defer skip
+semantics, broadcast threshold fail-safety, storefront broadcast
+flood-control, portal sales-chart lean aggregate; the audit's security stream
+on the v1.61–v1.69 surface came back clean, no migrations; deferred candidates
+are recorded in that file). No active program is open. For the next one,
 create a new `docs/*_PLAN.md`, fix exactly one batch per release in the
 documented order, and use `docs/RELEASE_PROCESS.md` for versioning, GitHub
 publication, production deployment, smoke checks, and rollback.

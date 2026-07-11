@@ -460,6 +460,12 @@ everything else; N02 is the smallest and can be released whenever a quick batch 
 convenient. One batch per release: `v1.69.1` … `v1.69.5` (all PATCH per
 `docs/VERSIONING.md`).
 
+**Program complete** (N01–N05, released `v1.69.1` → `v1.69.5` on 2026-07-11, each
+deployed to production with a fresh pre-deploy `pg_dump` and smoke-checked). No
+migrations were introduced. Deferred candidates for a future program are recorded in
+the "considered and rejected" section above (frontend Vitest baseline, docs refresh,
+storefront handlers split) plus the direction backlog below.
+
 ## Findings considered and rejected (do not re-audit)
 
 From the same 2026-07-11 audit, verified against the code and rejected:
