@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.69.1 - 2026-07-11
+
+### Fixed
+
+- **Storefront proactive notices are no longer lost on transient send failures (N01).**
+  The near-expiry reminder, «trial ended → buy» nudge, and «~80% volume used» warning used to
+  mark the customer as already-alerted on ANY send failure — including Telegram flood-waits
+  (429) and network blips — so the notice was silently dropped forever. Now only a delivered
+  notice or a permanently blocked customer (`TelegramForbiddenError`) is stamped; transient
+  failures are retried by the next daily run, and a 429 is retried within the same run under
+  the shared broadcast flood-control policy (rate limit + bounded retry), which these sweeps
+  now use for pacing. Sweep counters gained a `blocked` field.
+- **Notice sweeps no longer hold a DB transaction across the whole Telegram send loop.** The
+  due list is resolved first, the read transaction is released before any network I/O, and
+  the already-alerted stamps are committed in bounded batches (25) — a mid-sweep crash now
+  re-sends at most one batch window instead of the entire day's notices.
+- Internal: the three sweeps share one scan→send→stamp runner (the inline duplicate of the
+  snapshot loader is gone), and `_needs_alert` uses the same tz-coercion as its usage-warning
+  sibling. New regression tests cover the transient/blocked/429 outcomes and two-shop tenant
+  isolation. No schema change.
+
 ## 1.69.0 - 2026-07-10
 
 ### Added

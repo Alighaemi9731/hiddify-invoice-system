@@ -1,5 +1,6 @@
-"""I10: storefront near-expiry reminders — days-left math, threshold, dedup/re-arm,
-blocked-customer stamping, and the off switch."""
+"""I10 + N01: storefront near-expiry reminders — days-left math, threshold, dedup/re-arm,
+outcome taxonomy (blocked stamps, transient failure retries), flood-control, tenant
+isolation, and the off switch."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +10,9 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/sfexpiry.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter  # noqa: E402
+from aiogram.methods import SendMessage  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.core import crypto  # noqa: E402
@@ -23,15 +27,28 @@ from app.models import (  # noqa: E402
 from app.services import settings_service, storefront_expiry  # noqa: E402
 
 
+def _m():
+    return SendMessage(chat_id=1, text="x")
+
+
 class _FakeBot:
-    def __init__(self, fail: bool = False) -> None:
-        self.fail = fail
+    def __init__(self, fail: bool = False, blocked: bool = False,
+                 retry_once: bool = False) -> None:
+        self.fail = fail              # transient failure (network/unknown) → must NOT stamp
+        self.blocked = blocked        # TelegramForbiddenError (permanent) → stamps
+        self.retry_once = retry_once  # one 429 then success → delivered in the SAME run
+        self._retried = False
         self.sent: list[tuple[int, str]] = []
         self.session = self
 
     async def send_message(self, chat_id, text, **_kw):  # noqa: ANN001, ANN003
+        if self.retry_once and not self._retried:
+            self._retried = True
+            raise TelegramRetryAfter(method=_m(), message="flood", retry_after=0)
+        if self.blocked:
+            raise TelegramForbiddenError(method=_m(), message="blocked")
         if self.fail:
-            raise RuntimeError("Forbidden: bot was blocked by the user")
+            raise RuntimeError("network blip")
         self.sent.append((chat_id, text))
 
     async def close(self) -> None:
@@ -151,15 +168,97 @@ def test_fallback_to_order_duration_when_no_snapshot(tmp_path):
 
 
 def test_blocked_customer_is_stamped_not_retried(tmp_path):
+    """TelegramForbiddenError is PERMANENT: stamp so the customer isn't retried daily."""
+    async def body(s):
+        order, _ = await _seed(s, days_left_via_snapshot=1)
+        fake = _FakeBot(blocked=True)
+        c = await storefront_expiry.notify_expiring(s, bot_factory=_factory_for(fake))
+        assert c["due"] == 1 and c["blocked"] == 1 and c["sent"] == 0 and c["failed"] == 0
+        await s.refresh(order)
+        assert order.expiry_alerted_at is not None  # stamped anyway → no daily retry spam
+        c2 = await storefront_expiry.notify_expiring(s, bot_factory=_factory_for(fake))
+        assert c2["due"] == 0
+
+    _run(body, tmp_path, "e5.db")
+
+
+def test_transient_failure_not_stamped_then_retried(tmp_path):
+    """N01 regression: a TRANSIENT send failure must NOT stamp — the next daily run
+    retries and delivers. (Pre-N01 the stamp was written on ANY failure, silently
+    dropping the reminder forever.)"""
     async def body(s):
         order, _ = await _seed(s, days_left_via_snapshot=1)
         fake = _FakeBot(fail=True)
         c = await storefront_expiry.notify_expiring(s, bot_factory=_factory_for(fake))
         assert c["due"] == 1 and c["failed"] == 1 and c["sent"] == 0
         await s.refresh(order)
-        assert order.expiry_alerted_at is not None  # stamped anyway → no daily retry spam
+        assert order.expiry_alerted_at is None       # NOT stamped → eligible tomorrow
+        fake.fail = False                            # the outage clears
+        c2 = await storefront_expiry.notify_expiring(s, bot_factory=_factory_for(fake))
+        assert c2["sent"] == 1 and len(fake.sent) == 1
+        await s.refresh(order)
+        assert order.expiry_alerted_at is not None   # delivered → stamped
 
-    _run(body, tmp_path, "e5.db")
+    _run(body, tmp_path, "e5b.db")
+
+
+def test_flood_wait_is_retried_in_the_same_run(tmp_path):
+    """N01 regression: a 429 (TelegramRetryAfter) is retried per the shared broadcast
+    policy and DELIVERED in the same run. (Pre-N01 it was swallowed as a generic
+    failure and the customer was stamped without ever receiving the reminder.)"""
+    async def body(s):
+        order, cust = await _seed(s, days_left_via_snapshot=1)
+        fake = _FakeBot(retry_once=True)
+        c = await storefront_expiry.notify_expiring(s, bot_factory=_factory_for(fake))
+        assert c["sent"] == 1 and c["failed"] == 0
+        assert fake.sent and fake.sent[0][0] == cust.telegram_id
+        await s.refresh(order)
+        assert order.expiry_alerted_at is not None
+
+    _run(body, tmp_path, "e5c.db")
+
+
+def test_cross_tenant_isolation_two_shops(tmp_path):
+    """Each due order is messaged ONLY through its own storefront's bot (a customer of
+    shop A must never hear from shop B's bot)."""
+    async def body(s):
+        # Shop A via the standard seed…
+        _order_a, cust_a = await _seed(s, days_left_via_snapshot=1)
+        # …plus shop B on the same panel with its own bot token, customer, and due order.
+        panel = (await s.execute(select(Panel))).scalars().first()
+        r2 = Reseller(panel_id=panel.id, admin_uuid="b", name="R2")
+        s.add(r2)
+        await s.flush()
+        bot2 = StorefrontBot(reseller_id=r2.id, panel_id=panel.id,
+                             bot_token_enc=crypto.encrypt("222:tok") or "",
+                             enabled=True, status="active")
+        s.add(bot2)
+        await s.flush()
+        cust_b = StorefrontCustomer(storefront_bot_id=bot2.id, telegram_id=777, name="B")
+        s.add(cust_b)
+        await s.flush()
+        s.add(StorefrontOrder(customer_id=cust_b.id, panel_id=panel.id, plan_id=None,
+                              label="سرویس ب", gb=10, days=30, price_toman=50_000,
+                              status="provisioned", panel_user_uuid="uu-2"))
+        from app.services.periods import today as tehran_today
+        start = tehran_today() - dt.timedelta(days=29)  # 1 day left
+        s.add(EndUserSnapshot(panel_id=panel.id, user_uuid="uu-2", name="u2",
+                              added_by_uuid="b", usage_limit_gb=10,
+                              start_date=start, package_days=30, enable=True))
+        await s.commit()
+
+        fakes: dict[str, _FakeBot] = {}
+
+        async def factory(token: str):
+            fakes.setdefault(token, _FakeBot())
+            return fakes[token]
+
+        c = await storefront_expiry.notify_expiring(s, bot_factory=factory)
+        assert c["sent"] == 2 and len(fakes) == 2
+        assert [cid for cid, _ in fakes["111:tok"].sent] == [cust_a.telegram_id]
+        assert [cid for cid, _ in fakes["222:tok"].sent] == [cust_b.telegram_id]
+
+    _run(body, tmp_path, "e5d.db")
 
 
 def test_zero_threshold_disables_the_feature(tmp_path):
@@ -168,7 +267,7 @@ def test_zero_threshold_disables_the_feature(tmp_path):
         await settings_service.set_value(s, "storefront_expiry_notify_days", 0)
         fake = _FakeBot()
         c = await storefront_expiry.notify_expiring(s, bot_factory=_factory_for(fake))
-        assert c == {"checked": 0, "due": 0, "sent": 0, "failed": 0}
+        assert c == {"checked": 0, "due": 0, "sent": 0, "blocked": 0, "failed": 0}
         assert fake.sent == []
 
     _run(body, tmp_path, "e6.db")

@@ -62,6 +62,45 @@ class _RateLimiter:
             self._next_at = max(now, self._next_at) + self._min_interval
 
 
+def rate_limiter() -> _RateLimiter:
+    """A fresh limiter at the standard broadcast rate — for the OTHER fan-out senders
+    (storefront notices/broadcast) so every bulk Telegram send shares one policy."""
+    return _RateLimiter(BROADCAST_RATE_PER_SEC)
+
+
+async def send_with_flood_control(
+    bot: Any,
+    chat_id: int,
+    text: str,
+    limiter: _RateLimiter,
+    *,
+    reply_markup: Any = None,
+    parse_mode: str | None = None,
+    max_retry: int = BROADCAST_MAX_RETRY,
+) -> str:
+    """Send ONE message under the shared flood-control policy and classify the outcome:
+    "sent" — delivered; "blocked" — the user blocked the bot (permanent — callers must not
+    retry); "failed" — transient/unknown (429 past the retry budget, network, dead bot —
+    callers may retry on a later run). Every attempt first acquires the global rate
+    limiter; a 429 sleeps its `retry_after` and retries the SAME recipient."""
+    kwargs: dict[str, Any] = {"parse_mode": parse_mode}
+    if reply_markup is not None:
+        kwargs["reply_markup"] = reply_markup
+    for _attempt in range(max_retry):
+        await limiter.acquire()
+        try:
+            await bot.send_message(chat_id, text, **kwargs)
+            return "sent"
+        except TelegramRetryAfter as e:               # 429 → wait then retry the same recipient
+            await asyncio.sleep(e.retry_after)
+            continue
+        except TelegramForbiddenError:                # user blocked the bot → no retry
+            return "blocked"
+        except Exception:  # noqa: BLE001
+            return "failed"
+    return "failed"                                   # kept hitting 429 past the retry budget
+
+
 # In-memory snapshot of the LAST/current run only (no DB, no per-recipient persistence) so the
 # panel can show live progress while the background send runs.
 _status: dict[str, Any] = {
@@ -334,26 +373,10 @@ async def run_broadcast(
             return
         body = render(rec) if render is not None else text
         async with sem:
-            for _attempt in range(BROADCAST_MAX_RETRY):
-                await limiter.acquire()
-                try:
-                    await bot.send_message(cid, body, parse_mode=parse_mode)
-                    counts["sent"] += 1
-                    _status["sent"] = counts["sent"]
-                    return
-                except TelegramRetryAfter as e:           # 429 → wait then retry the same recipient
-                    await asyncio.sleep(e.retry_after)
-                    continue
-                except TelegramForbiddenError:            # user blocked the bot → no retry
-                    counts["blocked"] += 1
-                    _status["blocked"] = counts["blocked"]
-                    return
-                except Exception:  # noqa: BLE001
-                    counts["failed"] += 1
-                    _status["failed"] = counts["failed"]
-                    return
-            counts["failed"] += 1                          # kept hitting 429 past the retry budget
-            _status["failed"] = counts["failed"]
+            outcome = await send_with_flood_control(
+                bot, cid, body, limiter, parse_mode=parse_mode)
+        counts[outcome] += 1
+        _status[outcome] = counts[outcome]
 
     try:
         await asyncio.gather(*[_send(r) for r in reachable])
