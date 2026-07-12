@@ -8,6 +8,7 @@ All money is manual: the admin confirms each top-up and sets the credited Toman 
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 
 from aiogram import Bot, F, Router
@@ -952,17 +953,23 @@ async def sf_customer_detail(cb: CallbackQuery, bot: Bot) -> None:
         if cust is None or cust.storefront_bot_id != sf.id:
             await cb.answer("یافت نشد.", show_alert=True)
             return
-        name, tgid, bal, banned = (cust.name or "—", cust.telegram_id,
-                                   _toman(cust.wallet_balance_toman), cust.banned)
-    lines = [f"👤 {name}", f"🆔 {tgid}", f"👛 موجودی: {bal} تومان"]
+        name, tgid, bal, banned, username = (
+            cust.name or "—", cust.telegram_id, _toman(cust.wallet_balance_toman),
+            cust.banned, cust.username)
+    # HTML body (so the no-username «open chat» text-mention renders) → escape the free-text name.
+    lines = [f"👤 {html.escape(name)}", f"🆔 {tgid}", f"👛 موجودی: {bal} تومان"]
     if banned:
         lines.append("⛔️ مسدود")
+    # Customers WITH a @username get a «چت با مشتری» URL button in the keyboard; those without get a
+    # tg://user text-mention here (opens their profile — works because the bot has seen them).
+    if not kb.clean_username(username):
+        lines.append(f'<a href="tg://user?id={tgid}">💬 باز کردن چت با مشتری</a>')
     text = rtl("\n".join(lines))
-    markup = kb.customer_detail_kb(cid)
+    markup = kb.customer_detail_kb(cid, username=username)
     try:
-        await cb.message.edit_text(text, reply_markup=markup)
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
     except Exception:  # noqa: BLE001
-        await cb.message.answer(text, reply_markup=markup)
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
     await cb.answer()
 
 

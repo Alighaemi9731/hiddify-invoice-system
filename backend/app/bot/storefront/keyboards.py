@@ -1,6 +1,8 @@
 """Keyboards for the per-reseller storefront bots (admin side + customer side)."""
 from __future__ import annotations
 
+import re
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -314,10 +316,29 @@ def customers_page_kb(
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
-def customer_detail_kb(customer_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+# A Telegram username is 5–32 chars of [A-Za-z0-9_]. Validate before building a t.me URL so a
+# malformed value can't make Telegram reject the whole inline keyboard.
+_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{4,32}")
+
+
+def clean_username(username: str | None) -> str | None:
+    """A validated bare Telegram username (no @) suitable for a t.me/<u> link, or None."""
+    u = (username or "").strip().lstrip("@")
+    return u if _USERNAME_RE.fullmatch(u) else None
+
+
+def customer_detail_kb(customer_id: int, *, username: str | None = None) -> InlineKeyboardMarkup:
+    """Admin customer actions. When the customer has a @username, a «چت با مشتری» URL button opens
+    their PV directly (t.me/<username>); the no-username case is handled by a tg://user text-mention
+    in the message body (Telegram disallows tg:// as a button URL)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    u = clean_username(username)
+    if u:
+        rows.append([InlineKeyboardButton(text="💬 چت با مشتری", url=f"https://t.me/{u}")])
+    rows += [
         [InlineKeyboardButton(text="➕ شارژ دستی", callback_data=f"sfadj:{customer_id}:+"),
          InlineKeyboardButton(text="➖ کسر دستی", callback_data=f"sfadj:{customer_id}:-")],
         [InlineKeyboardButton(text="📦 سرویس‌ها", callback_data=f"sfacust:{customer_id}")],
         [InlineKeyboardButton(text="‹ بازگشت به فهرست", callback_data="sfcustpg:0")],
-    ])
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)

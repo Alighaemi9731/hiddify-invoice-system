@@ -529,6 +529,30 @@ def test_customer_kb_shows_free_trial_only_when_flagged():
     assert sfkb.FREE_TRIAL_LABEL in on and sfkb.FREE_TRIAL_LABEL not in off
 
 
+def test_customer_detail_kb_pv_button_with_username():
+    """A customer with a @username gets a «چت با مشتری» URL button → t.me/<username>; without one,
+    no URL button (the handler adds a tg://user text-mention in the body instead)."""
+    with_u = sfkb.customer_detail_kb(7, username="@Ali_Shop")
+    urls = [b.url for row in with_u.inline_keyboard for b in row if b.url]
+    assert urls == ["https://t.me/Ali_Shop"]            # @ stripped, validated
+    # the usual actions are still present
+    cbs = [b.callback_data for row in with_u.inline_keyboard for b in row if b.callback_data]
+    assert "sfadj:7:+" in cbs and "sfacust:7" in cbs and "sfcustpg:0" in cbs
+
+    no_u = sfkb.customer_detail_kb(7, username=None)
+    assert [b.url for row in no_u.inline_keyboard for b in row if b.url] == []
+    bad = sfkb.customer_detail_kb(7, username="نام فارسی")  # invalid → no URL button
+    assert [b.url for row in bad.inline_keyboard for b in row if b.url] == []
+
+
+def test_clean_username_validation():
+    assert sfkb.clean_username("@Ali_Shop") == "Ali_Shop"
+    assert sfkb.clean_username("bob123") == "bob123"
+    assert sfkb.clean_username("has space") is None
+    assert sfkb.clean_username("") is None
+    assert sfkb.clean_username(None) is None
+
+
 def test_trial_available_logic():
     from app.bot.storefront.handlers import _trial_available
     assert _trial_available(SimpleNamespace(free_trial_enabled=True),

@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.70.0 - 2026-07-12
+
+### Added
+
+- **Shop admins can open a direct chat with any customer.** In a storefront bot, tapping a customer
+  in «👥 مشتری‌ها» (or from search) now shows a «💬 چت با مشتری» button that opens the customer's
+  private chat (`t.me/<username>`) when they have a Telegram username; for customers without one, the
+  detail message carries a clickable «💬 باز کردن چت با مشتری» that opens their profile. No schema
+  change.
+
 ## 1.69.5 - 2026-07-11
 
 ### Changed
