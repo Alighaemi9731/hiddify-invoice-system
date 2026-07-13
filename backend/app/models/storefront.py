@@ -25,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     text,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -163,6 +164,9 @@ class StorefrontWalletTxn(Base, TimestampMixin):
     chain: Mapped[str | None] = mapped_column(String(16), nullable=True)
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A pending top-up may carry a credit code (کد شارژ) captured at request time; the bonus is
+    # applied and the code consumed only when the admin CONFIRMS the top-up. Plain reference.
+    credit_code_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class StorefrontOrder(Base, TimestampMixin):
@@ -209,3 +213,57 @@ class StorefrontOrder(Base, TimestampMixin):
     # same way `expiry_alerted_at` is. NULL = never.
     usage_alerted_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+
+
+class StorefrontCreditCode(Base, TimestampMixin):
+    """A wallet TOP-UP credit code («کد شارژ/هدیه») scoped to one shop. Redeeming it credits the
+    customer's wallet — a percentage bonus on a top-up (capped by `max_bonus_toman`), a fixed bonus
+    on a top-up, or (when `is_gift`) a standalone fixed gift credited with NO payment. Never touches
+    plan prices — it's purely the reseller↔customer wallet ledger."""
+    __tablename__ = "storefront_credit_codes"
+    __table_args__ = (
+        # Case-insensitive uniqueness per shop (match + write both go through the normalized form).
+        UniqueConstraint("storefront_bot_id", "code_ci", name="uq_storefront_credit_code"),
+        CheckConstraint("kind in ('percent','fixed')", name="ck_storefront_credit_kind"),
+        CheckConstraint("percent_off is null or (percent_off > 0 and percent_off <= 100)",
+                        name="ck_storefront_credit_percent"),
+        CheckConstraint("amount_toman is null or amount_toman > 0", name="ck_storefront_credit_amount"),
+        CheckConstraint("used_count >= 0", name="ck_storefront_credit_used_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    storefront_bot_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_bots.id", ondelete="CASCADE"), index=True
+    )
+    code: Mapped[str] = mapped_column(String(32))            # display form (as the admin typed it)
+    code_ci: Mapped[str] = mapped_column(String(32))         # normalized (upper) for match + uniqueness
+    kind: Mapped[str] = mapped_column(String(16))            # percent | fixed
+    percent_off: Mapped[int | None] = mapped_column(Integer, nullable=True)       # 1..100
+    amount_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)      # fixed bonus (Toman)
+    max_bonus_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)   # cap for percent
+    min_topup_toman: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    is_gift: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)          # total; NULL=unlimited
+    per_customer_limit: Mapped[int | None] = mapped_column(
+        Integer, default=1, server_default=text("1"))                            # NULL=unlimited
+    used_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    starts_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+
+
+class StorefrontCreditRedemption(Base, TimestampMixin):
+    """One redemption of a credit code by a customer — drives per-customer + global usage counting
+    and the admin audit/analytics view."""
+    __tablename__ = "storefront_credit_redemptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_credit_codes.id", ondelete="CASCADE"), index=True
+    )
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_customers.id", ondelete="CASCADE"), index=True
+    )
+    # Plain reference (no hard FK) — mirrors StorefrontWalletTxn.order_id so the ledger never cascades.
+    wallet_txn_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    bonus_toman: Mapped[int] = mapped_column(Integer, default=0)

@@ -453,6 +453,8 @@ class BotStats:
     topups_month_toman: float = 0.0
     pending_topups: int = 0
     wallet_liability_toman: float = 0.0
+    credit_redemptions_month: int = 0
+    credit_bonus_month_toman: int = 0
 
 
 async def stats_for_bot(session: AsyncSession, storefront_bot_id: int) -> BotStats:
@@ -526,4 +528,8 @@ async def stats_for_bot(session: AsyncSession, storefront_bot_id: int) -> BotSta
         select(func.coalesce(func.sum(StorefrontCustomer.wallet_balance_toman), 0)).where(
             StorefrontCustomer.storefront_bot_id == storefront_bot_id)
     )).scalar_one() or 0)
+
+    from app.services import storefront_credit
+    st.credit_redemptions_month, st.credit_bonus_month_toman = (
+        await storefront_credit.redemptions_this_month(session, storefront_bot_id))
     return st

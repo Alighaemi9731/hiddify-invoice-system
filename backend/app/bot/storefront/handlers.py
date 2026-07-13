@@ -36,6 +36,7 @@ from app.services import (
     broadcast,
     settings_service,
     storefront,
+    storefront_credit,
     storefront_provision,
     storefront_subscription,
     storefront_wallet,
@@ -47,6 +48,18 @@ log = logging.getLogger("bot.storefront")
 _PER_PAGE = 8          # customers per page in the admin «مشتری‌ها» list
 _SEARCH_LIMIT = 20     # max matches shown for a customer search (refine if more)
 _TRIAL_NO_RENEW = "⛔️ سرویسِ تستِ رایگان قابلِ تمدید نیست؛ برای ادامه لطفاً یک پلن تهیه کنید."
+
+# Credit-code rejection reasons → Persian (customer-facing).
+_CREDIT_ERR = {
+    "not_found": "کدِ واردشده نامعتبر است.",
+    "disabled": "این کد غیرفعال است.",
+    "not_started": "این کد هنوز فعال نشده است.",
+    "expired": "این کد منقضی شده است.",
+    "min_not_met": "این کد برای شارژِ شما (یا بدونِ شارژ) قابلِ استفاده نیست.",
+    "per_customer_exhausted": "شما قبلاً از این کد استفاده کرده‌اید.",
+    "global_exhausted": "ظرفیتِ استفاده از این کد پُر شده است.",
+    "no_bonus": "این کد برای این مبلغ بونوسی ندارد.",
+}
 
 storefront_router = Router()
 storefront_router.message.filter(F.chat.type == "private")
@@ -74,6 +87,17 @@ class SF(StatesGroup):
     cust_search = State()      # admin searches customers by name / telegram id
     broadcast = State()
     add_admin = State()        # admin appoints a co-admin (numeric id or forwarded message)
+    topup_code = State()       # customer enters a credit code during top-up; data: topup_amount
+    gift_code = State()        # customer redeems a standalone gift code
+    # credit-code admin wizard (کد شارژ). data threads through: c_code, c_kind, c_is_gift, c_percent,
+    # c_amount, c_maxbonus, c_mintopup, c_maxuses, c_percustomer.
+    credit_code = State()
+    credit_value = State()
+    credit_maxbonus = State()
+    credit_mintopup = State()
+    credit_maxuses = State()
+    credit_percustomer = State()
+    credit_expiry = State()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -379,6 +403,8 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             f"💰 فروش این ماه: {st_.sales_month_toman:,.0f} تومان ({st_.sales_month_count} خرید)\n"
             f"💳 شارژ تأییدشدهٔ این ماه: {st_.topups_month_toman:,.0f} تومان\n"
             f"⏸ شارژِ در انتظار تأیید: {st_.pending_topups}\n"
+            f"🎁 کدهای شارژ (این ماه): {st_.credit_redemptions_month} استفاده · "
+            f"{st_.credit_bonus_month_toman:,.0f} تومان بونوس\n"
             f"🏦 موجودی کیف پول مشتری‌ها: {st_.wallet_liability_toman:,.0f} تومان"))
     elif action == "broadcast":
         await ans(rtl("📢 پیامِ همگانی — گیرندگان را انتخاب کنید:"),
@@ -407,6 +433,12 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             await _send_admins_panel(ans, s, sf, reseller)
         else:
             await ans(rtl("فقط مدیرِ اصلیِ فروشگاه می‌تواند مدیران را مدیریت کند."))
+    elif action == "credits":
+        codes = await storefront_credit.list_codes(s, sf.id)
+        await ans(rtl(
+            "🎁 کدهای شارژ\n\nمشتری موقعِ شارژِ کیف‌پول کد را وارد می‌کند و بونوس می‌گیرد (یا کدِ "
+            "هدیهٔ بدونِ‌پرداخت). هر تخفیف فقط از سودِ شما کم می‌شود، پس مبلغ‌ها را با دقت تنظیم کنید."),
+            reply_markup=kb.credit_codes_manage_kb(codes))
     elif action == "shopstate":
         state_fa = "🔴 بسته" if sf.shop_closed else "🟢 باز"
         await ans(rtl(
@@ -557,7 +589,8 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
         if pend:
             lines.append("\n⏳ در انتظارِ تأییدِ مدیر:")
             lines += [f"• #{t.id} — {_toman(t.amount_toman)} تومان" for t in pend]
-        await ans(rtl("\n".join(lines)), reply_markup=kb.wallet_kb())
+        has_gift = await storefront_credit.has_gift_codes(s, sf.id)
+        await ans(rtl("\n".join(lines)), reply_markup=kb.wallet_kb(gift=has_gift))
     elif action == "orders":
         orders = (await s.execute(
             select(StorefrontOrder).where(StorefrontOrder.customer_id == customer.id)
@@ -1178,8 +1211,90 @@ async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None
         if sf is None:
             await state.clear()
             return
-    await state.update_data(topup_amount=int(raw))
-    await message.answer(rtl("روشِ پرداخت را انتخاب کنید:"), reply_markup=kb.pay_methods_kb(sf))
+        has_codes = await storefront_credit.has_enabled_codes(s, sf.id)
+        pay_kb = kb.pay_methods_kb(sf)
+    await state.update_data(topup_amount=int(raw), topup_code_id=None, topup_bonus=0)
+    if has_codes:  # offer the credit-code step (no dead-end when the shop has none)
+        await state.set_state(None)
+        await message.answer(
+            rtl(f"مبلغِ شارژ: {_toman(int(raw))} تومان\nاگر کدِ شارژ دارید، آن را وارد کنید:"),
+            reply_markup=kb.topup_code_prompt_kb())
+    else:
+        await message.answer(rtl("روشِ پرداخت را انتخاب کنید:"), reply_markup=pay_kb)
+
+
+@storefront_router.callback_query(F.data == "sftopcode")
+async def sf_topup_code_prompt(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.set_state(SF.topup_code)
+    await cb.message.answer(rtl("کدِ شارژ را بفرستید:"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data == "sftopnocode")
+async def sf_topup_nocode(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.set_state(None)
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, cb.from_user)
+    if sf is None:
+        await cb.answer()
+        return
+    await cb.message.answer(rtl("روشِ پرداخت را انتخاب کنید:"), reply_markup=kb.pay_methods_kb(sf))
+    await cb.answer()
+
+
+@storefront_router.message(SF.topup_code, F.text)
+async def sf_topup_code_entered(message: Message, state: FSMContext, bot: Bot) -> None:
+    code_str = (message.text or "").strip()
+    data = await state.get_data()
+    amount = int(data.get("topup_amount") or 0)
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            await state.clear()
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+        q = await storefront_credit.quote(s, sf.id, code_str, topup_toman=amount, customer_id=customer.id)
+        pay_kb = kb.pay_methods_kb(sf)
+    if q.ok:
+        await state.set_state(None)
+        await state.update_data(topup_code_id=q.code_id, topup_bonus=q.bonus_toman)
+        await message.answer(rtl(
+            f"✅ کد پذیرفته شد: +{_toman(q.bonus_toman)} تومان بونوس.\n"
+            f"مجموعِ اعتبار پس از تأیید: {_toman(amount + q.bonus_toman)} تومان.\n\n"
+            "روشِ پرداخت را انتخاب کنید:"), reply_markup=pay_kb)
+    else:
+        await message.answer(
+            rtl(f"❌ {_CREDIT_ERR.get(q.reason or '', 'کد نامعتبر است.')}"),
+            reply_markup=kb.credit_skip_kb("sftopnocode", "➡️ ادامه بدون کد"))
+
+
+@storefront_router.callback_query(F.data == "sfgift")
+async def sf_gift_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.set_state(SF.gift_code)
+    await cb.message.answer(rtl("کدِ هدیه را بفرستید:"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.gift_code, F.text)
+async def sf_gift_entered(message: Message, state: FSMContext, bot: Bot) -> None:
+    code_str = (message.text or "").strip()
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, _a = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+        cid = customer.id
+        q = await storefront_wallet.apply_gift_code(s, cid, sf.id, code_str)
+        bal = "?"
+        if q.ok:
+            c2 = await s.get(StorefrontCustomer, cid)
+            bal = _toman(c2.wallet_balance_toman) if c2 else "?"
+    if q.ok:
+        await message.answer(rtl(
+            f"🎁 کدِ هدیه اعمال شد: +{_toman(q.bonus_toman)} تومان.\nموجودیِ جدید: {bal} تومان."))
+    else:
+        await message.answer(rtl(f"❌ {_CREDIT_ERR.get(q.reason or '', 'کدِ هدیه نامعتبر است.')}"))
 
 
 @storefront_router.callback_query(F.data.startswith("sftop:"))
@@ -1192,15 +1307,18 @@ async def sf_topup_method(cb: CallbackQuery, state: FSMContext, bot: Bot) -> Non
         if sf is None:
             await cb.answer()
             return
+    bonus = int(data.get("topup_bonus") or 0)
     detail = {
         "card": f"کارت‌به‌کارت\n<code>{sf.card_number}</code>\nبه‌نامِ: {sf.card_holder or '—'}",
         "usdt": f"تتر USDT (شبکهٔ BEP-20)\n<code>{sf.usdt_address}</code>",
         "ton": f"گرام/تون (TON)\n<code>{sf.ton_address}</code>",
     }.get(method, "")
+    bonus_line = (f"\n🎁 با کدِ شارژ، پس از تأیید {_toman(bonus)} تومان بونوس هم اضافه می‌شود "
+                  f"(مجموع: {_toman(amount + bonus)} تومان)." if bonus else "")
     await state.update_data(topup_method=method)
     await state.set_state(SF.topup_proof)
     await cb.message.answer(rtl(
-        f"💳 مبلغِ {_toman(amount)} تومان را به آدرسِ زیر واریز کنید:\n\n{detail}\n\n"
+        f"💳 مبلغِ {_toman(amount)} تومان را به آدرسِ زیر واریز کنید:{bonus_line}\n\n{detail}\n\n"
         "سپس رسید (عکس) یا شناسهٔ تراکنش/متنِ واریز را همین‌جا بفرستید."),
         parse_mode="HTML", reply_markup=kb.cancel_kb())
     await cb.answer()
@@ -1211,6 +1329,7 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     amount = int(data.get("topup_amount") or 0)
     method = data.get("topup_method") or "card"
+    code_id = data.get("topup_code_id")
     await state.clear()
     async with SessionLocal() as s:
         sf, reseller, _a = await _resolve(s, bot, message.from_user)
@@ -1229,7 +1348,8 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
         else:
             txid = (message.text or "")[:120]
         txn = await storefront_wallet.create_topup(
-            s, customer, amount, method=method, proof_path=proof_path, txid=txid)
+            s, customer, amount, method=method, proof_path=proof_path, txid=txid,
+            credit_code_id=int(code_id) if code_id else None)
         await message.answer(rtl(
             f"✅ درخواستِ شارژِ {_toman(amount)} تومان ثبت شد (#{txn.id}). پس از تأییدِ مدیر، "
             "کیفِ پولِ شما شارژ می‌شود."))
@@ -1513,6 +1633,263 @@ async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
     await message.answer(
         rtl("✅ پلن ویرایش شد." if ok else "پلن یافت نشد."),
         reply_markup=kb.plans_manage_kb(plans))
+
+
+# ── admin: credit codes (کد شارژ) CRUD — a guided, mistake-proof wizard ─────────
+
+@storefront_router.callback_query(F.data == "sfcredadd")
+async def sf_credit_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        _sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if not is_admin:
+        await cb.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await state.set_state(SF.credit_code)
+    await cb.message.answer(
+        rtl("کدِ تخفیف را بفرستید (فقط حروف/عدد، مثلاً NOWRUZ):"), reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.credit_code, F.text)
+async def sf_credit_code(message: Message, state: FSMContext, bot: Bot) -> None:
+    code = storefront_credit.normalize_code(message.text)
+    if not code or len(code) > 32 or not code.replace("_", "").isalnum():
+        await message.answer(rtl("کدِ نامعتبر. فقط حروف/عدد (۱ تا ۳۲ نویسه)."),
+                             reply_markup=kb.cancel_kb())
+        return
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            await state.clear()
+            return
+        if await storefront_credit.code_exists(s, sf.id, code):
+            await message.answer(rtl("این کد قبلاً وجود دارد؛ کدِ دیگری بفرستید."),
+                                 reply_markup=kb.cancel_kb())
+            return
+    await state.update_data(c_code=code)
+    await state.set_state(None)
+    await message.answer(rtl("نوعِ کد را انتخاب کنید:"), reply_markup=kb.credit_type_kb())
+
+
+@storefront_router.callback_query(F.data.startswith("sfcredtype:"))
+async def sf_credit_type(cb: CallbackQuery, state: FSMContext) -> None:
+    t = cb.data.split(":")[1]
+    await state.update_data(c_kind=("percent" if t == "percent" else "fixed"), c_is_gift=(t == "gift"))
+    await state.set_state(SF.credit_value)
+    if t == "percent":
+        await cb.message.answer(rtl("درصدِ تخفیف (عددِ ۱ تا ۱۰۰):"), reply_markup=kb.cancel_kb())
+    else:
+        await cb.message.answer(
+            rtl("مبلغِ هدیه به تومان:" if t == "gift" else "مبلغِ بونوس به تومان:"),
+            reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.credit_value, F.text)
+async def sf_credit_value(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    raw = _digits(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        return
+    val = int(raw)
+    if data.get("c_kind") == "percent":
+        if val > 100:
+            await message.answer(rtl("درصد باید بین ۱ تا ۱۰۰ باشد."), reply_markup=kb.cancel_kb())
+            return
+        await state.update_data(c_percent=val)
+        await state.set_state(SF.credit_maxbonus)
+        await message.answer(
+            rtl("سقفِ حداکثرِ تخفیف به تومان (مثلاً ۵۰۰۰۰). اگر سقف نمی‌خواهید «بدون سقف»:"),
+            reply_markup=kb.credit_skip_kb("sfcredskip:maxbonus", "بدون سقف"))
+    else:
+        await state.update_data(c_amount=val)
+        if data.get("c_is_gift"):
+            await _credit_ask_maxuses(message.answer, state)   # gift: no min-topup
+        else:
+            await _credit_ask_mintopup(message.answer, state)
+
+
+@storefront_router.message(SF.credit_maxbonus, F.text)
+async def sf_credit_maxbonus(message: Message, state: FSMContext) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(rtl("عددِ معتبر بفرستید یا «بدون سقف»:"),
+                             reply_markup=kb.credit_skip_kb("sfcredskip:maxbonus", "بدون سقف"))
+        return
+    await state.update_data(c_maxbonus=int(raw))
+    await _credit_ask_mintopup(message.answer, state)
+
+
+async def _credit_ask_mintopup(ans, state: FSMContext) -> None:  # noqa: ANN001
+    await state.set_state(SF.credit_mintopup)
+    await ans(rtl("حداقلِ مبلغِ شارژ برای فعال‌شدنِ کد (تومان). اگر نیست «بدون حداقل»:"),
+              reply_markup=kb.credit_skip_kb("sfcredskip:mintopup", "بدون حداقل"))
+
+
+@storefront_router.message(SF.credit_mintopup, F.text)
+async def sf_credit_mintopup(message: Message, state: FSMContext) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit():
+        await message.answer(rtl("عددِ معتبر بفرستید یا «بدون حداقل»:"),
+                             reply_markup=kb.credit_skip_kb("sfcredskip:mintopup", "بدون حداقل"))
+        return
+    await state.update_data(c_mintopup=int(raw))
+    await _credit_ask_maxuses(message.answer, state)
+
+
+async def _credit_ask_maxuses(ans, state: FSMContext) -> None:  # noqa: ANN001
+    await state.set_state(SF.credit_maxuses)
+    await ans(rtl("حداکثرِ تعدادِ کلِ استفاده (بینِ همهٔ مشتری‌ها). اگر نامحدود است «نامحدود»:"),
+              reply_markup=kb.credit_skip_kb("sfcredskip:maxuses", "نامحدود"))
+
+
+@storefront_router.message(SF.credit_maxuses, F.text)
+async def sf_credit_maxuses(message: Message, state: FSMContext) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(rtl("عددِ معتبر بفرستید یا «نامحدود»:"),
+                             reply_markup=kb.credit_skip_kb("sfcredskip:maxuses", "نامحدود"))
+        return
+    await state.update_data(c_maxuses=int(raw))
+    await _credit_ask_percustomer(message.answer, state)
+
+
+async def _credit_ask_percustomer(ans, state: FSMContext) -> None:  # noqa: ANN001
+    await state.set_state(None)
+    await ans(rtl("هر مشتری چند بار بتواند از این کد استفاده کند؟"),
+              reply_markup=kb.credit_percustomer_kb())
+
+
+@storefront_router.callback_query(F.data.startswith("sfcredpc:"))
+async def sf_credit_percustomer(cb: CallbackQuery, state: FSMContext) -> None:
+    n = int(cb.data.split(":")[1])
+    await state.update_data(c_percustomer=(None if n == 0 else n))
+    await state.set_state(SF.credit_expiry)
+    await cb.message.answer(
+        rtl("این کد تا چند روزِ دیگر معتبر باشد؟ اگر انقضا ندارد «بدون انقضا»:"),
+        reply_markup=kb.credit_skip_kb("sfcredskip:expiry", "بدون انقضا"))
+    await cb.answer()
+
+
+@storefront_router.message(SF.credit_expiry, F.text)
+async def sf_credit_expiry(message: Message, state: FSMContext, bot: Bot) -> None:
+    raw = _digits(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(rtl("تعدادِ روزِ معتبر بفرستید یا «بدون انقضا»:"),
+                             reply_markup=kb.credit_skip_kb("sfcredskip:expiry", "بدون انقضا"))
+        return
+    await state.update_data(c_expiry_days=int(raw))
+    await _credit_finalize(message.answer, state, bot, message.from_user)
+
+
+@storefront_router.callback_query(F.data.startswith("sfcredskip:"))
+async def sf_credit_skip(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    step = cb.data.split(":")[1]
+    if step == "maxbonus":
+        await state.update_data(c_maxbonus=None)
+        await _credit_ask_mintopup(cb.message.answer, state)
+    elif step == "mintopup":
+        await state.update_data(c_mintopup=0)
+        await _credit_ask_maxuses(cb.message.answer, state)
+    elif step == "maxuses":
+        await state.update_data(c_maxuses=None)
+        await _credit_ask_percustomer(cb.message.answer, state)
+    elif step == "expiry":
+        await state.update_data(c_expiry_days=None)
+        await _credit_finalize(cb.message.answer, state, bot, cb.from_user)
+    await cb.answer()
+
+
+async def _credit_finalize(ans, state: FSMContext, bot: Bot, from_user) -> None:  # noqa: ANN001
+    import datetime as _dt
+
+    data = await state.get_data()
+    await state.clear()
+    expires_at = None
+    if data.get("c_expiry_days"):
+        expires_at = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=int(data["c_expiry_days"]))
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, from_user)
+        if sf is None or not is_admin:
+            return
+        kind = data.get("c_kind", "fixed")
+        code = await storefront_credit.create_code(
+            s, sf.id, code=data.get("c_code", ""), kind=kind,
+            percent_off=data.get("c_percent") if kind == "percent" else None,
+            amount_toman=data.get("c_amount") if kind == "fixed" else None,
+            max_bonus_toman=data.get("c_maxbonus"),
+            min_topup_toman=int(data.get("c_mintopup") or 0),
+            is_gift=bool(data.get("c_is_gift")), max_uses=data.get("c_maxuses"),
+            per_customer_limit=data.get("c_percustomer", 1), expires_at=expires_at,
+        )
+        codes = await storefront_credit.list_codes(s, sf.id)
+        warn = ("\n⚠️ این کد سقفِ تخفیف ندارد؛ روی شارژِ بزرگ، بونوسِ زیادی می‌دهد."
+                if kind == "percent" and not code.max_bonus_toman else "")
+    await ans(rtl(f"✅ کدِ «{data.get('c_code', '')}» ساخته شد.{warn}"),
+              reply_markup=kb.credit_codes_manage_kb(codes))
+
+
+@storefront_router.callback_query(F.data.startswith("sfcredtog:"))
+async def sf_credit_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    code_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        code = await storefront_credit.get_code(s, sf.id, code_id)
+        if code is None:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        await storefront_credit.set_enabled(s, code, not code.enabled)
+        now_on = code.enabled
+        codes = await storefront_credit.list_codes(s, sf.id)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb.credit_codes_manage_kb(codes))
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("فعال شد." if now_on else "غیرفعال شد.")
+
+
+@storefront_router.callback_query(F.data.startswith("sfcreddel:"))
+async def sf_credit_del(cb: CallbackQuery, bot: Bot) -> None:
+    code_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await storefront_credit.delete_code(s, sf.id, code_id)
+        codes = await storefront_credit.list_codes(s, sf.id)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb.credit_codes_manage_kb(codes))
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("حذف شد.")
+
+
+@storefront_router.callback_query(F.data.startswith("sfcredusage:"))
+async def sf_credit_usage(cb: CallbackQuery, bot: Bot) -> None:
+    code_id = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        code = await storefront_credit.get_code(s, sf.id, code_id)
+        if code is None:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        total, uniq, given = await storefront_credit.usage_summary(s, code.id)
+        cap = f" از {code.max_uses}" if code.max_uses else ""
+        codestr = code.code
+    await cb.message.answer(rtl(
+        f"📊 مصرفِ کدِ «{codestr}»\n"
+        f"• دفعاتِ استفاده: {total}{cap}\n"
+        f"• مشتریانِ یکتا: {uniq}\n"
+        f"• مجموعِ اعتبارِ داده‌شده: {_toman(given)} تومان"))
+    await cb.answer()
 
 
 # ── admin: payment settings ───────────────────────────────────────────────────

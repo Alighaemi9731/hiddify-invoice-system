@@ -33,11 +33,14 @@ async def create_topup(
     proof_path: str | None = None,
     txid: str | None = None,
     chain: str | None = None,
+    credit_code_id: int | None = None,
 ) -> StorefrontWalletTxn:
-    """Record a PENDING wallet top-up. Balance is NOT credited until the reseller-admin confirms."""
+    """Record a PENDING wallet top-up. Balance is NOT credited until the reseller-admin confirms. A
+    captured `credit_code_id` (کد شارژ) is redeemed + its bonus credited only at confirmation."""
     txn = StorefrontWalletTxn(
         customer_id=customer.id, kind="topup", amount_toman=Decimal(str(int(amount_toman))),
         status="pending", method=method, proof_path=proof_path, txid=txid, chain=chain,
+        credit_code_id=credit_code_id,
     )
     session.add(txn)
     await session.commit()
@@ -78,12 +81,56 @@ async def confirm_topup(
     )
     if credited < 0:
         credited = Decimal(0)
+    # A captured credit code (کد شارژ) is redeemed HERE (not at request time): lock + re-validate
+    # against the actually-credited base, so an expired/exhausted code between request and confirm
+    # simply yields no bonus. The bonus is a SEPARATE `credit_bonus` ledger row (the top-up row stays
+    # equal to the paid amount).
+    from app.services import storefront_credit
+
+    q = None
+    if txn.credit_code_id:
+        q = await storefront_credit.reserve_by_id(
+            session, txn.credit_code_id, storefront_bot_id=customer.storefront_bot_id,
+            topup_toman=int(credited), customer_id=customer.id)
     customer.wallet_balance_toman = float(balance(customer) + credited)
     txn.amount_toman = float(credited)
     txn.status = "confirmed"
     txn.decided_at = _now()
+    if q is not None and q.ok and q.bonus_toman > 0 and q.code_id is not None:
+        bonus_txn = StorefrontWalletTxn(
+            customer_id=customer.id, kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
+            status="done", note="بونوسِ کدِ شارژ", decided_at=_now())
+        session.add(bonus_txn)
+        await session.flush()
+        customer.wallet_balance_toman = float(balance(customer) + q.bonus_toman)
+        await storefront_credit.record(session, q.code_id, customer.id, bonus_txn.id, q.bonus_toman)
     await session.commit()
     return True, txn
+
+
+async def apply_gift_code(session: AsyncSession, customer_id: int, storefront_bot_id: int, code_str: str):  # noqa: ANN201
+    """Standalone «کدِ هدیه» redemption (NO payment): lock the customer + code, validate, credit the
+    gift + record the redemption atomically. Returns the storefront_credit.CreditQuote (q.ok/q.reason/
+    q.bonus_toman). Only a code flagged `is_gift` yields credit here (a bonus code → q.reason=min_not_met)."""
+    from app.services import storefront_credit
+
+    customer = await _get_for_update(session, StorefrontCustomer, customer_id)
+    if customer is None:
+        return storefront_credit.CreditQuote(False, "not_found")
+    q = await storefront_credit.reserve(
+        session, storefront_bot_id, code_str, topup_toman=0, customer_id=customer_id)
+    if not q.ok or q.bonus_toman <= 0 or q.code_id is None:
+        await session.rollback()
+        return q
+    gift_txn = StorefrontWalletTxn(
+        customer_id=customer_id, kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
+        status="done", note="کدِ هدیه", decided_at=_now())
+    session.add(gift_txn)
+    await session.flush()
+    customer.wallet_balance_toman = float(balance(customer) + q.bonus_toman)
+    await storefront_credit.record(session, q.code_id, customer_id, gift_txn.id, q.bonus_toman)
+    await session.commit()
+    return q
 
 
 async def reject_topup(session: AsyncSession, txn_id: int) -> tuple[bool, StorefrontWalletTxn | None]:

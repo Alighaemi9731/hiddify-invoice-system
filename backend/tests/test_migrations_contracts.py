@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "d1f3b5a7c9e2"
+HEAD = "e3a5c7f9b1d4"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:

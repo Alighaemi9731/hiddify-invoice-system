@@ -25,6 +25,8 @@ from app.models.reseller import Reseller
 from app.models.setting import Setting
 from app.models.storefront import (
     StorefrontBot,
+    StorefrontCreditCode,
+    StorefrontCreditRedemption,
     StorefrontCustomer,
     StorefrontOrder,
     StorefrontPlan,
@@ -52,6 +54,8 @@ __all__ = [
     "StorefrontCustomer",
     "StorefrontWalletTxn",
     "StorefrontOrder",
+    "StorefrontCreditCode",
+    "StorefrontCreditRedemption",
     "UsageMeter",
     "DeliveryLog",
     "EnforcementAction",

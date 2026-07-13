@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.72.0 - 2026-07-12
+
+### Added
+
+- **Credit codes for the storefront («کد شارژ/هدیه»).** Each shop can create codes that credit a
+  customer's wallet, managed from a new «🎁 کدهای شارژ» admin screen (list · guided add wizard ·
+  enable/disable · usage view · delete — mirroring plan management so it's mistake-proof). Types:
+  - **درصدی** — a percentage bonus on a top-up (e.g. +۲۰٪), with an optional maximum-bonus cap.
+  - **مبلغ ثابت** — a fixed bonus on a top-up.
+  - **هدیهٔ بدونِ‌پرداخت** — a standalone gift code the customer redeems from the wallet screen for
+    instant credit (no payment).
+
+  Every code supports: expiry, total usage cap, per-customer limit (default once), minimum top-up, and
+  enable/disable. Codes are case-insensitive and unique per shop. The customer enters a code during
+  top-up (only shown when the shop has codes) and sees the bonus on the confirmation before paying; the
+  bonus is credited as a separate ledger row when the admin confirms the top-up (a rejected top-up
+  consumes nothing). Redemption counting is concurrency-safe (a row lock prevents two customers taking
+  the last use). «📊 آمار» now shows the month's redemptions and total bonus given. Migration
+  `e3a5c7f9b1d4` adds `storefront_credit_codes` + `storefront_credit_redemptions` +
+  `storefront_wallet_txns.credit_code_id`.
+
 ## 1.71.0 - 2026-07-12
 
 ### Added

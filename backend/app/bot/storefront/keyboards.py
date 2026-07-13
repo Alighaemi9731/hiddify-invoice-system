@@ -33,6 +33,7 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("📢 پیام همگانی", "broadcast"),
     ("💬 پشتیبانی", "support"),
     ("🛡 مدیرانِ ربات", "admins"),
+    ("🎁 کدهای شارژ", "credits"),
     ("🔴 وضعیت فروشگاه", "shopstate"),
     ("👤 نمای مشتری", "preview"),
 ]
@@ -199,11 +200,71 @@ def buy_confirm_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def wallet_kb() -> InlineKeyboardMarkup:
-    """Wallet screen — show balance first, then offer top-up (owner: don't jump straight to amount)."""
+def wallet_kb(*, gift: bool = False) -> InlineKeyboardMarkup:
+    """Wallet screen — show balance first, then offer top-up (owner: don't jump straight to amount).
+    When the shop has a gift code available, also offer «🎁 کدِ هدیه» (standalone credit, no payment)."""
+    rows = [[InlineKeyboardButton(text="➕ افزایش موجودی", callback_data="sftopup")]]
+    if gift:
+        rows.append([InlineKeyboardButton(text="🎁 کدِ هدیه دارم", callback_data="sfgift")])
+    rows.append([InlineKeyboardButton(text="✖️ بستن", callback_data="sfcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── credit codes (کد شارژ/هدیه) ────────────────────────────────────────────────
+def credit_label(c) -> str:  # noqa: ANN001 — StorefrontCreditCode
+    if c.is_gift:
+        kind = f"🎁 هدیه {c.amount_toman:,}ت"
+    elif c.kind == "percent":
+        cap = f" (سقف {c.max_bonus_toman:,}ت)" if c.max_bonus_toman else ""
+        kind = f"+{c.percent_off}٪{cap}"
+    else:
+        kind = f"+{c.amount_toman:,}ت"
+    used = f"{c.used_count}" + (f"/{c.max_uses}" if c.max_uses else "")
+    return f"{c.code} · {kind} · {used} · {'فعال ✅' if c.enabled else 'غیرفعال ❌'}"
+
+
+def credit_codes_manage_kb(codes) -> InlineKeyboardMarkup:  # noqa: ANN001
+    rows: list[list[InlineKeyboardButton]] = []
+    for c in codes:
+        rows.append([InlineKeyboardButton(text=rtl(credit_label(c)), callback_data="sfnoop")])
+        rows.append([
+            InlineKeyboardButton(text="🔴 غیرفعال" if c.enabled else "🟢 فعال",
+                                 callback_data=f"sfcredtog:{c.id}"),
+            InlineKeyboardButton(text="📊 مصرف", callback_data=f"sfcredusage:{c.id}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"sfcreddel:{c.id}"),
+        ])
+    rows.append([InlineKeyboardButton(text="➕ افزودن کد", callback_data="sfcredadd")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def credit_type_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ افزایش موجودی", callback_data="sftopup")],
-        [InlineKeyboardButton(text="✖️ بستن", callback_data="sfcancel")],
+        [InlineKeyboardButton(text="٪ درصدی روی شارژ", callback_data="sfcredtype:percent")],
+        [InlineKeyboardButton(text="＋ مبلغِ ثابت روی شارژ", callback_data="sfcredtype:fixed")],
+        [InlineKeyboardButton(text="🎁 هدیهٔ بدونِ پرداخت", callback_data="sfcredtype:gift")],
+        [InlineKeyboardButton(text="✖️ انصراف", callback_data="sfcancel")],
+    ])
+
+
+def credit_skip_kb(cb_data: str, label: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=cb_data)],
+        [InlineKeyboardButton(text="✖️ انصراف", callback_data="sfcancel")],
+    ])
+
+
+def credit_percustomer_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="۱ بار (پیش‌فرض)", callback_data="sfcredpc:1"),
+         InlineKeyboardButton(text="نامحدود", callback_data="sfcredpc:0")],
+        [InlineKeyboardButton(text="✖️ انصراف", callback_data="sfcancel")],
+    ])
+
+
+def topup_code_prompt_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 کدِ شارژ دارم", callback_data="sftopcode")],
+        [InlineKeyboardButton(text="➡️ ادامه بدون کد", callback_data="sftopnocode")],
     ])
 
 
