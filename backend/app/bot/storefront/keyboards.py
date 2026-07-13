@@ -1,8 +1,6 @@
 """Keyboards for the per-reseller storefront bots (admin side + customer side)."""
 from __future__ import annotations
 
-import re
-
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -11,6 +9,10 @@ from aiogram.types import (
 )
 
 from app.bot.rtl import rtl
+from app.core.tg_links import (  # noqa: F401 (clean_username re-exported)
+    clean_username,
+    tg_pv_url,
+)
 from app.models import (
     StorefrontBot,
     StorefrontCustomer,
@@ -316,29 +318,25 @@ def customers_page_kb(
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
-# A Telegram username is 5–32 chars of [A-Za-z0-9_]. Validate before building a t.me URL so a
-# malformed value can't make Telegram reject the whole inline keyboard.
-_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{4,32}")
-
-
-def clean_username(username: str | None) -> str | None:
-    """A validated bare Telegram username (no @) suitable for a t.me/<u> link, or None."""
-    u = (username or "").strip().lstrip("@")
-    return u if _USERNAME_RE.fullmatch(u) else None
-
-
-def customer_detail_kb(customer_id: int, *, username: str | None = None) -> InlineKeyboardMarkup:
-    """Admin customer actions. When the customer has a @username, a «چت با مشتری» URL button opens
-    their PV directly (t.me/<username>); the no-username case is handled by a tg://user text-mention
-    in the message body (Telegram disallows tg:// as a button URL)."""
+def customer_detail_kb(
+    customer_id: int, *, username: str | None = None, chat_id: int | None = None,
+    banned: bool = False,
+) -> InlineKeyboardMarkup:
+    """Admin customer actions. «💬 چت با مشتری» is a consistent URL button for EVERY customer with a
+    Telegram identity — t.me/<username> when a username exists, else tg://user?id=<chat_id> (a valid
+    inline-button url). Plus a ban/unban toggle."""
     rows: list[list[InlineKeyboardButton]] = []
-    u = clean_username(username)
-    if u:
-        rows.append([InlineKeyboardButton(text="💬 چت با مشتری", url=f"https://t.me/{u}")])
+    pv = tg_pv_url(username, chat_id)
+    if pv:
+        rows.append([InlineKeyboardButton(text="💬 چت با مشتری", url=pv)])
     rows += [
         [InlineKeyboardButton(text="➕ شارژ دستی", callback_data=f"sfadj:{customer_id}:+"),
          InlineKeyboardButton(text="➖ کسر دستی", callback_data=f"sfadj:{customer_id}:-")],
         [InlineKeyboardButton(text="📦 سرویس‌ها", callback_data=f"sfacust:{customer_id}")],
-        [InlineKeyboardButton(text="‹ بازگشت به فهرست", callback_data="sfcustpg:0")],
     ]
+    if banned:
+        rows.append([InlineKeyboardButton(text="✅ رفعِ مسدودی", callback_data=f"sfcustunban:{customer_id}")])
+    else:
+        rows.append([InlineKeyboardButton(text="⛔️ مسدود کردن", callback_data=f"sfcustban:{customer_id}")])
+    rows.append([InlineKeyboardButton(text="‹ بازگشت به فهرست", callback_data="sfcustpg:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

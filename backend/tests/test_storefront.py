@@ -529,28 +529,44 @@ def test_customer_kb_shows_free_trial_only_when_flagged():
     assert sfkb.FREE_TRIAL_LABEL in on and sfkb.FREE_TRIAL_LABEL not in off
 
 
-def test_customer_detail_kb_pv_button_with_username():
-    """A customer with a @username gets a «چت با مشتری» URL button → t.me/<username>; without one,
-    no URL button (the handler adds a tg://user text-mention in the body instead)."""
-    with_u = sfkb.customer_detail_kb(7, username="@Ali_Shop")
-    urls = [b.url for row in with_u.inline_keyboard for b in row if b.url]
-    assert urls == ["https://t.me/Ali_Shop"]            # @ stripped, validated
-    # the usual actions are still present
+def test_customer_detail_kb_consistent_chat_button():
+    """«چت با مشتری» is now a CONSISTENT button for everyone: t.me/<username> when a username exists,
+    else tg://user?id=<chat_id>. Only truly identity-less customers get no button."""
+    with_u = sfkb.customer_detail_kb(7, username="@Ali_Shop", chat_id=555)
+    assert [b.url for row in with_u.inline_keyboard for b in row if b.url] == ["https://t.me/Ali_Shop"]
     cbs = [b.callback_data for row in with_u.inline_keyboard for b in row if b.callback_data]
     assert "sfadj:7:+" in cbs and "sfacust:7" in cbs and "sfcustpg:0" in cbs
 
-    no_u = sfkb.customer_detail_kb(7, username=None)
-    assert [b.url for row in no_u.inline_keyboard for b in row if b.url] == []
-    bad = sfkb.customer_detail_kb(7, username="نام فارسی")  # invalid → no URL button
-    assert [b.url for row in bad.inline_keyboard for b in row if b.url] == []
+    # no username but a chat_id → still a button (tg://user?id=) — the fixed inconsistency
+    no_u = sfkb.customer_detail_kb(7, username=None, chat_id=555)
+    assert [b.url for row in no_u.inline_keyboard for b in row if b.url] == ["tg://user?id=555"]
+    # invalid username falls back to the chat_id button
+    bad = sfkb.customer_detail_kb(7, username="نام فارسی", chat_id=555)
+    assert [b.url for row in bad.inline_keyboard for b in row if b.url] == ["tg://user?id=555"]
+    # no identity at all → no button
+    none = sfkb.customer_detail_kb(7, username=None, chat_id=None)
+    assert [b.url for row in none.inline_keyboard for b in row if b.url] == []
 
 
-def test_clean_username_validation():
-    assert sfkb.clean_username("@Ali_Shop") == "Ali_Shop"
-    assert sfkb.clean_username("bob123") == "bob123"
-    assert sfkb.clean_username("has space") is None
-    assert sfkb.clean_username("") is None
-    assert sfkb.clean_username(None) is None
+def test_customer_detail_kb_ban_toggle():
+    """The detail keyboard shows «مسدود کردن» when active and «رفعِ مسدودی» when banned."""
+    active = sfkb.customer_detail_kb(7, chat_id=555, banned=False)
+    cbs = [b.callback_data for row in active.inline_keyboard for b in row if b.callback_data]
+    assert "sfcustban:7" in cbs and "sfcustunban:7" not in cbs
+    banned = sfkb.customer_detail_kb(7, chat_id=555, banned=True)
+    cbs = [b.callback_data for row in banned.inline_keyboard for b in row if b.callback_data]
+    assert "sfcustunban:7" in cbs and "sfcustban:7" not in cbs
+
+
+def test_tg_pv_url_precedence():
+    from app.core.tg_links import clean_username, tg_pv_url
+    assert tg_pv_url("@Ali_Shop", 555) == "https://t.me/Ali_Shop"   # username wins
+    assert tg_pv_url(None, 555) == "tg://user?id=555"               # falls back to id
+    assert tg_pv_url("نام فارسی", 555) == "tg://user?id=555"        # invalid username → id
+    assert tg_pv_url(None, None) is None
+    assert clean_username("@Ali_Shop") == "Ali_Shop"
+    assert clean_username("has space") is None and clean_username(None) is None
+    assert sfkb.clean_username("bob123") == "bob123"                # re-exported from keyboards
 
 
 def test_trial_available_logic():

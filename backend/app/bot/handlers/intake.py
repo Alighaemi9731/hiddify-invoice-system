@@ -158,6 +158,19 @@ def _network_status_fa(chk: dict) -> str:
     return f"🟢 واریزی یافت شد: {recv}"
 
 
+async def _reseller_username(session, reseller) -> str | None:
+    """The reseller's current Telegram @username (BotUser joined on bot_chat_id) — used to build the
+    more-reliable t.me/<username> profile link. None when not registered/unknown."""
+    if not reseller or not getattr(reseller, "bot_chat_id", None):
+        return None
+    from app.models import BotUser
+
+    bu = (await session.execute(
+        select(BotUser).where(BotUser.telegram_id == reseller.bot_chat_id)
+    )).scalars().first()
+    return bu.username if bu else None
+
+
 async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=None) -> str:
     """Rich, owner-facing HTML summary of a pending payment — shared by the submit notification
     and the «پرداخت‌های در انتظار» detail view so both are complete and identical. Includes the
@@ -180,7 +193,10 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=No
                 .scalars().all()
             )
     chain = pay.chain or ("ton" if pay.method == PaymentMethod.ton_txid else "bsc")
-    name_link = owner_notify.user_link(reseller) if reseller else "—"
+    name_link = (
+        owner_notify.user_link(reseller, username=await _reseller_username(session, reseller))
+        if reseller else "—"
+    )
     lines = [
         f"💳 پرداخت — شمارهٔ پیگیری #{payment_code(pay.id)}",
         f"👤 نماینده: {name_link}",

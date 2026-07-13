@@ -72,10 +72,13 @@ async def notify_owner_photo(
         await bot.session.close()
 
 
-def user_link(reseller) -> str:
-    """An HTML link to a reseller's Telegram profile (clickable in the owner's chat).
-    The name is HTML-escaped so a name with <, > or & can't break the message or inject markup."""
+def user_link(reseller, *, username: str | None = None) -> str:
+    """An HTML link to a reseller's Telegram profile (clickable in the owner's chat). Prefers
+    t.me/<username> (more reliable) when a username is known, else tg://user?id=<bot_chat_id>; plain
+    escaped name if neither is available. The name is HTML-escaped so `<`, `>`, `&` can't break the
+    message or inject markup."""
+    from app.core.tg_links import tg_pv_url
+
     label = html.escape(reseller.name or str(reseller.id))
-    if reseller.bot_chat_id:
-        return f"<a href='tg://user?id={reseller.bot_chat_id}'>{label}</a>"
-    return label
+    url = tg_pv_url(username, getattr(reseller, "bot_chat_id", None))
+    return f"<a href='{url}'>{label}</a>" if url else label

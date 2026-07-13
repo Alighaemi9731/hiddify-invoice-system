@@ -941,6 +941,26 @@ async def sf_customers_page(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
+def _customer_detail_view(cust: StorefrontCustomer) -> tuple[str, object]:
+    """(text, markup) for the admin customer-detail card. HTML (name escaped) so the «چت با مشتری»
+    button + status render cleanly."""
+    lines = [f"👤 {html.escape(cust.name or '—')}", f"🆔 {cust.telegram_id}",
+             f"👛 موجودی: {_toman(cust.wallet_balance_toman)} تومان"]
+    if cust.banned:
+        lines.append("⛔️ این مشتری مسدود است")
+    markup = kb.customer_detail_kb(
+        cust.id, username=cust.username, chat_id=cust.telegram_id, banned=cust.banned)
+    return rtl("\n".join(lines)), markup
+
+
+async def _show_customer_detail(cb: CallbackQuery, cust: StorefrontCustomer) -> None:
+    text, markup = _customer_detail_view(cust)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+
+
 @storefront_router.callback_query(F.data.startswith("sfcust:"))
 async def sf_customer_detail(cb: CallbackQuery, bot: Bot) -> None:
     cid = int(cb.data.split(":")[1])
@@ -953,24 +973,35 @@ async def sf_customer_detail(cb: CallbackQuery, bot: Bot) -> None:
         if cust is None or cust.storefront_bot_id != sf.id:
             await cb.answer("یافت نشد.", show_alert=True)
             return
-        name, tgid, bal, banned, username = (
-            cust.name or "—", cust.telegram_id, _toman(cust.wallet_balance_toman),
-            cust.banned, cust.username)
-    # HTML body (so the no-username «open chat» text-mention renders) → escape the free-text name.
-    lines = [f"👤 {html.escape(name)}", f"🆔 {tgid}", f"👛 موجودی: {bal} تومان"]
-    if banned:
-        lines.append("⛔️ مسدود")
-    # Customers WITH a @username get a «چت با مشتری» URL button in the keyboard; those without get a
-    # tg://user text-mention here (opens their profile — works because the bot has seen them).
-    if not kb.clean_username(username):
-        lines.append(f'<a href="tg://user?id={tgid}">💬 باز کردن چت با مشتری</a>')
-    text = rtl("\n".join(lines))
-    markup = kb.customer_detail_kb(cid, username=username)
-    try:
-        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
-    except Exception:  # noqa: BLE001
-        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+        await _show_customer_detail(cb, cust)
     await cb.answer()
+
+
+async def _set_customer_banned(cb: CallbackQuery, bot: Bot, *, banned: bool) -> None:
+    cid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        cust = await s.get(StorefrontCustomer, cid)
+        if cust is None or cust.storefront_bot_id != sf.id:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        cust.banned = banned
+        await s.commit()
+        await _show_customer_detail(cb, cust)
+    await cb.answer("مسدود شد." if banned else "رفعِ مسدودی شد.")
+
+
+@storefront_router.callback_query(F.data.startswith("sfcustban:"))
+async def sf_customer_ban(cb: CallbackQuery, bot: Bot) -> None:
+    await _set_customer_banned(cb, bot, banned=True)
+
+
+@storefront_router.callback_query(F.data.startswith("sfcustunban:"))
+async def sf_customer_unban(cb: CallbackQuery, bot: Bot) -> None:
+    await _set_customer_banned(cb, bot, banned=False)
 
 
 @storefront_router.callback_query(F.data == "sfcustsearch")

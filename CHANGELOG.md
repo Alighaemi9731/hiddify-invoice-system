@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.71.0 - 2026-07-12
+
+### Added
+
+- **Ban / unban a customer from the storefront customer detail.** The customer card now has a
+  «⛔️ مسدود کردن» / «✅ رفعِ مسدودی» toggle (the ban enforcement already existed; only the button was
+  missing). A banned customer is blocked from the shop by the existing middleware.
+
+### Fixed
+
+- **«💬 چت با مشتری» now appears for EVERY customer, not just those with a @username.** Previously a
+  customer without a username got only a text link in the message body while username customers got a
+  button. Now it's a consistent button for everyone — `t.me/<username>` when a username exists, else
+  `tg://user?id=<id>`.
+- **The reseller name in the main bot's payment-review is clickable more often.** The «👤 نماینده» link
+  now prefers `t.me/<username>` (looked up from the bot-user record) and falls back to
+  `tg://user?id=<id>`, matching the panel's Payments behavior — so it's a working link whenever the
+  reseller has a username or a Telegram id, instead of only sometimes.
+
+Both link fixes share one helper (`app/core/tg_links.tg_pv_url`), the Python twin of the frontend's
+`telegramHref`. No schema change.
+
 ## 1.70.0 - 2026-07-12
 
 ### Added
