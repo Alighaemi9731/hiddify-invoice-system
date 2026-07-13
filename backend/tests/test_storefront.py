@@ -558,6 +558,44 @@ def test_customer_detail_kb_ban_toggle():
     assert "sfcustunban:7" in cbs and "sfcustban:7" not in cbs
 
 
+def test_customer_detail_opens_for_privacy_restricted_customer():
+    """The reported prod bug: Telegram REJECTS a tg://user?id= chat BUTTON for a customer whose
+    privacy settings disallow it (BUTTON_USER_PRIVACY_RESTRICTED), so tapping that customer opened
+    nothing. The handler must retry WITHOUT the button (body-link fallback) so the card always opens."""
+    import asyncio as _asyncio
+
+    from app.bot.storefront import handlers as h
+
+    cust = SimpleNamespace(id=7, name="Mahsa", telegram_id=863, wallet_balance_toman=0,
+                           banned=False, username=None)
+    sent: list = []
+
+    def _tg_urls(markup):
+        return [b.url for row in markup.inline_keyboard for b in row
+                if b.url and b.url.startswith("tg://")]
+
+    class FakeMsg:
+        async def edit_text(self, text, reply_markup=None, parse_mode=None):  # noqa: ANN001
+            if _tg_urls(reply_markup):
+                raise Exception("Telegram server says - Bad Request: BUTTON_USER_PRIVACY_RESTRICTED")
+            sent.append((text, reply_markup))
+
+        async def answer(self, text, reply_markup=None, parse_mode=None):  # noqa: ANN001
+            if _tg_urls(reply_markup):
+                raise Exception("Telegram server says - Bad Request: BUTTON_USER_PRIVACY_RESTRICTED")
+            sent.append((text, reply_markup))
+
+    cb = SimpleNamespace(message=FakeMsg())
+    _asyncio.run(h._show_customer_detail(cb, cust))
+
+    assert len(sent) == 1                                   # the card DID open
+    text, markup = sent[0]
+    assert _tg_urls(markup) == []                           # no rejected button in the fallback
+    assert "tg://user?id=863" in text                       # best-effort body link instead
+    cbs = [b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data]
+    assert "sfadj:7:+" in cbs and "sfcustban:7" in cbs      # the actions are all still there
+
+
 def test_tg_pv_url_precedence():
     from app.core.tg_links import clean_username, tg_pv_url
     assert tg_pv_url("@Ali_Shop", 555) == "https://t.me/Ali_Shop"   # username wins

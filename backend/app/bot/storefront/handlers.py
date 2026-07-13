@@ -974,24 +974,60 @@ async def sf_customers_page(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
-def _customer_detail_view(cust: StorefrontCustomer) -> tuple[str, object]:
-    """(text, markup) for the admin customer-detail card. HTML (name escaped) so the «چت با مشتری»
-    button + status render cleanly."""
+def _customer_detail_view(
+    cust: StorefrontCustomer, *, chat_button: bool = True
+) -> tuple[str, object]:
+    """(text, markup) for the admin customer-detail card. HTML (name escaped). With
+    `chat_button=False` (the privacy fallback, see `_show_customer_detail`) the «چت با مشتری» row is
+    dropped and a best-effort tg:// text link goes in the BODY instead — a body link never fails the
+    send (worst case it renders unclickable), unlike a rejected button."""
     lines = [f"👤 {html.escape(cust.name or '—')}", f"🆔 {cust.telegram_id}",
              f"👛 موجودی: {_toman(cust.wallet_balance_toman)} تومان"]
     if cust.banned:
         lines.append("⛔️ این مشتری مسدود است")
+    if not chat_button:
+        lines.append(f'<a href="tg://user?id={cust.telegram_id}">💬 باز کردن چت با مشتری</a>')
     markup = kb.customer_detail_kb(
-        cust.id, username=cust.username, chat_id=cust.telegram_id, banned=cust.banned)
+        cust.id, username=cust.username, chat_id=cust.telegram_id, banned=cust.banned,
+        chat_button=chat_button)
     return rtl("\n".join(lines)), markup
+
+
+def _is_button_rejection(exc: Exception) -> bool:
+    """Telegram REJECTS a `tg://user?id=` inline-button url when the target's privacy settings
+    disallow it (BUTTON_USER_PRIVACY_RESTRICTED) — the whole send fails, so the view must be retried
+    without the button."""
+    return "BUTTON" in str(exc).upper()
+
+
+async def _send_or_edit(cb: CallbackQuery, text: str, markup) -> bool:  # noqa: ANN001
+    """Deliver a view via edit-in-place, falling back to a fresh message. Returns False when
+    Telegram rejected the BUTTON itself (caller retries without it); True otherwise."""
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if _is_button_rejection(exc):
+            return False
+        if "message is not modified" in str(exc):
+            return True
+    try:
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if _is_button_rejection(exc):
+            return False
+        raise
 
 
 async def _show_customer_detail(cb: CallbackQuery, cust: StorefrontCustomer) -> None:
     text, markup = _customer_detail_view(cust)
-    try:
-        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
-    except Exception:  # noqa: BLE001
-        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    if await _send_or_edit(cb, text, markup):
+        return
+    # Privacy-restricted customer → Telegram refused the tg:// chat BUTTON; show the same card
+    # with a body link instead so the detail view ALWAYS opens.
+    text, markup = _customer_detail_view(cust, chat_button=False)
+    await _send_or_edit(cb, text, markup)
 
 
 @storefront_router.callback_query(F.data.startswith("sfcust:"))

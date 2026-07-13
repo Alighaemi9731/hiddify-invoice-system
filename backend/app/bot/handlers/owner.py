@@ -279,12 +279,24 @@ async def _send_reseller_card(answer, session, reseller_id: int) -> None:
         f"بدهیِ معوق: {owner_report._toman(owed)} ت",
         f"سقفِ کاربر: {cap or '—'}",
     ]
-    await answer(
-        "\n".join(lines),
-        reply_markup=keyboards.owner_reseller_card_keyboard(
-            r.id, enforced=enforced, tg_href=tg_href
-        ),
-    )
+    try:
+        await answer(
+            "\n".join(lines),
+            reply_markup=keyboards.owner_reseller_card_keyboard(
+                r.id, enforced=enforced, tg_href=tg_href
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Telegram rejects a tg://user?id= BUTTON when the reseller's privacy settings disallow it
+        # (BUTTON_USER_PRIVACY_RESTRICTED) — resend the card without the chat button so it always opens.
+        if "BUTTON" not in str(exc).upper():
+            raise
+        await answer(
+            "\n".join(lines),
+            reply_markup=keyboards.owner_reseller_card_keyboard(
+                r.id, enforced=enforced, tg_href=None
+            ),
+        )
 
 
 @router.callback_query(F.data.startswith("oenf:"))

@@ -381,13 +381,14 @@ def customers_page_kb(
 
 def customer_detail_kb(
     customer_id: int, *, username: str | None = None, chat_id: int | None = None,
-    banned: bool = False,
+    banned: bool = False, chat_button: bool = True,
 ) -> InlineKeyboardMarkup:
-    """Admin customer actions. «💬 چت با مشتری» is a consistent URL button for EVERY customer with a
-    Telegram identity — t.me/<username> when a username exists, else tg://user?id=<chat_id> (a valid
-    inline-button url). Plus a ban/unban toggle."""
+    """Admin customer actions. «💬 چت با مشتری» is a URL button — t.me/<username> when a username
+    exists, else tg://user?id=<chat_id>. NOTE: Telegram rejects a tg:// button when the target's
+    privacy disallows it (BUTTON_USER_PRIVACY_RESTRICTED) — the handler retries the view with
+    `chat_button=False` (body-link fallback) so the card always opens."""
     rows: list[list[InlineKeyboardButton]] = []
-    pv = tg_pv_url(username, chat_id)
+    pv = tg_pv_url(username, chat_id) if chat_button else None
     if pv:
         rows.append([InlineKeyboardButton(text="💬 چت با مشتری", url=pv)])
     rows += [

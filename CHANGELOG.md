@@ -8,6 +8,20 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.72.1 - 2026-07-13
+
+### Fixed
+
+- **Tapping a customer without a username no longer fails to open the detail card.** Telegram rejects
+  a `tg://user?id=` chat BUTTON when the customer's privacy settings disallow being linked by id
+  (`BUTTON_USER_PRIVACY_RESTRICTED`) — the whole message send failed, so the card never appeared
+  (confirmed in the production logs). The card is now retried without the chat button (a best-effort
+  text link goes in the body instead), so it always opens; customers whose privacy allows it still get
+  the one-tap «💬 چت با مشتری» button, and username customers are unaffected (`t.me/…` buttons are
+  always accepted). The main bot's reseller card («💬 گفتگو») had the same latent bug and got the same
+  retry. Note: for a customer with no username AND restrictive privacy, Telegram offers no reliable
+  deep link — that's a Telegram limitation, not a bug.
+
 ## 1.72.0 - 2026-07-12
 
 ### Added
