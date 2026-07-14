@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.74.2 - 2026-07-15
+
+### Fixed
+
+- **Re-installs and retries are now bulletproof against DB-password drift.** A `db_data`
+  volume keeps the password it was first initialized with; if `.env` was later regenerated
+  (a fresh install after an earlier failed attempt), the backend failed with
+  «password authentication failed for user "invoice"» and the whole stack stayed unhealthy —
+  a confusing trap during repeated install attempts. `install.sh` now brings up the database
+  first and idempotently syncs its role password to the current `.env` (via the container's
+  local trust socket) before the backend connects: a no-op on a fresh/matching volume, a
+  self-heal when it has drifted. No data is touched.
+- **A plain re-run or in-panel update on a relay box no longer reverts the Caddy ports.**
+  When neither `BEHIND_RELAY` nor `CADDY_*_PUBLISH` is passed, the installer now inherits the
+  values already in `.env` instead of resetting them to 80/443 (which would re-collide with a
+  co-located relay). So updating a relayed panel no longer needs `BEHIND_RELAY=1` re-specified.
+
 ## 1.74.1 - 2026-07-14
 
 ### Fixed

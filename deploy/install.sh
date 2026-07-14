@@ -59,6 +59,15 @@ if [[ "$BEHIND_RELAY" == "1" ]]; then
     exit 1
   fi
 fi
+# If not explicitly set (no BEHIND_RELAY, no CADDY_*_PUBLISH env), INHERIT any value already
+# in .env, so a plain re-run or an in-panel update on a relay box doesn't silently revert the
+# ports to 80/443 and re-collide with the relay. Falls back to 80/443 only when truly unset.
+if [[ -z "${CADDY_HTTP_PUBLISH:-}" && -f "$ENV_FILE" ]]; then
+  CADDY_HTTP_PUBLISH="$(sed -n 's/^CADDY_HTTP_PUBLISH=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]')"
+fi
+if [[ -z "${CADDY_HTTPS_PUBLISH:-}" && -f "$ENV_FILE" ]]; then
+  CADDY_HTTPS_PUBLISH="$(sed -n 's/^CADDY_HTTPS_PUBLISH=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]')"
+fi
 CADDY_HTTP_PUBLISH="${CADDY_HTTP_PUBLISH:-80}"
 CADDY_HTTPS_PUBLISH="${CADDY_HTTPS_PUBLISH:-443}"
 
@@ -162,6 +171,33 @@ COMPOSE="docker compose --env-file $ENV_FILE -f deploy/docker-compose.prod.yml"
 # (db_data) and Caddy certs survive across re-installs. Only the panel's
 # «پاک‌سازی داده‌ها» wipes data.
 $COMPOSE down --remove-orphans 2>/dev/null || true
+
+# --- Guarantee the DB role password matches .env BEFORE the backend connects. ----------------
+# A db_data volume from a PRIOR install keeps the password it was FIRST initialized with. If .env
+# was later regenerated (e.g. a fresh install after an earlier failed attempt), the backend would
+# fail with «password authentication failed for user "invoice"» and the stack would never come up
+# (the exact trap that made retries so confusing). Bring up ONLY the database, then idempotently
+# ALTER its role password to the current .env value via the container's local trust socket:
+# a no-op on a fresh volume or when it already matches, and a self-heal when it has drifted.
+DB_USER="$(sed -n 's/^POSTGRES_USER=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]')"; DB_USER="${DB_USER:-invoice}"
+DB_NAME="$(sed -n 's/^POSTGRES_DB=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]')"; DB_NAME="${DB_NAME:-invoice}"
+DB_PASS="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]')"
+$COMPOSE up -d db
+for _ in $(seq 1 30); do
+  $COMPOSE exec -T db pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1 && break
+  sleep 2
+done
+# Installer-generated passwords are alphanumeric (see rand()); only sync a safe value so the
+# single-quoted SQL can't be broken. A hand-edited exotic password just skips the auto-sync.
+if [[ "$DB_PASS" =~ ^[A-Za-z0-9]+$ ]]; then
+  if printf "ALTER USER %s WITH PASSWORD '%s';\n" "$DB_USER" "$DB_PASS" \
+       | $COMPOSE exec -T db psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q >/dev/null 2>&1; then
+    c "Database role password is in sync with .env."
+  else
+    err "Could not pre-sync the DB role password (continuing; the database may still be starting)."
+  fi
+fi
+
 $COMPOSE up -d --build --force-recreate
 
 # ---- 5. in-panel updater (host-side watcher) --------------------------------
