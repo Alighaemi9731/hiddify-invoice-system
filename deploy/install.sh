@@ -42,6 +42,26 @@ ACME_EMAIL="${ACME_EMAIL:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-owner}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"   # empty → setup wizard runs in the browser
 
+# ---- Behind a TLS-passthrough relay? ----------------------------------------
+# When this box also runs an nginx SNI relay that already owns host 80/443, Caddy
+# cannot bind them (address already in use). BEHIND_RELAY=1 makes Caddy publish on
+# localhost high ports instead; the relay forwards this panel's domain here. Caddy
+# still obtains its own Let's Encrypt cert (TLS-ALPN-01 works through SNI
+# passthrough). A domain is REQUIRED in this mode — the relay routes by domain, so
+# there is no bare-IP access to fall back on.
+BEHIND_RELAY="${BEHIND_RELAY:-0}"
+if [[ "$BEHIND_RELAY" == "1" ]]; then
+  CADDY_HTTP_PUBLISH="${CADDY_HTTP_PUBLISH:-127.0.0.1:8080}"
+  CADDY_HTTPS_PUBLISH="${CADDY_HTTPS_PUBLISH:-127.0.0.1:8443}"
+  if [[ -z "$DOMAIN" ]]; then
+    err "BEHIND_RELAY=1 needs a DOMAIN (the relay routes by domain; there is no bare-IP access)."
+    err "Re-run with e.g.  BEHIND_RELAY=1 DOMAIN=panel.example.com ACME_EMAIL=you@mail.com sudo -E bash deploy/install.sh"
+    exit 1
+  fi
+fi
+CADDY_HTTP_PUBLISH="${CADDY_HTTP_PUBLISH:-80}"
+CADDY_HTTPS_PUBLISH="${CADDY_HTTPS_PUBLISH:-443}"
+
 rand() { openssl rand -base64 "${1:-48}" | tr -dc 'A-Za-z0-9' | cut -c1-"${2:-44}"; }
 
 SERVER_IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
@@ -91,6 +111,11 @@ DATABASE_URL=postgresql+asyncpg://invoice:$DB_PASS@db:5432/invoice
 # Domain + automatic HTTPS (Caddy)
 SERVER_DOMAIN=$DOMAIN
 ACME_EMAIL=$ACME_EMAIL
+
+# Where Caddy is published on the host. Defaults grab 80/443. Behind a TLS relay
+# these become 127.0.0.1:8080 / 127.0.0.1:8443 (set via BEHIND_RELAY=1).
+CADDY_HTTP_PUBLISH=$CADDY_HTTP_PUBLISH
+CADDY_HTTPS_PUBLISH=$CADDY_HTTPS_PUBLISH
 
 # Bot / payments — set these from the panel Settings tab after first login,
 # or fill them here before first boot.

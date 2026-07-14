@@ -34,6 +34,29 @@ DOMAIN=panel.example.com ACME_EMAIL=you@mail.com ADMIN_PASSWORD='choose-a-strong
 
 When it finishes, open `https://<your-domain>` and log in.
 
+## Co-locating on a TLS-passthrough relay (shares 80/443 with an nginx SNI relay)
+
+If the box already runs an nginx SNI relay (`deploy/relay.sh`) that owns ports 80
+and 443 for other domains, Caddy cannot also bind them (`address already in use`).
+Run the panel **behind** the relay instead — the relay forwards the panel's own
+domain to a localhost-bound Caddy, and Caddy still gets its own Let's Encrypt cert
+(TLS-ALPN-01 passes through SNI passthrough unchanged):
+
+1. On the relay, edit `deploy/relay.sh`: set `INVOICE_PANEL_DOMAIN` to the panel's
+   domain (its A record must point at the relay's IP), then run it. It routes that
+   domain to `127.0.0.1:8443` / `127.0.0.1:8080`.
+2. Install the panel with relay mode on (Caddy binds only localhost high ports):
+
+   ```bash
+   BEHIND_RELAY=1 DOMAIN=panel.example.com ACME_EMAIL=you@mail.com \
+     ADMIN_PASSWORD='choose-a-strong-one' sudo -E bash deploy/install.sh
+   ```
+
+`BEHIND_RELAY=1` requires a `DOMAIN` (there is no bare-IP access behind a relay).
+It writes `CADDY_HTTP_PUBLISH=127.0.0.1:8080` and `CADDY_HTTPS_PUBLISH=127.0.0.1:8443`
+into `.env`; override those two if you need different local ports. **Run the relay
+first** so Caddy's first ACME attempt can reach it.
+
 ## After install
 - **Settings tab** → set the Telegram **bot token**, **USDT wallet** (BEP-20),
   **BscScan API key**, exchange rate, and (optionally) the **master xpub**.
@@ -96,6 +119,8 @@ be discarded.
 - `docker-compose.prod.yml` — the production stack (db, backend, bot, frontend, caddy).
 - `Caddyfile` — reverse-proxy + auto-TLS rules.
 - `install.sh` — the one-line installer.
+- `relay.sh` — optional nginx SNI **TLS-passthrough relay** template (panel origins +
+  optional co-located invoice panel). Edit the map at the top before running.
 
 ## Install on a fresh server from the PRIVATE GitHub repo (deploy key)
 

@@ -8,6 +8,29 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.74.0 - 2026-07-14
+
+### Added
+
+- **Run the panel on a box that already hosts a TLS-passthrough relay.** When the
+  same server runs an nginx SNI relay that already owns ports 80/443 (e.g.
+  `deploy/relay.sh` forwarding VPN-panel domains to their origins), Caddy could not
+  bind those ports and the stack failed to start with
+  `failed to bind host port 0.0.0.0:80/tcp: address already in use`. Two additions
+  make co-location work:
+  - Caddy's **published host ports are now configurable** via `CADDY_HTTP_PUBLISH` /
+    `CADDY_HTTPS_PUBLISH` in `.env` (default `80` / `443`, so existing installs are
+    unaffected). `deploy/install.sh` gained **`BEHIND_RELAY=1`**, which sets them to
+    `127.0.0.1:8080` / `127.0.0.1:8443` so Caddy binds only localhost high ports and
+    the relay forwards the panel's domain there. Caddy still obtains its own Let's
+    Encrypt certificate — TLS-ALPN-01 rides through the SNI passthrough unchanged.
+    `BEHIND_RELAY=1` requires a `DOMAIN` (there is no bare-IP access behind a relay).
+  - New **`deploy/relay.sh`** template: an nginx SNI TLS-passthrough relay for panel
+    origins with an optional `INVOICE_PANEL_DOMAIN` that routes the invoice panel's
+    own hostname to the co-located Caddy. Documented in `deploy/README.md`.
+
+  No migration; no change for standard single-domain installs.
+
 ## 1.73.0 - 2026-07-14
 
 ### Fixed

@@ -133,9 +133,15 @@ services:
     # RESTORED on restart/rebuild. On a fresh install (no autosave) it falls back to
     # the Caddyfile (:80 on the server IP) until the setup wizard sets a domain.
     command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --resume
+    # Where Caddy is published on the HOST. Defaults grab the whole box's 80/443.
+    # Behind a TLS-passthrough relay (nginx SNI) that already owns 80/443, set
+    # CADDY_HTTP_PUBLISH=127.0.0.1:8080 and CADDY_HTTPS_PUBLISH=127.0.0.1:8443 in
+    # .env (install.sh does this for you with BEHIND_RELAY=1) so Caddy binds only
+    # localhost high ports and the relay forwards this panel's domain here. Caddy
+    # still gets its own Let's Encrypt cert — TLS-ALPN-01 passes through SNI relaying.
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_HTTP_PUBLISH:-80}:80"
+      - "${CADDY_HTTPS_PUBLISH:-443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
