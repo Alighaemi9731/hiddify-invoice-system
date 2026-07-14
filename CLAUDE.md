@@ -30,10 +30,15 @@ feature-hardening batch (`docs/NEXTBATCH_PLAN.md`, N01–N05, through `v1.69.5`
 semantics, broadcast threshold fail-safety, storefront broadcast
 flood-control, portal sales-chart lean aggregate; the audit's security stream
 on the v1.61–v1.69 surface came back clean, no migrations; deferred candidates
-are recorded in that file). No active program is open. For the next one,
-create a new `docs/*_PLAN.md`, fix exactly one batch per release in the
-documented order, and use `docs/RELEASE_PROCESS.md` for versioning, GitHub
-publication, production deployment, smoke checks, and rollback.
+are recorded in that file). **One program is ACTIVE: the 2026-07-15 external-review
+remediation (`docs/SECURITY_REVIEW_PLAN.md`, 16 verified findings F1–F16 in six
+batches, Batch 0+1 shipped in `v1.75.0` — owner money-path row locking F6, payment-
+method policy enforcement F7, and the `pg_contract` Postgres concurrency-test
+foundation F16; Batches 2–5 pending).** Concurrency invariants are asserted by
+`pg_contract`-marked tests run against a real Postgres 16 in the CI `backend-postgres`
+job (SQLite can't). For the next program, create a new `docs/*_PLAN.md`, fix exactly
+one batch per release in the documented order, and use `docs/RELEASE_PROCESS.md` for
+versioning, GitHub publication, production deployment, smoke checks, and rollback.
 Record user-visible release notes in `CHANGELOG.md`; the long milestone history
 below remains the archive for releases before this process was introduced.
 

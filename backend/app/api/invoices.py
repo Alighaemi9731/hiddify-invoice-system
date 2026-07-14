@@ -205,7 +205,7 @@ async def invoice_pdf(invoice_id: int, session: AsyncSession = Depends(get_sessi
 
 @router.post("/{invoice_id}/mark-paid", response_model=InvoiceOut)
 async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session)) -> InvoiceOut:
-    inv = await session.get(Invoice, invoice_id)
+    inv = await session.get(Invoice, invoice_id, with_for_update=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_mark_paid(inv.status)
@@ -245,7 +245,18 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     inv = await session.get(Invoice, invoice_id)
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    invoice_state.ensure_can_unmark_paid(inv.status)
+    invoice_state.ensure_can_unmark_paid(inv.status)  # pre-check on the unlocked read
+    # LOCK ORDER (deadlock-safe): unmark is the only invoice route that also mutates Payment rows,
+    # so — like the payment paths (confirm/reject) — it must lock Payment BEFORE Invoice. Retire the
+    # covering confirmed `manual` rows (now FOR UPDATE) first, THEN lock + re-validate the invoice.
+    # Locking the invoice first and retiring after would be Invoice→Payment, the reverse order, and
+    # could deadlock a concurrent reject_payment (Payment→Invoice).
+    from app.services.payments import retire_manual_payments
+    await retire_manual_payments(session, inv)
+    inv = await session.get(Invoice, invoice_id, with_for_update=True)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    invoice_state.ensure_can_unmark_paid(inv.status)  # re-validate under the row lock
     inv.status = InvoiceStatus.sent if inv.sent_at else InvoiceStatus.draft
     inv.paid_at = None
     # An un-paid invoice gets a fresh dunning window (reminders restart) instead of jumping
@@ -253,11 +264,6 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     if inv.status == InvoiceStatus.sent:
         from app.services import dunning
         await dunning.reset_cycle(session, inv, restamp_sent_at=True)
-    # The confirmed `manual` row created by mark-paid must not survive as a confirmed payment
-    # for an invoice that is no longer paid — it would wrongly shield the invoice from a later
-    # revert (`_settled_by_other_confirmed`). Retire it in the same transaction.
-    from app.services.payments import retire_manual_payments
-    await retire_manual_payments(session, inv)
     reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
@@ -269,7 +275,7 @@ async def edit_invoice(
     invoice_id: int, body: InvoiceEdit, session: AsyncSession = Depends(get_session)
 ) -> InvoiceOut:
     """Manually correct an invoice's usage/price/amount and recompute the USDT total."""
-    inv = await session.get(Invoice, invoice_id)
+    inv = await session.get(Invoice, invoice_id, with_for_update=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_edit(inv.status)
@@ -360,7 +366,7 @@ async def defer_invoice(
     dunning cycle from that date: prior reminders are cleared so they re-fire, an
     overdue invoice goes back to 'sent', and an already-suspended reseller is restored
     for the new grace window. Other invoices and panel data are unaffected."""
-    inv = await session.get(Invoice, invoice_id)
+    inv = await session.get(Invoice, invoice_id, with_for_update=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_defer(inv.status)
@@ -380,8 +386,10 @@ async def bulk_defer(
     silently applied. Money is never moved. One commit for the whole set."""
     done = 0
     skipped: list[dict] = []
-    for iid in dict.fromkeys(body.ids):  # dedupe, preserve order
-        inv = await session.get(Invoice, iid)
+    # Lock each invoice FOR UPDATE, in ASCENDING id order (two concurrent bulk-defers over
+    # overlapping sets would otherwise deadlock on opposite orders); reported order stays sorted.
+    for iid in sorted(dict.fromkeys(body.ids)):  # dedupe + ascending lock order
+        inv = await session.get(Invoice, iid, with_for_update=True)
         if inv is None:
             skipped.append({"id": iid, "reason": "یافت نشد"})
             continue
@@ -450,7 +458,7 @@ async def send_period(period: str, session: AsyncSession = Depends(get_session))
 
 @router.post("/{invoice_id}/cancel", response_model=InvoiceOut)
 async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) -> InvoiceOut:
-    inv = await session.get(Invoice, invoice_id)
+    inv = await session.get(Invoice, invoice_id, with_for_update=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_cancel(inv.status)
@@ -469,7 +477,7 @@ async def revert_to_draft(
     correcting a mistaken send. A PAID invoice is protected (un-mark it as paid first). Clears
     sent_at + any payment deadline and removes it from the durable ledger (drafts aren't kept
     there); «صدور فاکتورهای دوره» will then recompute it like any other draft."""
-    inv = await session.get(Invoice, invoice_id)
+    inv = await session.get(Invoice, invoice_id, with_for_update=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")
     if inv.status == InvoiceStatus.paid:

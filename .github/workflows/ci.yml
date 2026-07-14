@@ -35,10 +35,11 @@ jobs:
 
   backend-postgres:
     # Production runs PostgreSQL 16, but the main test job (and the drift check above) run on
-    # SQLite — dialect differences (boolean server_default, PG-only GUCs, constraint behavior)
-    # have bitten twice before. This job applies every migration to a REAL postgres:16 and runs
-    # the env-gated Postgres smoke tests. Full-suite-on-Postgres is out of scope (the test files
-    # hardcode SQLite engines).
+    # SQLite — dialect differences (boolean server_default, PG-only GUCs, constraint behavior,
+    # AND row/advisory locking) have bitten before. This job applies every migration to a REAL
+    # postgres:16 and runs the env-gated Postgres smoke tests PLUS the `pg_contract` concurrency
+    # tests (row locks, advisory locks, partial-unique constraints) that SQLite cannot assert.
+    # Full-suite-on-Postgres is out of scope (the test files hardcode SQLite engines).
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -74,6 +75,8 @@ jobs:
           alembic check
       - name: Postgres smoke tests
         run: pytest -q tests/test_postgres_smoke.py
+      - name: Postgres concurrency contract tests
+        run: pytest -q -m pg_contract
 
   frontend:
     runs-on: ubuntu-latest

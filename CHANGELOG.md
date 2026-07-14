@@ -8,6 +8,36 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.75.0 - 2026-07-15
+
+Security & correctness remediation — Batch 1 of 6 (owner money integrity) + the test foundation.
+See `docs/SECURITY_REVIEW_PLAN.md`.
+
+### Fixed
+
+- **A confirmed payment can no longer be left attached to a canceled invoice (F6).** The owner
+  payment paths (`confirm`, `reject`, `delete`, on-chain `verify`) locked the payment row but read
+  its invoices UNLOCKED, and every invoice-mutation route (`mark-paid`, `unmark-paid`, `edit`,
+  `defer`, `bulk-defer`, `cancel`, `revert-to-draft`) used a plain read — so a confirm racing a
+  cancel could, under Postgres, leave the invoice canceled with the payment confirmed (or silently
+  drop the cancel). Every owner money path now locks the payment first, then its invoices
+  `FOR UPDATE` in ascending id order and re-validates the transition under the lock;
+  `unmark-paid` retires (locks) its `manual` payment rows before locking the invoice, preserving a
+  single global Payment→Invoice lock order (no deadlock). No behavior change on SQLite/single-writer.
+- **Disabled or unconfigured payment methods are now rejected at submission (F7).** The UIs only
+  offered enabled methods, but a direct API call or a stale client could still create a pending
+  payment for a method the owner had turned off or never configured; the web portal also silently
+  coerced an unknown chain to BSC/USDT. The shared `submit_reseller_payment` now enforces
+  `payment_methods.load_options()` (enabled **and** destination configured), and the portal passes
+  the chain through so the allow-list rejects unknown networks instead of misfiling them as USDT.
+
+### Added
+
+- **`pg_contract` test foundation (F16).** A new pytest marker + a two-connection barrier helper
+  (`tests/pg_barrier.py`); the CI `backend-postgres` job now runs `pytest -m pg_contract` against a
+  migrated Postgres 16, so row-lock / advisory-lock / partial-unique invariants are actually
+  asserted (SQLite treats them as no-ops). Batch 1 ships the F6 confirm-vs-cancel barrier test.
+
 ## 1.74.2 - 2026-07-15
 
 ### Fixed

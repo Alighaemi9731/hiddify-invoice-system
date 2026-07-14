@@ -244,6 +244,27 @@ async def submit_reseller_payment(
             # invoice, so the customer could never make it cover both — the exact reported trap.
             reopen = existing
 
+    # Enforce the CURRENT payment-method policy on the shared submit path (bot AND portal). The
+    # UIs only OFFER enabled methods, but a direct API call or a stale client could still submit a
+    # method the owner has turned off or left unconfigured — creating a pending payment they meant
+    # to stop accepting. load_options() ANDs each method's enabled flag with its destination config,
+    # so this rejects both "disabled" and "enabled-but-no-address".
+    from app.services import payment_methods
+
+    _opts = await payment_methods.load_options(session)
+    _method_ok = (
+        _opts.screenshot if screenshot
+        else _opts.usdt if chain == "bsc"
+        else _opts.ton if chain == "ton"
+        else _opts.avax if chain == "avax"
+        else False
+    )
+    if not _method_ok:
+        return SubmitResult(
+            "not_payable",
+            "این روش پرداخت در حال حاضر فعال نیست؛ از منوی پرداخت یک روشِ فعال را انتخاب کنید.",
+        )
+
     if not ids:
         return SubmitResult(
             "not_payable",
@@ -872,10 +893,7 @@ async def verify_payment(
     # Settle the WHOLE set this payment covers — one transfer can pay several invoices. The
     # deposit must cover the SUM of the still-owed invoices in the set.
     set_ids = _settled_ids(payment) or ([payment.invoice_id] if payment.invoice_id else [])
-    all_in_set = (
-        (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
-        if set_ids else []
-    )
+    all_in_set = await _lock_invoices(session, set_ids)
     targets = [t for t in all_in_set if t.status in _OWED]
     if not targets:
         # No owed member. Auto-closing is only safe when the WHOLE set demonstrably exists and
@@ -1051,6 +1069,20 @@ async def _settled_by_other_confirmed(
     return row is not None
 
 
+async def _lock_invoices(session: AsyncSession, ids: list[int]) -> list[Invoice]:
+    """Load the given invoices FOR UPDATE, one at a time in ASCENDING id order. Every owner money
+    path locks the Payment first, then its invoices via this helper, so concurrent transitions
+    (confirm/reject/mark-paid vs cancel/edit/defer/unmark) always validate against a locked row and
+    can't deadlock on opposite lock orders. Missing ids are skipped (matches the prior IN(...) load);
+    the row lock is a no-op on SQLite (tests / single-writer)."""
+    rows: list[Invoice] = []
+    for iid in sorted(set(ids)):
+        inv = await session.get(Invoice, iid, with_for_update=True)
+        if inv is not None:
+            rows.append(inv)
+    return rows
+
+
 async def _revert_settled_invoices(
     session: AsyncSession, payment: Payment
 ) -> None:
@@ -1062,9 +1094,7 @@ async def _revert_settled_invoices(
     ids = _settled_ids(payment)
     if not ids:
         return
-    rows = (
-        await session.execute(select(Invoice).where(Invoice.id.in_(ids)))
-    ).scalars().all()
+    rows = await _lock_invoices(session, ids)
     for inv in rows:
         if inv.status != InvoiceStatus.paid:
             continue
@@ -1132,7 +1162,7 @@ async def retire_manual_payments(session: AsyncSession, invoice: Invoice) -> int
                 Payment.method == PaymentMethod.manual,
                 Payment.status == PaymentStatus.confirmed,
                 Payment.invoice_id == invoice.id,
-            )
+            ).with_for_update()
         )
     ).scalars().all()
     n = 0
@@ -1161,10 +1191,7 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
     set_ids = _settled_ids(payment)
-    rows = (
-        (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
-        if set_ids else []
-    )
+    rows = await _lock_invoices(session, set_ids)
     # Keep the STORED set order (the IN(...) select returns DB order): the first id is the
     # primary invoice shown in the panel, and a manual confirm must not silently reshuffle it.
     _by_id = {inv.id: inv for inv in rows}
@@ -1225,10 +1252,7 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
     set_ids = _settled_ids(payment)
-    invoices = (
-        (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids)))).scalars().all()
-        if set_ids else []
-    )
+    invoices = await _lock_invoices(session, set_ids)
     payment.status = PaymentStatus.rejected
     payment.verified_at = None
     if was_confirmed:

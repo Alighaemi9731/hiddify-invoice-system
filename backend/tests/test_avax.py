@@ -8,6 +8,8 @@ import datetime as dt
 import os
 from decimal import Decimal
 
+import pytest  # noqa: E402
+
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/avax.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
@@ -196,6 +198,7 @@ async def _coro(v):
 
 # ───────────────────────── payment options & instructions ─────────────────────────
 
+@pytest.mark.real_pay_options
 def test_load_options_avax_gating():
     async def run():
         engine, factory = await _session()

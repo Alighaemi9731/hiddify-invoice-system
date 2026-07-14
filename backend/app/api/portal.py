@@ -542,7 +542,10 @@ async def pay_txid(
     txid = (body.txid or "").strip()
     if not txid:
         raise HTTPException(400, "شناسهٔ تراکنش خالی است.")
-    chain = body.chain if body.chain in ("ton", "avax") else "bsc"
+    # Pass the chain THROUGH (normalized) instead of silently coercing an unknown value to "bsc"
+    # — coercion would store a wrong-network hash as USDT and hand it to BscScan. The shared
+    # submit path's allow-list (chain ∈ {bsc, ton, avax}) rejects anything else as invalid.
+    chain = (body.chain or "bsc").strip().lower()
     ids = body.invoice_ids or ([body.invoice_id] if body.invoice_id else [])
     result = await payments.submit_reseller_payment(
         session, reseller_ids=set(ctx.ids), invoice_ids=ids, txid=txid, chain=chain)
