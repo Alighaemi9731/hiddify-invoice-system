@@ -49,62 +49,108 @@ async def _panel_ctx(s: AsyncSession, order: StorefrontOrder):  # noqa: ANN001, 
     return sf, customer, reseller, panel
 
 
+async def _order_for_update(s: AsyncSession, order_id: int) -> StorefrontOrder | None:
+    """Fetch an order under a write lock (Postgres FOR UPDATE; no-op on SQLite)."""
+    stmt = select(StorefrontOrder).where(StorefrontOrder.id == order_id)
+    try:
+        stmt = stmt.with_for_update()
+    except Exception:  # noqa: BLE001 — dialect without row locks
+        pass
+    return (await s.execute(stmt)).scalar_one_or_none()
+
+
 async def renew(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,
     order_id: int,
     by_admin: bool = False,
 ) -> SubResult:
-    """Renew a subscription in place at the CURRENT plan price (admin renews are free grants). Charges
-    the wallet first (customer path), then resets the panel config; refunds if the panel write fails."""
+    """Renew a subscription in place at the CURRENT plan price (admin renews are free grants).
+
+    F4-renewal (idempotency): the order is locked and CAS-flipped to "renewing" up front, so a rapid
+    double-tap that slips past the button-strip blocks on the row lock, then sees "renewing" (not
+    renewable) and bails — never a second charge. The status is restored on every exit; a hard crash
+    mid-renew leaves it "renewing" until the pending-order reaper reverts it.
+
+    F11 (charge ordering): funds are DEBITED FIRST, then the panel is renewed; if the panel write
+    fails the charge is compensated via a distinct `renew_reversal` (never leaving a customer charged
+    for a service they didn't get), instead of the old renew-first-charge-last (which could silently
+    grant a free renewal)."""
+    # 1. Claim the renewal atomically.
     async with session_factory() as s:
-        order = await s.get(StorefrontOrder, order_id)
+        order = await _order_for_update(s, order_id)
         if order is None or order.status not in _ACTIVE:
             return SubResult(False, "not_found")
-        # Free trials are one-time and NEVER renewable (renewing them was the abuse: price==0
-        # bypassed the wallet charge, giving a perpetual free config). Covers customer + by_admin.
+        # Free trials are one-time and NEVER renewable (price==0 bypassed the wallet charge → a
+        # perpetual free config). Covers customer + by_admin.
         if order.is_trial:
             return SubResult(False, "trial")
-        sf, customer, reseller, panel = await _panel_ctx(s, order)
-        if not (sf and customer and reseller and panel and order.panel_user_uuid):
-            return SubResult(False, "error")
-        plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
-        gb = int(plan.gb) if plan else int(order.gb)
-        days = int(plan.days) if plan else int(order.days)
-        price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
-        sf_id, customer_id, uuid, api_key = sf.id, customer.id, order.panel_user_uuid, reseller.admin_uuid
+        prior_status = order.status
+        order.status = "renewing"
+        await s.commit()
 
-    async with _customer_lock(sf_id, customer_id):
-        # Order: verify balance (under the per-customer lock, so it can't drop before we charge) → renew
-        # on the panel → charge LAST. This way a crash can never leave a customer charged-but-not-renewed
-        # (the worst case is a rare renewed-but-not-charged, a small reseller loss, never customer harm).
-        if not by_admin and price > 0:
-            async with session_factory() as s:
-                customer = await s.get(StorefrontCustomer, customer_id)
-                bal = int(storefront_wallet.balance(customer)) if customer else 0
-            if bal < price:
-                return SubResult(False, "insufficient", price=price, short_toman=price - bal)
+    async def _restore() -> None:
+        async with session_factory() as s:
+            o = await s.get(StorefrontOrder, order_id)
+            if o is not None and o.status == "renewing":
+                o.status = prior_status
+                await s.commit()
 
-        try:
-            async with session_factory() as s:
-                reseller = await s.get(Reseller, reseller.id)
-                panel = await s.get(Panel, panel.id)
-                if reseller is None or panel is None:
-                    raise RuntimeError("panel/reseller vanished")
-                await AdminApiClient().renew_user(panel, uuid, gb=gb, days=days, api_key=api_key)
-        except Exception as exc:  # noqa: BLE001 — nothing charged yet, so just report failure
-            log.warning("renew_user failed for order %s", order_id, exc_info=True)
-            return SubResult(False, "error", message=str(exc)[:200])
+    try:
+        async with session_factory() as s:
+            order = await s.get(StorefrontOrder, order_id)
+            if order is None:
+                await _restore()
+                return SubResult(False, "not_found")
+            sf, customer, reseller, panel = await _panel_ctx(s, order)
+            if not (sf and customer and reseller and panel and order.panel_user_uuid):
+                await _restore()
+                return SubResult(False, "error")
+            plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
+            gb = int(plan.gb) if plan else int(order.gb)
+            days = int(plan.days) if plan else int(order.days)
+            price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+            sf_id, customer_id = sf.id, customer.id
+            uuid, api_key = order.panel_user_uuid, reseller.admin_uuid
+            reseller_id, panel_id = reseller.id, panel.id
 
-        if not by_admin and price > 0:
-            async with session_factory() as s:
-                ok, _ = await storefront_wallet.charge_purchase(s, customer_id, price, order_id=order_id)
-                if not ok:  # balance vanished between check and charge (e.g. admin debit) — already
-                    await s.rollback()  # renewed; eat the rare loss rather than reverse a live config
-                    log.warning("renew: panel renewed but charge failed for order %s", order_id)
-                else:
+        async with _customer_lock(sf_id, customer_id):
+            charged = False
+            # F11: DEBIT FIRST (under the per-customer lock so the balance can't drop underneath us).
+            if not by_admin and price > 0:
+                async with session_factory() as s:
+                    ok, _ = await storefront_wallet.charge_purchase(
+                        s, customer_id, price, order_id=order_id)
+                    if not ok:
+                        await s.rollback()
+                        await _restore()
+                        async with session_factory() as s2:
+                            c = await s2.get(StorefrontCustomer, customer_id)
+                            bal = int(storefront_wallet.balance(c)) if c else 0
+                        return SubResult(False, "insufficient", price=price,
+                                         short_toman=max(0, price - bal))
                     await s.commit()
+                    charged = True
 
+            # Renew on the panel; on failure, COMPENSATE the debit and restore the order.
+            try:
+                async with session_factory() as s:
+                    reseller = await s.get(Reseller, reseller_id)
+                    panel = await s.get(Panel, panel_id)
+                    if reseller is None or panel is None:
+                        raise RuntimeError("panel/reseller vanished")
+                    await AdminApiClient().renew_user(panel, uuid, gb=gb, days=days, api_key=api_key)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("renew_user failed for order %s", order_id, exc_info=True)
+                if charged:
+                    async with session_factory() as s:
+                        await storefront_wallet.reverse_charge(
+                            s, customer_id, price, order_id=order_id)
+                        await s.commit()
+                await _restore()
+                return SubResult(False, "error", message=str(exc)[:200])
+
+        # Success — finalize the order.
         async with session_factory() as s:
             o = await s.get(StorefrontOrder, order_id)
             if o is not None:
@@ -113,6 +159,10 @@ async def renew(
                 o.last_renewed_at = dt.datetime.now(dt.timezone.utc)
                 await s.commit()
         return SubResult(True, price=(0 if by_admin else price), gb=gb, days=days)
+    except Exception:
+        log.exception("renew crashed for order %s; restoring status", order_id)
+        await _restore()
+        raise
 
 
 async def delete_subscription(

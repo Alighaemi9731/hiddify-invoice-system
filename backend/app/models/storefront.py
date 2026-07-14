@@ -143,15 +143,31 @@ class StorefrontCustomer(Base, TimestampMixin):
 
 
 class StorefrontWalletTxn(Base, TimestampMixin):
-    """Wallet ledger. `kind`: topup | purchase | manual_credit | manual_debit | refund.
-    `amount_toman` is SIGNED (credit +, debit −). `status`: pending | confirmed | rejected | done.
-    A topup stays `pending` until the reseller-admin confirms it; only then is the balance credited."""
+    """Wallet ledger. `kind`: topup | purchase | manual_credit | manual_debit | refund | renew_reversal
+    | credit_bonus. `amount_toman` is SIGNED (credit +, debit −). `status`: pending | confirmed |
+    rejected | done. A topup stays `pending` until the reseller-admin confirms it; only then credited."""
     __tablename__ = "storefront_wallet_txns"
+    __table_args__ = (
+        # F14: a crypto deposit is credited at most ONCE per shop — a tenant-scoped partial-unique
+        # index on the normalized txid (only crypto rows carry a replay-protected txid).
+        Index("uq_sfwallet_txid_per_bot", "storefront_bot_id", "txid", unique=True,
+              sqlite_where=text("txid IS NOT NULL AND method IN ('usdt','ton')"),
+              postgresql_where=text("txid IS NOT NULL AND method IN ('usdt','ton')")),
+        # F5: at most ONE refund per order — the durable backstop against a reaper/provisioner double
+        # refund (partial so repeat 'purchase'/'renew_reversal' rows per order are unaffected).
+        Index("uq_sfwallet_refund_per_order", "order_id", unique=True,
+              sqlite_where=text("kind = 'refund'"),
+              postgresql_where=text("kind = 'refund'")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     customer_id: Mapped[int] = mapped_column(
         ForeignKey("storefront_customers.id", ondelete="CASCADE"), index=True
     )
+    # Denormalized tenant (= customer.storefront_bot_id) so txid uniqueness can be scoped PER SHOP
+    # by a partial unique index (a cross-table join can't back a unique constraint). Nullable for
+    # non-crypto rows; the migration backfills it from the customer.
+    storefront_bot_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(16))
     amount_toman: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
     status: Mapped[str] = mapped_column(String(16), default="pending")

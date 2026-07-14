@@ -286,12 +286,12 @@ def test_topup_confirm_credits_once_and_purchase_is_atomic(tmp_path):
         await s.refresh(cust)
         assert storefront_wallet.balance(cust) == Decimal(0)          # not credited while pending
 
-        changed, _ = await storefront_wallet.confirm_topup(s, txn.id)
+        changed, _ = await storefront_wallet.confirm_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
         await s.refresh(cust)
         assert changed and storefront_wallet.balance(cust) == Decimal(300_000)
 
         # double-confirm must NOT double-credit
-        changed2, _ = await storefront_wallet.confirm_topup(s, txn.id)
+        changed2, _ = await storefront_wallet.confirm_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
         await s.refresh(cust)
         assert changed2 is False and storefront_wallet.balance(cust) == Decimal(300_000)
 
@@ -310,7 +310,7 @@ def test_reject_topup_and_manual_adjust_floor(tmp_path):
     async def body(s):
         _r, _bot, cust = await _seed(s)
         txn = await storefront_wallet.create_topup(s, cust, 50_000, method="card")
-        changed, _ = await storefront_wallet.reject_topup(s, txn.id)
+        changed, _ = await storefront_wallet.reject_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
         await s.refresh(cust)
         assert changed and storefront_wallet.balance(cust) == Decimal(0)  # rejected → no credit
 
@@ -332,16 +332,16 @@ def test_topup_decided_once_cannot_be_flipped(tmp_path):
         _r, _bot, cust = await _seed(s)
         # confirm → a later reject must NOT un-credit or change the status
         t1 = await storefront_wallet.create_topup(s, cust, 100_000, method="card")
-        await storefront_wallet.confirm_topup(s, t1.id)
-        changed, t1b = await storefront_wallet.reject_topup(s, t1.id)
+        await storefront_wallet.confirm_topup(s, t1.id, expected_storefront_bot_id=cust.storefront_bot_id)
+        changed, t1b = await storefront_wallet.reject_topup(s, t1.id, expected_storefront_bot_id=cust.storefront_bot_id)
         await s.refresh(cust)
         assert changed is False and t1b.status == "confirmed"
         assert storefront_wallet.balance(cust) == Decimal(100_000)
 
         # reject → a later confirm must NOT credit
         t2 = await storefront_wallet.create_topup(s, cust, 50_000, method="card")
-        await storefront_wallet.reject_topup(s, t2.id)
-        changed2, t2b = await storefront_wallet.confirm_topup(s, t2.id)
+        await storefront_wallet.reject_topup(s, t2.id, expected_storefront_bot_id=cust.storefront_bot_id)
+        changed2, t2b = await storefront_wallet.confirm_topup(s, t2.id, expected_storefront_bot_id=cust.storefront_bot_id)
         await s.refresh(cust)
         assert changed2 is False and t2b.status == "rejected"
         assert storefront_wallet.balance(cust) == Decimal(100_000)  # unchanged

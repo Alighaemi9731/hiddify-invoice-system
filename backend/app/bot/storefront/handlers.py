@@ -934,6 +934,9 @@ async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer()
             await cb.message.answer(rtl(_shop_closed_text(sf)))
             return
+    # F4: strip the «تمدید» button immediately so a rapid double-tap can't queue a second renewal
+    # (the durable CAS-to-"renewing" in renew() is the backstop for a concurrent tap that slips in).
+    await _strip_buttons(cb)
     await cb.answer()
     await cb.message.answer(rtl("⏳ در حال تمدید…"))
     res = await storefront_subscription.renew(SessionLocal, order_id=order_id, by_admin=False)
@@ -1459,9 +1462,15 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
                 proof_path = None
         else:
             txid = (message.text or "")[:120]
-        txn = await storefront_wallet.create_topup(
-            s, customer, amount, method=method, proof_path=proof_path, txid=txid,
-            credit_code_id=int(code_id) if code_id else None)
+        try:
+            txn = await storefront_wallet.create_topup(
+                s, customer, amount, method=method, proof_path=proof_path, txid=txid,
+                credit_code_id=int(code_id) if code_id else None)
+        except storefront_wallet.DuplicateTopupTxid:
+            # F14: this crypto txid was already submitted for this shop — reject the replay.
+            await message.answer(rtl(
+                "این شناسهٔ تراکنش قبلاً ثبت شده است؛ اگر واریزی جدید دارید شناسهٔ همان را بفرستید."))
+            return
         await message.answer(rtl(
             f"✅ درخواستِ شارژِ {_toman(amount)} تومان ثبت شد (#{txn.id}). پس از تأییدِ مدیر، "
             "کیفِ پولِ شما شارژ می‌شود."))
@@ -1503,7 +1512,8 @@ async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
         if not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        changed, txn = await storefront_wallet.confirm_topup(s, txn_id)
+        changed, txn = await storefront_wallet.confirm_topup(
+            s, txn_id, expected_storefront_bot_id=sf.id if sf else 0)
         if not changed:
             await _strip_buttons(cb)
             await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
@@ -1528,8 +1538,9 @@ async def sf_topup_no(cb: CallbackQuery, bot: Bot) -> None:
         if not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        changed, txn = await storefront_wallet.reject_topup(s, txn_id)
-        cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
+        changed, txn = await storefront_wallet.reject_topup(
+            s, txn_id, expected_storefront_bot_id=sf.id if sf else 0)
+        cust = await s.get(StorefrontCustomer, txn.customer_id) if (changed and txn) else None
     await _strip_buttons(cb)
     if changed:
         await cb.message.answer(rtl(f"❌ شارژِ #{txn_id} رد شد."))
@@ -1569,11 +1580,12 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
         return
     await state.clear()
     async with SessionLocal() as s:
-        _sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if not is_admin:
             return
-        changed, txn = await storefront_wallet.confirm_topup(s, txn_id, amount_toman=int(raw))
-        cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
+        changed, txn = await storefront_wallet.confirm_topup(
+            s, txn_id, expected_storefront_bot_id=sf.id if sf else 0, amount_toman=int(raw))
+        cust = await s.get(StorefrontCustomer, txn.customer_id) if (changed and txn) else None
     if changed:
         await message.answer(rtl(f"✅ شارژِ #{txn_id} با مبلغِ {_toman(raw)} تومان تأیید شد."))
         if cust:

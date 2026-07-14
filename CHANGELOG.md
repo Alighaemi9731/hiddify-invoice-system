@@ -8,6 +8,39 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.76.0 - 2026-07-15
+
+Security & correctness remediation — Batch 2 of 6 (storefront money integrity).
+See `docs/SECURITY_REVIEW_PLAN.md`. **Includes one Alembic migration.**
+
+### Fixed
+
+- **Storefront admins can no longer touch ANOTHER shop's top-ups (F3).** The confirm / reject /
+  set-amount top-up decisions took a globally-addressable transaction id with no tenant check, so a
+  reseller could craft a callback against another shop's pending deposit and credit, reject, or
+  re-amount it. `confirm_topup`/`reject_topup` now require the acting shop id and refuse any
+  transaction whose customer belongs to a different storefront.
+- **A crypto top-up can’t be replayed (F14).** Storefront top-up txids were stored raw, unnormalized,
+  and non-unique. They are now lowercased and carry the shop id, and a tenant-scoped partial-unique
+  index rejects the same on-chain deposit submitted twice within a shop (the owner-payment path
+  already had this). A card/free-text reference is unaffected.
+- **A rapid double-tap of «تمدید» no longer double-charges (F4).** The renew button is stripped on
+  first tap, and `renew()` now atomically claims the order (locks it and flips it to `renewing`) so a
+  concurrent second tap sees it in-progress and bails instead of charging again.
+- **A failed renewal never leaves a customer charged-without-service (F11).** Renewal now debits the
+  wallet **before** the panel write and, if the panel call fails, compensates with a distinct
+  `renew_reversal` credit and restores the order — instead of the old renew-first/charge-last that
+  could silently grant a free renewal.
+- **One refund per order (F5).** The refund path now locks the customer row and is backed by a
+  partial-unique index on `(order_id) WHERE kind='refund'`, so a reaper/provisioner race can’t write
+  two refunds for one order.
+
+### Migration
+
+- `f5b8d1a3c6e9` — adds `storefront_wallet_txns.storefront_bot_id` (backfilled from the customer),
+  normalizes existing crypto txids, de-duplicates any residual collisions, and creates the two
+  partial-unique indexes above. Portable to SQLite (contracts test) via `sqlite_where`/`postgresql_where`.
+
 ## 1.75.0 - 2026-07-15
 
 Security & correctness remediation — Batch 1 of 6 (owner money integrity) + the test foundation.

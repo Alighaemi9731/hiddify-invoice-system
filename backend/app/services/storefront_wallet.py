@@ -11,9 +11,25 @@ import datetime as dt
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import StorefrontCustomer, StorefrontWalletTxn
+
+# Crypto top-up methods whose txid is replay-protected (normalized + tenant-scoped unique).
+_CRYPTO_METHODS = ("usdt", "ton")
+
+
+class DuplicateTopupTxid(Exception):
+    """A crypto top-up txid was already submitted for this storefront (replay attempt)."""
+
+
+def _norm_txid(method: str | None, txid: str | None) -> str | None:
+    """Normalize a crypto txid so casing variants of ONE transfer collide (BSC/hex are matched
+    case-insensitively on-chain). Non-crypto references are left as-is."""
+    if txid and (method or "") in _CRYPTO_METHODS:
+        return txid.strip().lower()
+    return txid
 
 
 def _now() -> dt.datetime:
@@ -36,14 +52,24 @@ async def create_topup(
     credit_code_id: int | None = None,
 ) -> StorefrontWalletTxn:
     """Record a PENDING wallet top-up. Balance is NOT credited until the reseller-admin confirms. A
-    captured `credit_code_id` (کد شارژ) is redeemed + its bonus credited only at confirmation."""
+    captured `credit_code_id` (کد شارژ) is redeemed + its bonus credited only at confirmation.
+
+    A crypto txid is normalized (lowercased) and stamped with the customer's storefront so a
+    tenant-scoped partial-unique index rejects a REPLAY of the same deposit. `DuplicateTopupTxid`
+    is raised if the same normalized txid was already submitted for this shop."""
+    norm_txid = _norm_txid(method, txid)
     txn = StorefrontWalletTxn(
-        customer_id=customer.id, kind="topup", amount_toman=Decimal(str(int(amount_toman))),
-        status="pending", method=method, proof_path=proof_path, txid=txid, chain=chain,
+        customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+        kind="topup", amount_toman=Decimal(str(int(amount_toman))),
+        status="pending", method=method, proof_path=proof_path, txid=norm_txid, chain=chain,
         credit_code_id=credit_code_id,
     )
     session.add(txn)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:  # tenant-scoped unique txid → this deposit was already submitted
+        await session.rollback()
+        raise DuplicateTopupTxid() from exc
     return txn
 
 
@@ -59,12 +85,17 @@ async def _get_for_update(session: AsyncSession, model, pk: int):  # noqa: ANN00
 
 
 async def confirm_topup(
-    session: AsyncSession, txn_id: int, *, amount_toman: int | None = None
+    session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int,
+    amount_toman: int | None = None,
 ) -> tuple[bool, StorefrontWalletTxn | None]:
     """Confirm a pending top-up and credit the wallet. `amount_toman` lets the admin set the credited
     Toman (used for crypto deposits — manual, no rates). Atomic + idempotent: the txn row is locked
     and re-checked, so if a second admin taps «تأیید» concurrently they block until the first commits
-    and then see it's no longer pending → a no-op (never a double credit). Returns (changed, txn)."""
+    and then see it's no longer pending → a no-op (never a double credit). Returns (changed, txn).
+
+    `expected_storefront_bot_id` enforces TENANT ISOLATION (F3): txn ids are a global sequence and
+    the callback data is client-controllable, so an admin may only decide a top-up whose customer
+    belongs to THEIR OWN storefront — otherwise a shop A admin could credit/re-amount shop B's deposit."""
     txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
         return False, txn
@@ -74,6 +105,8 @@ async def confirm_topup(
     customer = await _get_for_update(session, StorefrontCustomer, txn.customer_id)
     if customer is None:
         return False, txn
+    if customer.storefront_bot_id != expected_storefront_bot_id:
+        return False, txn  # cross-tenant attempt — never touch another shop's money
     # The admin may override the Toman to credit (esp. for crypto deposits, where the amount is set
     # manually — the bot never depends on online rates). Otherwise credit the requested amount.
     credited = Decimal(str(int(amount_toman))) if amount_toman is not None else Decimal(
@@ -133,14 +166,20 @@ async def apply_gift_code(session: AsyncSession, customer_id: int, storefront_bo
     return q
 
 
-async def reject_topup(session: AsyncSession, txn_id: int) -> tuple[bool, StorefrontWalletTxn | None]:
+async def reject_topup(
+    session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int
+) -> tuple[bool, StorefrontWalletTxn | None]:
     """Reject a pending top-up (no credit). Atomic + idempotent (locks + re-checks the txn row so a
-    concurrent confirm/reject by another admin can't both act). Returns (changed, txn)."""
+    concurrent confirm/reject by another admin can't both act). `expected_storefront_bot_id` enforces
+    tenant isolation (F3), same as confirm_topup. Returns (changed, txn)."""
     txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
         return False, txn
     if txn.status != "pending":
         return False, txn
+    customer = await _get_for_update(session, StorefrontCustomer, txn.customer_id)
+    if customer is None or customer.storefront_bot_id != expected_storefront_bot_id:
+        return False, txn  # missing / cross-tenant — refuse
     txn.status = "rejected"
     txn.decided_at = _now()
     await session.commit()
@@ -203,15 +242,42 @@ async def refund(
     session: AsyncSession, customer_id: int, amount_toman: int, *, order_id: int | None = None,
     note: str = "",
 ) -> StorefrontWalletTxn | None:
-    """Credit a refund back to the wallet (e.g. provisioning failed after the debit). Does NOT commit."""
-    customer = await session.get(StorefrontCustomer, customer_id)
+    """Credit a refund back to the wallet (e.g. provisioning failed after the debit). Does NOT commit.
+
+    Locks the customer row (F5) so a refund can't lose a concurrent debit's update; a partial-unique
+    index on (order_id) WHERE kind='refund' is the durable backstop against a double refund per order."""
+    customer = await _get_for_update(session, StorefrontCustomer, customer_id)
     if customer is None:
         return None
     amt = Decimal(str(int(amount_toman)))
     customer.wallet_balance_toman = float(balance(customer) + amt)
     txn = StorefrontWalletTxn(
-        customer_id=customer.id, kind="refund", amount_toman=amt, status="done",
+        customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+        kind="refund", amount_toman=amt, status="done",
         order_id=order_id, note=(note or "")[:255], decided_at=_now(),
+    )
+    session.add(txn)
+    await session.flush()
+    return txn
+
+
+async def reverse_charge(
+    session: AsyncSession, customer_id: int, amount_toman: int, *, order_id: int | None = None,
+    note: str = "",
+) -> StorefrontWalletTxn | None:
+    """Credit back a renewal charge whose panel write FAILED (F11 compensation). Uses a DISTINCT
+    kind ('renew_reversal') — NOT 'refund' — so it never collides with the one-refund-per-order
+    partial-unique index and a later failed renewal can still be compensated. Locks the customer;
+    does NOT commit."""
+    customer = await _get_for_update(session, StorefrontCustomer, customer_id)
+    if customer is None:
+        return None
+    amt = Decimal(str(int(amount_toman)))
+    customer.wallet_balance_toman = float(balance(customer) + amt)
+    txn = StorefrontWalletTxn(
+        customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+        kind="renew_reversal", amount_toman=amt, status="done",
+        order_id=order_id, note=(note or "بازگشتِ وجهِ تمدیدِ ناموفق")[:255], decided_at=_now(),
     )
     session.add(txn)
     await session.flush()

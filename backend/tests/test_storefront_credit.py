@@ -135,7 +135,7 @@ def test_confirm_topup_applies_bonus_and_records():
         bot, cust = await _seed(s)
         code = await cc.create_code(s, bot.id, code="P10", kind="percent", percent_off=10)
         txn = await wallet.create_topup(s, cust, 100_000, method="card", credit_code_id=code.id)
-        changed, _ = await wallet.confirm_topup(s, txn.id)
+        changed, _ = await wallet.confirm_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
         assert changed
         await s.refresh(cust)
         assert wallet.balance(cust) == Decimal(110_000)              # 100k base + 10k bonus
@@ -151,7 +151,7 @@ def test_rejected_topup_consumes_no_code():
         bot, cust = await _seed(s)
         code = await cc.create_code(s, bot.id, code="P10", kind="percent", percent_off=10)
         txn = await wallet.create_topup(s, cust, 100_000, method="card", credit_code_id=code.id)
-        changed, _ = await wallet.reject_topup(s, txn.id)
+        changed, _ = await wallet.reject_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
         assert changed
         await s.refresh(cust)
         await s.refresh(code)
@@ -183,8 +183,8 @@ def test_double_confirm_credits_bonus_once():
         bot, cust = await _seed(s)
         code = await cc.create_code(s, bot.id, code="F", kind="fixed", amount_toman=5000)
         txn = await wallet.create_topup(s, cust, 50_000, method="card", credit_code_id=code.id)
-        await wallet.confirm_topup(s, txn.id)
-        await wallet.confirm_topup(s, txn.id)   # re-confirm → no-op
+        await wallet.confirm_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
+        await wallet.confirm_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)   # re-confirm → no-op
         await s.refresh(cust)
         await s.refresh(code)
         assert wallet.balance(cust) == Decimal(55_000) and code.used_count == 1
