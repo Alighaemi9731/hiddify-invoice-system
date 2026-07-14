@@ -42,10 +42,11 @@ Run the panel **behind** the relay instead — the relay forwards the panel's ow
 domain to a localhost-bound Caddy, and Caddy still gets its own Let's Encrypt cert
 (TLS-ALPN-01 passes through SNI passthrough unchanged):
 
-1. On the relay, edit `deploy/relay.sh`: set `INVOICE_PANEL_DOMAIN` to the panel's
-   domain (its A record must point at the relay's IP), then run it. It routes that
-   domain to `127.0.0.1:8443` / `127.0.0.1:8080`.
-2. Install the panel with relay mode on (Caddy binds only localhost high ports):
+1. Keep `deploy/relay.sh`'s `MAP` current (your Hiddify panel origins) and run it.
+   You never edit it for the invoice panel: its **default route** forwards any
+   domain not in `MAP` to the co-located Caddy on `127.0.0.1:8443` / `127.0.0.1:8080`.
+2. Point the panel's domain A record at the relay's IP.
+3. Install the panel with relay mode on (Caddy binds only localhost high ports):
 
    ```bash
    BEHIND_RELAY=1 DOMAIN=panel.example.com ACME_EMAIL=you@mail.com \
@@ -54,8 +55,9 @@ domain to a localhost-bound Caddy, and Caddy still gets its own Let's Encrypt ce
 
 `BEHIND_RELAY=1` requires a `DOMAIN` (there is no bare-IP access behind a relay).
 It writes `CADDY_HTTP_PUBLISH=127.0.0.1:8080` and `CADDY_HTTPS_PUBLISH=127.0.0.1:8443`
-into `.env`; override those two if you need different local ports. **Run the relay
-first** so Caddy's first ACME attempt can reach it.
+into `.env` (upserted even when `.env` already exists); override those two if you
+need different local ports. **Run the relay first** so Caddy's first ACME attempt
+can reach it.
 
 ## After install
 - **Settings tab** → set the Telegram **bot token**, **USDT wallet** (BEP-20),

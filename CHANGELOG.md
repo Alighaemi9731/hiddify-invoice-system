@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.74.1 - 2026-07-14
+
+### Fixed
+
+- **`BEHIND_RELAY=1` now takes effect even when a `.env` already exists.** The installer
+  previously wrote the Caddy publish ports only while *generating* a fresh `.env`; re-running
+  on a box that already had one silently kept the 80/443 defaults, so Caddy still collided
+  with a co-located relay (`failed to bind host port 0.0.0.0:80/tcp: address already in use`).
+  `install.sh` now idempotently upserts `CADDY_HTTP_PUBLISH`/`CADDY_HTTPS_PUBLISH` (and
+  `SERVER_DOMAIN`/`ACME_EMAIL` when provided) into an existing `.env`; secrets are untouched.
+
+### Changed
+
+- **`deploy/relay.sh` is now a fixed, edit-free relay.** Its SNI (`:443`) and host (`:80`)
+  **default route** forwards any domain not in the panel `MAP` to the co-located Caddy
+  (`127.0.0.1:8443` / `127.0.0.1:8080`). Co-locating the invoice panel no longer requires
+  adding the panel's own domain to the relay — run it once and only keep the panel `MAP`
+  current. The same script is safe on relay boxes that don't host the panel (unknown domains
+  hit a local port with nothing listening and are refused, as before).
+
 ## 1.74.0 - 2026-07-14
 
 ### Added

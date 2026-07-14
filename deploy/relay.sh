@@ -1,44 +1,42 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  TLS-passthrough relay (nginx, SNI-based) — for Hiddify panels, and OPTIONALLY
-#  a co-located Hiddify Invoice panel on the SAME box.
+#  Fixed TLS-passthrough relay (nginx, SNI-based).
 #
-#  What it does
-#  ------------
-#   • Listens on :443 and forwards each TLS connection UNCHANGED to the right
-#     origin, chosen by SNI (the hostname the client asked for). It never
-#     decrypts and never holds a certificate — every origin keeps using its own
-#     cert. (This is why the relay needs no ACME/SSL setup of its own.)
-#   • Listens on :80 and HTTP-proxies to the origin (for redirects + ACME
-#     HTTP-01 challenges that the origins answer).
-#   • If INVOICE_PANEL_DOMAIN is set, THAT one hostname is routed to the LOCAL
-#     invoice panel instead of an external IP. The invoice installer publishes
-#     Caddy on 127.0.0.1:8443 / :8080 (run it with BEHIND_RELAY=1); Caddy still
-#     gets its OWN Let's Encrypt cert because TLS-ALPN-01 rides through the SNI
-#     passthrough unchanged.
+#  Run this ONCE. You never edit it when adding, renaming, or moving the
+#  co-located invoice panel — the only thing that is yours to keep current is the
+#  panel MAP below (your Hiddify origins).
 #
-#  Run as root on the relay server:   bash relay.sh
+#  Routing:
+#   • :443 — every TLS connection is forwarded UNCHANGED, chosen by SNI. A hostname
+#     listed in MAP goes to its origin server; ANYTHING ELSE (i.e. the co-located
+#     invoice panel's own domain, whatever it is) falls through to the LOCAL Caddy
+#     on 127.0.0.1:8443. The relay never decrypts and holds no certificate.
+#   • :80 — HTTP proxy for redirects + ACME HTTP-01. Same rule: MAP hosts go to
+#     their origin; everything else to the local Caddy on 127.0.0.1:8080.
 #
-#  Ordering when co-locating the invoice panel:
-#    1) fill INVOICE_PANEL_DOMAIN below and run THIS script first,
-#    2) then run the invoice installer with BEHIND_RELAY=1 DOMAIN=<same domain>.
-#  (The relay must already be routing the domain so Caddy's first ACME succeeds.)
+#  So the invoice panel just needs to be installed with BEHIND_RELAY=1 (its Caddy
+#  binds 127.0.0.1:8080 / :8443); this relay's default route already points there.
+#  There is NO invoice domain to configure here. Caddy still gets its own Let's
+#  Encrypt cert — TLS-ALPN-01 rides through the SNI passthrough unchanged.
+#
+#  The same script is safe on relay boxes that DON'T host the panel: unknown
+#  domains simply hit a local port with nothing listening and are refused.
+#
+#  Run as root:  bash relay.sh
 # ============================================================================
 set -euo pipefail
 
-# ---- 1. Panel passthrough map: <domain>  <origin-server-IP> -----------------
-#         (edit these to your real panels; both :443 and :80 go to the same IP)
+# ---- Panel passthrough map: <domain>  <origin-server-IP> -------------------
+#      (edit these to your real panels; both :443 and :80 go to the same IP)
 MAP="
 panel-01.example.com   10.0.0.1
 panel-02.example.com   10.0.0.2
 "
 
-# ---- 2. (Optional) co-located invoice panel --------------------------------
-#  The hostname the invoice panel is served on. Its DNS A record must point at
-#  THIS relay's public IP. Leave empty ("") to run a pure panel relay.
-INVOICE_PANEL_DOMAIN=""
-INVOICE_HTTPS_PORT="8443"   # must match CADDY_HTTPS_PUBLISH port in the installer
-INVOICE_HTTP_PORT="8080"    # must match CADDY_HTTP_PUBLISH port in the installer
+# Co-located invoice panel (Caddy, published by the installer on these localhost
+# ports via BEHIND_RELAY=1). Any domain NOT in MAP falls through to here.
+LOCAL_HTTPS_UPSTREAM="127.0.0.1:8443"
+LOCAL_HTTP_UPSTREAM="127.0.0.1:8080"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Please run as root (sudo -i first)."
@@ -61,14 +59,6 @@ while read -r d ip; do
 "
 done <<< "$MAP"
 
-# Route the invoice panel's own domain to the LOCAL Caddy (localhost high ports).
-if [ -n "${INVOICE_PANEL_DOMAIN:-}" ]; then
-  S="${S}        ${INVOICE_PANEL_DOMAIN} 127.0.0.1:${INVOICE_HTTPS_PORT};
-"
-  H="${H}        ${INVOICE_PANEL_DOMAIN} 127.0.0.1:${INVOICE_HTTP_PORT};
-"
-fi
-
 cat > /etc/nginx/nginx.conf <<NGINX
 user www-data;
 worker_processes auto;
@@ -77,10 +67,10 @@ error_log /var/log/nginx/error.log warn;
 include /etc/nginx/modules-enabled/*.conf;
 events { worker_connections 8192; }
 
-# TLS pass-through by SNI (no decryption, just forward to origin / local panel)
+# TLS pass-through by SNI. Known panels → their origin; anything else → local panel.
 stream {
     map \$ssl_preread_server_name \$up443 {
-${S}        default "";
+${S}        default ${LOCAL_HTTPS_UPSTREAM};
     }
     server {
         listen 443 reuseport;
@@ -92,10 +82,10 @@ ${S}        default "";
     }
 }
 
-# Port 80 for redirects and Let's Encrypt (ACME) HTTP-01 to origin / local panel
+# Port 80: redirects + ACME HTTP-01. Known panels → origin; anything else → local panel.
 http {
     map \$host \$up80 {
-${H}        default "";
+${H}        default ${LOCAL_HTTP_UPSTREAM};
     }
     server {
         listen 80;
@@ -120,7 +110,7 @@ nginx -t
 systemctl enable nginx >/dev/null 2>&1 || true
 systemctl restart nginx
 
-echo "-------- TEST (external panel origins) --------"
+echo "-------- TEST (panel origins) --------"
 while read -r d ip; do
   [ -z "${d:-}" ] && continue
   if timeout 5 bash -c "</dev/tcp/${ip}/443" 2>/dev/null; then
@@ -132,7 +122,5 @@ while read -r d ip; do
     echo "FAIL  ${d} -> ${ip} | relay cannot reach origin on 443 (firewall/security-group or origin down)"
   fi
 done <<< "$MAP"
-if [ -n "${INVOICE_PANEL_DOMAIN:-}" ]; then
-  echo "LOCAL ${INVOICE_PANEL_DOMAIN} -> 127.0.0.1:${INVOICE_HTTPS_PORT} (invoice panel; run the installer with BEHIND_RELAY=1)"
-fi
-echo "----------------------------------------------"
+echo "DEFAULT (any other domain) -> ${LOCAL_HTTPS_UPSTREAM} : co-located invoice panel (install with BEHIND_RELAY=1)"
+echo "--------------------------------------"

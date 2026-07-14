@@ -130,8 +130,28 @@ EOF
   chmod 600 "$ENV_FILE"
   c "Generated SECRET_KEY + DB password (kept in $ENV_FILE, mode 600)."
 else
-  c "$ENV_FILE already exists — keeping it. Ensure SERVER_DOMAIN/ACME_EMAIL are set."
+  c "$ENV_FILE already exists — keeping it (SECRET_KEY + DB password preserved)."
 fi
+
+# Reconcile the relay/domain keys with THIS run's inputs even when .env was
+# preserved from an earlier install. Without this, re-running with BEHIND_RELAY=1
+# (or a new DOMAIN) on a box that already has a .env silently no-ops: the keys are
+# absent, compose falls back to publishing 0.0.0.0:80/443, and Caddy collides with
+# a co-located relay ("address already in use"). Idempotent upsert; secrets are
+# never touched.
+upsert_env() {  # <key> <value>   (values here never contain '|')
+  local key="$1" val="$2"
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+  fi
+}
+upsert_env CADDY_HTTP_PUBLISH "$CADDY_HTTP_PUBLISH"
+upsert_env CADDY_HTTPS_PUBLISH "$CADDY_HTTPS_PUBLISH"
+[[ -n "$DOMAIN" ]] && upsert_env SERVER_DOMAIN "$DOMAIN"
+[[ -n "$ACME_EMAIL" ]] && upsert_env ACME_EMAIL "$ACME_EMAIL"
+chmod 600 "$ENV_FILE"
 
 # ---- 4. up ------------------------------------------------------------------
 c "Building and starting the stack (this can take a few minutes)…"
