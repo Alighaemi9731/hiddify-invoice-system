@@ -9,9 +9,8 @@ from aiogram.types import (
 )
 
 from app.bot.rtl import rtl
-from app.core.tg_links import (  # noqa: F401 (clean_username re-exported)
-    clean_username,
-    tg_pv_url,
+from app.core.tg_links import (
+    clean_username,  # noqa: F401 (re-exported for callers/tests)
 )
 from app.models import (
     StorefrontBot,
@@ -381,16 +380,19 @@ def customers_page_kb(
 
 def customer_detail_kb(
     customer_id: int, *, username: str | None = None, chat_id: int | None = None,
-    banned: bool = False, chat_button: bool = True,
+    banned: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Admin customer actions. «💬 چت با مشتری» is a URL button — t.me/<username> when a username
-    exists, else tg://user?id=<chat_id>. NOTE: Telegram rejects a tg:// button when the target's
-    privacy disallows it (BUTTON_USER_PRIVACY_RESTRICTED) — the handler retries the view with
-    `chat_button=False` (body-link fallback) so the card always opens."""
+    """Admin customer actions. Reaching the customer is a bot-RELAY («💬 پیام به مشتری» →
+    `sfmsg:<id>`): the shop bot forwards the admin's message to the customer, so it works for EVERY
+    customer regardless of username or privacy settings. When the customer ALSO has a public
+    @username we add a direct-PV shortcut (t.me/<username> always resolves). We deliberately never
+    emit a `tg://user?id=` link for a username-less customer — Telegram can't resolve it for the
+    admin (a third party who has never met them), so it would be a dead link (that was the old bug)."""
     rows: list[list[InlineKeyboardButton]] = []
-    pv = tg_pv_url(username, chat_id) if chat_button else None
-    if pv:
-        rows.append([InlineKeyboardButton(text="💬 چت با مشتری", url=pv)])
+    u = clean_username(username)
+    if u:
+        rows.append([InlineKeyboardButton(text="↗️ گفتگوی مستقیم", url=f"https://t.me/{u}")])
+    rows.append([InlineKeyboardButton(text="💬 پیام به مشتری", callback_data=f"sfmsg:{customer_id}")])
     rows += [
         [InlineKeyboardButton(text="➕ شارژ دستی", callback_data=f"sfadj:{customer_id}:+"),
          InlineKeyboardButton(text="➖ کسر دستی", callback_data=f"sfadj:{customer_id}:-")],
@@ -402,3 +404,10 @@ def customer_detail_kb(
         rows.append([InlineKeyboardButton(text="⛔️ مسدود کردن", callback_data=f"sfcustban:{customer_id}")])
     rows.append([InlineKeyboardButton(text="‹ بازگشت به فهرست", callback_data="sfcustpg:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def relay_reply_kb(customer_id: int) -> InlineKeyboardMarkup:
+    """A «💬 پاسخ» button attached to a customer's relayed message → opens the admin reply-compose
+    flow (`sfmsg:<id>`, the same one the customer-detail card uses)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💬 پاسخ به مشتری", callback_data=f"sfmsg:{customer_id}")]])

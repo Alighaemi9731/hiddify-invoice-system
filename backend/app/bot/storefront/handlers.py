@@ -12,6 +12,7 @@ import html
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -87,6 +88,7 @@ class SF(StatesGroup):
     cust_search = State()      # admin searches customers by name / telegram id
     broadcast = State()
     add_admin = State()        # admin appoints a co-admin (numeric id or forwarded message)
+    dm_compose = State()       # admin composes a relay message to a customer; data: dm_customer_id
     topup_code = State()       # customer enters a credit code during top-up; data: topup_amount
     gift_code = State()        # customer redeems a standalone gift code
     # credit-code admin wizard (کد شارژ). data threads through: c_code, c_kind, c_is_gift, c_percent,
@@ -178,6 +180,42 @@ async def _notify_admin(  # noqa: ANN003
             await bot.send_message(chat_id, rtl(text), **kw)
         except Exception:  # noqa: BLE001 — one blocked admin shouldn't stop the others
             log.warning("notify storefront admin failed", exc_info=True)
+
+
+async def _relay_message(bot: Bot, chat_id: int, header: str, message: Message,
+                         *, reply_markup=None) -> bool:  # noqa: ANN001
+    """Relay a person's composed message (text or photo+caption) to `chat_id`, prefixed with a plain
+    `header` line so the recipient knows who it's from. Plain text (no HTML) so the composer's content
+    is never interpreted as markup. Returns False if the recipient is unreachable (blocked the bot /
+    deactivated) or the send fails; True on success."""
+    try:
+        if message.photo:
+            cap = (message.caption or "").strip()
+            body = rtl(f"{header}\n\n{cap}") if cap else rtl(header)
+            await bot.send_photo(chat_id, message.photo[-1].file_id, caption=body,
+                                 reply_markup=reply_markup)
+        else:
+            await bot.send_message(chat_id, rtl(f"{header}\n\n{(message.text or '').strip()}"),
+                                   reply_markup=reply_markup, disable_web_page_preview=True)
+        return True
+    except TelegramForbiddenError:
+        return False
+    except Exception:  # noqa: BLE001 — a bad-request / transient error must not crash the handler
+        log.warning("storefront relay failed", exc_info=True)
+        return False
+
+
+async def _relay_to_admins(bot: Bot, admin_ids: list[int], cust_name: str, customer_id: int,
+                           message: Message) -> bool:
+    """Deliver a customer's message to every shop admin with a «پاسخ» button. Returns True if at
+    least one admin received it."""
+    header = f"💬 پیام از مشتری «{cust_name}» (#{customer_id}):"
+    markup = kb.relay_reply_kb(customer_id)
+    delivered = False
+    for aid in admin_ids:
+        if await _relay_message(bot, aid, header, message, reply_markup=markup):
+            delivered = True
+    return delivered
 
 
 async def _deliver_config(  # noqa: ANN001
@@ -322,6 +360,23 @@ async def sf_start(message: Message, state: FSMContext, bot: Bot) -> None:
         sf = await storefront.get_bot_by_telegram_id(s, bot.id)
         customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
         await _send_customer_menu(message.answer, sf, customer)
+
+
+@storefront_router.message(Command("cancel"))
+async def sf_cmd_cancel(message: Message, state: FSMContext, bot: Bot) -> None:
+    """A real global cancel: clear any in-progress flow and re-show the right menu. Registered before
+    every FSM-state text handler so `/cancel` aborts a compose instead of being consumed/relayed by
+    it — and the ban/join middlewares already exempt `/cancel`, so it's reachable mid-flow."""
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            return
+        if is_admin:
+            await _send_admin_menu(message.answer, sf)
+        else:
+            cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+            await _send_customer_menu(message.answer, sf, cust)
 
 
 @storefront_router.message(F.text.in_(kb.ALL_LABELS))
@@ -611,7 +666,9 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
                       f"{labels.get(o.status, o.status)}" for o in other[:10]]
             await ans(rtl("\n".join(lines)))
     elif action == "support":
-        await ans(rtl(f"💬 پشتیبانی: {sf.support_contact or 'به‌زودی'}"))
+        contact = f"💬 پشتیبانی: {sf.support_contact}\n" if sf.support_contact else ""
+        await ans(rtl(f"{contact}✍️ هر پیامی همین‌جا بنویسید تا مستقیم به پشتیبانیِ فروشگاه برسد و "
+                      "پاسخ بگیرید."))
 
 
 async def _claim_free_trial(message, sf_id: int, customer_id: int, bot: Bot) -> None:  # noqa: ANN001
@@ -974,60 +1031,28 @@ async def sf_customers_page(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
-def _customer_detail_view(
-    cust: StorefrontCustomer, *, chat_button: bool = True
-) -> tuple[str, object]:
-    """(text, markup) for the admin customer-detail card. HTML (name escaped). With
-    `chat_button=False` (the privacy fallback, see `_show_customer_detail`) the «چت با مشتری» row is
-    dropped and a best-effort tg:// text link goes in the BODY instead — a body link never fails the
-    send (worst case it renders unclickable), unlike a rejected button."""
+def _customer_detail_view(cust: StorefrontCustomer) -> tuple[str, object]:
+    """(text, markup) for the admin customer-detail card. HTML (name escaped). Contacting the
+    customer is a bot-relay button (see `customer_detail_kb`), so this view has no fragile tg://
+    deep link and always renders — it opens for EVERY customer, username or not."""
     lines = [f"👤 {html.escape(cust.name or '—')}", f"🆔 {cust.telegram_id}",
              f"👛 موجودی: {_toman(cust.wallet_balance_toman)} تومان"]
     if cust.banned:
         lines.append("⛔️ این مشتری مسدود است")
-    if not chat_button:
-        lines.append(f'<a href="tg://user?id={cust.telegram_id}">💬 باز کردن چت با مشتری</a>')
     markup = kb.customer_detail_kb(
-        cust.id, username=cust.username, chat_id=cust.telegram_id, banned=cust.banned,
-        chat_button=chat_button)
+        cust.id, username=cust.username, chat_id=cust.telegram_id, banned=cust.banned)
     return rtl("\n".join(lines)), markup
 
 
-def _is_button_rejection(exc: Exception) -> bool:
-    """Telegram REJECTS a `tg://user?id=` inline-button url when the target's privacy settings
-    disallow it (BUTTON_USER_PRIVACY_RESTRICTED) — the whole send fails, so the view must be retried
-    without the button."""
-    return "BUTTON" in str(exc).upper()
-
-
-async def _send_or_edit(cb: CallbackQuery, text: str, markup) -> bool:  # noqa: ANN001
-    """Deliver a view via edit-in-place, falling back to a fresh message. Returns False when
-    Telegram rejected the BUTTON itself (caller retries without it); True otherwise."""
+async def _show_customer_detail(cb: CallbackQuery, cust: StorefrontCustomer) -> None:
+    """Render the customer-detail card by editing in place, falling back to a fresh message."""
+    text, markup = _customer_detail_view(cust)
     try:
         await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
-        return True
     except Exception as exc:  # noqa: BLE001
-        if _is_button_rejection(exc):
-            return False
         if "message is not modified" in str(exc):
-            return True
-    try:
+            return
         await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
-        return True
-    except Exception as exc:  # noqa: BLE001
-        if _is_button_rejection(exc):
-            return False
-        raise
-
-
-async def _show_customer_detail(cb: CallbackQuery, cust: StorefrontCustomer) -> None:
-    text, markup = _customer_detail_view(cust)
-    if await _send_or_edit(cb, text, markup):
-        return
-    # Privacy-restricted customer → Telegram refused the tg:// chat BUTTON; show the same card
-    # with a body link instead so the detail view ALWAYS opens.
-    text, markup = _customer_detail_view(cust, chat_button=False)
-    await _send_or_edit(cb, text, markup)
 
 
 @storefront_router.callback_query(F.data.startswith("sfcust:"))
@@ -1071,6 +1096,57 @@ async def sf_customer_ban(cb: CallbackQuery, bot: Bot) -> None:
 @storefront_router.callback_query(F.data.startswith("sfcustunban:"))
 async def sf_customer_unban(cb: CallbackQuery, bot: Bot) -> None:
     await _set_customer_banned(cb, bot, banned=False)
+
+
+# ── admin ⇄ customer relay (the shop bot forwards messages both ways) ─────────
+
+@storefront_router.callback_query(F.data.startswith("sfmsg:"))
+async def sf_dm_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Admin taps «پیام به مشتری» (from the detail card) or «پاسخ» (on a relayed customer message):
+    start composing a message the bot will deliver to that customer."""
+    cid = int(cb.data.split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        cust = await s.get(StorefrontCustomer, cid)
+        if cust is None or cust.storefront_bot_id != sf.id:
+            await cb.answer("یافت نشد.", show_alert=True)
+            return
+        name = cust.name or str(cust.telegram_id)
+    await state.set_state(SF.dm_compose)
+    await state.update_data(dm_customer_id=cid)
+    await cb.message.answer(
+        rtl(f"✍️ پیامی که می‌خواهید برای «{name}» فرستاده شود را بنویسید (متن یا عکس).\n"
+            "پیام از طرفِ «پشتیبانیِ فروشگاه» برای مشتری ارسال می‌شود."),
+        reply_markup=kb.cancel_kb())
+    await cb.answer()
+
+
+@storefront_router.message(SF.dm_compose, F.text | F.photo)
+async def sf_dm_send(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    cid = data.get("dm_customer_id")
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None or not is_admin:
+            return
+        cust = await s.get(StorefrontCustomer, cid) if cid else None
+        if cust is None or cust.storefront_bot_id != sf.id:
+            await message.answer(rtl("مشتری یافت نشد."), reply_markup=kb.admin_reply_kb())
+            return
+        target, cust_name = cust.telegram_id, (cust.name or str(cust.telegram_id))
+    ok = await _relay_message(bot, target, "📨 پیام از پشتیبانیِ فروشگاه:", message)
+    if ok:
+        await message.answer(rtl(f"✅ پیام برای «{cust_name}» ارسال شد."),
+                             reply_markup=kb.admin_reply_kb())
+    else:
+        await message.answer(
+            rtl(f"❌ ارسالِ پیام به «{cust_name}» ناموفق بود — احتمالاً ربات را مسدود کرده "
+                "یا هنوز /start را نزده است."),
+            reply_markup=kb.admin_reply_kb())
 
 
 @storefront_router.callback_query(F.data == "sfcustsearch")
@@ -2400,15 +2476,36 @@ async def sf_noop(cb: CallbackQuery) -> None:
 # ── fallback: any other message → re-show the menu (registered LAST = lowest priority) ──────────
 
 @storefront_router.message()
-async def sf_fallback(message: Message, bot: Bot) -> None:
-    """A stray message that matched no command/label/FSM state → gently re-show the right menu instead
-    of ignoring it (a banned customer was already short-circuited by the middleware)."""
+async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
+    """A stray message that matched no command/label/FSM state.
+      • ADMIN → re-show the admin menu.
+      • CUSTOMER who is IDLE (no half-open flow) and sends free text/photo → treat it as a message to
+        shop support: relay it to the admin(s) with a «پاسخ» button and give a light ack (NOT the full
+        welcome banner, which would clutter a back-and-forth).
+      • Otherwise → gently re-show the customer menu.
+    Clearing `state` first means a message that fell through mid-flow (e.g. an unsupported type sent
+    during a compose) aborts that flow instead of leaving it half-open. A banned customer was already
+    short-circuited by the middleware."""
+    was_mid_flow = await state.get_state() is not None
+    await state.clear()
     async with SessionLocal() as s:
-        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None:
             return
         if is_admin:
             await _send_admin_menu(message.answer, sf)
-        else:
-            cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-            await _send_customer_menu(message.answer, sf, cust)
+            return
+        cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+        admin_ids = _admin_chat_ids(reseller, sf)
+        cust_name, cust_id = (cust.name or str(cust.telegram_id)), cust.id
+    # Relay only a genuine idle support message: free text (not a slash command) or a photo, and NOT a
+    # stray message that fell out of a flow (that just aborts to the menu).
+    txt = (message.text or "").strip()
+    relayable = (not was_mid_flow) and (bool(message.photo) or bool(txt and not txt.startswith("/")))
+    if relayable and await _relay_to_admins(bot, admin_ids, cust_name, cust_id, message):
+        await message.answer(rtl("📨 پیامِ شما برای پشتیبانیِ فروشگاه ارسال شد؛ به‌زودی پاسخ می‌گیرید."))
+        return
+    async with SessionLocal() as s:
+        sf = await storefront.get_bot_by_telegram_id(s, bot.id)
+        cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+        await _send_customer_menu(message.answer, sf, cust)

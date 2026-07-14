@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.73.0 - 2026-07-14
+
+### Fixed
+
+- **Contacting a customer who has no @username now actually works — via a bot relay, not a dead link.**
+  The previous attempts (v1.70.0 → v1.72.1) tried to open the admin's private chat with a customer
+  through a `tg://user?id=` deep link. That is fundamentally impossible for a username-less customer:
+  Telegram can't resolve a `tg://user?id=` link for the admin (a third party who has never interacted
+  with that customer and shares no group), so it rendered as an **untappable dead link** (and the
+  button form was rejected with `BUTTON_USER_PRIVACY_RESTRICTED`). Confirmed against Telegram's own
+  [deep-links documentation](https://core.telegram.org/api/links). The fix replaces the deep link with
+  a **two-way relay through the shop bot** (the bot *can* message anyone who has contacted it):
+  - The customer-detail card now has a **«💬 پیام به مشتری»** button for **every** customer. The admin
+    types a message (or sends a photo) and the bot delivers it to the customer as «📨 پیام از
+    پشتیبانیِ فروشگاه». Customers who also have a public @username still get a **«↗️ گفتگوی مستقیم»**
+    (`t.me/…`) shortcut; no customer ever gets a dead `tg://` link again.
+  - **The other direction too:** when a customer writes to the shop, the message is relayed to the
+    admin(s) with a **«پاسخ»** button that reopens the same compose flow — a proper back-and-forth
+    support channel. The customer «پشتیبانی» screen now says they can just type here to reach support.
+
+### Added
+
+- **Global `/cancel` in the storefront bots** — aborts any in-progress step (compose, wizard, etc.)
+  and returns to the menu. Previously `/cancel` had no handler and could be sent verbatim into a flow.
+
 ## 1.72.1 - 2026-07-13
 
 ### Fixed

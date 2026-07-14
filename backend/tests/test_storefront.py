@@ -529,23 +529,234 @@ def test_customer_kb_shows_free_trial_only_when_flagged():
     assert sfkb.FREE_TRIAL_LABEL in on and sfkb.FREE_TRIAL_LABEL not in off
 
 
-def test_customer_detail_kb_consistent_chat_button():
-    """«چت با مشتری» is now a CONSISTENT button for everyone: t.me/<username> when a username exists,
-    else tg://user?id=<chat_id>. Only truly identity-less customers get no button."""
-    with_u = sfkb.customer_detail_kb(7, username="@Ali_Shop", chat_id=555)
-    assert [b.url for row in with_u.inline_keyboard for b in row if b.url] == ["https://t.me/Ali_Shop"]
-    cbs = [b.callback_data for row in with_u.inline_keyboard for b in row if b.callback_data]
-    assert "sfadj:7:+" in cbs and "sfacust:7" in cbs and "sfcustpg:0" in cbs
+def test_customer_detail_kb_relay_button_for_everyone():
+    """Reaching a customer is a bot-RELAY button («پیام به مشتری» → sfmsg:<id>) present for EVERY
+    customer — username or not — so the card is consistent and never has a dead link. A public
+    @username ADDS a direct-PV shortcut (t.me), but a username-less customer gets NO tg://user?id=
+    link (Telegram can't resolve it for the admin → it was a dead link, the reported bug)."""
+    for username, chat_id in [("@Ali_Shop", 555), (None, 555), ("نام فارسی", 555), (None, None)]:
+        m = sfkb.customer_detail_kb(7, username=username, chat_id=chat_id)
+        cbs = [b.callback_data for row in m.inline_keyboard for b in row if b.callback_data]
+        urls = [b.url for row in m.inline_keyboard for b in row if b.url]
+        assert "sfmsg:7" in cbs                              # the universal relay button
+        assert not any((u or "").startswith("tg://") for u in urls)   # never a dead tg:// link
+        assert "sfadj:7:+" in cbs and "sfacust:7" in cbs and "sfcustpg:0" in cbs
 
-    # no username but a chat_id → still a button (tg://user?id=) — the fixed inconsistency
+    # a valid public username ALSO gets the direct-PV t.me shortcut
+    with_u = sfkb.customer_detail_kb(7, username="@Ali_Shop", chat_id=555)
+    assert "https://t.me/Ali_Shop" in [b.url for row in with_u.inline_keyboard for b in row if b.url]
+    # no/invalid username → no url button at all (relay only)
     no_u = sfkb.customer_detail_kb(7, username=None, chat_id=555)
-    assert [b.url for row in no_u.inline_keyboard for b in row if b.url] == ["tg://user?id=555"]
-    # invalid username falls back to the chat_id button
+    assert [b.url for row in no_u.inline_keyboard for b in row if b.url] == []
     bad = sfkb.customer_detail_kb(7, username="نام فارسی", chat_id=555)
-    assert [b.url for row in bad.inline_keyboard for b in row if b.url] == ["tg://user?id=555"]
-    # no identity at all → no button
-    none = sfkb.customer_detail_kb(7, username=None, chat_id=None)
-    assert [b.url for row in none.inline_keyboard for b in row if b.url] == []
+    assert [b.url for row in bad.inline_keyboard for b in row if b.url] == []
+
+
+def test_relay_reply_kb():
+    """A relayed customer message carries a «پاسخ» button that reuses the compose flow (sfmsg:<id>)."""
+    cbs = [b.callback_data for row in sfkb.relay_reply_kb(7).inline_keyboard for b in row]
+    assert cbs == ["sfmsg:7"]
+
+
+class _RelayBot:
+    """Records send_message/send_photo; optionally raises to simulate a blocked/unreachable target."""
+    def __init__(self, *, forbidden: bool = False, error: bool = False):
+        self.forbidden, self.error, self.sent = forbidden, error, []
+
+    async def send_message(self, chat_id, text, **kw):  # noqa: ANN001
+        if self.forbidden:
+            from aiogram.exceptions import TelegramForbiddenError
+            raise TelegramForbiddenError(method=None, message="bot was blocked by the user")
+        if self.error:
+            raise RuntimeError("transient")
+        self.sent.append((chat_id, text, kw.get("reply_markup")))
+
+    async def send_photo(self, chat_id, photo, caption=None, **kw):  # noqa: ANN001
+        if self.forbidden:
+            from aiogram.exceptions import TelegramForbiddenError
+            raise TelegramForbiddenError(method=None, message="blocked")
+        if self.error:
+            raise RuntimeError("transient")
+        self.sent.append((chat_id, caption, kw.get("reply_markup")))
+
+
+def test_relay_message_delivers_and_reports_unreachable():
+    """_relay_message forwards text to the target (True); a blocked target OR a transient error → False,
+    never raising (the handler must survive)."""
+    import asyncio as _asyncio
+
+    from app.bot.storefront import handlers as h
+
+    msg = SimpleNamespace(text="سلام مشتری عزیز", photo=None, caption=None)
+    bot = _RelayBot()
+    assert _asyncio.run(h._relay_message(bot, 863, "📨 پیام از پشتیبانی:", msg)) is True
+    assert bot.sent and bot.sent[0][0] == 863 and "سلام مشتری عزیز" in bot.sent[0][1]
+
+    assert _asyncio.run(h._relay_message(_RelayBot(forbidden=True), 863, "📨", msg)) is False
+    assert _asyncio.run(h._relay_message(_RelayBot(error=True), 863, "📨", msg)) is False
+
+
+def test_relay_to_admins_reaches_all_with_reply_button():
+    """A customer message is delivered to EVERY admin id, each carrying a «پاسخ» (sfmsg:<id>) button."""
+    import asyncio as _asyncio
+
+    from app.bot.storefront import handlers as h
+
+    msg = SimpleNamespace(text="کمک می‌خوام", photo=None, caption=None)
+    bot = _RelayBot()
+    ok = _asyncio.run(h._relay_to_admins(bot, [111, 222], "Mahsa", 7, msg))
+    assert ok is True
+    assert sorted(chat for chat, _t, _m in bot.sent) == [111, 222]
+    for _chat, _text, markup in bot.sent:
+        cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert cbs == ["sfmsg:7"]
+    # no admins at all → nothing delivered, no crash
+    assert _asyncio.run(h._relay_to_admins(_RelayBot(), [], "Mahsa", 7, msg)) is False
+
+
+class _FakeState:
+    def __init__(self, st=None):
+        self._st, self.data = st, {}
+
+    async def get_state(self):
+        return self._st
+
+    async def clear(self):
+        self._st, self.data = None, {}
+
+    async def set_state(self, st):  # noqa: ANN001
+        self._st = st.state if hasattr(st, "state") else st
+
+    async def update_data(self, **kw):  # noqa: ANN003
+        self.data.update(kw)
+
+    async def get_data(self):
+        return dict(self.data)
+
+
+def _fallback_harness(tmp_path, monkeypatch, name):
+    """Wire an in-memory storefront (reseller admin id 111, one customer id 555) and point the
+    handlers module at it. Returns (run, relayed, answered) where run(state, msg) drives sf_fallback."""
+    from app.bot.storefront import handlers as H
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / name}")
+    from app.core.db import Base
+
+    relayed: list = []
+    answered: list = []
+
+    class FakeBot:
+        id = 991  # matches _seed's bot_telegram_id for tag "1" (int("99"+"1"))
+
+        async def send_message(self, chat_id, text, **kw):  # noqa: ANN001, ANN003
+            relayed.append((chat_id, text, kw.get("reply_markup")))
+
+        async def send_photo(self, chat_id, photo, caption=None, **kw):  # noqa: ANN001, ANN003
+            relayed.append((chat_id, caption, kw.get("reply_markup")))
+
+    async def setup():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as s:
+            r, bot, _c = await _seed(s)
+            r.bot_chat_id = 111
+            await s.commit()
+        monkeypatch.setattr(H, "SessionLocal", Session)
+
+    async def run(state, msg):
+        await H.sf_fallback(msg, state, FakeBot())
+
+    return setup, run, relayed, answered, engine
+
+
+def _fake_customer_msg(answered, *, text=None, photo=None):
+    class FakeMsg:
+        from_user = SimpleNamespace(id=555, first_name="Cust", username="c")
+
+        async def answer(self, t, **kw):  # noqa: ANN001, ANN003
+            answered.append(t)
+
+    m = FakeMsg()
+    m.text, m.photo, m.caption = text, photo, None
+    return m
+
+
+def test_sf_fallback_relays_idle_customer_with_light_ack(tmp_path, monkeypatch):
+    """An IDLE customer's free text is relayed to the admin (with a «پاسخ» button) and the customer
+    gets ONE light ack — NOT the full welcome/balance menu (which would clutter a back-and-forth)."""
+    setup, run, relayed, answered, engine = _fallback_harness(tmp_path, monkeypatch, "fb1.db")
+
+    async def go():
+        await setup()
+        try:
+            await run(_FakeState(None), _fake_customer_msg(answered, text="سرویسم قطع شده"))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+    assert any(chat == 111 for chat, _t, _m in relayed)            # admin got it
+    assert any(m is not None for _c, _t, m in relayed)             # with a reply button
+    assert len(answered) == 1 and "پشتیبانی" in answered[0]        # light ack, no full menu re-render
+
+
+def test_sf_fallback_does_not_relay_mid_flow_message(tmp_path, monkeypatch):
+    """A message that fell through mid-flow (a wrong-type message during a compose/FSM state) must NOT
+    be relayed as support — it aborts to the menu, and the leaked state is cleared."""
+    setup, run, relayed, answered, engine = _fallback_harness(tmp_path, monkeypatch, "fb2.db")
+
+    async def go():
+        await setup()
+        try:
+            st = _FakeState("SF:buy_name")                        # a half-open flow
+            await run(st, _fake_customer_msg(answered, text="یک عکس فرستادم"))
+            assert await st.get_state() is None                   # state was cleared (no leak)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+    assert relayed == []                                          # nothing relayed to the admin
+    assert len(answered) >= 1                                     # the menu WAS re-shown instead
+
+
+def test_sf_cmd_cancel_clears_state_and_shows_menu(tmp_path, monkeypatch):
+    """/cancel is a real global cancel: it clears any in-progress compose and re-shows the menu,
+    instead of being relayed to the customer as literal text."""
+    from app.bot.storefront import handlers as H
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
+    from app.core.db import Base
+
+    answered: list = []
+
+    class FakeBot:
+        id = 991
+
+    class FakeMsg:
+        from_user = SimpleNamespace(id=555, first_name="Cust", username="c")
+        text = "/cancel"
+
+        async def answer(self, t, **kw):  # noqa: ANN001, ANN003
+            answered.append(t)
+
+    async def go():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as s:
+            r, _bot, _c = await _seed(s)
+            r.bot_chat_id = 111
+            await s.commit()
+        monkeypatch.setattr(H, "SessionLocal", Session)
+        st = _FakeState("SF:dm_compose")
+        try:
+            await H.sf_cmd_cancel(FakeMsg(), st, FakeBot())
+            assert await st.get_state() is None                   # compose cleared
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+    assert len(answered) == 1                                     # menu shown (not a relay)
 
 
 def test_customer_detail_kb_ban_toggle():
@@ -558,10 +769,11 @@ def test_customer_detail_kb_ban_toggle():
     assert "sfcustunban:7" in cbs and "sfcustban:7" not in cbs
 
 
-def test_customer_detail_opens_for_privacy_restricted_customer():
-    """The reported prod bug: Telegram REJECTS a tg://user?id= chat BUTTON for a customer whose
-    privacy settings disallow it (BUTTON_USER_PRIVACY_RESTRICTED), so tapping that customer opened
-    nothing. The handler must retry WITHOUT the button (body-link fallback) so the card always opens."""
+def test_customer_detail_opens_for_username_less_customer():
+    """The reported prod bug: a username-less customer's card either failed to open (tg:// BUTTON
+    rejected) or showed a DEAD body tg:// link the admin couldn't tap. The fix: the card carries a
+    bot-relay callback button (never a tg:// link), so it opens cleanly for every customer and the
+    admin can always reach them."""
     import asyncio as _asyncio
 
     from app.bot.storefront import handlers as h
@@ -570,30 +782,24 @@ def test_customer_detail_opens_for_privacy_restricted_customer():
                            banned=False, username=None)
     sent: list = []
 
-    def _tg_urls(markup):
-        return [b.url for row in markup.inline_keyboard for b in row
-                if b.url and b.url.startswith("tg://")]
-
     class FakeMsg:
         async def edit_text(self, text, reply_markup=None, parse_mode=None):  # noqa: ANN001
-            if _tg_urls(reply_markup):
-                raise Exception("Telegram server says - Bad Request: BUTTON_USER_PRIVACY_RESTRICTED")
             sent.append((text, reply_markup))
 
         async def answer(self, text, reply_markup=None, parse_mode=None):  # noqa: ANN001
-            if _tg_urls(reply_markup):
-                raise Exception("Telegram server says - Bad Request: BUTTON_USER_PRIVACY_RESTRICTED")
             sent.append((text, reply_markup))
 
     cb = SimpleNamespace(message=FakeMsg())
     _asyncio.run(h._show_customer_detail(cb, cust))
 
-    assert len(sent) == 1                                   # the card DID open
+    assert len(sent) == 1                                   # the card opened, first try
     text, markup = sent[0]
-    assert _tg_urls(markup) == []                           # no rejected button in the fallback
-    assert "tg://user?id=863" in text                       # best-effort body link instead
+    assert "tg://" not in text                              # no dead body link anymore
+    urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
+    assert not any((u or "").startswith("tg://") for u in urls)   # no dead button either
     cbs = [b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data]
-    assert "sfadj:7:+" in cbs and "sfcustban:7" in cbs      # the actions are all still there
+    assert "sfmsg:7" in cbs                                 # the relay button IS there
+    assert "sfadj:7:+" in cbs and "sfcustban:7" in cbs      # and every other action
 
 
 def test_tg_pv_url_precedence():
