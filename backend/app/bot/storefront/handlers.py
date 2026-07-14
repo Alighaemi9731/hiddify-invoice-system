@@ -787,6 +787,10 @@ async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
 async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """Step 3: hand off to the atomic, crash-safe purchase service (charge + provision in short txns,
     no DB connection held across the panel/Telegram I/O), then deliver or report."""
+    # F4: strip the «تأیید خرید» button on the first tap so a rapid double-tap can't queue a second
+    # purchase. Capture + clear the FSM before any panel/Telegram I/O; purchase()'s per-customer lock
+    # and atomic order/debit are the durable backstop.
+    await _strip_buttons(cb)
     data = await state.get_data()
     plan_id = int(data.get("buy_plan_id") or 0)
     name = (data.get("buy_name") or "").strip()

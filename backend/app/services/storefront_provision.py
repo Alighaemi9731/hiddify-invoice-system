@@ -11,6 +11,7 @@ import asyncio
 import datetime as dt
 import logging
 import uuid as uuidlib
+import weakref
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -31,8 +32,13 @@ log = logging.getLogger("bot.storefront")
 
 # Serialize a single customer's money/provision actions in-process (buy / trial / renew) so a
 # double-tap can't mint two configs or double-charge. The durable guards (row-lock debit, free-trial
-# compare-and-set) back this up across processes.
-_customer_locks: dict[tuple[int, int], asyncio.Lock] = {}
+# compare-and-set) back this up across processes. A WeakValueDictionary evicts each lock once it is
+# released AND unreferenced (F15) — a WHILE-HELD lock is referenced by its `async with`, so it stays
+# in the map and still serializes; only idle entries are GC'd, so the map can't grow with churn.
+# The get-or-create runs synchronously in one event loop, so there's no create-race between coros.
+_customer_locks: weakref.WeakValueDictionary[tuple[int, int], asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
 
 
 def _customer_lock(sf_id: int, customer_id: int) -> asyncio.Lock:
@@ -42,6 +48,17 @@ def _customer_lock(sf_id: int, customer_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _customer_locks[key] = lock
     return lock
+
+
+async def _lock_order_skip(session: AsyncSession, order_id: int) -> StorefrontOrder | None:
+    """Lock one order FOR UPDATE SKIP LOCKED (Postgres): returns the row if we got the lock, else
+    None (it's being finalized by a live provision — leave it for the next tick). No-op on SQLite."""
+    stmt = select(StorefrontOrder).where(StorefrontOrder.id == order_id)
+    try:
+        stmt = stmt.with_for_update(skip_locked=True)
+    except Exception:  # noqa: BLE001 — dialect without row locks
+        pass
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 @dataclass
@@ -318,17 +335,23 @@ async def reap_pending_orders(
     notify the customer); absent → refund (once) + mark failed. Idempotent. Returns counts."""
     from app.services.panel_client.admin_api import AdminApiClient
 
-    counts = {"checked": 0, "completed": 0, "refunded": 0}
-    stale = (
+    counts = {"checked": 0, "completed": 0, "refunded": 0, "renewing_recovered": 0}
+    # Candidate ids only (unlocked). We re-lock EACH order right before deciding it — a single
+    # FOR UPDATE over the whole batch would drop every lock on the first per-order commit, letting
+    # the live provisioner slip in. `SKIP LOCKED` skips an order purchase()'s step-3 is finalizing.
+    ids = (
         await session.execute(
-            select(StorefrontOrder).where(
+            select(StorefrontOrder.id).where(
                 StorefrontOrder.status == "pending",
                 StorefrontOrder.created_at < older_than,
             ).limit(200)
         )
     ).scalars().all()
     client = AdminApiClient()
-    for order in stale:
+    for oid in ids:
+        order = await _lock_order_skip(session, oid)
+        if order is None or order.status != "pending":
+            continue  # gone, locked by a live provision (skip this tick), or already decided
         counts["checked"] += 1
         customer = await session.get(StorefrontCustomer, order.customer_id)
         sf = await session.get(StorefrontBot, customer.storefront_bot_id) if customer else None
@@ -359,6 +382,24 @@ async def reap_pending_orders(
             order.status = "failed"
             await session.commit()
             counts["refunded"] += 1
+
+    # Recover orders stuck in "renewing" (renew() crashed mid-flight before restoring the status,
+    # leaving the order unrenewable/unmanageable). Only revert ones older than the threshold so a
+    # legitimately in-progress renewal is never disturbed.
+    renewing_ids = (
+        await session.execute(
+            select(StorefrontOrder.id).where(
+                StorefrontOrder.status == "renewing",
+                StorefrontOrder.updated_at < older_than,
+            ).limit(200)
+        )
+    ).scalars().all()
+    for oid in renewing_ids:
+        o = await _lock_order_skip(session, oid)
+        if o is not None and o.status == "renewing":
+            o.status = "provisioned"
+            await session.commit()
+            counts["renewing_recovered"] += 1
     return counts
 
 

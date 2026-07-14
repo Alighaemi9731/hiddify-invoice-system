@@ -144,7 +144,8 @@ def test_poll_one_marks_errored_after_consecutive_unauthorized(monkeypatch):
         lambda: SimpleNamespace(resolve_used_update_types=lambda: []))
 
     bot = _FakeBot()
-    asyncio.run(manager._poll_one(bot, row_id=7))  # returns instead of looping forever
+    asyncio.run(manager._poll_one(  # returns instead of looping forever
+        bot, 7, asyncio.Semaphore(manager._HANDLER_CONCURRENCY), set()))
     assert bot.calls == manager._UNAUTHORIZED_LIMIT
     assert recorded and recorded[0][0] == 7
     assert "revoked" in recorded[0][1]

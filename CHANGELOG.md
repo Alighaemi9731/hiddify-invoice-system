@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.77.0 - 2026-07-15
+
+Security & correctness remediation — Batch 3 of 6 (storefront provisioning robustness). No migration.
+
+### Fixed
+
+- **The pending-order reaper can no longer refund an order a live purchase is still completing (F5).**
+  It now locks each stale order individually with `FOR UPDATE SKIP LOCKED` and re-asserts it is still
+  `pending` before deciding (the batch-wide select dropped every lock on the first per-order commit).
+  A slow provision that outran the reaper threshold is skipped, not refunded-then-orphaned.
+- **The reaper recovers an order stuck in `renewing` (F5/F4).** If a renewal crashed mid-flight, the
+  order is reverted to `provisioned` after the stale threshold instead of remaining unmanageable.
+- **A rapid double-tap of «تأیید خرید» can’t queue a second purchase (F4).** The confirm button is
+  stripped on the first tap; the atomic order/debit remains the durable backstop.
+- **Storefront bots apply backpressure and drain on stop (F13).** Update handlers now run under a
+  per-bot concurrency cap and are tracked; stopping a bot cancels and drains in-flight handlers before
+  closing its session, so a flood + slow panel calls can’t spawn unbounded tasks or leave a handler
+  running against a closed bot.
+- **The per-customer lock registry can’t grow with churn (F15).** It’s now a `WeakValueDictionary` —
+  a held lock keeps its entry alive (still serializes), and idle locks are evicted.
+
 ## 1.76.0 - 2026-07-15
 
 Security & correctness remediation — Batch 2 of 6 (storefront money integrity).

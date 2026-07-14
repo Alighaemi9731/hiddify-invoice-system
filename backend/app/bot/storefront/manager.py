@@ -35,6 +35,7 @@ _GETME_CONCURRENCY = 20   # bounded parallel token validation (cold start with m
 _LONGPOLL_TIMEOUT = 25    # getUpdates long-poll seconds
 _POLL_BACKOFF = 3         # seconds to wait after a getUpdates error (e.g. a brief 409 on token change)
 _UNAUTHORIZED_LIMIT = 3   # consecutive 401s before a mid-run revoked token is marked errored
+_HANDLER_CONCURRENCY = 32  # max in-flight update handlers PER storefront bot (backpressure)
 
 
 @dataclass
@@ -42,6 +43,8 @@ class _Runner:
     bot: Bot
     task: asyncio.Task[None]
     token: str
+    sem: asyncio.Semaphore                    # caps concurrent update handlers for this bot
+    tasks: set[asyncio.Task[None]]            # live handler tasks (drained on stop)
 
 
 _dp: Dispatcher | None = None
@@ -73,7 +76,16 @@ async def _feed(dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
         log.warning("storefront update handling failed", exc_info=True)
 
 
-async def _poll_one(bot: Bot, row_id: int) -> None:
+async def _bounded_feed(sem: asyncio.Semaphore, dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
+    """Handle one update under the per-bot concurrency cap so a flood of updates + slow panel/API
+    calls can't spawn unbounded tasks/DB sessions."""
+    async with sem:
+        await _feed(dp, bot, update)
+
+
+async def _poll_one(
+    bot: Bot, row_id: int, sem: asyncio.Semaphore, tasks: set[asyncio.Task[None]]
+) -> None:
     """One bot's dedicated long-poll loop. Each update is dispatched as its own task so a slow handler
     (panel/Telegram I/O) doesn't stall polling. Exits cleanly on cancel; backs off on transient errors.
     A token revoked MID-RUN (consecutive 401s) marks the row errored and ends the loop — otherwise the
@@ -107,7 +119,9 @@ async def _poll_one(bot: Bot, row_id: int) -> None:
         unauthorized = 0
         for update in updates:
             offset = update.update_id + 1
-            asyncio.create_task(_feed(dp, bot, update))
+            t = asyncio.create_task(_bounded_feed(sem, dp, bot, update))
+            tasks.add(t)              # keep a strong ref (avoid GC mid-flight) + enable drain-on-stop
+            t.add_done_callback(tasks.discard)
 
 
 async def _stop_runner(reseller_id: int) -> None:
@@ -121,6 +135,12 @@ async def _stop_runner(reseller_id: int) -> None:
         pass
     except Exception:  # noqa: BLE001
         log.warning("storefront poll task for reseller %s ended with error", reseller_id, exc_info=True)
+    # Drain in-flight handler tasks BEFORE closing the session — otherwise an orphaned handler would
+    # keep running against a closed bot (raising mid-I/O). Bounded by the per-bot semaphore.
+    for t in list(runner.tasks):
+        t.cancel()
+    if runner.tasks:
+        await asyncio.gather(*runner.tasks, return_exceptions=True)
     await _safe_close(runner.bot)   # closing the session aborts any in-flight getUpdates immediately
 
 
@@ -159,8 +179,10 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
                 await storefront.mark_errored(s, row_id, f"id clash: {exc}")
             log.warning("storefront bot row %s id persist failed: %s", row_id, exc)
             return
-    task = asyncio.create_task(_poll_one(bot, row_id))
-    _active[reseller_id] = _Runner(bot=bot, task=task, token=token)
+    sem = asyncio.Semaphore(_HANDLER_CONCURRENCY)
+    handler_tasks: set[asyncio.Task[None]] = set()
+    task = asyncio.create_task(_poll_one(bot, row_id, sem, handler_tasks))
+    _active[reseller_id] = _Runner(bot=bot, task=task, token=token, sem=sem, tasks=handler_tasks)
     log.info("storefront bot @%s (reseller %s) polling", me.username, reseller_id)
 
 
