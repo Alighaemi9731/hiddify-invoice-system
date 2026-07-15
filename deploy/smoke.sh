@@ -4,10 +4,11 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
+. "$REPO_DIR/deploy/env.sh"
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$REPO_DIR/deploy/docker-compose.prod.yml")
 EXPECTED_VERSION="$(cat "$REPO_DIR/VERSION")"
 
-domain="$(grep -E '^SERVER_DOMAIN=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')"
+domain="$(read_env_value SERVER_DOMAIN "$ENV_FILE")"
 if [[ -n "${SMOKE_URL:-}" ]]; then
   base_url="${SMOKE_URL%/}"
 elif [[ -n "$domain" ]]; then

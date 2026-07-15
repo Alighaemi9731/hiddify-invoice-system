@@ -9,6 +9,15 @@ assets="$tmp/assets"
 dest="$tmp/install"
 mkdir -p "$assets"
 
+# Optional .env keys are genuinely optional under `set -euo pipefail`. A consumed setup token is
+# removed from production .env; reading that normal state must not abort install before smoke checks.
+. "$REPO_DIR/deploy/env.sh"
+env_fixture="$tmp/optional.env"
+printf 'SERVER_DOMAIN=panel.example.test\n' > "$env_fixture"
+[[ "$(read_env_value SERVER_DOMAIN "$env_fixture")" == "panel.example.test" ]]
+[[ -z "$(read_env_value SETUP_BOOTSTRAP_TOKEN "$env_fixture")" ]]
+[[ -z "$(read_env_value SERVER_DOMAIN "$tmp/absent.env")" ]]
+
 make_fixture() {
   local tag="$1" marker="$2" stale="${3:-0}"
   local root="$tmp/invoice-system-$tag"
@@ -16,12 +25,13 @@ make_fixture() {
   mkdir -p "$root/deploy"
   printf '%s\n' "${tag#v}" > "$root/VERSION"
   printf '%s\n' "$marker" > "$root/marker.txt"
+  cp "$REPO_DIR/deploy/env.sh" "$root/deploy/"
   cp "$REPO_DIR/deploy/release-installer.sh" "$root/deploy/"
   cp "$REPO_DIR/deploy/rollback.sh" "$root/deploy/"
   for script in install.sh updater.sh smoke.sh; do
     printf '#!/usr/bin/env bash\nset -euo pipefail\n' > "$root/deploy/$script"
   done
-  printf '%s\n' VERSION marker.txt deploy/install.sh deploy/updater.sh \
+  printf '%s\n' VERSION marker.txt deploy/env.sh deploy/install.sh deploy/updater.sh \
     deploy/release-installer.sh deploy/rollback.sh deploy/smoke.sh .release-files \
     > "$root/.release-files"
   if [[ "$stale" == "1" ]]; then

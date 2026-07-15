@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.82.2 - 2026-07-15
+
+Deployment reliability hotfix; no database migration and no manual upgrade steps.
+
+### Fixed
+
+- A normal post-setup `.env` no longer makes `install.sh` exit immediately before its mandatory
+  post-deploy smoke checks. Optional `SERVER_DOMAIN` and consumed `SETUP_BOOTSTRAP_TOKEN` values are
+  now read by a shared missing-safe helper used by both the installer and smoke script.
+
 ## 1.82.1 - 2026-07-15
 
 Security follow-up after the Round-2 verification. One additive migration (`a6c9e2f4b7d1`, off

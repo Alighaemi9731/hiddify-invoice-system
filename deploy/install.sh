@@ -14,6 +14,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$REPO_DIR/.env"
+. "$REPO_DIR/deploy/env.sh"
 
 c() { printf "\033[1;36m%s\033[0m\n" "$*"; }
 err() { printf "\033[1;31m%s\033[0m\n" "$*" >&2; }
@@ -260,14 +261,14 @@ fi
 VER="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo "")"
 # If a domain was configured on a prior install (kept in .env), the panel lives at
 # https://<domain> and the bare IP redirects there — point the user at the domain.
-EXISTING_DOMAIN="$(grep -E '^SERVER_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')"
+EXISTING_DOMAIN="$(read_env_value SERVER_DOMAIN "$ENV_FILE")"
 if [[ -n "$EXISTING_DOMAIN" ]]; then
   URL="https://$EXISTING_DOMAIN"
 else
   URL="http://$SERVER_IP"
 fi
 
-SETUP_TOKEN_ENV="$(grep -E '^SETUP_BOOTSTRAP_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')"
+SETUP_TOKEN_ENV="$(read_env_value SETUP_BOOTSTRAP_TOKEN "$ENV_FILE")"
 TOKEN_LINE=""
 if [[ -n "$ADMIN_PASSWORD" ]]; then
   LOGIN_NOTE="Log in with the username/password you set (user: $ADMIN_USERNAME)."
