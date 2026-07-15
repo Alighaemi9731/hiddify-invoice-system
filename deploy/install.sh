@@ -42,20 +42,33 @@ ACME_EMAIL="${ACME_EMAIL:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-owner}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"   # empty → setup wizard runs in the browser
 
-# ---- Behind a TLS-passthrough relay? ----------------------------------------
-# When this box also runs an nginx SNI relay that already owns host 80/443, Caddy
-# cannot bind them (address already in use). BEHIND_RELAY=1 makes Caddy publish on
-# localhost high ports instead; the relay forwards this panel's domain here. Caddy
-# still obtains its own Let's Encrypt cert (TLS-ALPN-01 works through SNI
-# passthrough). A domain is REQUIRED in this mode — the relay routes by domain, so
-# there is no bare-IP access to fall back on.
-BEHIND_RELAY="${BEHIND_RELAY:-0}"
+# ---- Behind a TLS-passthrough relay? (auto-detected) ------------------------
+# When this box ALSO runs an nginx SNI relay (deploy/relay.sh) that already owns host 80/443, Caddy
+# cannot bind them. In that case the panel's Caddy publishes on localhost high ports and the relay
+# forwards this panel's domain to it; Caddy still gets its own Let's Encrypt cert (TLS-ALPN-01 rides
+# through the SNI passthrough). A domain is REQUIRED behind a relay (it routes by domain — no bare-IP).
+#
+# So the SAME install command works with or without a relay: we AUTO-DETECT the relay (a host nginx is
+# running) and switch modes automatically — no need to pass BEHIND_RELAY. Set BEHIND_RELAY=1/0 to force.
+if [[ -z "${BEHIND_RELAY:-}" ]]; then
+  if systemctl is-active --quiet nginx 2>/dev/null; then
+    BEHIND_RELAY=1
+    c "Detected a host nginx (TLS relay) — installing the panel BEHIND it (Caddy on localhost ports)."
+  else
+    BEHIND_RELAY=0
+  fi
+fi
 if [[ "$BEHIND_RELAY" == "1" ]]; then
   CADDY_HTTP_PUBLISH="${CADDY_HTTP_PUBLISH:-127.0.0.1:8080}"
   CADDY_HTTPS_PUBLISH="${CADDY_HTTPS_PUBLISH:-127.0.0.1:8443}"
-  if [[ -z "$DOMAIN" ]]; then
-    err "BEHIND_RELAY=1 needs a DOMAIN (the relay routes by domain; there is no bare-IP access)."
-    err "Re-run with e.g.  BEHIND_RELAY=1 DOMAIN=panel.example.com ACME_EMAIL=you@mail.com sudo -E bash deploy/install.sh"
+  # A domain is required — passed now OR already in .env from a prior install (so a plain re-run /
+  # in-panel update on an established relay box doesn't error just because DOMAIN wasn't re-passed).
+  _existing_domain="$(sed -n 's/^SERVER_DOMAIN=//p' "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  if [[ -z "$DOMAIN" && -z "$_existing_domain" ]]; then
+    err "This server runs a TLS relay, so the panel installs behind it and needs a DOMAIN (there is"
+    err "no bare-IP access behind a relay). Re-run with e.g.:"
+    err "  DOMAIN=panel.example.com ACME_EMAIL=you@mail.com sudo -E bash deploy/install.sh"
+    err "(or force a direct install with BEHIND_RELAY=0 if that host nginx is unrelated.)"
     exit 1
   fi
 fi

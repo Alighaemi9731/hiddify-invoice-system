@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.79.1 - 2026-07-15
+
+### Changed
+
+- **The install command is now the same whether or not a TLS relay is present.** `install.sh`
+  auto-detects a co-located relay (a host `nginx` running) and binds Caddy to localhost ports
+  automatically — no `BEHIND_RELAY` flag needed. Force it with `BEHIND_RELAY=1`/`0`. Behind a relay a
+  `DOMAIN` is required, but it may now come from an existing `.env` (so a plain re-run / in-panel
+  update on an established relay box doesn't error just because `DOMAIN` wasn't re-passed).
+
 ## 1.79.0 - 2026-07-15
 
 Security remediation — Batch 6 of 6 (front-door & auth hardening). No migration. Completes the

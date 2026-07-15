@@ -46,18 +46,20 @@ domain to a localhost-bound Caddy, and Caddy still gets its own Let's Encrypt ce
    You never edit it for the invoice panel: its **default route** forwards any
    domain not in `MAP` to the co-located Caddy on `127.0.0.1:8443` / `127.0.0.1:8080`.
 2. Point the panel's domain A record at the relay's IP.
-3. Install the panel with relay mode on (Caddy binds only localhost high ports):
+3. Install the panel with the **same command as any other install** — the installer
+   auto-detects the relay (a host nginx running) and binds Caddy to localhost ports:
 
    ```bash
-   BEHIND_RELAY=1 DOMAIN=panel.example.com ACME_EMAIL=you@mail.com \
+   DOMAIN=panel.example.com ACME_EMAIL=you@mail.com \
      ADMIN_PASSWORD='choose-a-strong-one' sudo -E bash deploy/install.sh
    ```
 
-`BEHIND_RELAY=1` requires a `DOMAIN` (there is no bare-IP access behind a relay).
-It writes `CADDY_HTTP_PUBLISH=127.0.0.1:8080` and `CADDY_HTTPS_PUBLISH=127.0.0.1:8443`
-into `.env` (upserted even when `.env` already exists); override those two if you
-need different local ports. **Run the relay first** so Caddy's first ACME attempt
-can reach it.
+The installer **auto-detects a co-located relay** (host `nginx` active) and switches to
+localhost-port publishing, so no `BEHIND_RELAY` flag is needed and the command is the same
+with or without a relay. Force it with `BEHIND_RELAY=1` / `BEHIND_RELAY=0`; override the
+local ports with `CADDY_HTTP_PUBLISH` / `CADDY_HTTPS_PUBLISH`. Behind a relay a `DOMAIN` is
+required (there is no bare-IP access) — either passed now or already in `.env`. **Run the
+relay first** so Caddy's first ACME attempt can reach it.
 
 ## After install
 - **Settings tab** → set the Telegram **bot token**, **USDT wallet** (BEP-20),
