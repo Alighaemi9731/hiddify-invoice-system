@@ -158,6 +158,12 @@ class StorefrontWalletTxn(Base, TimestampMixin):
         Index("uq_sfwallet_refund_per_order", "order_id", unique=True,
               sqlite_where=text("kind = 'refund'"),
               postgresql_where=text("kind = 'refund'")),
+        # F11 (round 2): at most ONE reversal per renewal OPERATION — the durable backstop so a crashed
+        # renewal is compensated exactly once whether the inline handler or the reconciler does it
+        # (partial WHERE kind='renew_reversal', so it never collides with the per-order refund index).
+        Index("uq_sfwallet_reversal_per_operation", "operation_id", unique=True,
+              sqlite_where=text("kind = 'renew_reversal'"),
+              postgresql_where=text("kind = 'renew_reversal'")),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -175,6 +181,9 @@ class StorefrontWalletTxn(Base, TimestampMixin):
     # Links a purchase/refund to its order so the reaper can reconcile money ↔ provisioning.
     # Plain reference (no hard FK) so order lifecycle never cascades into the money ledger.
     order_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # F4/F11 (round 2): links a debit/reversal to its durable StorefrontOperation so a renewal is
+    # charged/reversed exactly once. Plain reference (no hard FK).
+    operation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     proof_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     txid: Mapped[str | None] = mapped_column(String(120), nullable=True)
     chain: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -218,6 +227,10 @@ class StorefrontOrder(Base, TimestampMixin):
     panel_user_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_renewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # F5/F11 (round 2): a durable provisioning/renewal LEASE. While `lease_expires_at` is in the future
+    # the reaper/reconciler leaves this order alone (a live purchase/renew is holding it across the panel
+    # network call). Set before the network I/O, cleared on finalize. NULL = no active lease.
+    lease_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # When the near-expiry reminder was last sent (I10). Re-armed by renewal: a reminder is due
     # again once `last_renewed_at` is newer than this stamp. NULL = never notified.
     expiry_alerted_at: Mapped[dt.datetime | None] = mapped_column(
@@ -229,6 +242,38 @@ class StorefrontOrder(Base, TimestampMixin):
     # same way `expiry_alerted_at` is. NULL = never.
     usage_alerted_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+
+
+class StorefrontOperation(Base, TimestampMixin):
+    """A durable, idempotent record of one money-moving storefront action (a purchase or a renewal),
+    keyed by a random `op_id` minted BEFORE the confirm button is shown (F4). It makes replays
+    exactly-once — a repeat tap / re-delivered callback / cross-process retry with the same `op_id`
+    returns the cached terminal result (`result_order_id`/`result_sub_link`) with no second debit or
+    panel call. It also anchors crash recovery (F11): the debit is linked here, so the reconciler can
+    reverse a renewal charge exactly once if the process died mid-renew. Denormalized, no hard FKs."""
+    __tablename__ = "storefront_operations"
+    __table_args__ = (
+        Index("uq_storefront_operation_op_id", "op_id", unique=True),
+        Index("ix_storefront_operation_status_order", "status", "order_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    op_id: Mapped[str] = mapped_column(String(64))                 # random token; unique
+    op_type: Mapped[str] = mapped_column(String(16))              # purchase | renewal
+    storefront_bot_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    customer_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    order_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    plan_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # pending → in_progress → done | failed | reversed
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    prior_status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # renewal: restore target
+    price_toman: Mapped[int] = mapped_column(Integer, default=0)
+    gb: Mapped[int] = mapped_column(Integer, default=0)
+    days: Mapped[int] = mapped_column(Integer, default=0)
+    by_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    debit_txn_id: Mapped[int | None] = mapped_column(Integer, nullable=True)      # the wallet debit
+    result_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # cached terminal result
+    result_sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class StorefrontCreditCode(Base, TimestampMixin):

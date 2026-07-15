@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import secrets
 import uuid as uuidlib
 import weakref
 from dataclasses import dataclass
@@ -23,12 +24,27 @@ from app.models import (
     Reseller,
     StorefrontBot,
     StorefrontCustomer,
+    StorefrontOperation,
     StorefrontOrder,
     StorefrontPlan,
 )
-from app.services import storefront_wallet, usercreate
+from app.services import storefront_ops, storefront_wallet, usercreate
 
 log = logging.getLogger("bot.storefront")
+
+# Order statuses that represent a live, renewable/restorable subscription (mirrors
+# storefront_subscription._ACTIVE) — the reconciler restores a crashed renewal to one of these.
+_ACTIVE = ("provisioned", "disabled")
+
+
+def _lease_active(lease_expires_at: dt.datetime | None, now: dt.datetime) -> bool:
+    """True if a provisioning lease is still in the future (F5). Normalizes a naive value to UTC —
+    SQLite reads DateTime(timezone=True) back as naive, so a bare `>=` against an aware `now` raises."""
+    if lease_expires_at is None:
+        return False
+    if lease_expires_at.tzinfo is None:
+        lease_expires_at = lease_expires_at.replace(tzinfo=dt.timezone.utc)
+    return lease_expires_at >= now
 
 # Serialize a single customer's money/provision actions in-process (buy / trial / renew) so a
 # double-tap can't mint two configs or double-charge. The durable guards (row-lock debit, free-trial
@@ -184,43 +200,77 @@ async def purchase(
     customer_id: int,
     plan_id: int,
     label: str,
+    op_id: str | None = None,
 ) -> PurchaseResult:
     """Buy a plan: charge the wallet and provision the config, atomically and crash-safely.
 
-    Order + debit are committed together in ONE short transaction BEFORE any network call (so money is
-    never debited without an order to attribute it to). The order pre-stores the panel uuid, so if the
-    process dies during provisioning the reaper can finish or refund it. DB connections are never held
-    across the panel/Telegram I/O. Serialized per customer to defeat double-taps."""
+    F4 (idempotency): the buy is a durable StorefrontOperation keyed by `op_id` (minted before the
+    confirm button). A repeat call with the SAME `op_id` returns the CACHED result — no second order or
+    debit — so a re-delivered callback / retry can't double-charge.
+
+    F5 (lease): the order is stamped with a provisioning LEASE before the (unlocked) panel call, so the
+    reaper never refunds this order while its provision is still in flight. Order + debit + operation are
+    committed together BEFORE any network call; the order pre-stores the panel uuid so a mid-provision
+    crash is recoverable. DB connections are never held across the panel/Telegram I/O; serialized per
+    customer to defeat double-taps."""
+    op_id = op_id or secrets.token_urlsafe(16)
     async with _customer_lock(sf_id, customer_id):
-        # 1) short txn — validate, pre-generate uuid, create the pending order + debit, commit together
+        # 1) short txn — claim the op, validate, pre-generate uuid, create the pending order (+lease)
+        #    + debit, commit together (idempotent: a replay returns the cached result here).
         async with session_factory() as s:
+            op, outcome = await storefront_ops.claim(
+                s, op_id, op_type="purchase", storefront_bot_id=sf_id, customer_id=customer_id,
+                plan_id=plan_id)
+            if outcome == storefront_ops.REPLAY and op is not None:
+                o = await s.get(StorefrontOrder, op.result_order_id) if op.result_order_id else None
+                if o is not None and o.status == "provisioned" and o.sub_link:
+                    return PurchaseResult(True, order_id=o.id, sub_link=o.sub_link,
+                                          gb=o.gb, days=o.days, label=o.label)
+                return PurchaseResult(False, order_id=(o.id if o else None), reason="error",
+                                      gb=(o.gb if o else 0), days=(o.days if o else 0),
+                                      label=(o.label if o else label))
+            if op is None or outcome == storefront_ops.IN_FLIGHT:
+                return PurchaseResult(False, reason="processing")
+            op_pk = op.id
             sf = await s.get(StorefrontBot, sf_id)
             customer = await s.get(StorefrontCustomer, customer_id)
             plan = await s.get(StorefrontPlan, plan_id)
             if sf is None or customer is None:
+                await storefront_ops.finalize(s, op, "failed")
+                await s.commit()
                 return PurchaseResult(False, reason="error")
             if plan is None or plan.storefront_bot_id != sf.id or not plan.enabled:
+                await storefront_ops.finalize(s, op, "failed")
+                await s.commit()
                 return PurchaseResult(False, reason="plan_gone")
             price = int(plan.price_toman)
             bal = int(storefront_wallet.balance(customer))
             if bal < price:
+                # never charged → drop the op so the customer can top up and retry with a fresh op
+                await s.rollback()
                 return PurchaseResult(False, reason="insufficient", short_toman=price - bal)
             new_uuid = str(uuidlib.uuid4())
             order = StorefrontOrder(
                 customer_id=customer.id, plan_id=plan.id, panel_id=sf.panel_id,
                 label=(label or "").strip()[:64], gb=plan.gb, days=plan.days,
                 price_toman=price, status="pending", panel_user_uuid=new_uuid,
+                lease_expires_at=await storefront_ops.lease_deadline(s),
             )
             s.add(order)
             await s.flush()
-            ok, _txn = await storefront_wallet.charge_purchase(s, customer.id, price, order_id=order.id)
-            if not ok:  # lost a race for the balance
+            ok, txn = await storefront_wallet.charge_purchase(
+                s, customer.id, price, order_id=order.id, operation_id=op_pk)
+            if not ok:  # lost a race for the balance → drop the op + order
                 await s.rollback()
                 return PurchaseResult(False, reason="insufficient", short_toman=price - bal)
+            op.order_id = order.id
+            if txn is not None:
+                op.debit_txn_id = txn.id
             await s.commit()
             order_id, gb, days = order.id, order.gb, order.days
 
-        # 2) provision OUTSIDE the first transaction (its own short session for the panel write)
+        # 2) provision OUTSIDE the first transaction (its own short session for the panel write). The
+        #    active lease keeps the reaper from touching this order while the panel call is in flight.
         async with session_factory() as s:
             sf = await s.get(StorefrontBot, sf_id)
             customer = await s.get(StorefrontCustomer, customer_id)
@@ -230,20 +280,25 @@ async def purchase(
                 res = await provision(s, sf, customer, gb=gb, days=days, label=label,
                                       user_uuid=new_uuid)
 
-        # 3) short txn — finalize: provisioned (+link) or failed (+refund). The pending-order
-        #    reaper may have already finalized this order if provisioning ran long (>15 min):
-        #    only act while it is still `pending` (CAS), and guard the refund with
-        #    order_has_refund — otherwise a slow provision could double-refund or, worse,
-        #    provision AND leave the reaper's refund standing (a paid-for-nothing / free config).
+        # 3) short txn — finalize: provisioned (+link) or failed (+refund), clear the lease, cache the
+        #    result on the operation. If the reconciler already decided this order (lease expired mid a
+        #    very long provision), respect its outcome (defense in depth).
         async with session_factory() as s:
             o = await s.get(StorefrontOrder, order_id, with_for_update=True)
+            op = await s.get(StorefrontOperation, op_pk)
             if o is None:
                 return PurchaseResult(False, reason="error")
             if o.status != "pending":
-                # The reaper already decided this order — respect its outcome.
                 if o.status == "provisioned" and o.sub_link:
+                    if op is not None:
+                        await storefront_ops.finalize(s, op, "done", result_order_id=order_id,
+                                                      result_sub_link=o.sub_link)
+                        await s.commit()
                     return PurchaseResult(True, order_id=order_id, sub_link=o.sub_link,
                                           gb=gb, days=days, label=label)
+                if op is not None:
+                    await storefront_ops.finalize(s, op, "failed", result_order_id=order_id)
+                    await s.commit()
                 return PurchaseResult(False, order_id=order_id, reason="reaped",
                                       message="سفارش توسط سیستم نهایی شد", gb=gb, days=days,
                                       label=label)
@@ -251,13 +306,20 @@ async def purchase(
                 o.status = "provisioned"
                 o.panel_user_uuid = res.uuid or new_uuid
                 o.sub_link = res.sub_link
+                o.lease_expires_at = None
+                if op is not None:
+                    await storefront_ops.finalize(s, op, "done", result_order_id=order_id,
+                                                  result_sub_link=res.sub_link)
                 await s.commit()
                 return PurchaseResult(True, order_id=order_id, sub_link=res.sub_link,
                                       gb=gb, days=days, label=label)
             o.status = "failed"
+            o.lease_expires_at = None
             if o.price_toman and not await storefront_wallet.order_has_refund(s, order_id):
                 await storefront_wallet.refund(s, customer_id, price, order_id=order_id,
                                                note=f"provision {res.reason}")
+            if op is not None:
+                await storefront_ops.finalize(s, op, "failed", result_order_id=order_id)
             await s.commit()
             return PurchaseResult(False, order_id=order_id, reason=res.reason or "error",
                                   message=res.message, gb=gb, days=days, label=label)
@@ -291,7 +353,7 @@ async def claim_trial(
             order = StorefrontOrder(
                 customer_id=customer.id, plan_id=None, panel_id=sf.panel_id, label="تست رایگان",
                 gb=gb, days=days, price_toman=0, status="pending", panel_user_uuid=new_uuid,
-                is_trial=True,
+                is_trial=True, lease_expires_at=await storefront_ops.lease_deadline(s),  # F5: reaper skips in-flight
             )
             s.add(order)
             customer.free_trial_used = True  # CAS: claimed before provisioning, under the lock
@@ -315,10 +377,12 @@ async def claim_trial(
                 o.status = "provisioned"
                 o.panel_user_uuid = res.uuid or new_uuid
                 o.sub_link = res.sub_link
+                o.lease_expires_at = None
                 await s.commit()
                 return PurchaseResult(True, order_id=order_id, sub_link=res.sub_link,
                                       gb=gb, days=days, label="تست رایگان")
             o.status = "failed"
+            o.lease_expires_at = None
             cust = await s.get(StorefrontCustomer, customer_id)
             if cust is not None:
                 cust.free_trial_used = False  # let them retry a failed trial
@@ -330,15 +394,23 @@ async def claim_trial(
 async def reap_pending_orders(
     session: AsyncSession, *, older_than: dt.datetime
 ) -> dict[str, int]:
-    """Reconcile orders stuck in `pending` past `older_than` (process died mid-purchase). For each, look
-    its pre-stored uuid up on the panel: present → mark provisioned + rebuild the sub-link (and best-effort
-    notify the customer); absent → refund (once) + mark failed. Idempotent. Returns counts."""
+    """Reconcile orders orphaned by a crash. PURCHASE pending past `older_than` (and with no active
+    lease): look the pre-stored uuid up on the panel — present → provisioned + rebuild the sub-link;
+    absent → refund (once) + failed. RENEWAL stuck in `renewing` (lease expired): reverse-on-uncertainty
+    — if the operation actually charged, reverse it EXACTLY once and restore the order to its prior
+    status; never blind-promote to `provisioned` while a debit is outstanding. Idempotent. Returns counts.
+
+    F5: an order whose provisioning LEASE is still valid is left alone (a live purchase/renew is holding
+    it across the panel call), so the reaper can never refund an in-flight provision."""
     from app.services.panel_client.admin_api import AdminApiClient
 
-    counts = {"checked": 0, "completed": 0, "refunded": 0, "renewing_recovered": 0}
+    now = storefront_ops.now()
+    counts = {"checked": 0, "completed": 0, "refunded": 0, "renewing_recovered": 0, "reversed": 0}
     # Candidate ids only (unlocked). We re-lock EACH order right before deciding it — a single
     # FOR UPDATE over the whole batch would drop every lock on the first per-order commit, letting
     # the live provisioner slip in. `SKIP LOCKED` skips an order purchase()'s step-3 is finalizing.
+    # The provisioning LEASE (F5) is checked per-order in Python (dialect-safe tz handling) after the
+    # lock, so an order whose lease is still valid is never touched.
     ids = (
         await session.execute(
             select(StorefrontOrder.id).where(
@@ -352,6 +424,8 @@ async def reap_pending_orders(
         order = await _lock_order_skip(session, oid)
         if order is None or order.status != "pending":
             continue  # gone, locked by a live provision (skip this tick), or already decided
+        if _lease_active(order.lease_expires_at, now):
+            continue  # F5: a live provision is holding this order across the panel call — leave it
         counts["checked"] += 1
         customer = await session.get(StorefrontCustomer, order.customer_id)
         sf = await session.get(StorefrontBot, customer.storefront_bot_id) if customer else None
@@ -367,6 +441,8 @@ async def reap_pending_orders(
         if data:  # the config WAS created before the crash → complete it
             order.status = "provisioned"
             order.sub_link = panel.user_sub_link(order.panel_user_uuid, name=order.label or None)
+            order.lease_expires_at = None
+            await _finalize_purchase_op(session, order.id, order.sub_link)
             await session.commit()
             counts["completed"] += 1
             await _notify_completed(sf, customer, order)
@@ -380,12 +456,16 @@ async def reap_pending_orders(
             if order.is_trial and customer.free_trial_used:
                 customer.free_trial_used = False
             order.status = "failed"
+            order.lease_expires_at = None
+            await _finalize_purchase_op(session, order.id, None)
             await session.commit()
             counts["refunded"] += 1
 
-    # Recover orders stuck in "renewing" (renew() crashed mid-flight before restoring the status,
-    # leaving the order unrenewable/unmanageable). Only revert ones older than the threshold so a
-    # legitimately in-progress renewal is never disturbed.
+    # Recover RENEWALS stuck in "renewing" whose lease has expired (renew() crashed/was cancelled between
+    # the debit and the finalize — a case `except Exception` can't catch). Reverse-on-uncertainty via the
+    # durable operation: if it actually charged, reverse EXACTLY once (per-operation unique index) and
+    # restore the prior status — never leave the customer charged for a renewal they didn't get, and never
+    # blind-promote to `provisioned` while a debit stands.
     renewing_ids = (
         await session.execute(
             select(StorefrontOrder.id).where(
@@ -396,11 +476,54 @@ async def reap_pending_orders(
     ).scalars().all()
     for oid in renewing_ids:
         o = await _lock_order_skip(session, oid)
-        if o is not None and o.status == "renewing":
-            o.status = "provisioned"
-            await session.commit()
-            counts["renewing_recovered"] += 1
+        if o is None or o.status != "renewing":
+            continue
+        if _lease_active(o.lease_expires_at, now):
+            continue   # a live renewal still holds this order — leave it
+        op = (
+            await session.execute(
+                select(StorefrontOperation).where(
+                    StorefrontOperation.order_id == oid,
+                    StorefrontOperation.op_type == "renewal",
+                    StorefrontOperation.status == "in_progress",
+                ).order_by(StorefrontOperation.id.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if op is not None:
+            if op.customer_id is not None and await storefront_wallet.operation_has_charge(session, op.id):
+                await storefront_wallet.reverse_charge(
+                    session, op.customer_id, int(op.price_toman), order_id=oid, operation_id=op.id,
+                    note="reconciler: crashed renewal")
+                op.status = "reversed"
+                counts["reversed"] += 1
+            else:
+                op.status = "failed"
+            o.status = op.prior_status if op.prior_status in _ACTIVE else "provisioned"
+        else:
+            o.status = "provisioned"   # legacy in-flight renewal (pre-deploy, no operation record)
+        o.lease_expires_at = None
+        await session.commit()
+        counts["renewing_recovered"] += 1
     return counts
+
+
+async def _finalize_purchase_op(session: AsyncSession, order_id: int, sub_link: str | None) -> None:
+    """Mark this order's in-progress PURCHASE operation terminal so a replay returns the reaper's
+    outcome (idempotency stays consistent after a reaper-completed/refunded order)."""
+    op = (
+        await session.execute(
+            select(StorefrontOperation).where(
+                StorefrontOperation.order_id == order_id,
+                StorefrontOperation.op_type == "purchase",
+                StorefrontOperation.status == "in_progress",
+            ).order_by(StorefrontOperation.id.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    if op is not None:
+        op.status = "done" if sub_link else "failed"
+        op.result_order_id = order_id
+        if sub_link:
+            op.result_sub_link = sub_link
 
 
 async def _notify_completed(

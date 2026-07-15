@@ -16,7 +16,7 @@ Genuinely fixed in round 1 (preserved, not regressed): **F3, F6, F7, F8, F9, F14
 | Batch | Release | Findings | Migration | Status |
 |-------|---------|----------|-----------|--------|
 | A Front door | v1.80.0 | F1, F2 | — | ✅ done |
-| B Storefront money durability | v1.81.0 | F4, F11, F5 (durable-operation + lease) | 1 | ⏳ |
+| B Storefront money durability | v1.81.0 | F4, F11, F5 (durable-operation + lease) | 1 (`7968884fecbd`) | ✅ done |
 | C Sync / metering / bot resource | v1.82.0 | F12, F10, F13 | — | ⏳ |
 
 **F2 posture = STRICT** (owner-chosen): public plaintext is refused for *all* credential + bearer requests

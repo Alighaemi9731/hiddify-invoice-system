@@ -225,6 +225,10 @@ DEFS: list[SettingDef] = [
     # Storefront pending-order reaper cadence (minutes): how often to reconcile purchases orphaned by a
     # mid-buy crash (complete the ones whose config exists on the panel, refund the rest).
     SettingDef("storefront_pending_order_reaper_minutes", 15, False, "schedule"),
+    # F5/F11: how long a storefront purchase/renewal holds a durable provisioning LEASE on its order
+    # while the panel call is in flight. The reaper/reconciler ignores an order whose lease is still
+    # valid, so a live provision is never reaped mid-flight. Must exceed the panel HTTP timeout (90s).
+    SettingDef("storefront_operation_lease_seconds", 180, False, "schedule"),
     # Storefront retention: the daily maintenance purges customers with NO financial footprint (zero
     # balance, no provisioned/disabled order, no confirmed top-up) inactive for this many days, plus
     # failed/deleted orders + rejected top-ups. Confirmed top-ups + provisioned services are kept. 0 = off.
@@ -329,6 +333,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "log_retention_days": (7, 3650),
     "meter_retention_months": (0, 120),
     "storefront_pending_order_reaper_minutes": (1, 1440),
+    "storefront_operation_lease_seconds": (30, 3600),
     "storefront_stale_customer_days": (0, 3650),
     "owner_data_retention_days": (0, 3650),
     "storefront_expiry_notify_days": (0, 60),

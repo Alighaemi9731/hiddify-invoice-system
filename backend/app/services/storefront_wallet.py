@@ -214,11 +214,15 @@ async def manual_adjust(
 
 
 async def charge_purchase(
-    session: AsyncSession, customer_id: int, price_toman: int, *, order_id: int | None = None
+    session: AsyncSession, customer_id: int, price_toman: int, *, order_id: int | None = None,
+    operation_id: int | None = None,
 ) -> tuple[bool, StorefrontWalletTxn | None]:
     """Atomically debit the wallet for a purchase. Re-reads the customer under a row lock (Postgres)
     so two concurrent buys can't overspend. Returns (ok, debit_txn). ok=False if the balance is short.
-    Does NOT commit — the caller commits the debit together with the order it belongs to."""
+    Does NOT commit — the caller commits the debit together with the order it belongs to.
+
+    `operation_id` links the debit to its durable StorefrontOperation (F4/F11) so the reconciler can
+    tell whether a crashed renewal actually charged and reverse it exactly once."""
     price = Decimal(str(int(price_toman)))
     stmt = select(StorefrontCustomer).where(StorefrontCustomer.id == customer_id)
     try:
@@ -231,7 +235,7 @@ async def charge_purchase(
     customer.wallet_balance_toman = float(balance(customer) - price)
     txn = StorefrontWalletTxn(
         customer_id=customer.id, kind="purchase", amount_toman=-price, status="done",
-        order_id=order_id, decided_at=_now(),
+        order_id=order_id, operation_id=operation_id, decided_at=_now(),
     )
     session.add(txn)
     await session.flush()
@@ -263,25 +267,57 @@ async def refund(
 
 async def reverse_charge(
     session: AsyncSession, customer_id: int, amount_toman: int, *, order_id: int | None = None,
-    note: str = "",
+    operation_id: int | None = None, note: str = "",
 ) -> StorefrontWalletTxn | None:
-    """Credit back a renewal charge whose panel write FAILED (F11 compensation). Uses a DISTINCT
-    kind ('renew_reversal') — NOT 'refund' — so it never collides with the one-refund-per-order
-    partial-unique index and a later failed renewal can still be compensated. Locks the customer;
-    does NOT commit."""
+    """Credit back a renewal charge whose panel write FAILED or crashed (F11 compensation). Uses a
+    DISTINCT kind ('renew_reversal') — NOT 'refund' — so it never collides with the one-refund-per-order
+    index. EXACTLY-ONCE per operation: locks the customer, checks `operation_has_reversal` first, and the
+    partial-unique `uq_sfwallet_reversal_per_operation` (WHERE kind='renew_reversal') is the durable
+    backstop so the inline handler and the reconciler can't both credit. Returns None if already reversed.
+    Does NOT commit."""
     customer = await _get_for_update(session, StorefrontCustomer, customer_id)
     if customer is None:
         return None
+    if operation_id is not None and await operation_has_reversal(session, operation_id):
+        return None  # already compensated — idempotent
     amt = Decimal(str(int(amount_toman)))
     customer.wallet_balance_toman = float(balance(customer) + amt)
     txn = StorefrontWalletTxn(
         customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
         kind="renew_reversal", amount_toman=amt, status="done",
-        order_id=order_id, note=(note or "بازگشتِ وجهِ تمدیدِ ناموفق")[:255], decided_at=_now(),
+        order_id=order_id, operation_id=operation_id,
+        note=(note or "بازگشتِ وجهِ تمدیدِ ناموفق")[:255], decided_at=_now(),
     )
     session.add(txn)
     await session.flush()
     return txn
+
+
+async def operation_has_charge(session: AsyncSession, operation_id: int) -> bool:
+    """True if this operation's wallet was debited (a `purchase` row carries its operation_id) — so the
+    reconciler knows a crashed renewal actually charged and must be reversed."""
+    row = (
+        await session.execute(
+            select(StorefrontWalletTxn.id).where(
+                StorefrontWalletTxn.operation_id == operation_id,
+                StorefrontWalletTxn.kind == "purchase",
+            ).limit(1)
+        )
+    ).first()
+    return row is not None
+
+
+async def operation_has_reversal(session: AsyncSession, operation_id: int) -> bool:
+    """True if this operation's charge was already reversed — so a reversal is never applied twice."""
+    row = (
+        await session.execute(
+            select(StorefrontWalletTxn.id).where(
+                StorefrontWalletTxn.operation_id == operation_id,
+                StorefrontWalletTxn.kind == "renew_reversal",
+            ).limit(1)
+        )
+    ).first()
+    return row is not None
 
 
 async def order_has_refund(session: AsyncSession, order_id: int) -> bool:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import secrets
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
@@ -776,26 +777,31 @@ async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         after = int(storefront_wallet.balance(customer)) - int(plan.price_toman)
         plan_text = kb.plan_label(plan)
-    await state.update_data(buy_name=name)
+    op_id = secrets.token_urlsafe(16)   # F4: durable idempotency token for this confirm card
+    await state.update_data(buy_name=name, buy_op=op_id)
     await message.answer(rtl(
         f"🧾 تأییدِ خرید\n\n{plan_text}\nنام: {name}\n\n"
         f"موجودیِ پس از خرید: {_toman(after)} تومان"),
-        reply_markup=kb.buy_confirm_kb())
+        reply_markup=kb.buy_confirm_kb(op_id))
 
 
-@storefront_router.callback_query(F.data == "sfbuyok")
+@storefront_router.callback_query(F.data.startswith("sfbuyok"))
 async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Step 3: hand off to the atomic, crash-safe purchase service (charge + provision in short txns,
-    no DB connection held across the panel/Telegram I/O), then deliver or report."""
-    # F4: strip the «تأیید خرید» button on the first tap so a rapid double-tap can't queue a second
-    # purchase. Capture + clear the FSM before any panel/Telegram I/O; purchase()'s per-customer lock
-    # and atomic order/debit are the durable backstop.
+    """Step 3: hand off to the atomic, crash-safe, IDEMPOTENT purchase service (charge + provision in
+    short txns, no DB connection held across the panel/Telegram I/O), then deliver or report.
+
+    F4: the durable `op_id` (minted at the confirm card, carried in the callback data + FSM) makes a
+    re-tapped / re-delivered confirm exactly-once — purchase() returns the cached result instead of a
+    second order/debit."""
     await _strip_buttons(cb)
     data = await state.get_data()
+    op_id = (cb.data.split(":", 1)[1] if (cb.data and ":" in cb.data) else None) or data.get("buy_op")
     plan_id = int(data.get("buy_plan_id") or 0)
     name = (data.get("buy_name") or "").strip()
     await state.clear()
-    if not plan_id or not name:
+    # With an op_id we always call through (purchase() replays the cached result even if the FSM is
+    # gone). Only bail when we have neither an op_id nor a fresh plan/name to work with.
+    if not op_id and (not plan_id or not name):
         await cb.answer()
         return
     async with SessionLocal() as s:
@@ -812,7 +818,10 @@ async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.answer()
     await cb.message.answer(rtl("⏳ در حال ساختِ سرویس…"))
     res = await storefront_provision.purchase(
-        SessionLocal, sf_id=sf_id, customer_id=customer_id, plan_id=plan_id, label=name)
+        SessionLocal, sf_id=sf_id, customer_id=customer_id, plan_id=plan_id, label=name, op_id=op_id)
+    if res.reason == "processing":
+        await cb.message.answer(rtl("⏳ سفارشِ شما در حال پردازش است؛ چند لحظه صبر کنید."))
+        return
     if res.ok and res.sub_link:
         await _deliver_config(bot, cb.from_user.id, gb=res.gb, days=res.days,
                               sub_link=res.sub_link, name=res.label)
@@ -919,16 +928,19 @@ async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
         price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
+    op_id = secrets.token_urlsafe(12)   # F4: durable idempotency token (short — fits the 64B callback)
     await cb.message.answer(
         rtl(f"🔄 تمدیدِ «{order.label or 'سرویس'}» — {gb} گیگ · {days} روز\n"
             f"مبلغ: {_toman(price)} تومان از کیفِ پول کسر می‌شود."),
-        reply_markup=kb.confirm_kb(rtl("✅ تمدید"), f"sfrenewok:{order_id}"))
+        reply_markup=kb.confirm_kb(rtl("✅ تمدید"), f"sfrenewok:{order_id}:{op_id}"))
     await cb.answer()
 
 
 @storefront_router.callback_query(F.data.startswith("sfrenewok:"))
 async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
-    order_id = int(cb.data.split(":")[1])
+    parts = (cb.data or "").split(":")
+    order_id = int(parts[1])
+    op_id = parts[2] if len(parts) > 2 else None   # legacy cards (2 parts) → renew() mints one
     async with SessionLocal() as s:
         sf, _r, _ = await _resolve(s, bot, cb.from_user)
         if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
@@ -938,15 +950,17 @@ async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer()
             await cb.message.answer(rtl(_shop_closed_text(sf)))
             return
-    # F4: strip the «تمدید» button immediately so a rapid double-tap can't queue a second renewal
-    # (the durable CAS-to-"renewing" in renew() is the backstop for a concurrent tap that slips in).
+    # F4: strip the «تمدید» button immediately; the durable `op_id` makes a re-tap/replay exactly-once
+    # (renew() returns the cached result rather than charging again).
     await _strip_buttons(cb)
     await cb.answer()
     await cb.message.answer(rtl("⏳ در حال تمدید…"))
-    res = await storefront_subscription.renew(SessionLocal, order_id=order_id, by_admin=False)
+    res = await storefront_subscription.renew(SessionLocal, order_id=order_id, by_admin=False, op_id=op_id)
     if res.ok:
         await cb.message.answer(rtl(
             f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز. لینکِ شما تغییری نکرده است."))
+    elif res.reason == "processing":
+        await cb.message.answer(rtl("⏳ تمدیدِ شما در حال پردازش است؛ چند لحظه صبر کنید."))
     elif res.reason == "insufficient":
         await cb.message.answer(
             rtl(f"موجودی کافی نیست. {_toman(res.short_toman)} تومان کم دارید."),

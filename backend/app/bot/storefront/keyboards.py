@@ -191,10 +191,11 @@ def admin_sub_actions_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def buy_confirm_kb() -> InlineKeyboardMarkup:
-    """Final confirm before charging the wallet + creating the config."""
+def buy_confirm_kb(op_id: str) -> InlineKeyboardMarkup:
+    """Final confirm before charging the wallet + creating the config. `op_id` (a durable idempotency
+    token minted here) rides in the callback so a re-tapped/re-delivered confirm can't double-charge."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ خرید و ساختِ سرویس", callback_data="sfbuyok")],
+        [InlineKeyboardButton(text="✅ خرید و ساختِ سرویس", callback_data=f"sfbuyok:{op_id}")],
         [InlineKeyboardButton(text="✖️ انصراف", callback_data="sfcancel")],
     ])
 

@@ -8,6 +8,34 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.81.0 - 2026-07-15
+
+Security remediation **Round 2** — Batch B of 3 (storefront money durability). One migration
+(`7968884fecbd`, off head `f5b8d1a3c6e9`). See `docs/SECURITY_REVIEW_PLAN2.md`.
+
+### Fixed
+
+- **F4 (High): storefront purchases and renewals are now idempotent.** Previously a re-tapped or
+  re-delivered confirm button — or a sequential retry of the same renewal — could charge the wallet
+  twice (the only guard was the order status, which returns to "provisioned" after a renewal). Each buy
+  and renewal is now a durable operation keyed by a random token minted on the confirm card; a replay
+  returns the original result with no second debit or config.
+- **F11 (High): a crashed renewal can no longer leave a customer charged for a service they didn't
+  get.** The wallet is debited before the panel is renewed; if the process is cancelled/killed between
+  the two (which the old error handling couldn't catch), the order is left with a short-lived "lease"
+  and a background reconciler reverses the charge exactly once and restores the subscription — instead
+  of the old behavior that blind-promoted the order to "provisioned" while keeping the charge.
+- **F5 (High): the pending-order reaper can no longer refund a purchase whose config is still being
+  created.** An in-flight buy/renew now holds a durable provisioning lease that the reaper honors, so a
+  slow panel call is never mistaken for a lost order and refunded (which previously could leave a paid,
+  untracked config on the panel).
+
+### Migration
+
+- `7968884fecbd` adds the `storefront_operations` idempotency/recovery table, an order provisioning
+  `lease_expires_at`, a wallet-txn `operation_id` link, and a partial-unique index guaranteeing one
+  reversal per renewal operation. New table + two nullable columns; no data transform.
+
 ## 1.80.0 - 2026-07-15
 
 Security remediation **Round 2** — Batch A of 3 (front door). No migration. A second external
