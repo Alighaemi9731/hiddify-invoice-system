@@ -21,7 +21,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from app.api.auth import _client_ip
+from app.api.auth import _client_ip, require_secure
 from app.core import loginsec, webauthn_store
 from app.core.db import get_session
 from app.core.security import OWNER_ROLE, create_access_token, get_current_subject
@@ -148,6 +148,12 @@ async def register_complete(
 # ------------------------------- login (unauthenticated) -------------------------------
 @router.post("/login/begin")
 async def login_begin(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    await require_secure(request, session)   # F2
+    if not loginsec.passkey_login_allowed(_client_ip(request)):  # F8: throttle the unauth begin
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "درخواست‌های زیاد؛ کمی بعد دوباره تلاش کنید.",
+        )
     _check_locked(request)
     rp_id, _origin = await _rp(session)
     opts = webauthn.generate_authentication_options(

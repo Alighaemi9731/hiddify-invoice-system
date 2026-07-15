@@ -1,22 +1,30 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Box, Button, Card, CardContent, TextField, Typography, Alert, Stack, CircularProgress, Link,
 } from "@mui/material";
 import RocketLaunchIcon from "@mui/icons-material/esm/RocketLaunch";
-import { doSetup } from "../api/client";
+import { doSetup, getSetupStatus } from "../api/client";
 
 export default function Setup({ onDone }: { onDone: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
+  const [token, setToken] = useState("");
+  const [tokenRequired, setTokenRequired] = useState(false);
   const [domain, setDomain] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState<any>(null);
 
+  // F1: the installer may require a one-time bootstrap token to complete first-run setup.
+  useEffect(() => {
+    getSetupStatus().then((s) => setTokenRequired(!!s.token_required)).catch(() => {});
+  }, []);
+
   const valid =
-    username.trim().length >= 3 && password.length >= 8 && password === password2;
+    username.trim().length >= 3 && password.length >= 8 && password === password2 &&
+    (!tokenRequired || token.trim().length > 0);
 
   const submit = async () => {
     setErr("");
@@ -28,6 +36,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     try {
       const r = await doSetup({
         username: username.trim(), password,
+        token: token.trim() || undefined,
         domain: domain.trim() || undefined, acme_email: email.trim() || undefined,
       });
       setResult(r);
@@ -100,6 +109,11 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               helperText="حداقل ۸ کاراکتر" />
             <TextField label="تکرار رمز عبور" type="password" value={password2} onChange={(e) => setPassword2(e.target.value)} fullWidth
               error={!!password2 && password !== password2} />
+
+            {tokenRequired && (
+              <TextField label="توکن راه‌اندازی" inputProps={{ dir: "ltr" }} value={token} onChange={(e) => setToken(e.target.value)} fullWidth
+                helperText="این توکن هنگام نصب در کنسول سرور نمایش داده شده است (SETUP_BOOTSTRAP_TOKEN)." />
+            )}
 
             <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 1 }}>۲) دامنه (اختیاری)</Typography>
             <TextField label="دامنه" inputProps={{ dir: "ltr" }} placeholder="panel.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} fullWidth

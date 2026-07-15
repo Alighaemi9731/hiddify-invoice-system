@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # ---- Initial owner (seeded on first boot only) ----
     admin_username: str = "owner"
     admin_password: str = "change-me-now"
+    # One-time first-run setup token (F1). The installer mints it, prints it to the SSH console, and
+    # writes it here; on a fresh install its hash is stored and /api/setup requires it, closing the
+    # unauthenticated first-boot takeover window. Empty = no token gate (older installer / preseeded).
+    setup_bootstrap_token: str = ""
 
     # ---- Database ----
     postgres_user: str = "invoice"

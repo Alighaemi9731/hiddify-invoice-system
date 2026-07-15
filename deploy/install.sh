@@ -98,6 +98,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   c "Generating $ENV_FILE …"
   SECRET_KEY="$(rand 48 44)"
   DB_PASS="$(rand 24 24)"
+  # One-time first-run setup token (F1): on a fresh install with no preseeded ADMIN_PASSWORD, the
+  # browser wizard must present this token (printed below) to create the owner — so a scanner can't
+  # claim ownership before the operator opens the page.
+  SETUP_TOKEN="$(rand 48 44)"
   # Create the file 600 BEFORE writing any secret into it — otherwise there is a brief window
   # where the SECRET_KEY / DB password sit in a world-readable file (umask default) until the
   # chmod below. `install -m 600 /dev/null` makes an empty 0600 file first.
@@ -109,6 +113,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES=720
 
 ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
+SETUP_BOOTSTRAP_TOKEN=$SETUP_TOKEN
 
 POSTGRES_USER=invoice
 POSTGRES_PASSWORD=$DB_PASS
@@ -249,12 +254,16 @@ else
   URL="http://$SERVER_IP"
 fi
 
+SETUP_TOKEN_ENV="$(grep -E '^SETUP_BOOTSTRAP_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')"
+TOKEN_LINE=""
 if [[ -n "$ADMIN_PASSWORD" ]]; then
   LOGIN_NOTE="Log in with the username/password you set (user: $ADMIN_USERNAME)."
 elif [[ -n "$EXISTING_DOMAIN" ]]; then
   LOGIN_NOTE="Already set up — log in with your existing username/password (your data was kept)."
 else
   LOGIN_NOTE="First run: the page asks for a username, password and domain, then gets SSL automatically."
+  # F1: the wizard requires this one-time token so nobody can claim ownership before you.
+  [[ -n "$SETUP_TOKEN_ENV" ]] && TOKEN_LINE="  Setup token (enter it on the first-run page): $SETUP_TOKEN_ENV"
 fi
 
 c "Running post-deploy smoke checks…"
@@ -269,7 +278,8 @@ cat <<DONE
       $URL
 
   $LOGIN_NOTE
-  After login, set your Bot token, USDT wallet and BscScan key under Settings.
+${TOKEN_LINE:+$TOKEN_LINE
+}  After login, set your Bot token, USDT wallet and BscScan key under Settings.
 
   Manage from the server (run as root):
       Update :  cd $REPO_DIR && sudo bash deploy/release-installer.sh

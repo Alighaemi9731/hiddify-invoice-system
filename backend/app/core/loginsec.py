@@ -141,6 +141,42 @@ def captcha_allowed(ip: str) -> bool:
     return True
 
 
+# Per-IP throttle for the UNAUTHENTICATED passkey login-begin (F8): each begin generates WebAuthn
+# options + a DB read and stashes a challenge; the completion-only lockout never fires on begins, so
+# without this a flood could churn CPU/DB and grow the challenge store. Same sliding-window shape as
+# the captcha throttle.
+_PASSKEY_MAX_PER_WINDOW = 20
+_PASSKEY_WINDOW = 60.0
+_passkey_hits: dict[str, list[float]] = {}
+
+
+def passkey_login_allowed(ip: str) -> bool:
+    """True if this IP may start another passkey login now. Sliding-window; self-evicting."""
+    now = time.time()
+    if len(_passkey_hits) > _MAX_BUCKETS:
+        for k in [k for k, v in _passkey_hits.items() if not v or now - v[-1] > _PASSKEY_WINDOW]:
+            _passkey_hits.pop(k, None)
+    hits = [t for t in _passkey_hits.get(ip or "?", []) if now - t < _PASSKEY_WINDOW]
+    if len(hits) >= _PASSKEY_MAX_PER_WINDOW:
+        _passkey_hits[ip or "?"] = hits
+        return False
+    hits.append(now)
+    _passkey_hits[ip or "?"] = hits
+    return True
+
+
+def secure_or_loopback_ok(proto: str, client_ip: str, https_enabled: bool) -> bool:
+    """F2: may a CREDENTIAL request proceed? Yes over real HTTPS (Caddy sets X-Forwarded-Proto),
+    from a loopback caller (SSH-tunnel / health), or while HTTPS isn't configured yet (the bare-IP
+    setup phase). Once a domain/HTTPS is on, a plaintext request from a non-loopback client is
+    refused — a password/JWT must not ride cleartext."""
+    if (proto or "").lower() == "https":
+        return True
+    if client_ip in ("127.0.0.1", "::1", "localhost", ""):
+        return True
+    return not https_enabled
+
+
 def new_captcha() -> tuple[str, str]:
     """Create a captcha. Returns (captcha_id, data_uri_png)."""
     _gc_captchas()

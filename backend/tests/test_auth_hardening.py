@@ -161,10 +161,15 @@ async def test_concurrent_setup_creates_exactly_one_owner(tmp_path):
         session.add(Setting(key="setup_done", value=False, is_secret=False))
         await session.commit()
 
+    from types import SimpleNamespace
+    _req = SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http"),
+                           client=SimpleNamespace(host="127.0.0.1"))
+
     async def attempt(username: str):
         async with Session() as session:
             return await setup.do_setup(
                 setup.SetupRequest(username=username, password="password123"),
+                _req,  # type: ignore[arg-type]
                 session=session,
             )
 

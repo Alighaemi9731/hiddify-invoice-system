@@ -53,8 +53,8 @@ export const getInfo = () =>
 
 // ---- setup (first-run wizard) ----
 export const getSetupStatus = () =>
-  api.get("/api/setup/status").then((r) => r.data as { setup_done: boolean; domain: string; https_enabled: boolean });
-export const doSetup = (body: { username: string; password: string; domain?: string; acme_email?: string }) =>
+  api.get("/api/setup/status").then((r) => r.data as { setup_done: boolean; domain: string; https_enabled: boolean; token_required?: boolean });
+export const doSetup = (body: { username: string; password: string; token?: string; domain?: string; acme_email?: string }) =>
   api.post("/api/setup", body).then((r) => r.data);
 
 // ---- auth ----

@@ -38,5 +38,16 @@ async def run_bootstrap() -> None:
             await settings_service.set_value(session, "setup_done", True)
             await session.commit()
         else:
+            # Fresh install, wizard path: if the installer minted a one-time bootstrap token, store
+            # its HASH so POST /api/setup requires it (F1) — closes the unauthenticated first-boot
+            # takeover window (a scanner claiming the owner before the operator opens the page). No
+            # token (older installer / preseeded password) → setup stays open as before.
+            if boot.setup_bootstrap_token:
+                await settings_service.set_value(
+                    session, "setup_bootstrap_token_hash",
+                    hash_password(boot.setup_bootstrap_token),
+                )
+                await session.commit()
+                log.info("First-run setup requires the bootstrap token from the installer console.")
             log.info("No owner yet — first visit will show the setup wizard.")
         log.info("Settings defaults ensured.")

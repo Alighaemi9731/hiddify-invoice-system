@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.79.0 - 2026-07-15
+
+Security remediation — Batch 6 of 6 (front-door & auth hardening). No migration. Completes the
+program (all 16 findings from `docs/SECURITY_REVIEW_PLAN.md` shipped).
+
+### Fixed
+
+- **First-run setup can’t be hijacked by a scanner (F1).** The installer now mints a one-time
+  bootstrap token, stores its hash, and prints it to the SSH console. On a fresh install `POST
+  /api/setup` requires that token before creating the owner (constant-time check, consumed on use),
+  closing the unauthenticated first-boot takeover window. Installs with a preseeded `ADMIN_PASSWORD`
+  or an already-claimed owner are unaffected. The wizard shows a token field when one is required.
+- **Owner password / JWT no longer accepted over plaintext HTTP once HTTPS is on (F2).** `/api/auth/login`,
+  `/api/setup`, and passkey login-begin refuse a plaintext request from a non-loopback client when a
+  domain/HTTPS is configured. Real requests (via Caddy, `X-Forwarded-Proto: https`), loopback callers
+  (SSH tunnel), and the bare-IP setup phase are unaffected.
+- **Passkey login-begin can’t be flooded (F8).** The unauthenticated begin is per-IP rate-limited
+  (the completion-only lockout never fired on begins), and the in-memory challenge store is now
+  hard-capped with eviction so a burst can’t grow it within the TTL window.
+
+### Added
+
+- `.env`/config `SETUP_BOOTSTRAP_TOKEN`; setting `setup_bootstrap_token_hash` (consumed at first setup).
+
 ## 1.78.0 - 2026-07-15
 
 Security & correctness remediation — Batch 4 of 6 (billing & sync correctness). No migration.
