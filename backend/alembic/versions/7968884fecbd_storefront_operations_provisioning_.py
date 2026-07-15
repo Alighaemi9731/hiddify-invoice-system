@@ -17,16 +17,16 @@ New table + two nullable columns; no data transform (existing in-flight orders h
 reconciler's legacy branches handle them). Runs on SQLite too (partial index carries sqlite_where +
 postgresql_where); `by_admin` uses sa.false() so the DEFAULT is portable to Postgres.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision: str = '7968884fecbd'
-down_revision: Union[str, None] = 'f5b8d1a3c6e9'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = 'f5b8d1a3c6e9'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
