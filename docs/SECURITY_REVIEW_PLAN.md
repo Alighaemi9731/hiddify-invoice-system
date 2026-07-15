@@ -13,8 +13,8 @@ Only **Batch 2** carries an Alembic migration (chained off head `e3a5c7f9b1d4`).
 | 1 Owner money integrity | v1.75.0 | F6, F7 | — | ✅ done |
 | 2 Storefront money integrity | v1.76.0 | F3, F14, F4-renewal, F11, F5-refund | 1 | ✅ done |
 | 3 Storefront provisioning | v1.77.0 | F5-reaper, F4-purchase, F13, F15 | — | ✅ done |
-| 4 Billing/sync correctness | v1.78.0 | F9, F10, F12 | — | ⬜ |
-| 5 Front-door & auth | v1.79.0 | F1, F2, F8 | — | ⬜ |
+| 4 Billing/sync correctness | v1.78.0 | F9, F10, F12 | — | ✅ done |
+| 5 Front-door & auth | v1.79.0 | F1, F2, F8 | — | ✅ done |
 
 ## Findings
 
