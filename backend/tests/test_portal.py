@@ -11,6 +11,7 @@ import pytest  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+from starlette.requests import Request  # noqa: E402
 
 from app.api import portal  # noqa: E402
 from app.core.db import Base  # noqa: E402
@@ -39,6 +40,14 @@ _TX_BSC3 = "0x" + "c" * 64
 _TX_BSC4 = "0x" + "d" * 64
 _TX_BSC5 = "0x" + "e" * 64
 _TX_AVAX = "0x" + "f" * 64
+
+
+def _request(*, host: str, proto: str = "http") -> Request:
+    return Request({
+        "type": "http", "method": "POST", "scheme": proto, "path": "/api/portal/auth/exchange",
+        "headers": [(b"x-forwarded-proto", proto.encode())], "client": (host, 1234),
+        "server": ("test", 80), "query_string": b"",
+    })
 
 
 def _run(body):
@@ -125,6 +134,31 @@ def test_exchange_endpoint():
         with pytest.raises(HTTPException) as noreseller:
             await portal.exchange(portal.ExchangeBody(token=create_portal_login_token(999)), s)
         assert noreseller.value.status_code == 403
+    _run(body)
+
+
+def test_portal_credentials_require_https_or_loopback():
+    async def body(s):
+        await _seed(s)
+        login = create_portal_login_token(111)
+        public_http = _request(host="198.51.100.10")
+        with pytest.raises(HTTPException) as exchange_err:
+            await portal.exchange(portal.ExchangeBody(token=login), s, request=public_http)
+        assert exchange_err.value.status_code == 426
+
+        session_token = create_portal_session_token(111)
+        with pytest.raises(HTTPException) as bearer_err:
+            await get_current_reseller(session_token, s, request=public_http)
+        assert bearer_err.value.status_code == 426
+
+        # The refused exchange did not consume its nonce; HTTPS and loopback remain valid.
+        out = await portal.exchange(
+            portal.ExchangeBody(token=login), s,
+            request=_request(host="198.51.100.10", proto="https"))
+        assert out["access_token"]
+        ctx = await get_current_reseller(
+            session_token, s, request=_request(host="127.0.0.1"))
+        assert ctx.chat_id == 111
     _run(body)
 
 

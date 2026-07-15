@@ -8,7 +8,7 @@ import datetime as dt
 import html as _html
 import os
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
@@ -25,6 +25,7 @@ from app.core.portal_auth import (
     get_current_reseller,
     verify_portal_login_token,
 )
+from app.core.security import require_secure_transport
 from app.models import Invoice, Panel, Payment, PortalLoginNonce, Reseller
 from app.models.enums import InvoiceStatus
 from app.services import invoice_pdf as invoice_pdf_service
@@ -54,9 +55,15 @@ async def _panel_keys(session: AsyncSession, panel_ids: set[int]) -> dict[int, P
 
 # ------------------------------ auth ------------------------------
 @router.post("/auth/exchange")
-async def exchange(body: ExchangeBody, session: AsyncSession = Depends(get_session)) -> dict:
+async def exchange(
+    body: ExchangeBody,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects; optional for direct tests
+) -> dict:
     """Exchange a bot-issued one-time login token for a reseller session token. Public (the token
     itself is the credential). Only succeeds if the Telegram id still has reseller rows."""
+    if request is not None:
+        require_secure_transport(request)
     parsed = verify_portal_login_token(body.token)
     if parsed is None:
         raise HTTPException(401, "لینکِ ورود نامعتبر یا منقضی شده است؛ از ربات دوباره وارد شوید.")

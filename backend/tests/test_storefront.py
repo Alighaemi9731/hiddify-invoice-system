@@ -1096,10 +1096,15 @@ def test_renew_charges_current_price_in_place(tmp_path, monkeypatch):
 
     seen = {}
 
-    async def fake_renew_user(self, panel, uuid, *, gb, days, api_key=None):  # noqa: ANN001, ANN002
+    async def fake_prepare(self, panel, uuid, *, gb, days, api_key=None):  # noqa: ANN001, ANN002
         seen.update(uuid=uuid, gb=gb, days=days)
+        return admin_api.RenewUserTarget(float(gb), int(days), "2026-06-01")
 
-    monkeypatch.setattr(admin_api.AdminApiClient, "renew_user", fake_renew_user)
+    async def fake_apply(self, panel, uuid, target, *, api_key=None):  # noqa: ANN001, ANN002
+        seen["applied"] = target.usage_limit_gb
+
+    monkeypatch.setattr(admin_api.AdminApiClient, "prepare_renew_user", fake_prepare)
+    monkeypatch.setattr(admin_api.AdminApiClient, "apply_renew_user_target", fake_apply)
 
     async def go():
         engine, Session = await _seed_engine(tmp_path, "renew.db")

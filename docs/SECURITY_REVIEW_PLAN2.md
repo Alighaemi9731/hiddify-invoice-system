@@ -8,8 +8,8 @@ batches (front-door first, then the coupled storefront-money core, then the medi
 fixes), each its own tested release + production deploy. Concurrency invariants are asserted by
 `pg_contract`-marked barrier tests on real Postgres 16 in CI (`backend-postgres`).
 
-Only **Batch B** carries an Alembic migration (chained off head `f5b8d1a3c6e9`), so Alembic stays a single
-linear head.
+Batch B and the post-review follow-up carry additive Alembic migrations, and Alembic remains a single
+linear head (`a6c9e2f4b7d1`).
 
 Genuinely fixed in round 1 (preserved, not regressed): **F3, F6, F7, F8, F9, F14, F15, F16.**
 
@@ -18,8 +18,9 @@ Genuinely fixed in round 1 (preserved, not regressed): **F3, F6, F7, F8, F9, F14
 | A Front door | v1.80.0 | F1, F2 | — | ✅ done |
 | B Storefront money durability | v1.81.0 | F4, F11, F5 (durable-operation + lease) | 1 (`7968884fecbd`) | ✅ done |
 | C Sync / metering / bot resource | v1.82.0 | F12, F10, F13 | — | ✅ done |
+| D Verification follow-up | v1.82.1 | F2, F4, F5, F10, F11 residuals | 1 (`a6c9e2f4b7d1`) | ✅ done |
 
-**Round 2 COMPLETE — all 8 residuals fixed, released, and deployed (v1.80.0 → v1.82.0).**
+**Round 2 + verification follow-up COMPLETE (v1.80.0 → v1.82.1).**
 
 **F2 posture = STRICT** (owner-chosen): public plaintext is refused for *all* credential + bearer requests
 even before HTTPS is configured; loopback (SSH tunnel) is always allowed; domain/relay installs are
@@ -51,5 +52,16 @@ domain (auto-HTTPS) or an SSH tunnel.
   newer success. → reacquire the lock + recency guard (newer success always wins). (C)
 - **F13 (Med)** Storefront polling creates a task per update before acquiring the semaphore → queued tasks
   grow unbounded. → acquire capacity before `create_task` (backpressure). (C)
+
+## Post-review verification follow-up (v1.82.1)
+
+A final adversarial verification found five edge gaps in the otherwise-green Round-2 suite. Batch D
+closes them: portal reseller auth now uses the same strict transport gate as owner auth; operation tokens
+are pre-reserved and principal-bound; the lease floor covers the full GET+PATCH panel sequence; metering
+preserves `start_date` with the rest of its baseline; and renewal recovery persists an absolute target so
+it verifies/reapplies a successful remote mutation instead of blindly refunding it. Regression coverage
+includes cross-customer replay, public-HTTP portal credentials, legacy short lease settings, failed-sync
+renewal retry, successful-panel/crashed-finalize recovery, fresh SQLite migration/drift checks, and the
+real-Postgres smoke/concurrency contract suite.
 
 See `.claude/plans/codex-dreamy-candy.md` for the full implementation design.

@@ -13,13 +13,17 @@ import secrets
 from dataclasses import dataclass
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
-from app.core.security import create_access_token, decode_token
+from app.core.security import (
+    create_access_token,
+    decode_token,
+    require_secure_transport,
+)
 from app.models import Reseller
 
 PORTAL_ROLE = "reseller"
@@ -81,9 +85,12 @@ class ResellerContext:
 async def get_current_reseller(
     token: str = Depends(portal_oauth),
     session: AsyncSession = Depends(get_session),
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects; optional for direct tests
 ) -> ResellerContext:
     """Validate a reseller session token and load the caller's reseller rows. Raises 401 if the
     token is invalid/not a reseller token, or the Telegram id has no reseller rows (deregistered)."""
+    if request is not None:
+        require_secure_transport(request)
     err = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",

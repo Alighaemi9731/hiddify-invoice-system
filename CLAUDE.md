@@ -42,15 +42,19 @@ bootstrap token F1, HTTPS-only credentials F2, passkey throttle F8.
 
 **Round 2 COMPLETE (2026-07-15):** a second external re-review (`docs/SECURITY_REVIEW_PLAN2.md`)
 found 8 of the 16 round-1 findings only *partially* fixed — including a reproducible **Critical
-setup-takeover** — all re-verified real against `v1.79.1`. Fixed in three batches, all released AND
-deployed, MINOR run `v1.80.0`→`v1.82.0`, one migration (Batch B, head now `7968884fecbd`): Batch A
+setup-takeover** — all re-verified real against `v1.79.1`. Fixed in three batches plus a final
+verification follow-up, all released AND deployed, run `v1.80.0`→`v1.82.1`, with migration head
+`a6c9e2f4b7d1`: Batch A
 `v1.80.0` = atomic setup token F1 + **Strict** transport gate F2 (public plaintext refused for all
 credential + bearer requests, loopback/HTTPS only — no `https_enabled` escape hatch); Batch B `v1.81.0`
 = storefront durable-operation + lease model (idempotent op_id F4, crash-safe renewal F11 via
 reverse-on-uncertainty reconciler, provision lease F5, table `storefront_operations`); Batch C `v1.82.0`
 = ordered failed-sync bookkeeping F12 (re-take lock + recency guard) + atomic metering F10 (pure
-`metering.compute`/`write`) + storefront polling backpressure F13. F3/F6/F7/F8/F9/F14/F15/F16 were
-confirmed genuinely fixed in round 1. **No program is currently open.**
+`metering.compute`/`write`) + storefront polling backpressure F13. A final verification follow-up
+`v1.82.1` closes five edge gaps: reseller-portal strict transport, principal-bound/pre-reserved operation
+tokens, a five-minute lease floor, atomic `start_date` baseline, and verify/reapply renewal recovery
+(migration head `a6c9e2f4b7d1`). F3/F6/F7/F8/F9/F14/F15/F16 were confirmed genuinely fixed in round 1.
+**No program is currently open.**
 
 Concurrency invariants are asserted by
 `pg_contract`-marked tests run against a real Postgres 16 in the CI `backend-postgres`

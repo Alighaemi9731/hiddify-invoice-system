@@ -9,6 +9,7 @@ F4  a renewal in progress ("renewing") can't be re-charged by a second tap.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/secremb2.db")
@@ -27,7 +28,11 @@ from app.models import (  # noqa: E402
     StorefrontOrder,
     StorefrontWalletTxn,
 )
-from app.services import storefront_subscription, storefront_wallet  # noqa: E402
+from app.services import (  # noqa: E402
+    storefront_provision,
+    storefront_subscription,
+    storefront_wallet,
+)
 from tests.pg_barrier import make_engine, requires_pg, run_two  # noqa: E402
 
 
@@ -174,7 +179,7 @@ def test_f5_concurrent_refunds_yield_exactly_one():
     asyncio.run(run())
 
 
-# ───────────────────────── F11: renewal compensates a failed panel write ─────────────────────────
+# ───────────────────────── F11: ambiguous renewal is durably reconciled ─────────────────────────
 def test_f11_renew_panel_failure_compensates_charge(tmp_path, monkeypatch):
     async def body(s, S):
         _bot, cust = await _shop(s, "a", balance=100_000)
@@ -185,12 +190,32 @@ def test_f11_renew_panel_failure_compensates_charge(tmp_path, monkeypatch):
         await s.commit()
         oid, cid = order.id, cust.id
 
+        from app.services.panel_client.admin_api import RenewUserTarget
+
+        async def _prepare(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
+            return RenewUserTarget(5.0, 30, "2026-06-01")
+
         async def _boom(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
             raise RuntimeError("panel down")
-        monkeypatch.setattr(storefront_subscription.AdminApiClient, "renew_user", _boom)
+        monkeypatch.setattr(storefront_subscription.AdminApiClient, "prepare_renew_user", _prepare)
+        monkeypatch.setattr(storefront_subscription.AdminApiClient, "apply_renew_user_target", _boom)
 
         res = await storefront_subscription.renew(S, order_id=oid, by_admin=False)
-        assert res.ok is False and res.reason == "error"
+        assert res.ok is False and res.reason == "processing"
+
+        # The ambiguous write is NOT refunded inline. Once the lease expires, a definitive 404 lets
+        # the reconciler compensate exactly once.
+        async with S() as s2:
+            o = await s2.get(StorefrontOrder, oid)
+            o.lease_expires_at = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+            await s2.commit()
+
+        async def _missing(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
+            return None
+        monkeypatch.setattr(storefront_provision.AdminApiClient, "get_user", _missing)
+        async with S() as s2:
+            await storefront_provision.reap_pending_orders(
+                s2, older_than=dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1))
 
         async with S() as s2:
             c = await s2.get(StorefrontCustomer, cid)

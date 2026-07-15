@@ -15,6 +15,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/secremb4.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
 import pytest  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.core import crypto  # noqa: E402
@@ -133,6 +134,66 @@ def test_f10_metering_failure_preserves_baseline(tmp_path, monkeypatch):
                 n_meters = (await s.execute(select(func.count()).select_from(UsageMeter)
                             .where(UsageMeter.panel_id == pid))).scalar_one()
                 assert n_meters == 0
+        finally:
+            await engine.dispose()
+    asyncio.run(go())
+
+
+def test_f10_failed_sync_preserves_renewal_date_for_exact_retry(tmp_path, monkeypatch):
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'f10-renew.db'}")
+        from app.core.db import Base
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        S = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            from app.models import UsageMeter
+            from app.services import metering, settings_service
+            async with S() as s:
+                await settings_service.set_value(s, "metering_enabled", True)
+                panel = Panel(key="pr", host="h", proxy_path_enc=crypto.encrypt("x") or "",
+                              owner_uuid=_OWNER)
+                s.add(panel)
+                await s.flush()
+                pid = panel.id
+                s.add(EndUserSnapshot(
+                    panel_id=pid, user_uuid="u1", added_by_uuid=_OWNER,
+                    usage_limit_gb=10, current_usage_gb=8, start_date=dt.date(2026, 7, 1),
+                    meter_init=True, meter_provisioned_gb=10, meter_consumed_gb=8))
+                s.add(UsageMeter(
+                    panel_id=pid, user_uuid="u1", period_label="2026-07",
+                    added_by_uuid=_OWNER, quota_added_gb=10, consumed_gb=8,
+                    renew_used_gb=0, edit_renewal_gb=0, overage_gb=0, reset_count=0))
+                await s.commit()
+
+            incoming = _user("u1", limit=10, used=1)
+            incoming.start_date = dt.date(2026, 7, 15)
+            real_compute = metering.compute
+
+            def _boom(**kwargs):  # noqa: ANN003
+                raise RuntimeError("transient meter failure")
+            monkeypatch.setattr(metering, "compute", _boom)
+            async with S() as s:
+                await sync_service.sync_panel(s, await s.get(Panel, pid), data=_data([incoming]))
+
+            async with S() as s:
+                snap = (await s.execute(select(EndUserSnapshot).where(
+                    EndUserSnapshot.user_uuid == "u1"))).scalar_one()
+                assert snap.start_date == dt.date(2026, 7, 1)
+                assert float(snap.current_usage_gb) == 8
+
+            monkeypatch.setattr(metering, "compute", real_compute)
+            async with S() as s:
+                await sync_service.sync_panel(s, await s.get(Panel, pid), data=_data([incoming]))
+            async with S() as s:
+                meter = (await s.execute(select(UsageMeter).where(
+                    UsageMeter.user_uuid == "u1"))).scalar_one()
+                snap = (await s.execute(select(EndUserSnapshot).where(
+                    EndUserSnapshot.user_uuid == "u1"))).scalar_one()
+                assert float(meter.quota_added_gb) == 20
+                assert float(meter.renew_used_gb) == 8
+                assert float(snap.meter_consumed_gb) == 1
+                assert snap.start_date == dt.date(2026, 7, 15)
         finally:
             await engine.dispose()
     asyncio.run(go())

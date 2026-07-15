@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "7968884fecbd"
+HEAD = "a6c9e2f4b7d1"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -370,3 +370,27 @@ def test_is_trial_backfill(tmp_path):
     rows = dict(conn.execute("SELECT id, is_trial FROM storefront_orders").fetchall())
     conn.close()
     assert rows == {1: 1, 2: 0, 3: 0}
+
+
+def test_renewal_target_migration_raises_short_lease_floor(tmp_path):
+    """a6c9e2f4b7d1 adds the durable renewal target and upgrades a legacy 180s lease to the safe 300s
+    floor without requiring an operator to re-save Settings."""
+    db = tmp_path / "renew-target.db"
+    _alembic(db, "upgrade", "7968884fecbd")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO settings (key, value, is_secret, created_at, updated_at) "
+        "VALUES ('storefront_operation_lease_seconds', '180', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    )
+    conn.commit()
+    conn.close()
+
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(storefront_operations)")}
+    stored = conn.execute(
+        "SELECT value FROM settings WHERE key='storefront_operation_lease_seconds'"
+    ).fetchone()[0]
+    conn.close()
+    assert {"target_usage_limit_gb", "prior_panel_start_date"} <= columns
+    assert int(stored) == 300

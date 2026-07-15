@@ -272,6 +272,11 @@ class StorefrontOperation(Base, TimestampMixin):
     days: Mapped[int] = mapped_column(Integer, default=0)
     by_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     debit_txn_id: Mapped[int | None] = mapped_column(Integer, nullable=True)      # the wallet debit
+    # Renewal recovery target, persisted BEFORE the debit/panel PATCH. If the worker dies after the
+    # remote write, the reconciler verifies or idempotently reapplies this absolute target instead of
+    # blindly refunding a renewal that the customer already received.
+    target_usage_limit_gb: Mapped[float | None] = mapped_column(Numeric(12, 3), nullable=True)
+    prior_panel_start_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     result_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # cached terminal result
     result_sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
 

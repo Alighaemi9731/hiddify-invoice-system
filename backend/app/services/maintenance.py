@@ -45,6 +45,7 @@ from app.models import (
     PortalLoginNonce,
     Reseller,
     StorefrontCustomer,
+    StorefrontOperation,
     StorefrontOrder,
     StorefrontWalletTxn,
     SyncRun,
@@ -257,7 +258,10 @@ async def prune_stale_storefront(
     except (TypeError, ValueError):
         days = 90
     if days <= 0:
-        return {"customers": 0, "junk_orders": 0, "junk_topups": 0, "retention_days": 0}
+        return {
+            "customers": 0, "junk_orders": 0, "junk_topups": 0,
+            "pending_operations": 0, "retention_days": 0,
+        }
     cutoff = now - dt.timedelta(days=days)
 
     async def _delete(stmt: Any) -> int:
@@ -302,6 +306,8 @@ async def prune_stale_storefront(
     customers = 0
     if stale_ids:
         # Explicit child-first deletes (don't depend on DB cascade being enabled, e.g. SQLite PRAGMA).
+        await _delete(delete(StorefrontOperation).where(
+            StorefrontOperation.customer_id.in_(stale_ids)))
         await _delete(delete(StorefrontWalletTxn).where(StorefrontWalletTxn.customer_id.in_(stale_ids)))
         await _delete(delete(StorefrontOrder).where(StorefrontOrder.customer_id.in_(stale_ids)))
         customers = await _delete(delete(StorefrontCustomer).where(StorefrontCustomer.id.in_(stale_ids)))
@@ -311,9 +317,17 @@ async def prune_stale_storefront(
     junk_topups = await _delete(delete(StorefrontWalletTxn).where(
         StorefrontWalletTxn.kind == "topup", StorefrontWalletTxn.status == "rejected",
         StorefrontWalletTxn.created_at < cutoff))
+    # Confirmation cards reserve their operation token before delivery. Cards that were never clicked
+    # remain `pending`; age only those abandoned reservations out. Terminal/in-progress money actions
+    # are retained so idempotent replay and recovery remain durable.
+    pending_operations = await _delete(delete(StorefrontOperation).where(
+        StorefrontOperation.status == "pending", StorefrontOperation.created_at < cutoff))
     await session.commit()
 
-    counts = {"customers": customers, "junk_orders": junk_orders, "junk_topups": junk_topups}
+    counts = {
+        "customers": customers, "junk_orders": junk_orders, "junk_topups": junk_topups,
+        "pending_operations": pending_operations,
+    }
     if any(counts.values()):
         log.info("Storefront retention sweep (>%dd inactive): %s", days, counts)
     return counts

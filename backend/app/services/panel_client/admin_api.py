@@ -14,6 +14,7 @@ import html
 import logging
 import re
 import uuid as uuidlib
+from dataclasses import dataclass
 
 import httpx
 
@@ -24,6 +25,24 @@ log = logging.getLogger("panel.admin_api")
 
 class UserLimitError(RuntimeError):
     """Raised when the panel rejects a create because the admin's max_users is reached."""
+
+
+@dataclass(frozen=True)
+class RenewUserTarget:
+    """Absolute, replayable panel state for one storefront renewal."""
+
+    usage_limit_gb: float
+    package_days: int
+    prior_start_date: str | None
+
+    @property
+    def body(self) -> dict:
+        return {
+            "usage_limit_GB": self.usage_limit_gb,
+            "package_days": self.package_days,
+            "start_date": None,
+            "enable": True,
+        }
 
 
 class AdminApiClient(PanelClient):
@@ -167,27 +186,38 @@ class AdminApiClient(PanelClient):
             return
         await self.bulk_delete_users(panel, [uid])
 
+    async def prepare_renew_user(  # noqa: ANN001
+        self, panel, user_uuid: str, *, gb: int, days: int, api_key: str | None = None
+    ) -> RenewUserTarget:
+        """Read and calculate the absolute renewal target without mutating the panel."""
+        data = await self.get_user(panel, user_uuid, api_key=api_key)
+        if data is None:
+            raise RuntimeError("panel user not found")
+        used = 0.0
+        try:
+            used = float(data.get("current_usage_GB") or 0)
+        except (TypeError, ValueError):
+            used = 0.0
+        raw_start = data.get("start_date")
+        return RenewUserTarget(
+            usage_limit_gb=round(used + float(gb), 3),
+            package_days=int(days),
+            prior_start_date=(str(raw_start)[:32] if raw_start not in (None, "") else None),
+        )
+
+    async def apply_renew_user_target(  # noqa: ANN001
+        self, panel, user_uuid: str, target: RenewUserTarget, *, api_key: str | None = None
+    ) -> None:
+        """Apply a previously persisted absolute target; safe to retry during crash recovery."""
+        await self.patch_user(panel, user_uuid, target.body, api_key=api_key)
+
     async def renew_user(  # noqa: ANN001
         self, panel, user_uuid: str, *, gb: int, days: int, api_key: str | None = None
     ) -> None:
-        """Renew/extend a user IN PLACE (same uuid → the customer's link/QR keep working): grant a fresh
-        `gb`/`days` from now. Reads current usage and sets `usage_limit_GB = used + gb` so the REMAINING
-        quota is exactly `gb` regardless of Hiddify's reset semantics, resets `package_days`, and clears
-        `start_date` (null → the window restarts on first connect). Re-enables if it was disabled."""
-        data = await self.get_user(panel, user_uuid, api_key=api_key)
-        used = 0.0
-        if data:
-            try:
-                used = float(data.get("current_usage_GB") or 0)
-            except (TypeError, ValueError):
-                used = 0.0
-        body = {
-            "usage_limit_GB": round(used + float(gb), 3),
-            "package_days": int(days),
-            "start_date": None,
-            "enable": True,
-        }
-        await self.patch_user(panel, user_uuid, body, api_key=api_key)
+        """Backward-compatible prepare+apply wrapper for non-durable callers and adapter tests."""
+        target = await self.prepare_renew_user(
+            panel, user_uuid, gb=gb, days=days, api_key=api_key)
+        await self.apply_renew_user_target(panel, user_uuid, target, api_key=api_key)
 
     async def get_user_ids(self, panel) -> dict[str, int]:  # noqa: ANN001
         """Return Hiddify's internal numeric id for every visible user (WHOLE panel — heavy).

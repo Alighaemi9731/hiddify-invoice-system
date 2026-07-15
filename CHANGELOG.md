@@ -8,6 +8,36 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.82.1 - 2026-07-15
+
+Security follow-up after the Round-2 verification. One additive migration (`a6c9e2f4b7d1`, off
+`7968884fecbd`); no manual upgrade steps.
+
+### Fixed
+
+- **All reseller-portal credentials now obey the strict HTTPS-or-loopback transport policy.** The
+  one-time login exchange and every reseller bearer-token dependency now reject public plaintext
+  before decoding a credential, matching the owner API's protection.
+- **Storefront idempotency tokens are authorization-bound.** Purchase and renewal confirmation tokens
+  are persisted before their Telegram buttons are sent and bound to the exact shop, customer, action,
+  and renewal order. A forwarded/stale callback can no longer poison another customer's operation or
+  replay a completed purchase to obtain its subscription link. Abandoned pending cards are aged out by
+  storefront retention without deleting terminal/recoverable money operations.
+- **A live panel request cannot outlast its storefront lease.** The validated/effective minimum is now
+  five minutes (covering the renewal GET+PATCH sequence and safety margin), minted only after lock wait;
+  skipped reaper rows release their database locks immediately.
+- **Metering failures preserve the complete renewal baseline.** `start_date` now advances atomically
+  with usage/limit and meter state, so the next successful sync still detects and bills the original
+  renewal transition exactly once.
+- **Ambiguous renewal crashes reconcile forward instead of granting free service.** The absolute panel
+  target is stored before debit. After a timeout/cancellation/crash, the reaper verifies or idempotently
+  reapplies that target and finalizes the charge; only a definitively missing panel user is compensated.
+
+### Migration
+
+- `a6c9e2f4b7d1` adds nullable `target_usage_limit_gb` and `prior_panel_start_date` columns to
+  `storefront_operations`. Legacy in-flight rows keep the conservative exactly-once reversal path.
+
 ## 1.82.0 - 2026-07-15
 
 Security remediation **Round 2** — Batch C of 3 (sync / metering / bot resource). No migration.

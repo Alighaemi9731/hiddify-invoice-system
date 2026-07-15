@@ -236,7 +236,10 @@ async def _upsert_users(
         if meter_ok:
             s.usage_limit_gb = u.usage_limit_gb
             s.current_usage_gb = u.current_usage_gb
-        s.start_date = u.start_date
+            # `compute()` compares the incoming date with the PREVIOUS snapshot date to detect a
+            # renewal. Advancing it on a failed calculation would erase that transition and make the
+            # retry misclassify/miss the renewal, so it is part of the same atomic baseline.
+            s.start_date = u.start_date
         s.package_days = u.package_days
         s.enable = u.enable
         s.is_active = u.is_active

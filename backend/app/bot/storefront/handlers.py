@@ -39,6 +39,7 @@ from app.services import (
     settings_service,
     storefront,
     storefront_credit,
+    storefront_ops,
     storefront_provision,
     storefront_subscription,
     storefront_wallet,
@@ -777,7 +778,12 @@ async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         after = int(storefront_wallet.balance(customer)) - int(plan.price_toman)
         plan_text = kb.plan_label(plan)
-    op_id = secrets.token_urlsafe(16)   # F4: durable idempotency token for this confirm card
+        op_id = secrets.token_urlsafe(16)
+        await storefront_ops.reserve(
+            s, op_id, op_type="purchase", storefront_bot_id=sf.id, customer_id=customer.id,
+            plan_id=plan.id, price_toman=int(plan.price_toman), gb=int(plan.gb), days=int(plan.days),
+        )
+        await s.commit()  # bind the token BEFORE it is exposed in the confirmation callback
     await state.update_data(buy_name=name, buy_op=op_id)
     await message.answer(rtl(
         f"🧾 تأییدِ خرید\n\n{plan_text}\nنام: {name}\n\n"
@@ -928,7 +934,14 @@ async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
         price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
-    op_id = secrets.token_urlsafe(12)   # F4: durable idempotency token (short — fits the 64B callback)
+        op_id = secrets.token_urlsafe(12)
+        await storefront_ops.reserve(
+            s, op_id, op_type="renewal", storefront_bot_id=sf.id,
+            customer_id=order.customer_id, order_id=order.id,
+            plan_id=(plan.id if plan else None), price_toman=price, gb=gb, days=days,
+            prior_status=order.status,
+        )
+        await s.commit()  # bind the token BEFORE it is exposed in the confirmation callback
     await cb.message.answer(
         rtl(f"🔄 تمدیدِ «{order.label or 'سرویس'}» — {gb} گیگ · {days} روز\n"
             f"مبلغ: {_toman(price)} تومان از کیفِ پول کسر می‌شود."),

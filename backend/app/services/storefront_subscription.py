@@ -83,12 +83,10 @@ async def renew(
     cross-process retry — returns the CACHED result with no second debit. When no `op_id` is given
     (admin free renews) one is minted per call (free, so no double-charge risk).
 
-    F11 (charge ordering + crash safety): funds are DEBITED FIRST (linked to the operation), then the
-    panel is renewed; on a panel failure the charge is reversed via a distinct `renew_reversal`. If the
-    process crashes between the debit and the finalize (e.g. task cancellation, which `except Exception`
-    can't catch), the order stays `renewing` with a LEASE and the reconciler (reap_pending_orders)
-    reverses the charge exactly once and restores the order — reverse-on-uncertainty, so a customer is
-    never left charged for a renewal they didn't get (renew_user isn't post-hoc idempotent)."""
+    F11 (charge ordering + crash safety): an absolute panel target is persisted before the debit, then
+    applied after it. If the process dies or the response is ambiguous, the order stays `renewing` with
+    a lease; the reconciler verifies or idempotently reapplies that same target and finalizes the charge.
+    A definitive missing panel user is compensated exactly once via `renew_reversal`."""
     op_id = op_id or secrets.token_urlsafe(16)
 
     # 0. Read-only validation + context (before we create any durable state).
@@ -107,9 +105,8 @@ async def renew(
         price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
         sf_id, customer_id = sf.id, customer.id
         uuid, api_key = order.panel_user_uuid, reseller.admin_uuid
-        reseller_id, panel_id = reseller.id, panel.id
+        panel_id = panel.id
         prior_status = order.status
-        lease_at = await storefront_ops.lease_deadline(s)
 
     async with _customer_lock(sf_id, customer_id):
         # 1. Claim the operation + CAS the order to "renewing" (with a lease), atomically.
@@ -121,6 +118,8 @@ async def renew(
                 prior_status=prior_status)
             if outcome == storefront_ops.REPLAY and op is not None:
                 return _cached_renew_result(op)   # idempotent replay — no re-charge
+            if outcome == storefront_ops.CONFLICT:
+                return SubResult(False, "error")
             if op is None or outcome == storefront_ops.IN_FLIGHT:
                 return SubResult(False, "processing")
             op_pk = op.id
@@ -130,7 +129,9 @@ async def renew(
                 await s.commit()
                 return SubResult(False, "not_found")
             order.status = "renewing"
-            order.lease_expires_at = lease_at
+            # Mint the lease only after the per-customer wait and row claim; otherwise time spent queued
+            # behind an earlier operation could consume the lease before this renewal even starts.
+            order.lease_expires_at = await storefront_ops.lease_deadline(s)
             await s.commit()
 
         async def _restore_and_finalize(status: str) -> None:
@@ -145,7 +146,29 @@ async def renew(
                     op2.status = status
                 await s.commit()
 
-        # 2. Debit FIRST (linked to the operation), committed with the debit_txn link.
+        # 2. Prepare and persist an ABSOLUTE, replayable panel target before any debit. A process death
+        #    after the remote PATCH can then be reconciled to service+charge instead of a blind refund.
+        client = AdminApiClient()
+        try:
+            async with session_factory() as s:
+                panel = await s.get(Panel, panel_id)
+            if panel is None:
+                raise RuntimeError("panel vanished")
+            target = await client.prepare_renew_user(
+                panel, uuid, gb=gb, days=days, api_key=api_key)
+            async with session_factory() as s:
+                op2 = await s.get(StorefrontOperation, op_pk)
+                if op2 is None or op2.status != "in_progress":
+                    raise RuntimeError("renewal operation vanished")
+                op2.target_usage_limit_gb = target.usage_limit_gb
+                op2.prior_panel_start_date = target.prior_start_date
+                await s.commit()
+        except Exception as exc:  # noqa: BLE001 — preparation happens before charging, so fail cleanly
+            log.warning("renew target preparation failed for order %s", order_id, exc_info=True)
+            await _restore_and_finalize("failed")
+            return SubResult(False, "error", message=str(exc)[:200])
+
+        # 3. Debit FIRST (linked to the operation), committed with the debit_txn link.
         if not by_admin and price > 0:
             async with session_factory() as s:
                 ok, txn = await storefront_wallet.charge_purchase(
@@ -163,25 +186,20 @@ async def renew(
                     op2.debit_txn_id = txn.id
                 await s.commit()   # debit + operation_id link commit together (no charged-but-unlinked gap)
 
-        # 3. Renew on the panel; on failure COMPENSATE (reverse the charge, restore the order).
+        # 4. Apply the persisted target. An exception is AMBIGUOUS (the remote PATCH may have committed
+        #    before the connection failed), so leave the durable operation in-progress. The reconciler
+        #    verifies/reapplies the same absolute target after the lease instead of issuing a blind refund.
         try:
             async with session_factory() as s:
-                reseller = await s.get(Reseller, reseller_id)
                 panel = await s.get(Panel, panel_id)
-                if reseller is None or panel is None:
-                    raise RuntimeError("panel/reseller vanished")
-                await AdminApiClient().renew_user(panel, uuid, gb=gb, days=days, api_key=api_key)
+            if panel is None:
+                raise RuntimeError("panel vanished")
+            await client.apply_renew_user_target(panel, uuid, target, api_key=api_key)
         except Exception as exc:  # noqa: BLE001
-            log.warning("renew_user failed for order %s", order_id, exc_info=True)
-            if not by_admin and price > 0:
-                async with session_factory() as s:
-                    await storefront_wallet.reverse_charge(
-                        s, customer_id, price, order_id=order_id, operation_id=op_pk)
-                    await s.commit()
-            await _restore_and_finalize("reversed" if (not by_admin and price > 0) else "failed")
-            return SubResult(False, "error", message=str(exc)[:200])
+            log.warning("renew target apply uncertain for order %s", order_id, exc_info=True)
+            return SubResult(False, "processing", message=str(exc)[:200])
 
-        # 4. Success — finalize the order + operation.
+        # 5. Success — finalize the order + operation.
         async with session_factory() as s:
             o = await s.get(StorefrontOrder, order_id)
             if o is not None:

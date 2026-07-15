@@ -2,8 +2,8 @@
 
 F4  purchase/renewal are idempotent by a durable `op_id` (a replay returns the cached result, never a
     second debit).
-F11 a crashed renewal (order stuck `renewing` with an expired lease + a committed debit) is reversed
-    EXACTLY once by the reconciler (reverse-on-uncertainty) — never blind-promoted to provisioned.
+F11 a crashed renewal persists an absolute panel target before debit; the reconciler verifies or
+    idempotently reapplies it and only compensates when the panel user is definitively absent.
 F5  the reaper never refunds an order whose provisioning LEASE is still active.
 """
 from __future__ import annotations
@@ -84,9 +84,12 @@ def _fake_create(calls):  # noqa: ANN001, ANN202
 
 
 def _fake_renew(calls):  # noqa: ANN001, ANN202
-    async def renew_user(self, panel, uuid, *, gb, days, api_key=None):  # noqa: ANN001, ANN002
+    async def prepare(self, panel, uuid, *, gb, days, api_key=None):  # noqa: ANN001, ANN002
+        return admin_api.RenewUserTarget(float(gb), int(days), "2026-06-01")
+
+    async def apply(self, panel, uuid, target, *, api_key=None):  # noqa: ANN001, ANN002
         calls["renew"] = calls.get("renew", 0) + 1
-    return renew_user
+    return prepare, apply
 
 
 async def _purchase_txn_count(Session, cust_id):  # noqa: ANN001
@@ -100,7 +103,9 @@ async def _purchase_txn_count(Session, cust_id):  # noqa: ANN001
 # ───────────────────────── F4: renewal idempotency ─────────────────────────
 def test_f4_renewal_idempotent_replay(tmp_path, monkeypatch):
     calls: dict[str, int] = {}
-    monkeypatch.setattr(admin_api.AdminApiClient, "renew_user", _fake_renew(calls))
+    prepare, apply = _fake_renew(calls)
+    monkeypatch.setattr(admin_api.AdminApiClient, "prepare_renew_user", prepare)
+    monkeypatch.setattr(admin_api.AdminApiClient, "apply_renew_user_target", apply)
 
     async def go():
         engine, Session = _engine_session(tmp_path, "r2b_ren.db")
@@ -169,6 +174,64 @@ def test_f4_purchase_idempotent_replay(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
+def test_f4_purchase_replay_is_bound_to_customer_and_tenant(tmp_path, monkeypatch):
+    calls: dict[str, int] = {}
+    monkeypatch.setattr(usercreate, "create_for_reseller", _fake_create(calls))
+
+    async def go():
+        engine, Session = _engine_session(tmp_path, "r2b_bind.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, owner, plan = await _seed(s)
+            other = await storefront.get_or_create_customer(
+                s, bot.id, SimpleNamespace(id=777, first_name="Other", username="other"))
+            other.wallet_balance_toman = 100_000
+            await storefront_ops.reserve(
+                s, "OP-BOUND", op_type="purchase", storefront_bot_id=bot.id,
+                customer_id=owner.id, plan_id=plan.id, price_toman=plan.price_toman,
+                gb=plan.gb, days=plan.days)
+            await s.commit()
+            ids = bot.id, owner.id, other.id, plan.id
+
+        sf_id, owner_id, other_id, plan_id = ids
+        preclaim_attack = await storefront_provision.purchase(
+            Session, sf_id=sf_id, customer_id=other_id, plan_id=plan_id,
+            label="attacker", op_id="OP-BOUND")
+        assert not preclaim_attack.ok and preclaim_attack.reason == "invalid_operation"
+
+        original = await storefront_provision.purchase(
+            Session, sf_id=sf_id, customer_id=owner_id, plan_id=plan_id,
+            label="owner", op_id="OP-BOUND")
+        assert original.ok and original.sub_link
+
+        replay = await storefront_provision.purchase(
+            Session, sf_id=sf_id, customer_id=other_id, plan_id=0,
+            label="", op_id="OP-BOUND")
+        assert not replay.ok and replay.reason == "invalid_operation"
+        assert replay.order_id is None and replay.sub_link is None
+        async with Session() as s:
+            assert int((await s.get(StorefrontCustomer, other_id)).wallet_balance_toman) == 100_000
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_f5_lease_clamps_legacy_short_setting_above_panel_sequence(tmp_path, monkeypatch):
+    async def short_setting(*args, **kwargs):  # noqa: ANN002, ANN003
+        return 30
+
+    monkeypatch.setattr(storefront_ops.settings_service, "get", short_setting)
+
+    async def go():
+        engine, Session = _engine_session(tmp_path, "r2b_lease_bound.db")
+        await _create_all(engine)
+        async with Session() as s:
+            assert await storefront_ops.lease_seconds(s) == 300
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
 # ───────────────────────── F11: reconciler reverses a crashed renewal once ─────────────────────────
 def test_f11_reconciler_reverses_crashed_renewal_once(tmp_path):
     async def go():
@@ -224,6 +287,72 @@ def test_f11_reconciler_reverses_crashed_renewal_once(tmp_path):
     asyncio.run(go())
 
 
+@pytest.mark.parametrize("already_applied", [True, False])
+def test_f11_reconciler_finalizes_panel_success_without_refund(
+    tmp_path, monkeypatch, already_applied,
+):
+    applied: list[admin_api.RenewUserTarget] = []
+
+    async def panel_has_target(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
+        return {
+            "usage_limit_GB": 18.0 if already_applied else 8.0,
+            "package_days": 30 if already_applied else 10,
+            "start_date": None if already_applied else "2026-06-01",
+            "enable": True,
+        }
+
+    async def apply_target(self, panel, uuid, target, *, api_key=None):  # noqa: ANN001, ANN002
+        applied.append(target)
+
+    monkeypatch.setattr(admin_api.AdminApiClient, "get_user", panel_has_target)
+    monkeypatch.setattr(admin_api.AdminApiClient, "apply_renew_user_target", apply_target)
+
+    async def go():
+        engine, Session = _engine_session(tmp_path, "r2b_panel_done.db")
+        await _create_all(engine)
+        past = storefront_ops.now() - dt.timedelta(minutes=5)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=70_000)
+            order = StorefrontOrder(
+                customer_id=cust.id, plan_id=plan.id, panel_id=bot.panel_id,
+                label="svc", gb=10, days=30, price_toman=30_000, status="renewing",
+                panel_user_uuid="uuid-1", sub_link="https://h/p/uuid-1/#x",
+                lease_expires_at=past)
+            s.add(order)
+            await s.flush()
+            op = StorefrontOperation(
+                op_id="OP-PANEL-DONE", op_type="renewal", storefront_bot_id=bot.id,
+                customer_id=cust.id, order_id=order.id, plan_id=plan.id, status="in_progress",
+                prior_status="provisioned", price_toman=30_000, gb=10, days=30,
+                target_usage_limit_gb=18.0, prior_panel_start_date="2026-06-01")
+            s.add(op)
+            await s.flush()
+            s.add(StorefrontWalletTxn(
+                customer_id=cust.id, storefront_bot_id=bot.id, kind="purchase",
+                amount_toman=-30_000, status="done", order_id=order.id, operation_id=op.id))
+            await s.commit()
+            oid, cid, op_pk = order.id, cust.id, op.id
+
+        async with Session() as s:
+            result = await storefront_provision.reap_pending_orders(
+                s, older_than=storefront_ops.now() + dt.timedelta(hours=1))
+        assert result["renewing_completed"] == 1 and result["reversed"] == 0
+        assert len(applied) == (0 if already_applied else 1)
+        if applied:
+            assert applied[0].usage_limit_gb == 18.0 and applied[0].package_days == 30
+        async with Session() as s:
+            assert (await s.get(StorefrontOperation, op_pk)).status == "done"
+            assert (await s.get(StorefrontOrder, oid)).status == "provisioned"
+            assert int((await s.get(StorefrontCustomer, cid)).wallet_balance_toman) == 70_000
+            n_rev = (await s.execute(select(func.count()).select_from(StorefrontWalletTxn).where(
+                StorefrontWalletTxn.operation_id == op_pk,
+                StorefrontWalletTxn.kind == "renew_reversal"))).scalar_one()
+            assert n_rev == 0
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
 # ───────────────────────── F5: an active lease shields an in-flight provision ─────────────────────────
 def test_f5_active_lease_blocks_reaper(tmp_path, monkeypatch):
     async def fake_get_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
@@ -273,7 +402,9 @@ def test_f5_active_lease_blocks_reaper(tmp_path, monkeypatch):
 @requires_pg
 def test_f4_concurrent_renewals_charge_once(monkeypatch):
     calls: dict[str, int] = {}
-    monkeypatch.setattr(admin_api.AdminApiClient, "renew_user", _fake_renew(calls))
+    prepare, apply = _fake_renew(calls)
+    monkeypatch.setattr(admin_api.AdminApiClient, "prepare_renew_user", prepare)
+    monkeypatch.setattr(admin_api.AdminApiClient, "apply_renew_user_target", apply)
 
     async def run():
         engine, Session = make_engine()
