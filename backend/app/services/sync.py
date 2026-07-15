@@ -28,6 +28,17 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def _newer_success_since(last_synced_at: dt.datetime | None, attempt_started: dt.datetime) -> bool:
+    """True if a successful sync landed at or after this attempt began its work (F12 recency guard).
+    Normalizes a naive value to UTC — SQLite reads DateTime(timezone=True) back as naive, so a bare
+    comparison against an aware `attempt_started` would raise."""
+    if last_synced_at is None:
+        return False
+    if last_synced_at.tzinfo is None:
+        last_synced_at = last_synced_at.replace(tzinfo=dt.timezone.utc)
+    return last_synced_at >= attempt_started
+
+
 async def sync_panel(
     session: AsyncSession,
     panel: Panel,
@@ -47,11 +58,15 @@ async def sync_panel(
     # uq_enduser_panel_uuid and spuriously mark the panel errored. Blocking (not try) + per-panel key
     # so different panels never wait on each other; released on commit/rollback. No-op on SQLite.
     bind = session.get_bind()
-    if getattr(bind.dialect, "name", "") == "postgresql":
+    is_postgres = getattr(bind.dialect, "name", "") == "postgresql"
+    if is_postgres:
         await session.execute(
             text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
             {"ns": _SYNC_LOCK_NS, "pid": panel_id},
         )
+    # When this attempt actually began its work (under the lock) — used by the F12 recency guard so an
+    # older failed attempt never clobbers a newer success's `ok` status.
+    attempt_started = _now()
     run = SyncRun(panel_id=panel_id, source=source, status=SyncStatus.running)
     session.add(run)
     await session.flush()
@@ -84,10 +99,22 @@ async def sync_panel(
         )
     except Exception as exc:  # noqa: BLE001
         # The flushed run row is gone after rollback; record a fresh failure row.
-        await session.rollback()
+        await session.rollback()   # ends the txn → releases the per-panel advisory lock
         err = str(exc)[:1000]
+        # F12: the rollback dropped the advisory lock, so failure bookkeeping would otherwise run
+        # UNSERIALIZED and could overwrite a newer concurrent success's `ok`. Re-acquire the same
+        # per-panel lock, then only downgrade to `error` if NO successful sync has landed since this
+        # attempt began (recency guard) — a newer success must always win. The failed SyncRun row is
+        # always recorded for audit.
+        if is_postgres:
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
+                {"ns": _SYNC_LOCK_NS, "pid": panel_id},
+            )
         current_panel = await session.get(Panel, panel_id)  # re-attach after rollback
-        if current_panel is not None:
+        if current_panel is not None and not _newer_success_since(
+            current_panel.last_synced_at, attempt_started
+        ):
             current_panel.status = PanelStatus.error
             current_panel.last_error = err
         run = SyncRun(
@@ -180,17 +207,23 @@ async def _upsert_users(
         if metering_on:
             try:
                 meter = meters.get(u.uuid)
+                is_new_meter = meter is None
                 if meter is None:
                     meter = UsageMeter(panel_id=panel.id, user_uuid=u.uuid, period_label=period_label)
-                    session.add(meter)
-                    meters[u.uuid] = meter
-                metering.apply(
+                # F10: compute() is PURE — it mutates nothing. Apply the result (and register a NEW
+                # meter row) ONLY after it succeeds, so a metering failure leaves neither a partial
+                # snapshot baseline nor an empty UsageMeter row; the next sync recaptures the full delta.
+                update = metering.compute(
                     snapshot=s, meter=meter,
                     prev_limit=float(s.usage_limit_gb or 0), prev_used=float(s.current_usage_gb or 0),
                     new_limit=float(u.usage_limit_gb or 0), new_used=float(u.current_usage_gb or 0),
                     start_date=u.start_date, added_by_uuid=u.added_by_uuid, name=u.name,
                     period_label=period_label,
                 )
+                if is_new_meter:
+                    session.add(meter)
+                    meters[u.uuid] = meter
+                metering.write(s, meter, update)
             except Exception:  # noqa: BLE001 — metering must never break a sync
                 meter_ok = False
                 log.warning("metering.apply failed for user %s", u.uuid, exc_info=True)

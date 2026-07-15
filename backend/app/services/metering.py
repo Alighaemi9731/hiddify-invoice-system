@@ -19,6 +19,7 @@ tells the reseller (and the owner) exactly what was detected and that it's bille
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,10 +58,29 @@ async def load_period_meters(
     return {m.user_uuid: m for m in rows}
 
 
-def apply(
+@dataclass(frozen=True)
+class MeterUpdate:
+    """The new ABSOLUTE snapshot/meter values a metering step produces (F10). `compute()` returns one
+    without touching any ORM object; the caller applies it via `write()` ONLY after it succeeds, so a
+    metering failure leaves the snapshot's baseline and the UsageMeter row untouched (the next sync then
+    recaptures the full missed delta exactly once)."""
+    meter_provisioned_gb: float
+    meter_consumed_gb: float
+    meter_init: bool
+    added_by_uuid: str | None
+    name: str
+    quota_added_gb: float
+    renew_used_gb: float
+    edit_renewal_gb: float
+    reset_count: int
+    consumed_gb: float
+    overage_gb: float
+
+
+def compute(
     *,
-    snapshot,                 # EndUserSnapshot (running state lives here)
-    meter: UsageMeter,        # this month's bucket
+    snapshot,                 # EndUserSnapshot (read-only here)
+    meter: UsageMeter,        # this month's bucket (read-only here)
     prev_limit: float,
     prev_used: float,
     new_limit: float,
@@ -69,22 +89,39 @@ def apply(
     added_by_uuid: str | None,
     name: str | None,
     period_label: str,
-) -> None:
-    """Update the per-user running state (on `snapshot`) and the monthly `meter`.
-    Pure (no DB); call BEFORE overwriting the snapshot's usage fields."""
-    meter.added_by_uuid = added_by_uuid
-    meter.name = (name or "")[:255]
+) -> MeterUpdate:
+    """PURE: read the current running state and return the new absolute values. Mutates nothing — the
+    caller writes the result only on success (F10)."""
+    # Start every field at its CURRENT value; each branch adjusts only what it touches.
+    prov = float(snapshot.meter_provisioned_gb or 0)
+    cons = float(snapshot.meter_consumed_gb or 0)
+    init = bool(snapshot.meter_init)
+    quota_added = float(meter.quota_added_gb or 0)
+    renew_used = float(meter.renew_used_gb or 0)
+    edit_renewal = float(meter.edit_renewal_gb or 0)
+    reset_count = int(meter.reset_count or 0)
+    consumed = float(meter.consumed_gb or 0)
+    overage_total = float(meter.overage_gb or 0)
+    m_name = (name or "")[:255]
     in_period = period_of(start_date) == period_label
+
+    def _result() -> MeterUpdate:
+        return MeterUpdate(
+            meter_provisioned_gb=prov, meter_consumed_gb=cons, meter_init=init,
+            added_by_uuid=added_by_uuid, name=m_name, quota_added_gb=quota_added,
+            renew_used_gb=renew_used, edit_renewal_gb=edit_renewal, reset_count=reset_count,
+            consumed_gb=consumed, overage_gb=overage_total,
+        )
 
     # First time we see this user (a brand-new user, OR an existing one when metering
     # is first switched on). Set the baseline; only bill it if genuinely created now.
-    if not snapshot.meter_init:
-        snapshot.meter_provisioned_gb = new_limit
-        snapshot.meter_consumed_gb = new_used
-        snapshot.meter_init = True
+    if not init:
+        prov = new_limit
+        cons = new_used
+        init = True
         if in_period:
-            meter.quota_added_gb = float(meter.quota_added_gb or 0) + new_limit
-        return
+            quota_added += new_limit
+        return _result()
 
     prev_start = snapshot.start_date  # not yet overwritten by the caller
 
@@ -98,21 +135,19 @@ def apply(
         # the normal start_date rule (which only bills the final snapshot's package). A cycle that
         # started a prior month was already billed there, so we must not bill it again.
         if period_of(prev_start) == period_label:
-            closing_used = min(
-                float(snapshot.meter_consumed_gb or 0), float(snapshot.meter_provisioned_gb or 0)
-            )
+            closing_used = min(cons, prov)
             if closing_used > _EPS:
-                meter.renew_used_gb = float(meter.renew_used_gb or 0) + round(closing_used, 3)
-        snapshot.meter_provisioned_gb = new_limit
-        snapshot.meter_consumed_gb = new_used
+                renew_used += round(closing_used, 3)
+        prov = new_limit
+        cons = new_used
         # A proper renewal (renew-day advances start_date) is the CORRECT way and supersedes any
         # earlier renew-by-edit recorded for this user this month: the fresh start_date makes the
         # normal invoice rule bill the full new quota, so a lingering edit_renewal_gb would
         # double-bill the same volume. Clear it (overage from real over-consumption is kept).
-        meter.edit_renewal_gb = 0.0
+        edit_renewal = 0.0
         if in_period:
-            meter.quota_added_gb = float(meter.quota_added_gb or 0) + new_limit
-        return
+            quota_added += new_limit
+        return _result()
 
     # Quota increase = new sale / top-up / renewal-by-edit (start_date unchanged). A DECREASE
     # (add <= 0) is intentionally ignored: metering only ADDS the abuse the snapshot rule misses,
@@ -122,11 +157,11 @@ def apply(
     # lower quota). This is by design — see docs/… and CLAUDE.md metering notes.
     add = new_limit - prev_limit
     if add > _EPS:
-        meter.quota_added_gb = float(meter.quota_added_gb or 0) + add
-        snapshot.meter_provisioned_gb = float(snapshot.meter_provisioned_gb or 0) + add
+        quota_added += add
+        prov += add
         if not in_period:
             # Topped up without a fresh start_date → renew-by-edit (snapshot rule misses it).
-            meter.edit_renewal_gb = float(meter.edit_renewal_gb or 0) + add
+            edit_renewal += add
 
     # Consumption since last sync (reset-aware).
     if new_used + _EPS >= prev_used:
@@ -135,7 +170,7 @@ def apply(
         # Usage dropped to ~0 while start_date stayed the same → a "renew-volume" reset (the
         # daily-reset abuse): the post-reset usage counts so it accumulates toward overage.
         dc = new_used
-        meter.reset_count = int(meter.reset_count or 0) + 1
+        reset_count += 1
     else:
         # Dropped but NOT to ~0 → a legitimate panel stat-correction / re-sync, not a reset.
         # Count no consumption this sync (next sync measures forward from the new lower value).
@@ -143,17 +178,55 @@ def apply(
     if dc < 0:
         dc = 0.0
 
-    buffer = float(snapshot.meter_provisioned_gb or 0) - float(snapshot.meter_consumed_gb or 0)
+    buffer = prov - cons
     if buffer < 0:
         buffer = 0.0
     overage = dc - buffer
     if overage < 0:
         overage = 0.0
 
-    meter.consumed_gb = float(meter.consumed_gb or 0) + dc
-    snapshot.meter_consumed_gb = float(snapshot.meter_consumed_gb or 0) + dc
+    consumed += dc
+    cons += dc
     if overage > _EPS:
-        meter.overage_gb = float(meter.overage_gb or 0) + overage
+        overage_total += overage
+    return _result()
+
+
+def write(snapshot, meter: UsageMeter, u: MeterUpdate) -> None:  # noqa: ANN001
+    """Apply a computed MeterUpdate to the ORM objects. Call ONLY after compute() succeeded (F10)."""
+    snapshot.meter_provisioned_gb = u.meter_provisioned_gb
+    snapshot.meter_consumed_gb = u.meter_consumed_gb
+    snapshot.meter_init = u.meter_init
+    meter.added_by_uuid = u.added_by_uuid
+    meter.name = u.name
+    meter.quota_added_gb = u.quota_added_gb
+    meter.renew_used_gb = u.renew_used_gb
+    meter.edit_renewal_gb = u.edit_renewal_gb
+    meter.reset_count = u.reset_count
+    meter.consumed_gb = u.consumed_gb
+    meter.overage_gb = u.overage_gb
+
+
+def apply(
+    *,
+    snapshot,                 # EndUserSnapshot (running state lives here)
+    meter: UsageMeter,        # this month's bucket
+    prev_limit: float,
+    prev_used: float,
+    new_limit: float,
+    new_used: float,
+    start_date,
+    added_by_uuid: str | None,
+    name: str | None,
+    period_label: str,
+) -> None:
+    """Backward-compatible wrapper: compute() then write(). Prefer compute()/write() at call sites that
+    need failure atomicity (the sync loop does), so a raising calculation leaves no partial mutation."""
+    write(snapshot, meter, compute(
+        snapshot=snapshot, meter=meter, prev_limit=prev_limit, prev_used=prev_used,
+        new_limit=new_limit, new_used=new_used, start_date=start_date, added_by_uuid=added_by_uuid,
+        name=name, period_label=period_label,
+    ))
 
 
 def _extra_from_rows(

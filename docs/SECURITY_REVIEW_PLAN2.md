@@ -17,7 +17,9 @@ Genuinely fixed in round 1 (preserved, not regressed): **F3, F6, F7, F8, F9, F14
 |-------|---------|----------|-----------|--------|
 | A Front door | v1.80.0 | F1, F2 | — | ✅ done |
 | B Storefront money durability | v1.81.0 | F4, F11, F5 (durable-operation + lease) | 1 (`7968884fecbd`) | ✅ done |
-| C Sync / metering / bot resource | v1.82.0 | F12, F10, F13 | — | ⏳ |
+| C Sync / metering / bot resource | v1.82.0 | F12, F10, F13 | — | ✅ done |
+
+**Round 2 COMPLETE — all 8 residuals fixed, released, and deployed (v1.80.0 → v1.82.0).**
 
 **F2 posture = STRICT** (owner-chosen): public plaintext is refused for *all* credential + bearer requests
 even before HTTPS is configured; loopback (SSH tunnel) is always allowed; domain/relay installs are

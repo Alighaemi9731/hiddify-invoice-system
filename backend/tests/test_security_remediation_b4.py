@@ -61,7 +61,32 @@ def test_f9_panel_billable_age_gate():
     assert _panel_billable(p, now=now, max_age_hours=26)[0] is False      # never synced
 
 
-# ───────────────────────── F10: metering failure doesn't lose usage ─────────────────────────
+# ───────────────────────── F10: metering is atomic (pure compute, apply-on-success) ─────────────────────────
+def test_f10_compute_is_pure():
+    """The calculation mutates NOTHING — so a failure mid-way can't leave a partial baseline. It reads
+    the current state and returns the new absolute values; only write() (called on success) mutates."""
+    from app.models import UsageMeter
+    from app.services import metering
+    snap = EndUserSnapshot(panel_id=1, user_uuid="u1", added_by_uuid=_OWNER,
+                           meter_init=True, meter_provisioned_gb=10, meter_consumed_gb=3,
+                           start_date=dt.date(2026, 7, 1))
+    meter = UsageMeter(panel_id=1, user_uuid="u1", period_label="2026-07",
+                       quota_added_gb=10, consumed_gb=3, overage_gb=0, edit_renewal_gb=0,
+                       renew_used_gb=0, reset_count=0)
+    before_snap = (snap.meter_provisioned_gb, snap.meter_consumed_gb, snap.meter_init)
+    before_meter = (meter.quota_added_gb, meter.consumed_gb, meter.overage_gb, meter.edit_renewal_gb,
+                    meter.renew_used_gb, meter.reset_count, meter.added_by_uuid, meter.name)
+    upd = metering.compute(snapshot=snap, meter=meter, prev_limit=10, prev_used=3,
+                           new_limit=10, new_used=9, start_date=dt.date(2026, 7, 1),
+                           added_by_uuid="a", name="n", period_label="2026-07")
+    # compute() touched neither object …
+    assert (snap.meter_provisioned_gb, snap.meter_consumed_gb, snap.meter_init) == before_snap
+    assert (meter.quota_added_gb, meter.consumed_gb, meter.overage_gb, meter.edit_renewal_gb,
+            meter.renew_used_gb, meter.reset_count, meter.added_by_uuid, meter.name) == before_meter
+    # … but it computed the forward consumption (9-3=6, buffer 10-3=7 → no overage)
+    assert upd.consumed_gb == 9 and upd.meter_consumed_gb == 9 and upd.overage_gb == 0
+
+
 def test_f10_metering_failure_preserves_baseline(tmp_path, monkeypatch):
     async def go():
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'f10.db'}")
@@ -70,6 +95,7 @@ def test_f10_metering_failure_preserves_baseline(tmp_path, monkeypatch):
             await c.run_sync(Base.metadata.create_all)
         S = async_sessionmaker(engine, expire_on_commit=False)
         try:
+            from app.models import UsageMeter
             from app.services import metering, settings_service
             async with S() as s:
                 await settings_service.set_value(s, "metering_enabled", True)
@@ -82,9 +108,11 @@ def test_f10_metering_failure_preserves_baseline(tmp_path, monkeypatch):
                                       usage_limit_gb=5, current_usage_gb=2))
                 await s.commit()
 
-            def _boom(**k):  # metering.apply raises for this user
+            # A metering step that MUTATES nothing (pure) but raises — the sync calls compute(), so this
+            # is the real failure path. sync must keep the baseline AND not leave a partial meter row.
+            def _boom(**k):
                 raise RuntimeError("meter fail")
-            monkeypatch.setattr(metering, "apply", _boom)
+            monkeypatch.setattr(metering, "compute", _boom)
 
             # New panel data would advance u1 to 10/8 — but metering failed, so the baseline must hold.
             async with S() as s:
@@ -95,11 +123,16 @@ def test_f10_metering_failure_preserves_baseline(tmp_path, monkeypatch):
                 assert run.status == SyncStatus.success  # sync stayed alive despite metering fail
 
             async with S() as s:
-                from sqlalchemy import select
+                from sqlalchemy import func, select
                 snap = (await s.execute(select(EndUserSnapshot).where(
                     EndUserSnapshot.user_uuid == "u1"))).scalar_one()
                 # baseline NOT advanced (still 5/2) → next sync recomputes the full delta
                 assert float(snap.usage_limit_gb) == 5 and float(snap.current_usage_gb) == 2
+                assert snap.meter_init is False   # snapshot metering state untouched
+                # and NO partial UsageMeter row was committed
+                n_meters = (await s.execute(select(func.count()).select_from(UsageMeter)
+                            .where(UsageMeter.panel_id == pid))).scalar_one()
+                assert n_meters == 0
         finally:
             await engine.dispose()
     asyncio.run(go())

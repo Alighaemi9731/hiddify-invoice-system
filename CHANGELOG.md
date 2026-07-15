@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.82.0 - 2026-07-15
+
+Security remediation **Round 2** — Batch C of 3 (sync / metering / bot resource). No migration.
+**Completes Round 2** (all 8 residuals from `docs/SECURITY_REVIEW_PLAN2.md` shipped).
+
+### Fixed
+
+- **F12: a failed panel sync can no longer wipe out a newer successful one.** When a sync failed it
+  recorded the error after releasing its per-panel lock, so an older failed attempt could overwrite a
+  concurrent success and mark a healthy panel "errored". The failure bookkeeping now re-takes the
+  per-panel lock and only downgrades the panel to "errored" if no newer successful sync has since
+  landed — a newer success always wins.
+- **F10: a metering hiccup can no longer corrupt a user's usage baseline.** The per-user metering
+  calculation is now pure (it computes the new values without touching anything) and is applied only
+  after it succeeds, so a failure leaves the stored baseline and the monthly meter untouched and the
+  next sync recaptures the full usage exactly once — no silent under/over-billing, no partial meter row.
+- **F13: a storefront bot under a flood of updates no longer piles up unbounded background tasks.** The
+  poll loop now waits for a free handler slot *before* creating each task (backpressure at the source),
+  so the number of live tasks is bounded instead of growing with the incoming update rate.
+
 ## 1.81.0 - 2026-07-15
 
 Security remediation **Round 2** — Batch B of 3 (storefront money durability). One migration

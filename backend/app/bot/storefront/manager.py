@@ -76,11 +76,15 @@ async def _feed(dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
         log.warning("storefront update handling failed", exc_info=True)
 
 
-async def _bounded_feed(sem: asyncio.Semaphore, dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
-    """Handle one update under the per-bot concurrency cap so a flood of updates + slow panel/API
-    calls can't spawn unbounded tasks/DB sessions."""
-    async with sem:
+async def _feed_and_release(sem: asyncio.Semaphore, dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
+    """Handle one update, then release the per-bot concurrency slot the poll loop acquired for it.
+    F13: the slot is acquired BEFORE the task is created (in `_poll_one`), so the number of LIVE task
+    objects — not just the number of actively-running handlers — is bounded. Released in `finally` so a
+    handler error or cancellation always frees the slot."""
+    try:
         await _feed(dp, bot, update)
+    finally:
+        sem.release()
 
 
 async def _poll_one(
@@ -119,7 +123,11 @@ async def _poll_one(
         unauthorized = 0
         for update in updates:
             offset = update.update_id + 1
-            t = asyncio.create_task(_bounded_feed(sem, dp, bot, update))
+            # F13: acquire a concurrency slot BEFORE creating the task. When all _HANDLER_CONCURRENCY
+            # slots are busy this blocks the poll loop (so get_updates isn't called again either) —
+            # applying backpressure at the SOURCE so queued task objects can't grow without bound.
+            await sem.acquire()
+            t = asyncio.create_task(_feed_and_release(sem, dp, bot, update))
             tasks.add(t)              # keep a strong ref (avoid GC mid-flight) + enable drain-on-stop
             t.add_done_callback(tasks.discard)
 
