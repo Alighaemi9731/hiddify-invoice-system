@@ -148,7 +148,7 @@ async def register_complete(
 # ------------------------------- login (unauthenticated) -------------------------------
 @router.post("/login/begin")
 async def login_begin(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
-    await require_secure(request, session)   # F2
+    await require_secure(request)   # F2 (Strict)
     if not loginsec.passkey_login_allowed(_client_ip(request)):  # F8: throttle the unauth begin
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -172,6 +172,7 @@ class LoginComplete(BaseModel):
 async def login_complete(
     body: LoginComplete, request: Request, session: AsyncSession = Depends(get_session)
 ) -> Token:
+    await require_secure(request)   # F2 (Strict): this endpoint mints a JWT — never over plaintext
     ip = _check_locked(request)
     rp_id, origin = await _rp(session)
     taken = webauthn_store.take(body.handle)

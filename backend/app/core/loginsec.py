@@ -165,16 +165,23 @@ def passkey_login_allowed(ip: str) -> bool:
     return True
 
 
-def secure_or_loopback_ok(proto: str, client_ip: str, https_enabled: bool) -> bool:
-    """F2: may a CREDENTIAL request proceed? Yes over real HTTPS (Caddy sets X-Forwarded-Proto),
-    from a loopback caller (SSH-tunnel / health), or while HTTPS isn't configured yet (the bare-IP
-    setup phase). Once a domain/HTTPS is on, a plaintext request from a non-loopback client is
-    refused — a password/JWT must not ride cleartext."""
+_LOOPBACK = ("127.0.0.1", "::1", "localhost", "")
+
+
+def is_loopback(client_ip: str) -> bool:
+    """True if the DIRECT TCP peer is loopback (SSH tunnel to the backend port / in-container health).
+    Uses the real peer, never a spoofable X-Forwarded-For hop."""
+    return client_ip in _LOOPBACK
+
+
+def secure_or_loopback_ok(proto: str, client_ip: str) -> bool:
+    """F2 (Strict): may a CREDENTIAL or bearer request proceed? Only over real HTTPS (Caddy sets
+    X-Forwarded-Proto=https) or from a loopback caller (SSH tunnel / health). A plaintext request from
+    a non-loopback client is ALWAYS refused — a password/JWT must never ride cleartext, even before a
+    domain/HTTPS is configured. A bare-IP box is set up/used via a domain (auto-HTTPS) or an SSH tunnel."""
     if (proto or "").lower() == "https":
         return True
-    if client_ip in ("127.0.0.1", "::1", "localhost", ""):
-        return True
-    return not https_enabled
+    return is_loopback(client_ip)
 
 
 def new_captcha() -> tuple[str, str]:

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import loginsec
 from app.core.db import get_session
 from app.core.security import hash_password, validate_new_password, verify_password
 from app.models.app_user import AppUser
@@ -66,7 +67,7 @@ async def do_setup(
 ) -> dict:
     from app.api.auth import require_secure
 
-    await require_secure(request, session)  # F2: no owner password over plaintext once HTTPS is on
+    await require_secure(request)  # F2 (Strict): no owner password over plaintext from a non-loopback client
     # The process lock protects the current single-worker deployment and SQLite tests.
     # The row lock also serializes setup across PostgreSQL workers/processes.
     async with _setup_lock:
@@ -75,13 +76,22 @@ async def do_setup(
         )
         if await _is_done(session):
             raise HTTPException(409, "راه‌اندازی قبلاً انجام شده است.")
-        # F1: if the installer minted a one-time bootstrap token, require + verify it before creating
-        # the owner (constant-time compare), then consume it. Without a stored hash, setup stays open.
+        # F1: read the bootstrap token but DO NOT consume it yet. Token clear, owner creation, and the
+        # `setup_done` flag all commit TOGETHER at the end — so a validation failure below leaves the
+        # token intact and setup re-runnable (closes the consume-then-fail takeover: previously the
+        # token was cleared+committed before validation, so a bad username still burned the token and
+        # a later no-token request could finish setup).
         token_hash = str(await settings_service.get(session, _TOKEN_HASH_KEY, "") or "")
-        if token_hash:
-            if not body.token or not verify_password(body.token, token_hash):
-                raise HTTPException(403, "توکنِ راه‌اندازی نادرست است.")
-            await settings_service.set_value(session, _TOKEN_HASH_KEY, "")  # one-time: consume it
+        # F1 (fail-closed): a legacy install with NO minted token may only be set up from loopback
+        # (SSH tunnel) — never an anonymous public request. Fresh installs always mint a token, so this
+        # only affects a pre-token box, which must be reached via a domain (HTTPS) or an SSH tunnel.
+        ip = request.client.host if request.client else ""
+        if not token_hash and not loginsec.is_loopback(ip):
+            raise HTTPException(
+                403,
+                "توکنِ راه‌اندازی تنظیم نشده است؛ نصب‌کننده را دوباره اجرا کنید یا از طریق تونل SSH وارد شوید.",
+            )
+        # Validate EVERY input before any persistent change (token still untouched here).
         username = (body.username or "").strip()
         if len(username) < 3:
             raise HTTPException(400, "نام کاربری باید حداقل ۳ کاراکتر باشد.")
@@ -89,7 +99,10 @@ async def do_setup(
             validate_new_password(body.password)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        if token_hash and (not body.token or not verify_password(body.token, token_hash)):
+            raise HTTPException(403, "توکنِ راه‌اندازی نادرست است.")
 
+        # All inputs valid — create the owner, mark setup done, and consume the token atomically.
         session.add(
             AppUser(
                 username=username,
@@ -97,7 +110,10 @@ async def do_setup(
                 role="owner",
             )
         )
-        await settings_service.set_value(session, "setup_done", True)
+        await settings_service.set_value(session, "setup_done", True, commit=False)
+        if token_hash:
+            await settings_service.set_value(session, _TOKEN_HASH_KEY, "", commit=False)  # one-time: consume it
+        await session.commit()
 
     result: dict = {"setup_done": True, "domain_applied": False}
     if body.domain:

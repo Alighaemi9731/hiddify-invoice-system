@@ -16,6 +16,11 @@ Only **Batch 2** carries an Alembic migration (chained off head `e3a5c7f9b1d4`).
 | 4 Billing/sync correctness | v1.78.0 | F9, F10, F12 | — | ✅ done |
 | 5 Front-door & auth | v1.79.0 | F1, F2, F8 | — | ✅ done |
 
+> **Round-2 note (2026-07-15):** a second external re-review found 8 of these findings were only
+> *partially* fixed (F1, F2, F4, F5, F10, F11, F12, F13) — including a reproducible Critical
+> setup-takeover. The residuals are re-verified and fixed in **`SECURITY_REVIEW_PLAN2.md`**
+> (v1.80.0→v1.82.0). F3, F6, F7, F8, F9, F14, F15, F16 were confirmed genuinely fixed here.
+
 ## Findings
 
 - **F1 (High)** Unauthenticated first-run `/api/setup` → owner takeover on a fresh box. → bootstrap token (B5). *Mitigated on the current prod box: owner already claimed → 409.*

@@ -89,14 +89,15 @@ def test_f1_setup_open_without_token_when_none_configured(tmp_path):
     _run(body, tmp_path, "f1open.db")
 
 
-# ───────────────────────── F2: HTTPS-only credentials ─────────────────────────
+# ───────────────────────── F2: HTTPS-only credentials (round-2 Strict) ─────────────────────────
 def test_f2_secure_or_loopback_ok():
     from app.core.loginsec import secure_or_loopback_ok
-    assert secure_or_loopback_ok("https", "1.2.3.4", True) is True    # real HTTPS (via Caddy)
-    assert secure_or_loopback_ok("http", "127.0.0.1", True) is True   # loopback (SSH tunnel)
-    assert secure_or_loopback_ok("http", "::1", True) is True         # loopback v6
-    assert secure_or_loopback_ok("http", "1.2.3.4", False) is True    # bare-IP setup phase (no HTTPS yet)
-    assert secure_or_loopback_ok("http", "1.2.3.4", True) is False    # plaintext in production → refused
+    assert secure_or_loopback_ok("https", "1.2.3.4") is True    # real HTTPS (via Caddy)
+    assert secure_or_loopback_ok("http", "127.0.0.1") is True   # loopback (SSH tunnel)
+    assert secure_or_loopback_ok("http", "::1") is True         # loopback v6
+    # Round-2 Strict: plaintext from a non-loopback client is refused ALWAYS — even before HTTPS is
+    # configured (the old `not https_enabled` bare-IP escape hatch is gone).
+    assert secure_or_loopback_ok("http", "1.2.3.4") is False
 
 
 # ───────────────────────── F8: passkey throttle + store cap ─────────────────────────

@@ -8,6 +8,29 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.80.0 - 2026-07-15
+
+Security remediation **Round 2** — Batch A of 3 (front door). No migration. A second external
+re-review found 8 of the 16 round-1 findings only partially fixed; this batch closes the two
+front-door ones. See `docs/SECURITY_REVIEW_PLAN2.md`.
+
+### Fixed
+
+- **F1 (Critical): first-run setup could be taken over.** `/api/setup` cleared and *committed* the
+  installer's one-time bootstrap token **before** it validated the username/password and created the
+  owner — so a request with the correct token but (say) a too-short username still burned the token,
+  and a later request with **no** token could then finish setup and claim the owner account. Setup now
+  validates every input first and creates the owner + marks setup done + consumes the token in a single
+  atomic commit, so any failure leaves the token intact and setup re-runnable. A legacy install that has
+  no minted token can now only be set up from loopback (an SSH tunnel), never an anonymous public request.
+- **F2 (High): credentials/JWT could ride plaintext HTTP.** The transport check allowed public plaintext
+  whenever HTTPS wasn't configured yet, and authenticated (bearer-token) API requests weren't checked at
+  all. Now **Strict**: a credential or bearer request over plaintext HTTP from a non-loopback client is
+  refused (426) **always** — every owner-authenticated route is gated, plus passkey login-complete. Real
+  HTTPS (the normal domain/relay install — Caddy sends `X-Forwarded-Proto: https`) and loopback (SSH
+  tunnel / health checks) are unaffected. A bare-IP box with no domain is now set up/used via a domain
+  (auto-HTTPS) or an SSH tunnel.
+
 ## 1.79.1 - 2026-07-15
 
 ### Changed

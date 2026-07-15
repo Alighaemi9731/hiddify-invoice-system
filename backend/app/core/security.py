@@ -6,11 +6,12 @@ import logging
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import loginsec
 from app.core.config import settings
 from app.core.db import get_session
 from app.models.app_user import AppUser
@@ -65,16 +66,33 @@ def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
 
 
+def require_secure_transport(request: Request) -> None:
+    """F2 (Strict): reject a credential/bearer request that arrives over plaintext HTTP from a
+    non-loopback client. A no-op over real HTTPS (Caddy sets X-Forwarded-Proto=https) or from a
+    loopback caller (SSH tunnel / in-container health). No settings/DB read — the decision is purely
+    the forwarded proto + the direct peer, so it's safe on the hot path of every authenticated call."""
+    proto = request.headers.get("x-forwarded-proto", "") or request.url.scheme
+    ip = request.client.host if request.client else ""
+    if not loginsec.secure_or_loopback_ok(proto, ip):
+        raise HTTPException(426, "برای این درخواست، اتصال امن (HTTPS) لازم است.")
+
+
 async def get_current_subject(
     token: str = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects; None only for direct/internal calls
 ) -> str:
     """Returns the authenticated owner's username, or raises 401.
 
     Beyond signature/expiry, the token is bound to the account's live state: a deactivated
     account is rejected, and a password change (which bumps `token_epoch`) invalidates any
     token carrying an older `epoch` claim — so a stolen token dies the moment the owner
-    changes their password."""
+    changes their password.
+
+    F2: every bearer request is transport-gated too — a JWT must not ride cleartext (`request` is
+    injected by FastAPI on real HTTP; it's None only for direct programmatic/test calls)."""
+    if request is not None:
+        require_secure_transport(request)
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",

@@ -13,6 +13,7 @@ from app.core.security import (
     create_access_token,
     get_current_subject,
     hash_password,
+    require_secure_transport,
     validate_new_password,
     verify_password,
 )
@@ -27,7 +28,6 @@ from app.schemas.auth import (
     TotpSetupOut,
     UserOut,
 )
-from app.services import settings_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -45,16 +45,12 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
 
 
-async def require_secure(request: Request, session: AsyncSession) -> None:
-    """F2: reject a credential request over plaintext HTTP from a non-loopback client once HTTPS is
-    configured. A no-op over real HTTPS (Caddy sets X-Forwarded-Proto=https), from a loopback caller
-    (SSH tunnel / health), or during the bare-IP setup phase (no domain yet) — so it never locks the
-    operator out of first-run setup, only stops a password/JWT riding cleartext in production."""
-    proto = request.headers.get("x-forwarded-proto", "") or request.url.scheme
-    ip = request.client.host if request.client else ""
-    https_enabled = bool(await settings_service.get(session, "https_enabled", False))
-    if not loginsec.secure_or_loopback_ok(proto, ip, https_enabled):
-        raise HTTPException(426, "برای ورود، اتصال امن (HTTPS) لازم است.")
+async def require_secure(request: Request) -> None:
+    """F2 (Strict): reject a credential request over plaintext HTTP from a non-loopback client — always
+    (even before HTTPS is configured). A no-op over real HTTPS (Caddy sets X-Forwarded-Proto=https) or
+    from a loopback caller (SSH tunnel / health). Delegates to the shared transport gate so credential
+    endpoints and every bearer request share one rule. No settings/DB read."""
+    require_secure_transport(request)
 
 
 async def _get_user(session: AsyncSession, username: str) -> AppUser | None:
@@ -86,7 +82,7 @@ async def get_captcha(request: Request) -> CaptchaOut:
 @router.post("/login", response_model=Token)
 async def login(body: LoginRequest, request: Request,
                 session: AsyncSession = Depends(get_session)) -> Token:
-    await require_secure(request, session)   # F2: no password over plaintext once HTTPS is on
+    await require_secure(request)   # F2 (Strict): no password over plaintext from a non-loopback client
     ip = _client_ip(request)
 
     # 1) lockout check
