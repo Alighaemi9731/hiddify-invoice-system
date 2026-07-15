@@ -172,6 +172,9 @@ DEFS: list[SettingDef] = [
     # In auto mode, a cached live rate older than this many hours is treated as stale and billing
     # falls back to the manual rate (0 disables the staleness check). Default 48h.
     SettingDef("rate_max_age_hours", 48, False, "pricing"),
+    # Skip billing a panel whose last successful sync is older than this many hours (0 = no age
+    # cap). Stale snapshots would invoice last month's reality (F9).
+    SettingDef("billing_max_snapshot_age_hours", 26, False, "pricing"),
     SettingDef("rate_refresh_hours", 1, False, "schedule"),  # how often to refresh the live rate
     SettingDef("excluded_usage_gb", [1], False, "pricing"),  # extra exact sizes to skip
     # Flag end-users created with at least this sold quota (GB) as "high volume" — the default
@@ -311,6 +314,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "default_price_per_gb": (0, None),
     "toman_per_usdt": (0, None),
     "rate_max_age_hours": (0, 24 * 365),
+    "billing_max_snapshot_age_hours": (0, 24 * 365),
     "rate_refresh_hours": (1, 24),
     "min_sale_toman": (0, None),
     "ton_toman_manual": (0, None),

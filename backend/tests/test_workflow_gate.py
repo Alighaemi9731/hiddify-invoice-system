@@ -40,6 +40,9 @@ def test_billing_payment_backup_workflow(monkeypatch, tmp_path):
             await settings_service.set_value(session, "toman_per_usdt", 100_000)
             await settings_service.set_value(session, "rate_mode", "manual")
             await settings_service.set_value(session, "auto_restore_on_payment", False)
+            # This workflow uses fixed historical dates (May 2026); disable the wall-clock snapshot
+            # freshness gate (F9) here — it's covered by its own test in test_security_remediation_b4.
+            await settings_service.set_value(session, "billing_max_snapshot_age_hours", 0)
 
             panel = Panel(
                 key="stage",

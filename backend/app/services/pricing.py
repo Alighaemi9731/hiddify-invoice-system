@@ -41,6 +41,15 @@ async def get_default_min_sale(session: AsyncSession) -> int:
         return 0
 
 
+async def get_max_snapshot_age_hours(session: AsyncSession) -> int:
+    """Max age (hours) of a panel's last successful sync for it to still be billable (0 = no cap)."""
+    value = await settings_service.get(session, "billing_max_snapshot_age_hours", 26)
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 26
+
+
 async def get_excluded_usage_gb(session: AsyncSession) -> set[float]:
     """Extra exact package sizes (GB) treated as test configs and skipped. Kept as floats so a
     configured decimal size (e.g. 1.5) is matched exactly rather than truncated to 1."""

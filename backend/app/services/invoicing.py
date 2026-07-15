@@ -49,13 +49,21 @@ async def _serialize_billing(session: AsyncSession) -> None:
         )
 
 
-def _panel_billable(panel: Panel) -> tuple[bool, str]:
-    """A panel may only be billed from FRESH data. Never bill on a failed or absent sync —
-    stale snapshots would invoice last month's reality. Returns (ok, reason)."""
+def _panel_billable(
+    panel: Panel, *, now: dt.datetime | None = None, max_age_hours: int = 0
+) -> tuple[bool, str]:
+    """A panel may only be billed from FRESH data. Never bill on a failed or absent sync — stale
+    snapshots would invoice last month's reality. With `max_age_hours`>0, also skip a panel whose
+    last successful sync is older than that (F9 — a scheduler outage or a re-enabled panel must not
+    silently bill months-old state). Returns (ok, reason)."""
     if panel.last_synced_at is None:
         return False, "هرگز همگام‌سازی نشده"
     if panel.status == PanelStatus.error:
         return False, "آخرین همگام‌سازی ناموفق بود"
+    if max_age_hours and now is not None:
+        synced = _as_utc(panel.last_synced_at)
+        if synced is not None and (now - synced).total_seconds() > max_age_hours * 3600:
+            return False, "دادهٔ همگام‌سازی خیلی قدیمی است (پنل را همگام‌سازی کنید)"
     return True, ""
 
 
@@ -147,6 +155,8 @@ async def generate_invoices(
     deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
     rate = await pricing.get_rate(session)
+    max_age = await pricing.get_max_snapshot_age_hours(session)
+    now_utc = dt.datetime.now(dt.timezone.utc)
 
     # An explicit panel_id must NOT bypass the enabled filter — a disabled panel is
     # disabled for billing too.
@@ -160,7 +170,7 @@ async def generate_invoices(
     billed_reseller_ids: set[int] = set()
 
     for panel in panels:
-        ok, reason = _panel_billable(panel)
+        ok, reason = _panel_billable(panel, now=now_utc, max_age_hours=max_age)
         if not ok:
             summary.skipped_panels.append(f"{panel.key}: {reason}")
             log.warning("billing: skipping panel '%s' (%s)", panel.key, reason)
@@ -258,6 +268,8 @@ async def preview_bundles(
     free_threshold = await pricing.get_free_threshold_gb(session)
     deleted_over = await pricing.get_deleted_full_quota_over_gb(session)
     default_min_sale = await pricing.get_default_min_sale(session)
+    max_age = await pricing.get_max_snapshot_age_hours(session)
+    now_utc = dt.datetime.now(dt.timezone.utc)
 
     panel_q = select(Panel).where(Panel.enabled.is_(True))
     if panel_id is not None:
@@ -268,7 +280,7 @@ async def preview_bundles(
     for panel in panels:
         # Mirror generate_invoices: don't preview a panel we wouldn't bill, and skip resellers
         # no longer present so the "zero sale" view matches reality.
-        ok, _ = _panel_billable(panel)
+        ok, _ = _panel_billable(panel, now=now_utc, max_age_hours=max_age)
         if not ok:
             continue
         resellers = (
@@ -316,20 +328,31 @@ async def recompute_invoice(
 
     synced = False
     if sync_first:
-        try:
-            from app.models.enums import SyncStatus
-            from app.services import sync as sync_service
+        from app.models.enums import SyncStatus
+        from app.services import sync as sync_service
 
+        try:
             run = await sync_service.sync_panel(session, panel)
             synced = run.status == SyncStatus.success
-        except Exception:  # noqa: BLE001 — fall back to existing snapshots
-            log.warning("recompute: panel sync failed, using existing snapshots", exc_info=True)
+        except Exception:  # noqa: BLE001 — treat a sync exception like a failed sync (abort below)
+            log.warning("recompute: panel sync raised", exc_info=True)
         refreshed_panel = await session.get(Panel, invoice.panel_id)
         refreshed_invoice = await session.get(Invoice, invoice.id)
         if refreshed_panel is None or refreshed_invoice is None:
             raise ValueError("invoice or panel disappeared during recompute")
         panel = refreshed_panel
         invoice = refreshed_invoice
+        # F9: recompute PROMISED current data — if the requested sync did not succeed, abort WITHOUT
+        # mutating the invoice rather than silently rewriting a sent invoice from stale snapshots.
+        if not synced:
+            raise ValueError("panel sync failed; invoice left unchanged (try again when the panel syncs)")
+
+    # F9: also never recompute from a panel that isn't billable (stale/errored/never-synced) — this
+    # path did not previously check it, so a recompute during a panel outage could rewrite from old data.
+    max_age = await pricing.get_max_snapshot_age_hours(session)
+    ok, reason = _panel_billable(panel, now=dt.datetime.now(dt.timezone.utc), max_age_hours=max_age)
+    if not ok:
+        raise ValueError(f"panel not billable ({reason}); invoice left unchanged")
 
     # Serialize against concurrent generation/recompute (after the optional sync's own commit,
     # so the lock is held through this recompute's single final commit).

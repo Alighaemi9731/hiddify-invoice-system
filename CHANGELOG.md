@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.78.0 - 2026-07-15
+
+Security & correctness remediation — Batch 4 of 6 (billing & sync correctness). No migration.
+
+### Fixed
+
+- **A panel with stale sync data is no longer billed (F9).** Billing already skipped a failed/never-
+  synced panel; it now also skips one whose last successful sync is older than a configurable cap
+  (`billing_max_snapshot_age_hours`, default 26; 0 = no cap) — so a scheduler outage or a re-enabled
+  panel can’t silently invoice months-old reality. `recompute` now **aborts without mutating** the
+  invoice when its requested sync doesn’t succeed (it promised current data) and when the panel isn’t
+  billable, instead of quietly rewriting a sent invoice from stale snapshots.
+- **A metering failure no longer loses usage (F10).** If `metering.apply` raises for a user during a
+  sync, that snapshot’s usage/limit baseline is left unchanged so the next sync recaptures the full
+  delta — previously the failed interval’s new values became the baseline and its usage/overage was
+  lost forever (silent underbilling).
+- **Concurrent syncs of one panel are serialized (F12).** `sync_panel` takes a per-panel PostgreSQL
+  advisory lock, so a scheduler tick overlapping a manual sync (or two clicks) can’t finish in reverse
+  order and overwrite newer data, and two first-time inserts can’t collide on the unique constraint
+  and spuriously mark the panel errored. Different panels never block each other; no-op on SQLite.
+
+### Added
+
+- Setting `billing_max_snapshot_age_hours` (pricing group).
+
 ## 1.77.0 - 2026-07-15
 
 Security & correctness remediation — Batch 3 of 6 (storefront provisioning robustness). No migration.

@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
@@ -18,6 +18,10 @@ from app.models.enums import EnforcementState, PanelStatus, SyncSource, SyncStat
 from app.services.panel_client import BackupJsonClient, PanelClient, PanelData
 
 log = logging.getLogger("sync")
+
+# Two-key advisory-lock namespace for serializing a SINGLE panel's sync (F12) — distinct key-space
+# from the billing lock (invoicing._BILLING_LOCK_KEY, single-key) so they never collide.
+_SYNC_LOCK_NS = 0x53594E43  # "SYNC"
 
 
 def _now() -> dt.datetime:
@@ -37,6 +41,17 @@ async def sync_panel(
     # so reading panel.id afterwards would trigger a sync lazy-load (MissingGreenlet) and
     # mask the real error / abort the whole run.
     panel_id = panel.id
+    # Serialize concurrent syncs of THIS panel (F12): scheduler tick, sync-all, a manual sync click,
+    # create/update-panel background sync, and recompute can all target one panel at once — without a
+    # lease, a reverse-order finish overwrites newer data or two first-time inserts collide on
+    # uq_enduser_panel_uuid and spuriously mark the panel errored. Blocking (not try) + per-panel key
+    # so different panels never wait on each other; released on commit/rollback. No-op on SQLite.
+    bind = session.get_bind()
+    if getattr(bind.dialect, "name", "") == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
+            {"ns": _SYNC_LOCK_NS, "pid": panel_id},
+        )
     run = SyncRun(panel_id=panel_id, source=source, status=SyncStatus.running)
     session.add(run)
     await session.flush()
@@ -161,6 +176,7 @@ async def _upsert_users(
 
         # Meter from the DELTA between the stored snapshot (prev) and the new values —
         # must run BEFORE we overwrite the snapshot's usage fields below.
+        meter_ok = True
         if metering_on:
             try:
                 meter = meters.get(u.uuid)
@@ -176,12 +192,17 @@ async def _upsert_users(
                     period_label=period_label,
                 )
             except Exception:  # noqa: BLE001 — metering must never break a sync
+                meter_ok = False
                 log.warning("metering.apply failed for user %s", u.uuid, exc_info=True)
 
         s.name = u.name
         s.added_by_uuid = u.added_by_uuid
-        s.usage_limit_gb = u.usage_limit_gb
-        s.current_usage_gb = u.current_usage_gb
+        # F10: only advance the metering BASELINE (usage/limit) when metering succeeded (or is off).
+        # If metering.apply raised, keeping the prev values means the NEXT sync recomputes the full
+        # combined delta — otherwise the failed interval's usage/overage would be lost forever.
+        if meter_ok:
+            s.usage_limit_gb = u.usage_limit_gb
+            s.current_usage_gb = u.current_usage_gb
         s.start_date = u.start_date
         s.package_days = u.package_days
         s.enable = u.enable
