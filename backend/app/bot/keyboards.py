@@ -53,7 +53,10 @@ def pay_chain_keyboard() -> InlineKeyboardMarkup:
 
 
 def reseller_menu_keyboard(
-    *, show_create_user: bool = False, show_storefront: bool = False
+    *,
+    show_create_user: bool = False,
+    show_storefront: bool = False,
+    portal_url: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
@@ -66,10 +69,15 @@ def reseller_menu_keyboard(
     if show_storefront:
         rows.append([InlineKeyboardButton(
             text="🏪 راه‌اندازی ربات فروشگاهی", callback_data="menu:storefront")])
+    portal_button = (
+        InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", url=portal_url)
+        if portal_url
+        else InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", callback_data="menu:portal")
+    )
     rows += [
         [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
          InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],
-        [InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", callback_data="menu:portal")],
+        [portal_button],
         [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
         [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support"),
          InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],

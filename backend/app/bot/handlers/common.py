@@ -247,6 +247,20 @@ async def _resellers_for_chat(session, chat_id: int) -> list[Reseller]:
     )
 
 
+async def _portal_menu_url(session, chat_id: int) -> str | None:
+    """Build a short-lived portal URL only for a registered reseller and configured domain."""
+    if not await _resellers_for_chat(session, chat_id):
+        return None
+    domain = (await settings_service.get(session, "server_domain", "") or "").strip()
+    domain = domain.replace("https://", "").replace("http://", "").strip("/")
+    if not domain:
+        return None
+
+    from app.core.portal_auth import create_portal_login_token
+
+    return f"https://{domain}/portal/login?t={create_portal_login_token(chat_id)}"
+
+
 def _iso(value) -> str:
     """Wrap a value in a Unicode First-Strong Isolate (U+2068 … U+2069) so it renders cleanly
     inside a mixed Persian/English Telegram line: the segment keeps its own auto-detected
@@ -449,12 +463,16 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
     menu = await texts.render(session, "tpl_menu")
     can_create = await _can_create_users(session, user.id)
     can_storefront = await _can_setup_storefront(session, user.id)
+    portal_url = await _portal_menu_url(session, user.id)
     # Clear any lingering docked reply keyboard, then show the inline menu (the docked menu didn't fit).
     await answer(welcome, reply_markup=ReplyKeyboardRemove())
     await answer(
         menu,
         reply_markup=keyboards.reseller_menu_keyboard(
-            show_create_user=can_create, show_storefront=can_storefront),
+            show_create_user=can_create,
+            show_storefront=can_storefront,
+            portal_url=portal_url,
+        ),
     )
 
 
@@ -469,10 +487,14 @@ async def _reshow_menu(message: Message, session, user) -> None:  # noqa: ANN001
             return
         can_create = await _can_create_users(session, user.id)
         can_storefront = await _can_setup_storefront(session, user.id)
+        portal_url = await _portal_menu_url(session, user.id)
         await message.answer(
             "📋 منوی اصلی:",
             reply_markup=keyboards.reseller_menu_keyboard(
-                show_create_user=can_create, show_storefront=can_storefront),
+                show_create_user=can_create,
+                show_storefront=can_storefront,
+                portal_url=portal_url,
+            ),
         )
     except Exception:  # noqa: BLE001 — a menu re-show must never break the action it follows
         pass

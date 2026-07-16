@@ -103,6 +103,140 @@ def test_reply_menu_keyboards_and_label_maps_are_consistent():
     assert kb.is_persistent and kb.resize_keyboard  # always docked at the bottom
 
 
+def _portal_button(kb):
+    return next(
+        button
+        for row in kb.inline_keyboard
+        for button in row
+        if button.text == "🌐 ورود به پنلِ تحتِ وب"
+    )
+
+
+def test_reseller_menu_portal_button_uses_normal_url_without_mini_app():
+    url = "https://example.test/portal/login?t=token"
+    button = _portal_button(keyboards.reseller_menu_keyboard(portal_url=url))
+
+    assert button.url == url
+    assert button.callback_data is None
+    assert button.web_app is None
+    assert button.login_url is None
+
+
+def test_reseller_menu_portal_button_preserves_callback_fallback():
+    button = _portal_button(keyboards.reseller_menu_keyboard())
+
+    assert button.callback_data == "menu:portal"
+    assert button.url is None
+    assert button.web_app is None
+
+
+def test_portal_menu_url_requires_a_registered_reseller(tmp_path):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.bot.handlers import common
+    from app.core.db import Base
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'no-reseller.db'}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as session:
+                assert await common._portal_menu_url(session, 999) is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_portal_menu_url_requires_a_configured_domain(tmp_path):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.bot.handlers import common
+    from app.core.db import Base
+    from app.models import Panel, Reseller
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'no-domain.db'}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as session:
+                panel = Panel(key="p", host="p.invalid", proxy_path_enc="x", owner_uuid="o")
+                session.add(panel)
+                await session.flush()
+                session.add(
+                    Reseller(
+                        panel_id=panel.id,
+                        admin_uuid="a",
+                        name="Ali",
+                        bot_chat_id=999,
+                    )
+                )
+                await session.commit()
+
+                assert await common._portal_menu_url(session, 999) is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_portal_menu_url_normalizes_domain_and_mints_valid_token(tmp_path):
+    from urllib.parse import parse_qs, urlsplit
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.bot.handlers import common
+    from app.core.db import Base
+    from app.core.portal_auth import verify_portal_login_token
+    from app.models import Panel, Reseller
+    from app.services import settings_service
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'portal-url.db'}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as session:
+                panel = Panel(key="p", host="p.invalid", proxy_path_enc="x", owner_uuid="o")
+                session.add(panel)
+                await session.flush()
+                session.add(
+                    Reseller(
+                        panel_id=panel.id,
+                        admin_uuid="a",
+                        name="Ali",
+                        bot_chat_id=999,
+                    )
+                )
+                await settings_service.set_value(
+                    session,
+                    "server_domain",
+                    "  https://portal.example.test///  ",
+                )
+
+                url = await common._portal_menu_url(session, 999)
+                assert url is not None
+                parsed = urlsplit(url)
+                assert parsed.scheme == "https"
+                assert parsed.netloc == "portal.example.test"
+                assert parsed.path == "/portal/login"
+                token = parse_qs(parsed.query)["t"][0]
+                verified = verify_portal_login_token(token)
+                assert verified is not None
+                chat_id, jti = verified
+                assert chat_id == 999
+                assert jti
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+
+
 def test_paystate_cancel_text_exits_cleanly():
     """Typing «cancel»/«لغو» in the locked pay flow clears the state (no DB needed)."""
     async def go():
@@ -184,6 +318,7 @@ def test_reshow_menu_sends_role_aware_menu(tmp_path):
     from app.bot import handlers
     from app.core.db import Base
     from app.models import Panel, Reseller
+    from app.services import settings_service
 
     sent: list = []
 
@@ -204,12 +339,21 @@ def test_reshow_menu_sends_role_aware_menu(tmp_path):
                 s.add(p)
                 await s.flush()
                 s.add(Reseller(panel_id=p.id, admin_uuid="a", name="Ali", bot_chat_id=999))
-                await s.commit()
+                await settings_service.set_value(
+                    s,
+                    "server_domain",
+                    "https://portal.example.test/",
+                )
                 await handlers._reshow_menu(FakeMsg(), s, user)
             assert len(sent) == 1
             text, kb = sent[0]
             assert "منوی اصلی" in text
             assert kb is not None and hasattr(kb, "inline_keyboard")
+            portal = _portal_button(kb)
+            assert portal.url is not None
+            assert portal.url.startswith("https://portal.example.test/portal/login?t=")
+            assert portal.callback_data is None
+            assert portal.web_app is None
         finally:
             await engine.dispose()
 
