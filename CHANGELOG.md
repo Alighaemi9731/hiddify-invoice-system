@@ -8,6 +8,39 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.83.0 - 2026-07-16
+
+Storefront management portal Release A; no database migration and no manual upgrade steps.
+
+### Added
+
+- Reseller owners can open a new «فروشگاه من» area in the normal web portal. Accounts with one
+  storefront are routed directly to it; owners of several storefronts can switch shops without
+  losing the selected tenant on refresh or deep links. Accounts without a configured shop do not
+  see the navigation entry.
+- The new read-only dashboard reports Tehran-day/month sales, purchase-versus-renewal-versus-legacy
+  breakdown, refunds/reversals, customers and wallet liability, service and provisioning states,
+  near-expiry services, pending top-ups, current-month credit bonuses, and trial-to-paid conversion.
+  A responsive chart and dedicated persisted-health view cover the storefront bot and Hiddify panel.
+- Frontend component testing is now part of CI through Vitest, jsdom, React Testing Library and MSW.
+
+### Security and correctness
+
+- Every storefront route starts from the reseller portal JWT and re-establishes
+  `StorefrontBot.reseller_id` ownership server-side. Missing, disabled-entitlement and foreign shops
+  all return the same 404; Telegram co-admin IDs do not implicitly gain portal access.
+- Responses use explicit DTOs and expose only sanitized health classes. Bot tokens, panel hosts,
+  encrypted paths/API keys, raw external errors, proof paths and subscription links are absent.
+- Dashboard GETs are side-effect-free and bounded to at most 12 SQL round trips. Sales ignore
+  non-revenue wallet entries, trial conversion excludes renewals/failed trials/refunded purchases,
+  and near-expiry counts only provisioned paid services.
+
+### Tests
+
+- Added backend HTTP/auth/tenant, accounting, Tehran-range, query-budget, read-only and credential
+  redaction regressions, plus responsive storefront discovery, switching, health, chart, empty/error,
+  foreign-resource and desktop/mobile navigation tests.
+
 ## 1.82.4 - 2026-07-16
 
 Billing correctness hotfix; no database migration and no manual upgrade steps. Forward-only.

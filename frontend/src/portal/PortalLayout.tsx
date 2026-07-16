@@ -13,6 +13,7 @@ import GroupIcon from "@mui/icons-material/esm/Group";
 import DnsIcon from "@mui/icons-material/esm/Dns";
 import SupportAgentIcon from "@mui/icons-material/esm/SupportAgent";
 import HelpOutlineIcon from "@mui/icons-material/esm/HelpOutline";
+import StorefrontIcon from "@mui/icons-material/esm/Storefront";
 import LogoutIcon from "@mui/icons-material/esm/Logout";
 import MenuIcon from "@mui/icons-material/esm/Menu";
 import PersonOutlineIcon from "@mui/icons-material/esm/PersonOutline";
@@ -23,6 +24,8 @@ import { useColorMode } from "../colorMode";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { PageTransition } from "../components/motion";
 import NotificationsBell from "./NotificationsBell";
+import { useQuery } from "@tanstack/react-query";
+import { listStorefronts, storefrontQueryKeys } from "./storefront/api";
 
 const WIDTH = 248;
 
@@ -32,6 +35,7 @@ const NAV = [
   { to: "/portal/payments", label: "پرداخت‌ها", icon: <PaymentsIcon />, color: "#10b981" },
   { to: "/portal/subs", label: "زیرمجموعه‌ها", icon: <GroupIcon />, color: "#22c55e" },
   { to: "/portal/panels", label: "پنل‌ها و ظرفیت", icon: <DnsIcon />, color: "#0ea5e9" },
+  { to: "/portal/storefront", label: "فروشگاه من", icon: <StorefrontIcon />, color: "#ec4899", storefront: true },
   { to: "/portal/support", label: "پشتیبانی", icon: <SupportAgentIcon />, color: "#a855f7" },
   { to: "/portal/help", label: "راهنما", icon: <HelpOutlineIcon />, color: "#06b6d4" },
 ];
@@ -46,6 +50,11 @@ export default function PortalLayout() {
   const { resellers, logout } = usePortalAuth();
   const { mode, toggle } = useColorMode();
   const primary = theme.palette.primary.main;
+  const storefronts = useQuery({ queryKey: storefrontQueryKeys.all, queryFn: listStorefronts });
+  const visibleNav = NAV.filter((item) => !item.storefront || !!storefronts.data?.length);
+  const isSelected = (to: string) => to === "/portal"
+    ? loc.pathname === to
+    : loc.pathname === to || loc.pathname.startsWith(`${to}/`);
 
   const title = resellers[0]?.name || "نماینده";
 
@@ -122,8 +131,8 @@ export default function PortalLayout() {
         <Divider />
 
         <List sx={{ py: 1, flexGrow: 1 }}>
-          {NAV.map((item) => {
-            const selected = loc.pathname === item.to;
+          {visibleNav.map((item) => {
+            const selected = isSelected(item.to);
             return (
               <ListItemButton
                 key={item.to}
@@ -211,12 +220,12 @@ export default function PortalLayout() {
           sx={{ borderBottom: "1px solid", borderColor: "divider", pt: "env(safe-area-inset-top)" }}>
           <Toolbar>
             {!isDesktop && (
-              <IconButton edge="start" onClick={() => setOpen(true)} sx={{ ml: 1 }}>
+              <IconButton edge="start" onClick={() => setOpen(true)} sx={{ ml: 1 }} aria-label="باز کردن منو">
                 <MenuIcon />
               </IconButton>
             )}
             <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 800 }}>
-              {NAV.find((n) => n.to === loc.pathname)?.label || ""}
+              {visibleNav.find((item) => isSelected(item.to))?.label || ""}
             </Typography>
             <NotificationsBell />
             <Tooltip title={mode === "dark" ? "حالت روشن" : "حالت تیره"}>

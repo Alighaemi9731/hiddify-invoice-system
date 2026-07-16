@@ -12,6 +12,10 @@ const Subs = lazy(() => import("./pages/Subs"));
 const Panels = lazy(() => import("./pages/Panels"));
 const Support = lazy(() => import("./pages/Support"));
 const Help = lazy(() => import("./pages/Help"));
+const StorefrontIndexPage = lazy(() => import("./storefront/StorefrontIndexPage"));
+const StorefrontShell = lazy(() => import("./storefront/StorefrontShell"));
+const StorefrontDashboardPage = lazy(() => import("./storefront/StorefrontDashboardPage"));
+const StorefrontHealthPanel = lazy(() => import("./storefront/StorefrontHealthPanel"));
 
 function RequirePortalAuth({ children }: { children: ReactNode }) {
   const { authed, loading } = usePortalAuth();
@@ -46,6 +50,11 @@ export default function PortalApp() {
           <Route path="/portal/panels" element={<Panels />} />
           <Route path="/portal/support" element={<Support />} />
           <Route path="/portal/help" element={<Help />} />
+          <Route path="/portal/storefront" element={<StorefrontIndexPage />} />
+          <Route path="/portal/storefront/:shopId" element={<StorefrontShell />}>
+            <Route index element={<StorefrontDashboardPage />} />
+            <Route path="health" element={<StorefrontHealthPanel />} />
+          </Route>
         </Route>
         <Route path="/portal/*" element={<Navigate to="/portal" replace />} />
       </Routes>
