@@ -25,7 +25,10 @@ async def test_generate_bills_deleted_user_on_consumption_with_label(tmp_path):
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
     period = current_month()
-    now = dt.datetime(period.start.year, period.start.month, 15, 12, 0)
+    # Keep the panel sync inside the production freshness window. A fixed mid-month
+    # timestamp makes this integration test start failing as soon as the real clock
+    # moves more than the configured max age beyond the 15th.
+    now = dt.datetime.now(dt.timezone.utc)
     created = period.start + dt.timedelta(days=3)
 
     async with Session() as s:
