@@ -285,7 +285,7 @@ describe("storefront portal", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "فروشگاه من" })).toBeVisible();
-    expect(screen.getByText("محتوای فروشگاه")).toBeVisible();
+    await waitFor(() => expect(screen.getByText("محتوای فروشگاه")).toBeVisible());
     expect(screen.queryByRole("button", { name: "باز کردن منو" })).not.toBeInTheDocument();
   });
 });

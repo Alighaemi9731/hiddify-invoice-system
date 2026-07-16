@@ -8,6 +8,16 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.83.1 - 2026-07-16
+
+Release-gate reliability patch; no runtime behavior change, database migration or manual upgrade.
+
+### Fixed
+
+- The new desktop storefront navigation test now waits for the existing page-transition animation
+  before asserting visibility. Parallel branch/tag CI runs can no longer disagree solely because a
+  fast runner observed the content during its initial opacity transition.
+
 ## 1.83.0 - 2026-07-16
 
 Storefront management portal Release A; no database migration and no manual upgrade steps.

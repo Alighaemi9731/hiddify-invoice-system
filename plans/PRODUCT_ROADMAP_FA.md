@@ -327,7 +327,8 @@
 - ریسک: متوسط تا زیاد
 - Migration: بله
 - وابستگی: ۶، ۱۲، ۱۴، ۱۵ و ۱۷ با این پروژه مرتبط‌اند
-- وضعیت: IN PROGRESS؛ Release A در `v1.83.0` تکمیل شده و Releaseهای B تا F باقی مانده‌اند
+- وضعیت: IN PROGRESS؛ Release A در `v1.83.0` تکمیل و patch پایدارسازی CI آن در `v1.83.1`
+  منتشر شده است؛ Releaseهای B تا F باقی مانده‌اند
 - برنامه‌های اجرایی: `plans/002-storefront-portal-foundation.md` تا
   `plans/007-storefront-parity-and-bot-simplification.md`
 - مبنای اجرایی Release A: commit `b37f587`؛ اصلاح metering نسخهٔ `v1.82.4` پیش از شروع

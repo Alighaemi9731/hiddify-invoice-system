@@ -17,7 +17,8 @@
 - **Category**: direction
 - **Planned at**: commit `b37f587`, 2026-07-16 (drift checked; intervening v1.82.4 changed only metering/version files outside this slice)
 - **Candidate release**: `v1.83.0` (recalculate if another release lands first)
-- **Execution result**: DONE in `v1.83.0`; no migration or manual upgrade step
+- **Execution result**: DONE in `v1.83.0`; CI-stability follow-up deployed as `v1.83.1`; no migration
+  or manual upgrade step
 
 ## Why this matters
 
