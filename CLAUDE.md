@@ -54,7 +54,10 @@ reverse-on-uncertainty reconciler, provision lease F5, table `storefront_operati
 `v1.82.1` closes five edge gaps: reseller-portal strict transport, principal-bound/pre-reserved operation
 tokens, a five-minute lease floor, atomic `start_date` baseline, and verify/reapply renewal recovery
 (migration head `a6c9e2f4b7d1`). F3/F6/F7/F8/F9/F14/F15/F16 were confirmed genuinely fixed in round 1.
-**No program is currently open.**
+**Product roadmap now active (2026-07-16):** the owner-selected roadmap is tracked in
+`plans/PRODUCT_ROADMAP_FA.md`. Item 1 shipped in `v1.82.3`: the reseller Telegram menu opens the
+existing one-time authenticated portal URL directly in a normal browser, with no Mini App and with
+the previous callback/message flow retained as the missing-account/domain fallback.
 
 Concurrency invariants are asserted by
 `pg_contract`-marked tests run against a real Postgres 16 in the CI `backend-postgres`

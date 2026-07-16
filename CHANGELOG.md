@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.82.3 - 2026-07-16
+
+Direct reseller-portal entry from Telegram; no database migration and no manual upgrade steps.
+
+### Changed
+
+- The reseller bot's «ورود به پنل تحت وب» action is now a standard HTTPS URL button. Registered
+  resellers with a configured server domain open their already-authenticated portal directly in the
+  browser, without waiting for a second bot message and without using a Telegram Mini App/Web App.
+- The existing callback/message flow remains available as a safe fallback when the Telegram account
+  is not linked to a reseller or the portal domain has not been configured.
+- Portal buttons reuse the existing signed, 15-minute, one-time login-token exchange. Tokens are
+  generated only while rendering a menu and are neither persisted nor logged.
+
+### Tests
+
+- Added regressions for normal URL-button construction, absence of Mini App/LoginUrl fields,
+  unregistered and unconfigured fallbacks, domain normalization, signed token identity/JTI, and
+  role-aware menu re-rendering.
+- Stabilized the deleted-user invoice integration fixture so its synthetic panel sync remains within
+  the production freshness window on every day of the month.
+
 ## 1.82.2 - 2026-07-15
 
 Deployment reliability hotfix; no database migration and no manual upgrade steps.
