@@ -103,3 +103,26 @@ def test_renewal_of_prior_month_cycle_not_double_billed():
     m = _meter()
     _apply(snap, m, prev_limit=10, prev_used=8.0, new_limit=10, new_used=0.0, start_date=JUNE1)
     assert m.renew_used_gb == 0.0
+
+
+def test_cumulative_renewal_does_not_double_bank_renew_used():
+    """The storefront-renewal double-bill bug: a CUMULATIVE renewal keeps `current_usage` and sets
+    usage_limit_GB = used+gb, so the base start_date rule already bills the full cumulative quota. The
+    metering renewal branch must NOT also bank the closing cycle's usage (that would double-count).
+    Mirrors prod «ملکه»: bought 20, used ~20, renewed +20 → limit 40, usage CARRIED (new_used≈prev_used),
+    start_date advances within the month. Correct outcome: renew_used stays 0 (the base bills the 40)."""
+    snap = _snap(meter_provisioned_gb=20.0, meter_consumed_gb=20.0, start_date=JUNE1)
+    m = _meter()
+    _apply(snap, m, prev_limit=20, prev_used=20.0, new_limit=40, new_used=20.0,
+           start_date=dt.date(2026, 6, 13))
+    assert m.renew_used_gb == 0.0   # usage did NOT reset → nothing banked; base bills the cumulative 40
+
+
+def test_reset_renewal_still_banks_prior_cycle_usage():
+    """The fix must not over-correct: a GENUINE per-cycle reset (usage drops sharply into a fresh
+    package) still banks the closing cycle's real usage exactly as before."""
+    snap = _snap(meter_provisioned_gb=20.0, meter_consumed_gb=20.0, start_date=JUNE1)
+    m = _meter()
+    _apply(snap, m, prev_limit=20, prev_used=20.0, new_limit=20, new_used=0.5,
+           start_date=dt.date(2026, 6, 13))
+    assert m.renew_used_gb == 20.0   # reset (20 → 0.5) → bank min(cons, prov)

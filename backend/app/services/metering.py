@@ -125,16 +125,20 @@ def compute(
 
     prev_start = snapshot.start_date  # not yet overwritten by the caller
 
-    # LEGITIMATE renewal: the renew button advances start_date (and usually resets
-    # current_usage). That's a fresh cycle with a fresh quota — re-baseline so the
-    # PREVIOUS cycle's consumption can't show up as "overage" against the new quota.
-    # (The new package is billed by the normal start_date rule, not here.)
+    # RENEWAL: start_date advanced → a fresh cycle. Re-baseline so the PREVIOUS cycle's consumption
+    # can't show up as "overage" against the new quota. (The new package is billed by the normal
+    # start_date rule, not here.)
     if start_date is not None and (prev_start is None or start_date > prev_start):
-        # Before re-baselining, bank what the CLOSING cycle actually used (capped at its sold
-        # quota) — but only if that cycle STARTED this month, because then it was never billed by
-        # the normal start_date rule (which only bills the final snapshot's package). A cycle that
-        # started a prior month was already billed there, so we must not bill it again.
-        if period_of(prev_start) == period_label:
+        # Bank what the CLOSING cycle actually used (capped at its sold quota) ONLY when the renewal
+        # RESET usage into a fresh cycle — detected by the usage counter dropping (it is monotonic
+        # within a cycle, so `new_used < prev_used` ⇒ a reset happened). A CUMULATIVE renewal
+        # (usage_limit_GB = used+gb with usage CARRIED OVER — the storefront renew, or a native edit
+        # that keeps usage) is already billed in full by the base start_date rule on the current
+        # `usage_limit_gb`, so banking `renew_used` here would double-count the closing consumption.
+        # Also require that the closing cycle STARTED this month (a prior-month cycle was already
+        # billed there, so never bill it again).
+        usage_reset = new_used + _EPS < prev_used
+        if usage_reset and period_of(prev_start) == period_label:
             closing_used = min(cons, prov)
             if closing_used > _EPS:
                 renew_used += round(closing_used, 3)

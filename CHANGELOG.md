@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.82.4 - 2026-07-16
+
+Billing correctness hotfix; no database migration and no manual upgrade steps. Forward-only.
+
+### Fixed
+
+- **A storefront config that was renewed is no longer billed twice.** When a customer bought a plan and
+  then renewed it in the same month, the reseller's invoice counted that renewal both in the config's
+  base quota line AND in a separate «مصرف اضافه/تمدید» line — so e.g. a 20 GB + 20 GB renewal was billed
+  as 60 GB instead of 40. Root cause: the storefront renew keeps the config's usage cumulative (so the
+  base rule already bills the whole amount), but the abuse-metering still banked the closing cycle's
+  usage as if the renewal had reset it. Metering now banks that closing usage only for a genuine
+  per-cycle **reset** (usage actually dropped), not for a cumulative renewal.
+- **Forward-only:** this stops the double-count from the next sync onward. Invoices already issued for the
+  current period keep the inflated line and should be adjusted manually (regenerate drafts / recompute
+  unpaid, or credit paid ones).
+
 ## 1.82.3 - 2026-07-16
 
 Direct reseller-portal entry from Telegram; no database migration and no manual upgrade steps.
