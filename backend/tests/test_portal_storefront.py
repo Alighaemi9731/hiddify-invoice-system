@@ -293,7 +293,7 @@ def test_dashboard_rejects_partial_reversed_and_oversized_ranges(day_from, day_t
     assert exc_info.value.status_code == 422
 
 
-def test_storefront_routes_are_registered_read_only():
+def test_release_a_storefront_routes_remain_registered_as_get_only():
     storefront_routes = {
         (route.path, frozenset(route.methods or set()))
         for route in app.routes
@@ -302,7 +302,12 @@ def test_storefront_routes_are_registered_read_only():
     assert ("/api/portal/storefronts", frozenset({"GET"})) in storefront_routes
     assert ("/api/portal/storefronts/{shop_id}/dashboard", frozenset({"GET"})) in storefront_routes
     assert ("/api/portal/storefronts/{shop_id}/health", frozenset({"GET"})) in storefront_routes
-    assert all(methods == {"GET"} for _path, methods in storefront_routes)
+    release_a_paths = {
+        "/api/portal/storefronts",
+        "/api/portal/storefronts/{shop_id}/dashboard",
+        "/api/portal/storefronts/{shop_id}/health",
+    }
+    assert all(methods == {"GET"} for path, methods in storefront_routes if path in release_a_paths)
 
 
 def test_storefront_http_auth_and_owner_scoping():

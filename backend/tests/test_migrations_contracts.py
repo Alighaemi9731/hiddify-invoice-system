@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "a6c9e2f4b7d1"
+HEAD = "1b84c0a7d3e5"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -53,6 +53,39 @@ def test_fresh_database_migrates_to_head_with_constraints(tmp_path):
     ).fetchone()[0]
     assert "ck_invoices_usage_nonnegative" in invoice_sql
     assert "ck_invoices_toman_nonnegative" in invoice_sql
+    conn.close()
+
+
+def test_storefront_admin_audit_command_schema_contract(tmp_path):
+    db = tmp_path / "storefront-admin.db"
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    bot_columns = {
+        row[1]: row for row in conn.execute("PRAGMA table_info(storefront_bots)").fetchall()
+    }
+    assert bot_columns["config_version"][3] == 1
+    assert str(bot_columns["config_version"][4]).strip("'\"") == "1"
+    assert {"channel_verified_at", "channel_verification_error"} <= set(bot_columns)
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {"storefront_audit_events", "storefront_api_commands"} <= tables
+    command_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='storefront_api_commands'"
+    ).fetchone()[0]
+    assert "uq_sfcommand_actor_key" in command_sql
+    assert "ck_sfcommand_status" in command_sql
+    indexes = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    assert {
+        "ix_sfaudit_shop_created", "ix_sfaudit_actor_action", "ix_sfaudit_entity",
+        "ix_sfcommand_status_lease", "ix_sfcommand_shop_updated",
+    } <= indexes
     conn.close()
 
 

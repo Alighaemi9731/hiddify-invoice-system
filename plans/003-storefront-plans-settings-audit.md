@@ -1,10 +1,8 @@
 # Plan 003: Add audited shared plan and settings management
 
 > Execute only after explicit approval and plan 002 is DONE. The reviewer maintains the index.
-> **Drift check**: `git diff --stat 2514a96..HEAD -- backend/app/models/storefront.py backend/app/services/storefront.py backend/app/bot/storefront/handlers.py backend/app/api/portal_storefront.py backend/app/schemas/portal_storefront.py frontend/src/portal/storefront backend/alembic backend/tests/test_migrations_contracts.py`
-> Plan 002 will intentionally cause drift; this file is a design blueprint, not an executable
-> handoff. After plan 002 ships, the advisor must re-read the release, replace the SHA/excerpts,
-> produce an exact file allowlist and exact commands. Replacing only the SHA is insufficient.
+> **Drift check**: `git diff --stat 938bd4e..HEAD -- backend/app/models/storefront.py backend/app/services/storefront.py backend/app/bot/storefront/handlers.py backend/app/api/portal_storefront.py backend/app/schemas/portal_storefront.py frontend/src/portal/storefront backend/alembic backend/tests/test_migrations_contracts.py`
+> Refreshed against the deployed `v1.83.1` source. Execution approval was granted with roadmap item 3.
 
 ## Status
 
@@ -14,8 +12,9 @@
 - **Risk**: HIGH
 - **Depends on**: plan 002
 - **Category**: direction / migration / security
-- **Planned at**: commit `2514a96`, mandatory reconcile after plan 002
+- **Planned at**: commit `938bd4e` (`v1.83.1`), 2026-07-16
 - **Candidate release**: `v1.84.0`
+- **Execution status**: IN PROGRESS
 
 ## Why this matters
 
@@ -79,13 +78,18 @@ Settings routes are `GET/PATCH /{shop}/settings/{payment|trial|messages|shop-sta
 
 **In scope**:
 
-- new migration, `backend/app/models/storefront.py`, model exports, migration HEAD test
-- `backend/app/services/storefront_admin.py` and `storefront_audit.py` (new)
-- existing `storefront.py` plan helpers hardened/reused
-- bot plan/settings/admin/channel/shop/preview handler paths refactored to shared commands
-- portal storefront router/schemas and plans/settings/preview pages
-- backend tests: portal plans/settings, audit/idempotency, migrations, bot/service parity
-- frontend tests for plans/settings/conflict/preview flows
+- `backend/alembic/versions/1b84c0a7d3e5_storefront_admin_audit_commands.py`,
+  `backend/app/models/storefront.py`,
+  `backend/app/models/__init__.py`, `backend/tests/test_migrations_contracts.py`
+- `backend/app/services/storefront_admin.py`, `backend/app/services/storefront_audit.py` (new), and
+  `backend/app/services/storefront.py` only where legacy helpers delegate to the shared commands
+- `backend/app/api/portal_storefront.py`, `backend/app/schemas/portal_storefront.py`
+- `backend/app/bot/storefront/handlers.py` and `backend/app/bot/storefront/keyboards.py` only for
+  plan/settings/manager/channel/shop/preview parity
+- `backend/tests/test_portal_storefront_plans.py`,
+  `backend/tests/test_portal_storefront_settings.py`, focused service/audit tests, and parity additions
+- `frontend/src/portal/PortalApp.tsx`; existing storefront `api.ts`, `types.ts`, `StorefrontShell.tsx`;
+  new feature-local plans/settings/managers/preview/conflict/history/mutation components and tests
 
 **Out of scope**:
 
@@ -106,7 +110,7 @@ Settings routes are `GET/PATCH /{shop}/settings/{payment|trial|messages|shop-sta
 | Frontend | `cd frontend && npm ci && npm audit --audit-level=high && npm test -- --run && npm run build` | exit 0 |
 | Release tools | syntax, release-tool test, release asset checksums and Compose config | exit 0 |
 
-- Branch: `feature/storefront-portal-3b-plans-settings` from the plan-002 release commit.
+- Branch: `feature/storefront-portal-3b-plans-settings` from deployed commit `938bd4e`.
 - Migration revision must be a new unique 12-char ID off the current HEAD; update the HEAD pin.
 - Keep migration + plans/settings batch alone. Reviewer approval precedes version/tag/release/deploy.
 

@@ -13,7 +13,11 @@ import logging
 import secrets
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import (
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -38,6 +42,7 @@ from app.services import (
     broadcast,
     settings_service,
     storefront,
+    storefront_admin,
     storefront_credit,
     storefront_ops,
     storefront_provision,
@@ -158,6 +163,106 @@ async def _send_customer_menu(answer, sf: StorefrontBot, customer: StorefrontCus
         rtl("\n".join(lines)),
         reply_markup=kb.customer_reply_kb(is_admin_preview=preview, show_free_trial=show_trial),
     )
+
+
+async def _send_customer_preview(answer, preview: dict) -> None:  # noqa: ANN001
+    """Render the admin preview from a pure DTO; never creates/updates a customer row."""
+    lines = [preview["welcome_text"], "", "👛 موجودیِ کیفِ پولِ شما: ۰ تومان"]
+    if preview["shop_closed"]:
+        lines.extend(["", preview["closed_text"] or _SHOP_CLOSED_DEFAULT])
+    trial = preview["trial"]
+    if trial["enabled"]:
+        lines.append(f"🎁 تستِ رایگان ({trial['gb']} گیگ · {trial['days']} روز) فعال است.")
+    if preview["channel_required"]:
+        lines.append("🔒 عضویت در کانال پیش از استفاده الزامی است.")
+    plans = preview["plans"]
+    if plans:
+        lines.extend(["", "📦 پلن‌های فعال:"])
+        lines.extend(
+            f"• {plan['title'] or 'پلن فروشگاه'}: {plan['gb']} گیگ · {plan['days']} روز · "
+            f"{_toman(plan['price_toman'])} تومان"
+            for plan in plans[:10]
+        )
+    methods = [
+        label for name, label in (("card", "کارت"), ("usdt", "USDT"), ("ton", "TON"))
+        if preview["payment_methods"].get(name)
+    ]
+    if methods:
+        lines.extend(["", f"💳 روش‌های پرداخت: {'، '.join(methods)}"])
+    if preview["support_contact"]:
+        lines.append(f"☎️ پشتیبانی: {preview['support_contact']}")
+    await answer(
+        rtl("\n".join(lines)),
+        reply_markup=kb.customer_reply_kb(
+            is_admin_preview=True, show_free_trial=bool(trial["enabled"])),
+    )
+
+
+def _command_ctx(user_id: int, version: int, key: str) -> storefront_admin.CommandContext:
+    return storefront_admin.CommandContext(
+        actor_telegram_id=user_id,
+        actor_role="admin",
+        source="bot",
+        idempotency_key=key,
+        expected_version=version,
+        correlation_id=key,
+    )
+
+
+def _callback_ctx(
+    cb: CallbackQuery, sf: StorefrontBot, *, rendered_version: int | None = None,
+) -> storefront_admin.CommandContext:
+    return _command_ctx(
+        cb.from_user.id,
+        sf.config_version if rendered_version is None else rendered_version,
+        f"tg-callback:{cb.id}",
+    )
+
+
+def _absolute_toggle(data: str | None) -> tuple[bool, int] | None:
+    """Read the desired state and config version embedded in a rendered inline button.
+
+    Old Telegram messages have legacy toggle callbacks without these fields. They are deliberately
+    treated as stale and only refreshed; deriving intent from today's DB value could reverse a
+    portal change made after that keyboard was rendered.
+    """
+    parts = (data or "").split(":")
+    if len(parts) < 3 or parts[-2] not in {"0", "1"}:
+        return None
+    try:
+        version = int(parts[-1])
+    except ValueError:
+        return None
+    if version < 1:
+        return None
+    return parts[-2] == "1", version
+
+
+async def _start_admin_fsm(state: FSMContext, sf: StorefrontBot) -> None:
+    await state.update_data(
+        sf_config_version=sf.config_version,
+        sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
+    )
+
+
+def _fsm_ctx(user_id: int, data: dict, sf: StorefrontBot) -> storefront_admin.CommandContext:
+    return _command_ctx(
+        user_id,
+        int(data.get("sf_config_version", sf.config_version)),
+        str(data.get("sf_command_key") or f"tg-fsm:{secrets.token_urlsafe(18)}"),
+    )
+
+
+def _admin_error(exc: storefront_admin.AdminCommandError) -> str:
+    if exc.code == "config_conflict":
+        return "⚠️ تنظیمات همزمان تغییر کرد. اطلاعات تازه بارگذاری شد؛ لطفاً دوباره تلاش کنید."
+    if exc.code == "in_flight":
+        return "این درخواست هنوز در حال انجام است؛ چند لحظه بعد دوباره بررسی کنید."
+    if exc.code == "unknown":
+        return "نتیجهٔ درخواست نامشخص است؛ برای جلوگیری از اجرای دوباره، ابتدا وضعیت فعلی را بررسی کنید."
+    if exc.code == "not_found":
+        return "مورد پیدا نشد یا دسترسی ندارید."
+    return str(exc)
 
 
 def _admin_chat_ids(reseller: Reseller | None, sf: StorefrontBot | None) -> list[int]:
@@ -467,11 +572,13 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await ans(rtl("📢 پیامِ همگانی — گیرندگان را انتخاب کنید:"),
                   reply_markup=kb.broadcast_segment_kb())
     elif action == "support":
+        await _start_admin_fsm(state, sf)
         await state.set_state(SF.support)
         await ans(rtl(
             f"شناسهٔ پشتیبانی (مثلاً @yourID) را بفرستید.\nفعلی: {sf.support_contact or '—'}"),
             reply_markup=kb.cancel_kb())
     elif action == "welcome":
+        await _start_admin_fsm(state, sf)
         await state.set_state(SF.welcome)
         await ans(rtl(
             "متنِ خوش‌آمدگوییِ فروشگاه را بفرستید (به مشتری در شروع نشان داده می‌شود).\n"
@@ -506,8 +613,9 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             reply_markup=kb.shop_state_kb(sf))
     elif action == "preview":
         await state.update_data(sf_preview=True)
-        cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-        await _send_customer_menu(message.answer, sf, cust, preview=True)
+        preview = await storefront_admin.customer_preview(
+            s, sf.id, message.from_user.id, "bot")
+        await _send_customer_preview(message.answer, preview)
 
 
 # ── admin: co-admins (extra managers) ────────────────────────────────────────
@@ -537,6 +645,7 @@ async def sf_add_admin_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> 
     if sf is None or not _is_shop_owner(reseller, cb.from_user.id):
         await cb.answer("فقط مدیرِ اصلی می‌تواند مدیر اضافه کند.", show_alert=True)
         return
+    await _start_admin_fsm(state, sf)
     await state.set_state(SF.add_admin)
     await cb.message.answer(rtl(
         "👤 آیدیِ عددیِ تلگرامِ فرد را بفرستید،\n"
@@ -567,6 +676,7 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             "آیدیِ عددی‌اش را دستی بفرستید.)"),
             reply_markup=kb.cancel_kb())
         return
+    data = await state.get_data()
     async with SessionLocal() as s:
         sf, reseller, _a = await _resolve(s, bot, message.from_user)
         if sf is None or not _is_shop_owner(reseller, message.from_user.id):
@@ -574,7 +684,19 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             await message.answer(rtl("فقط مدیرِ اصلی می‌تواند مدیر اضافه کند."),
                                  reply_markup=kb.admin_reply_kb())
             return
-        result = await storefront.add_co_admin(s, sf, target_id)
+        try:
+            await storefront_admin.add_manager(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf), telegram_id=target_id)
+            result = "ok"
+        except storefront_admin.AdminCommandError as exc:
+            if exc.code == "config_conflict":
+                result = "conflict"
+            elif "limit" in str(exc):
+                result = "full"
+            elif "banned" in str(exc):
+                result = "banned"
+            else:
+                result = "invalid" if exc.code in ("validation", "not_found") else "error"
         await state.clear()
         note = {
             "ok": f"✅ آیدیِ {target_id} به‌عنوان مدیرِ فروشگاه اضافه شد.",
@@ -583,6 +705,7 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             "full": f"حداکثر {storefront.MAX_CO_ADMINS} مدیرِ اضافه مجاز است.",
             "invalid": "آیدیِ نامعتبر است؛ یک عددِ مثبت بفرستید.",
             "banned": "این کاربر مسدود است؛ ابتدا رفعِ مسدودی کنید، سپس مدیر کنید.",
+            "conflict": "⚠️ فهرست مدیران تغییر کرده است؛ دوباره تلاش کنید.",
         }.get(result, "خطا در افزودنِ مدیر.")
         await message.answer(rtl(note), reply_markup=kb.admin_reply_kb())
         await _send_admins_panel(message.answer, s, sf, reseller)
@@ -608,7 +731,13 @@ async def sf_del_admin(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or not _is_shop_owner(reseller, cb.from_user.id):
             await cb.answer("فقط مدیرِ اصلی می‌تواند مدیر حذف کند.", show_alert=True)
             return
-        removed = await storefront.remove_co_admin(s, sf, tid)
+        try:
+            await storefront_admin.remove_manager(
+                s, sf.id, _callback_ctx(cb, sf), telegram_id=tid)
+            removed = True
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
         co_ids = storefront.co_admin_ids(sf)
     try:
         await cb.message.edit_reply_markup(reply_markup=kb.admins_manage_kb(co_ids))
@@ -1635,11 +1764,12 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
 @storefront_router.callback_query(F.data == "sfplanadd")
 async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     async with SessionLocal() as s:
-        _sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-    if not is_admin:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if sf is None or not is_admin:
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     # No title (owner: «عنوان نمی‌خواهیم») — collect volume → days → price only.
+    await _start_admin_fsm(state, sf)
     await state.set_state(SF.plan_gb)
     await cb.message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
     await cb.answer()
@@ -1674,15 +1804,22 @@ async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
         return
     data = await state.get_data()
-    await state.clear()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        await storefront.add_plan(
-            s, sf.id, title="", gb=int(data.get("p_gb", 0)),
-            days=int(data.get("p_days", 0)), price_toman=int(raw))
+        try:
+            await storefront_admin.create_plan(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf), title="",
+                gb=int(data.get("p_gb", 0)), days=int(data.get("p_days", 0)),
+                price_toman=int(raw))
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            plans = await storefront.list_plans(s, sf.id)
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.plans_manage_kb(plans))
+            return
         plans = await storefront.list_plans(s, sf.id)
+    await state.clear()
     await message.answer(rtl("✅ پلن اضافه شد."), reply_markup=kb.plans_manage_kb(plans))
 
 
@@ -1694,7 +1831,14 @@ async def sf_plan_del(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        await storefront.delete_plan(s, sf.id, plan_id)
+        try:
+            await storefront_admin.delete_plan(s, sf.id, plan_id, _callback_ctx(cb, sf))
+        except storefront_admin.AdminCommandError as exc:
+            if exc.code == "config_conflict":
+                plans = await storefront.list_plans(s, sf.id)
+                await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
         plans = await storefront.list_plans(s, sf.id)
     await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
     await cb.answer("حذف شد.")
@@ -1717,8 +1861,27 @@ async def _sf_plan_move(cb: CallbackQuery, bot: Bot, direction: str) -> None:
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        moved = await storefront.move_plan(s, sf.id, plan_id, direction)
         plans = await storefront.list_plans(s, sf.id)
+        ids = [plan.id for plan in plans]
+        try:
+            position = ids.index(plan_id)
+        except ValueError:
+            await cb.answer("پلن یافت نشد.", show_alert=True)
+            return
+        swap = position - 1 if direction == "up" else position + 1
+        moved = 0 <= swap < len(ids)
+        if moved:
+            ids[position], ids[swap] = ids[swap], ids[position]
+            try:
+                await storefront_admin.reorder_plans(
+                    s, sf.id, _callback_ctx(cb, sf), ordered_ids=ids)
+            except storefront_admin.AdminCommandError as exc:
+                if exc.code == "config_conflict":
+                    plans = await storefront.list_plans(s, sf.id)
+                    await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
+                await cb.answer(_admin_error(exc), show_alert=True)
+                return
+            plans = await storefront.list_plans(s, sf.id)
     try:
         await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
     except Exception:  # noqa: BLE001 — "not modified" at an edge → ignore
@@ -1740,6 +1903,7 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             return
         cur = f"{plan.gb} گیگ · {plan.days} روز · {plan.price_toman:,} تومان"
     await state.set_state(SF.edit_gb)
+    await _start_admin_fsm(state, sf)
     await state.update_data(edit_plan_id=plan_id)
     await cb.message.answer(
         rtl(f"ویرایش پلن ({cur})\n\nحجمِ جدید به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
@@ -1775,16 +1939,27 @@ async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
         return
     data = await state.get_data()
-    await state.clear()
     plan_id = int(data.get("edit_plan_id", 0))
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        ok = await storefront.update_plan(
-            s, sf.id, plan_id, gb=int(data.get("e_gb", 0)),
-            days=int(data.get("e_days", 0)), price_toman=int(raw))
+        try:
+            await storefront_admin.update_plan(
+                s, sf.id, plan_id, _fsm_ctx(message.from_user.id, data, sf),
+                gb=int(data.get("e_gb", 0)), days=int(data.get("e_days", 0)),
+                price_toman=int(raw))
+            ok = True
+        except storefront_admin.AdminCommandError as exc:
+            ok = False
+            if exc.code != "not_found":
+                await state.clear()
+                plans = await storefront.list_plans(s, sf.id)
+                await message.answer(
+                    rtl(_admin_error(exc)), reply_markup=kb.plans_manage_kb(plans))
+                return
         plans = await storefront.list_plans(s, sf.id)
+    await state.clear()
     await message.answer(
         rtl("✅ پلن ویرایش شد." if ok else "پلن یافت نشد."),
         reply_markup=kb.plans_manage_kb(plans))
@@ -2051,15 +2226,29 @@ async def sf_credit_usage(cb: CallbackQuery, bot: Bot) -> None:
 
 @storefront_router.callback_query(F.data.startswith("sfpaytog:"))
 async def sf_pay_toggle(cb: CallbackQuery, bot: Bot) -> None:
-    method = cb.data.split(":")[1]
+    parts = (cb.data or "").split(":")
+    method = parts[1] if len(parts) > 1 else ""
+    target = _absolute_toggle(cb.data)
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        attr = {"card": "pay_card_enabled", "usdt": "pay_usdt_enabled", "ton": "pay_ton_enabled"}[method]
-        setattr(sf, attr, not getattr(sf, attr))
-        await s.commit()
+        if method not in {"card", "usdt", "ton"} or target is None:
+            await cb.message.edit_reply_markup(reply_markup=kb.pay_settings_kb(sf))
+            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            return
+        desired, rendered_version = target
+        try:
+            await storefront_admin.update_payment(
+                s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version),
+                **{f"{method}_enabled": desired})
+        except storefront_admin.AdminCommandError as exc:
+            if exc.code == "config_conflict":
+                await s.refresh(sf)
+                await cb.message.edit_reply_markup(reply_markup=kb.pay_settings_kb(sf))
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
         await cb.message.edit_reply_markup(reply_markup=kb.pay_settings_kb(sf))
     await cb.answer("بروزرسانی شد.")
 
@@ -2068,11 +2257,12 @@ async def sf_pay_toggle(cb: CallbackQuery, bot: Bot) -> None:
 async def sf_pay_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     method = cb.data.split(":")[1]
     async with SessionLocal() as s:
-        _sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-    if not is_admin:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if sf is None or not is_admin:
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.pay_value)
+    await _start_admin_fsm(state, sf)
     await state.update_data(pay_method=method, pay_step="card_number" if method == "card" else "addr")
     prompt = {
         "card": "شمارهٔ کارت را بفرستید:",
@@ -2095,33 +2285,48 @@ async def sf_pay_value(message: Message, state: FSMContext, bot: Bot) -> None:
             await state.clear()
             return
         if method == "card" and step == "card_number":
-            sf.card_number = val[:32]
-            await s.commit()
-            await state.update_data(pay_step="card_holder")
+            await state.update_data(pay_step="card_holder", pending_card_number=val)
             await message.answer(rtl("نامِ صاحبِ کارت را بفرستید:"), reply_markup=kb.cancel_kb())
             return
-        if method == "card":
-            sf.card_holder = val[:128]
-        elif method == "usdt":
-            sf.usdt_address = val[:128]
-        elif method == "ton":
-            sf.ton_address = val[:128]
-        await s.commit()
+        changes = (
+            {"card_number": data.get("pending_card_number"), "card_holder": val}
+            if method == "card" else {f"{method}_address": val}
+        )
+        try:
+            await storefront_admin.update_payment(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf), **changes)
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.pay_settings_kb(sf))
+            return
         await state.clear()
         await message.answer(rtl("✅ ذخیره شد."), reply_markup=kb.pay_settings_kb(sf))
 
 
 # ── admin: free-trial settings ────────────────────────────────────────────────
 
-@storefront_router.callback_query(F.data == "sftrialtog")
+@storefront_router.callback_query(F.data.startswith("sftrialtog"))
 async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    target = _absolute_toggle(cb.data)
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        sf.free_trial_enabled = not sf.free_trial_enabled
-        await s.commit()
+        if target is None:
+            await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
+            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            return
+        desired, rendered_version = target
+        try:
+            await storefront_admin.update_trial(
+                s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version), enabled=desired)
+        except storefront_admin.AdminCommandError as exc:
+            if exc.code == "config_conflict":
+                await s.refresh(sf)
+                await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
         await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
     await cb.answer("فعال شد." if sf.free_trial_enabled else "غیرفعال شد.")
 
@@ -2129,11 +2334,12 @@ async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
 @storefront_router.callback_query(F.data == "sftrialset")
 async def sf_trial_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     async with SessionLocal() as s:
-        _sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-    if not is_admin:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+    if sf is None or not is_admin:
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.trial_gb)
+    await _start_admin_fsm(state, sf)
     await cb.message.answer(rtl("حجمِ تستِ رایگان به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
     await cb.answer()
 
@@ -2156,14 +2362,20 @@ async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
         return
     data = await state.get_data()
-    await state.clear()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        sf.free_trial_gb = int(data.get("t_gb", 1))
-        sf.free_trial_days = int(raw)
-        await s.commit()
+        try:
+            await storefront_admin.update_trial(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf),
+                gb=int(data.get("t_gb", 1)), days=int(raw))
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            await s.refresh(sf)
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.trial_settings_kb(sf))
+            return
+        await state.clear()
         await message.answer(
             rtl(f"✅ تستِ رایگان: {sf.free_trial_gb} گیگ · {sf.free_trial_days} روز"),
             reply_markup=kb.trial_settings_kb(sf))
@@ -2210,25 +2422,39 @@ async def sf_adjust_amount(message: Message, state: FSMContext, bot: Bot) -> Non
 
 @storefront_router.message(SF.support, F.text)
 async def sf_support_set(message: Message, state: FSMContext, bot: Bot) -> None:
-    await state.clear()
+    data = await state.get_data()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        sf.support_contact = (message.text or "").strip()[:128]
-        await s.commit()
+        try:
+            await storefront_admin.update_messages(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf),
+                support_contact=(message.text or "").strip())
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.admin_reply_kb())
+            return
+    await state.clear()
     await message.answer(rtl("✅ شناسهٔ پشتیبانی ذخیره شد."), reply_markup=kb.admin_reply_kb())
 
 
 @storefront_router.message(SF.welcome, F.text)
 async def sf_welcome_set(message: Message, state: FSMContext, bot: Bot) -> None:
-    await state.clear()
+    data = await state.get_data()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        sf.welcome_text = (message.text or "").strip()[:1000] or None
-        await s.commit()
+        try:
+            await storefront_admin.update_messages(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf),
+                welcome_text=(message.text or "").strip() or None)
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.admin_reply_kb())
+            return
+    await state.clear()
     await message.answer(rtl("✅ پیامِ خوش‌آمد ذخیره شد."), reply_markup=kb.admin_reply_kb())
 
 
@@ -2242,6 +2468,9 @@ async def _bot_is_channel_admin(bot: Bot, channel_id: str, bot_telegram_id: int 
     try:
         m = await bot.get_chat_member(channel_id, bot_telegram_id)
         return m.status in ("administrator", "creator")
+    except (TelegramNetworkError, TelegramRetryAfter) as exc:
+        raise storefront_admin.AdminCommandError(
+            "external_unknown", "Telegram verification outcome is unknown") from exc
     except Exception:  # noqa: BLE001
         return False
 
@@ -2253,6 +2482,7 @@ async def sf_join_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     if sf is None or not is_admin:
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
+    await _start_admin_fsm(state, sf)
     await state.set_state(SF.join_channel)
     await cb.message.answer(rtl(
         f"یک پیام از کانالِ خود را همین‌جا فوروارد کنید (یا @username یا آیدیِ -100… را بفرستید).\n"
@@ -2280,13 +2510,66 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
             "نشد. یک پیام از کانال را فوروارد کنید یا @username / آیدیِ -100… را بفرستید."),
             reply_markup=kb.cancel_kb())
         return
+    data = await state.get_data()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             await state.clear()
             return
         bot_tg = sf.bot_telegram_id
-    if not await _bot_is_channel_admin(bot, channel_id, bot_tg):
+        ctx = _fsm_ctx(message.from_user.id, data, sf)
+        try:
+            claim = await storefront_admin.claim_external_channel(
+                s, sf.id, ctx, channel_id=channel_id)
+        except storefront_admin.AdminCommandError as exc:
+            if exc.code == "config_conflict":
+                await state.update_data(
+                    sf_config_version=exc.current_version or sf.config_version,
+                    sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
+                )
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.cancel_kb())
+            return
+    if isinstance(claim, storefront_admin.CommandResult):
+        if claim.response_status >= 400:
+            await state.update_data(
+                sf_config_version=claim.config_version,
+                sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
+            )
+            await message.answer(rtl(
+                "بررسیِ قبلیِ کانال ناموفق بود؛ وضعیت ادمین‌بودن ربات را اصلاح کنید و دوباره بفرستید."),
+                reply_markup=kb.cancel_kb())
+            return
+        await state.clear()
+        async with SessionLocal() as s:
+            sf, _r, _a = await _resolve(s, bot, message.from_user)
+            if sf is None:
+                return
+            markup = kb.join_settings_kb(sf)
+        await message.answer(rtl("✅ کانال قبلاً ثبت شده است."), reply_markup=kb.admin_reply_kb())
+        await message.answer(rtl("🔒 عضویت اجباری در کانال"), reply_markup=markup)
+        return
+    try:
+        is_channel_admin = await _bot_is_channel_admin(bot, channel_id, bot_tg)
+    except storefront_admin.AdminCommandError as exc:
+        async with SessionLocal() as s:
+            await storefront_admin.mark_external_channel_unknown(
+                s, claim, ctx, error_class=exc.code)
+        await state.update_data(
+            sf_config_version=claim.expected_version,
+            sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
+        )
+        await message.answer(rtl(
+            "نتیجه بررسی تلگرام نامشخص ماند؛ چند لحظه بعد دوباره تلاش کنید."),
+            reply_markup=kb.cancel_kb())
+        return
+    if not is_channel_admin:
+        async with SessionLocal() as s:
+            await storefront_admin.finalize_verified_channel(
+                s, claim, ctx, verified=False, resolved_link=None)
+        await state.update_data(
+            sf_config_version=claim.expected_version,
+            sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
+        )
         await message.answer(rtl(
             "ابتدا ربات را در کانالِ خود ادمین کنید، سپس دوباره پیام را فوروارد کنید."),
             reply_markup=kb.cancel_kb())
@@ -2300,53 +2583,160 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
         else:
             invite = await bot.create_chat_invite_link(channel_id)
             link = invite.invite_link
+    except (TelegramNetworkError, TelegramRetryAfter) as exc:
+        async with SessionLocal() as s:
+            await storefront_admin.mark_external_channel_unknown(
+                s, claim, ctx, error_class="external_unknown")
+        await state.update_data(
+            sf_config_version=claim.expected_version,
+            sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
+        )
+        await message.answer(rtl(_admin_error(storefront_admin.AdminCommandError(
+            "external_unknown", str(exc)))), reply_markup=kb.cancel_kb())
+        return
     except Exception:  # noqa: BLE001 — link is optional; the gate still works via the check button
         link = None
-    await state.clear()
     async with SessionLocal() as s:
+        try:
+            await storefront_admin.finalize_verified_channel(
+                s, claim, ctx, verified=True, resolved_link=link)
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.admin_reply_kb())
+            return
         sf, _r, _a = await _resolve(s, bot, message.from_user)
         if sf is None:
             return
-        sf.channel_id = channel_id[:64]
-        sf.channel_link = (link or "")[:255] or None
-        sf.channel_required = True
-        await s.commit()
         markup = kb.join_settings_kb(sf)
+    await state.clear()
     await message.answer(rtl("✅ کانال ثبت و عضویت اجباری فعال شد."), reply_markup=kb.admin_reply_kb())
     await message.answer(rtl("🔒 عضویت اجباری در کانال"), reply_markup=markup)
 
 
-@storefront_router.callback_query(F.data == "sfjointog")
+@storefront_router.callback_query(F.data.startswith("sfjointog"))
 async def sf_join_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    claim: storefront_admin.ChannelVerification | storefront_admin.CommandResult | None = None
+    ctx: storefront_admin.CommandContext | None = None
+    channel_id: str | None = None
+    bot_tg: int | None = None
+    existing_link: str | None = None
+    target = _absolute_toggle(cb.data)
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        if not sf.channel_required:  # turning ON → need a channel + the bot must be its admin
-            if not sf.channel_id:
-                await cb.answer("اول کانال را تنظیم کنید.", show_alert=True)
+        if target is None:
+            await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
+            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            return
+        desired, rendered_version = target
+        if desired:  # turning ON → verify through the durable external command flow
+            channel_id, bot_tg, existing_link = sf.channel_id, sf.bot_telegram_id, sf.channel_link
+            ctx = _callback_ctx(cb, sf, rendered_version=rendered_version)
+            try:
+                claim = await storefront_admin.claim_external_channel_enable(s, sf.id, ctx)
+            except storefront_admin.AdminCommandError as exc:
+                await cb.answer(_admin_error(exc), show_alert=True)
                 return
-            if not await _bot_is_channel_admin(bot, sf.channel_id, sf.bot_telegram_id):
-                await cb.answer("اول ربات را در کانال ادمین کنید.", show_alert=True)
+            if isinstance(claim, storefront_admin.ChannelVerification):
+                channel_id = claim.channel_id
+        else:
+            try:
+                await storefront_admin.set_channel_required(
+                    s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version),
+                    required=False)
+            except storefront_admin.AdminCommandError as exc:
+                await cb.answer(_admin_error(exc), show_alert=True)
                 return
-        sf.channel_required = not sf.channel_required
-        await s.commit()
-        await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
-    await cb.answer("فعال شد." if sf.channel_required else "غیرفعال شد.")
+            await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
+    if not desired:
+        await cb.answer("غیرفعال شد.")
+        return
+    if isinstance(claim, storefront_admin.CommandResult):
+        if claim.response_status >= 400:
+            await cb.answer("بررسیِ قبلیِ کانال ناموفق بود؛ دوباره تلاش کنید.", show_alert=True)
+            return
+        markup = None
+        async with SessionLocal() as s:
+            sf, _r, _a = await _resolve(s, bot, cb.from_user)
+            if sf is not None:
+                markup = kb.join_settings_kb(sf)
+        if markup is not None:
+            await cb.message.edit_reply_markup(reply_markup=markup)
+        await cb.answer("فعال شد.")
+        return
+    if claim is None or ctx is None or channel_id is None:
+        await cb.answer("خطا در بررسی کانال.", show_alert=True)
+        return
+    try:
+        verified = await _bot_is_channel_admin(bot, channel_id, bot_tg)
+    except storefront_admin.AdminCommandError as exc:
+        async with SessionLocal() as s:
+            await storefront_admin.mark_external_channel_unknown(
+                s, claim, ctx, error_class=exc.code)
+        await cb.answer("نتیجه بررسی تلگرام نامشخص ماند؛ دوباره تلاش کنید.", show_alert=True)
+        return
+    if not verified:
+        async with SessionLocal() as s:
+            await storefront_admin.finalize_verified_channel(
+                s, claim, ctx, verified=False, resolved_link=None)
+        await cb.answer("اول ربات را در کانال ادمین کنید.", show_alert=True)
+        return
+    link = existing_link
+    if not link:
+        try:
+            full = await bot.get_chat(channel_id)
+            if getattr(full, "username", None):
+                link = f"https://t.me/{full.username}"
+            else:
+                invite = await bot.create_chat_invite_link(channel_id)
+                link = invite.invite_link
+        except (TelegramNetworkError, TelegramRetryAfter):
+            async with SessionLocal() as s:
+                await storefront_admin.mark_external_channel_unknown(
+                    s, claim, ctx, error_class="external_unknown")
+            await cb.answer("نتیجه ساخت لینک نامشخص ماند؛ دوباره تلاش کنید.", show_alert=True)
+            return
+        except Exception:  # noqa: BLE001 - link remains optional
+            link = None
+    markup = None
+    async with SessionLocal() as s:
+        try:
+            await storefront_admin.finalize_verified_channel(
+                s, claim, ctx, verified=True, resolved_link=link)
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
+        sf, _r, _a = await _resolve(s, bot, cb.from_user)
+        if sf is not None:
+            markup = kb.join_settings_kb(sf)
+    if markup is not None:
+        await cb.message.edit_reply_markup(reply_markup=markup)
+    await cb.answer("فعال شد.")
 
 
-@storefront_router.callback_query(F.data == "sfshoptog")
+@storefront_router.callback_query(F.data.startswith("sfshoptog"))
 async def sf_shop_toggle(cb: CallbackQuery, bot: Bot) -> None:
     """Admin flips «shop temporarily closed» on/off."""
+    target = _absolute_toggle(cb.data)
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        sf.shop_closed = not sf.shop_closed
-        await s.commit()
-        now_closed = sf.shop_closed
+        if target is None:
+            await cb.message.edit_reply_markup(reply_markup=kb.shop_state_kb(sf))
+            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            return
+        now_closed, rendered_version = target
+        try:
+            await storefront_admin.update_shop_state(
+                s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version),
+                closed=now_closed)
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
         await cb.message.edit_reply_markup(reply_markup=kb.shop_state_kb(sf))
     await cb.answer("فروشگاه بسته شد." if now_closed else "فروشگاه باز شد.")
 
@@ -2360,6 +2750,7 @@ async def sf_shop_msg(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.closed_text)
+    await _start_admin_fsm(state, sf)
     await cb.message.answer(rtl(
         "متنِ پیامی که هنگامِ بسته‌بودنِ فروشگاه به مشتری نشان داده می‌شود را بفرستید.\n"
         f"فعلی: {sf.closed_text or _SHOP_CLOSED_DEFAULT}"), reply_markup=kb.cancel_kb())
@@ -2368,13 +2759,21 @@ async def sf_shop_msg(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 
 @storefront_router.message(SF.closed_text, F.text)
 async def sf_closed_set(message: Message, state: FSMContext, bot: Bot) -> None:
-    await state.clear()
+    data = await state.get_data()
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        sf.closed_text = (message.text or "").strip()[:1000] or None
-        await s.commit()
+        try:
+            await storefront_admin.update_shop_state(
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf),
+                closed_text=(message.text or "").strip() or None)
+        except storefront_admin.AdminCommandError as exc:
+            await state.clear()
+            await s.refresh(sf)
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.shop_state_kb(sf))
+            return
+    await state.clear()
     await message.answer(rtl("✅ پیامِ بسته‌بودنِ فروشگاه ذخیره شد."), reply_markup=kb.admin_reply_kb())
 
 
@@ -2385,10 +2784,11 @@ async def sf_join_clear(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        sf.channel_id = None
-        sf.channel_link = None
-        sf.channel_required = False
-        await s.commit()
+        try:
+            await storefront_admin.delete_channel(s, sf.id, _callback_ctx(cb, sf))
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
         await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
     await cb.answer("حذف شد.")
 

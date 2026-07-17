@@ -24,6 +24,7 @@ from app.models.storefront import (  # noqa: E402
 from app.services import (  # noqa: E402
     maintenance,
     storefront,
+    storefront_admin,
     storefront_provision,
     storefront_subscription,
     storefront_wallet,
@@ -75,9 +76,24 @@ async def _seed(s, *, tag="1", storefront_enabled=True, with_bot=True, fee=None)
     return r, bot, cust
 
 
-def test_co_admin_add_remove_and_is_shop_admin(tmp_path):
-    """A shop owner can appoint co-admins; is_shop_admin then grants them management, and a
-    non-admin is rejected. Owner id, duplicates, and the cap are handled."""
+async def _seed_plan(s, storefront_bot_id, *, gb, days, price_toman, title=""):
+    """Test-only direct-ORM plan insert for setup (the audited create is exercised in
+    tests/test_storefront_admin_service.py / test_portal_storefront_plans.py)."""
+    existing = await storefront.list_plans(s, storefront_bot_id)
+    plan = StorefrontPlan(
+        storefront_bot_id=storefront_bot_id, title=title[:128], gb=int(gb), days=int(days),
+        price_toman=int(price_toman), enabled=True, sort_order=len(existing),
+    )
+    s.add(plan)
+    await s.commit()
+    return plan
+
+
+def test_co_admin_ids_and_is_shop_admin(tmp_path):
+    """The read helpers `co_admin_ids` / `is_shop_admin` gate management: the owning reseller and
+    any appointed co-admin manage the shop, a stranger does not. (Appointment itself is now the
+    audited `storefront_admin.add_manager` command — its negative paths are covered in
+    tests/test_storefront_admin_service.py.)"""
     async def body(s):
         r, bot, _c = await _seed(s)
         r.bot_chat_id = 111  # the owning reseller's Telegram id
@@ -88,24 +104,18 @@ def test_co_admin_add_remove_and_is_shop_admin(tmp_path):
         assert storefront.is_shop_admin(bot, r, 111) is True
         assert storefront.is_shop_admin(bot, r, 222) is False
 
-        # Appoint 222.
-        assert await storefront.add_co_admin(s, bot, 222) == "ok"
+        # Appoint 222 (as the shared command layer stores it: a comma-joined id list).
+        bot.co_admin_ids = "222"
+        await s.commit()
         assert storefront.co_admin_ids(bot) == [222]
         assert storefront.is_shop_admin(bot, r, 222) is True      # co-admin can now manage
-        # Idempotent + guards.
-        assert await storefront.add_co_admin(s, bot, 222) == "exists"
-        assert await storefront.add_co_admin(s, bot, 111) == "is_owner"
+        assert storefront.is_shop_admin(bot, r, 333) is False     # a stranger still cannot
 
-        # Cap at MAX_CO_ADMINS.
-        for extra in range(300, 300 + storefront.MAX_CO_ADMINS):
-            await storefront.add_co_admin(s, bot, extra)
-        assert await storefront.add_co_admin(s, bot, 999) == "full"
-
-        # Remove.
-        assert await storefront.remove_co_admin(s, bot, 222) is True
-        assert 222 not in storefront.co_admin_ids(bot)
+        # Revoked.
+        bot.co_admin_ids = None
+        await s.commit()
+        assert storefront.co_admin_ids(bot) == []
         assert storefront.is_shop_admin(bot, r, 222) is False
-        assert await storefront.remove_co_admin(s, bot, 222) is False  # already gone
 
     _run(body, tmp_path, "coadmin.db")
 
@@ -402,40 +412,10 @@ def test_plan_label_is_gb_days_price_never_title():
     assert "30 گیگ" in label and "30 روزه" in label and "120,000" in label
 
 
-def test_update_plan_edits_and_rejects_foreign(tmp_path):
-    async def body(s):
-        _r, bot, _c = await _seed(s)
-        p = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
-        assert await storefront.update_plan(s, bot.id, p.id, gb=20, days=60, price_toman=90_000)
-        p2 = await s.get(StorefrontPlan, p.id)
-        assert (p2.gb, p2.days, p2.price_toman) == (20, 60, 90_000)
-        # a different storefront can't edit this plan
-        assert await storefront.update_plan(
-            s, bot.id + 999, p.id, gb=1, days=1, price_toman=1) is False
-
-    _run(body, tmp_path, "planedit.db")
-
-
-def test_move_plan_reorders(tmp_path):
-    async def body(s):
-        _r, bot, _c = await _seed(s)
-        a = await storefront.add_plan(s, bot.id, title="", gb=1, days=1, price_toman=1)
-        b = await storefront.add_plan(s, bot.id, title="", gb=2, days=2, price_toman=2)
-        c = await storefront.add_plan(s, bot.id, title="", gb=3, days=3, price_toman=3)
-
-        async def order():
-            return [p.id for p in await storefront.list_plans(s, bot.id)]
-
-        assert await order() == [a.id, b.id, c.id]
-        assert await storefront.move_plan(s, bot.id, c.id, "up")     # a, c, b
-        assert await order() == [a.id, c.id, b.id]
-        assert await storefront.move_plan(s, bot.id, a.id, "down")   # c, a, b
-        assert await order() == [c.id, a.id, b.id]
-        # edge no-op: the top plan can't move up
-        top = (await storefront.list_plans(s, bot.id))[0]
-        assert await storefront.move_plan(s, bot.id, top.id, "up") is False
-
-    _run(body, tmp_path, "planmove.db")
+# Plan create/update/enable/delete/reorder behavior (incl. foreign-plan rejection and exact
+# reorder) is covered against the audited shared command layer in tests/test_portal_storefront_plans.py
+# and tests/test_storefront_admin_service.py — the legacy storefront.add_plan/update_plan/move_plan
+# helpers they used to exercise were removed in plan 003.
 
 
 def test_plans_manage_kb_has_edit_move_delete():
@@ -993,7 +973,7 @@ def test_purchase_is_atomic_and_refunds_on_provision_failure(tmp_path, monkeypat
         engine, Session = await _seed_engine(tmp_path, "buy.db")
         async with Session() as s:
             _r, bot, cust = await _seed(s)
-            plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+            plan = await _seed_plan(s, bot.id, gb=10, days=30, price_toman=50_000)
             await storefront_wallet.manual_adjust(s, cust, 80_000, note="seed")
             sf_id, cid, pid = bot.id, cust.id, plan.id
 
@@ -1030,7 +1010,7 @@ def test_purchase_refunds_when_provision_fails(tmp_path, monkeypatch):
         engine, Session = await _seed_engine(tmp_path, "buyfail.db")
         async with Session() as s:
             _r, bot, cust = await _seed(s)
-            plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+            plan = await _seed_plan(s, bot.id, gb=10, days=30, price_toman=50_000)
             await storefront_wallet.manual_adjust(s, cust, 80_000, note="seed")
             sf_id, cid, pid = bot.id, cust.id, plan.id
         res = await storefront_provision.purchase(
@@ -1110,7 +1090,7 @@ def test_renew_charges_current_price_in_place(tmp_path, monkeypatch):
         engine, Session = await _seed_engine(tmp_path, "renew.db")
         async with Session() as s:
             _r, bot, cust = await _seed(s)
-            plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=50_000)
+            plan = await _seed_plan(s, bot.id, gb=10, days=30, price_toman=50_000)
             await storefront_wallet.manual_adjust(s, cust, 80_000, note="seed")
             order = StorefrontOrder(customer_id=cust.id, plan_id=plan.id, panel_id=bot.panel_id,
                                     label="x", gb=10, days=30, price_toman=50_000,
@@ -1332,7 +1312,7 @@ def test_two_panels_get_separate_bots(tmp_path):
 def test_upsert_bot_repoint_migrates_data_no_duplicate(tmp_path):
     async def body(s):
         r, bot, cust = await _seed(s)
-        plan = await storefront.add_plan(s, bot.id, title="", gb=10, days=30, price_toman=1000)
+        plan = await _seed_plan(s, bot.id, gb=10, days=30, price_toman=1000)
         old_id = bot.id
         updated = await storefront.upsert_bot(
             s, reseller_id=r.id, panel_id=r.panel_id, token="999:newtoken",
@@ -1431,10 +1411,11 @@ def test_my_services_detail_sends_single_message(tmp_path, monkeypatch):
 # ── v1.46.0: storefront forced-join (channel membership) ─────────────────────
 
 def test_join_keyboards_callbacks():
-    on = SimpleNamespace(channel_required=True, channel_id="-100x")
+    on = SimpleNamespace(channel_required=True, channel_id="-100x", config_version=1)
     cbs = [b.callback_data for row in sfkb.join_settings_kb(on).inline_keyboard for b in row]
-    assert {"sfjointog", "sfjoinset", "sfjoinclear"} <= set(cbs)
-    off = SimpleNamespace(channel_required=False, channel_id=None)
+    assert {"sfjoinset", "sfjoinclear"} <= set(cbs)
+    assert any(value.startswith("sfjointog:0:") for value in cbs)
+    off = SimpleNamespace(channel_required=False, channel_id=None, config_version=1)
     cbs2 = [b.callback_data for row in sfkb.join_settings_kb(off).inline_keyboard for b in row]
     assert "sfjoinclear" not in cbs2          # no clear button when no channel is set
     pk = [b.callback_data for row in sfkb.join_prompt_kb("https://t.me/x").inline_keyboard
@@ -1506,11 +1487,19 @@ def test_set_channel_requires_bot_admin(tmp_path, monkeypatch):
                 return SimpleNamespace(username="mychan")
 
         class FakeState:
+            data = {}
+
             async def clear(self):
-                return None
+                self.data = {}
 
             async def set_state(self, *a, **k):  # noqa: ANN002, ANN003
                 return None
+
+            async def get_data(self):
+                return self.data
+
+            async def update_data(self, **kwargs):
+                self.data.update(kwargs)
 
         class FakeMsg:
             from_user = SimpleNamespace(id=4242, first_name="A", username="a")
@@ -1562,8 +1551,12 @@ def test_join_toggle_requires_channel(tmp_path, monkeypatch):
                 return None
 
         class FakeCb:
+            data = "sfjointog:1:1"
             from_user = SimpleNamespace(id=4242, first_name="A", username="a")
             message = FakeCbMsg()
+
+            def __init__(self, callback_id: str = "join-toggle-test") -> None:
+                self.id = callback_id
 
             async def answer(self, *a, **k):  # noqa: ANN002, ANN003
                 return None
@@ -1575,9 +1568,90 @@ def test_join_toggle_requires_channel(tmp_path, monkeypatch):
             b = await storefront.get_bot_for_reseller(s, rid)
             b.channel_id = "-100777"
             await s.commit()
-        await sfh.sf_join_toggle(FakeCb(), FakeBot())          # now it enables
+        await sfh.sf_join_toggle(FakeCb("join-toggle-test-2"), FakeBot())  # now it enables
         async with Session() as s:
             assert (await storefront.get_bot_for_reseller(s, rid)).channel_required is True
+        await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_admin_preview_is_pure_and_card_first_step_does_not_write(tmp_path, monkeypatch):
+    from app.bot.storefront import handlers as sfh
+
+    async def go():
+        engine, Session = await _seed_engine(tmp_path, "admin-parity.db")
+        async with Session() as s:
+            r, sf, customer = await _seed(s)
+            r.bot_chat_id = 4242
+            before_seen = customer.last_seen_at
+            await s.commit()
+            shop_id, bot_tg = sf.id, sf.bot_telegram_id
+
+        monkeypatch.setattr(sfh, "SessionLocal", Session)
+
+        class FakeState:
+            def __init__(self, data=None):
+                self.data = dict(data or {})
+
+            async def get_data(self):
+                return dict(self.data)
+
+            async def update_data(self, **kwargs):
+                self.data.update(kwargs)
+
+            async def set_state(self, *_args, **_kwargs):
+                return None
+
+            async def clear(self):
+                self.data = {}
+
+        sent = []
+
+        class FakeMessage:
+            from_user = SimpleNamespace(id=4242, first_name="Owner", username="owner")
+            text = "6037999999999999"
+
+            async def answer(self, text="", **kwargs):
+                sent.append((text, kwargs))
+
+        class FakeBot:
+            id = bot_tg
+
+        # Preview uses the DTO renderer and does not touch/create customer state.
+        async with Session() as s:
+            sf = await s.get(StorefrontBot, shop_id)
+            reseller = await s.get(Reseller, sf.reseller_id)
+            count_before = len(await storefront.list_customers(s, shop_id))
+            await sfh._admin_action(
+                "preview", FakeMessage(), FakeState(), s, sf, reseller)
+            count_after = len(await storefront.list_customers(s, shop_id))
+            refreshed = await s.get(StorefrontCustomer, customer.id)
+            assert count_before == count_after == 1
+            assert refreshed.last_seen_at == before_seen.replace(tzinfo=None)
+
+        # First card step lives only in FSM; holder step performs the single shared command.
+        card_state = FakeState({
+            "pay_method": "card", "pay_step": "card_number",
+            "sf_config_version": 1, "sf_command_key": "tg-fsm:test-card",
+        })
+        await sfh.sf_pay_value(FakeMessage(), card_state, FakeBot())
+        async with Session() as s:
+            sf = await s.get(StorefrontBot, shop_id)
+            assert sf.card_number is None and sf.config_version == 1
+        assert card_state.data["pending_card_number"] == "6037999999999999"
+        assert card_state.data["pay_step"] == "card_holder"
+
+        holder_message = FakeMessage()
+        holder_message.text = "Owner Name"
+        await sfh.sf_pay_value(holder_message, card_state, FakeBot())
+        async with Session() as s:
+            sf = await s.get(StorefrontBot, shop_id)
+            assert sf.card_number == "6037999999999999"
+            assert sf.card_holder == "Owner Name"
+            assert sf.config_version == 2
+        assert card_state.data == {}
+
         await engine.dispose()
 
     asyncio.run(go())
@@ -1699,3 +1773,36 @@ def test_sf_broadcast_bg_flood_control_and_summary():
         assert summary_kb is not None        # admin reply keyboard attached
 
     asyncio.run(go())
+
+
+def test_bot_stale_config_version_yields_conflict_and_single_retry(tmp_path):
+    """Parity clause: a bot admin action captures config_version at FSM start; if the config changed
+    meanwhile (portal or another admin), executing with the captured version raises config_conflict
+    and the bot surfaces exactly one reload/retry message — never a hidden overwrite."""
+    from app.bot.storefront import handlers as sfh
+
+    async def body(s):
+        r, bot, _c = await _seed(s)
+        r.bot_chat_id = 111
+        bot.config_version = 1
+        await s.commit()
+
+        # The bot FSM captured config_version = 1 when the action started.
+        fsm_data = {"sf_config_version": 1, "sf_command_key": "tg-fsm:test"}
+
+        # A concurrent change (portal or another admin) advances config_version to 2.
+        await storefront_admin.update_trial(
+            s, bot.id, sfh._command_ctx(111, 1, "concurrent"), enabled=False)
+        await s.refresh(bot)
+        assert bot.config_version == 2
+
+        # Completing the bot action with the STALE captured version 1 → config_conflict.
+        ctx = sfh._fsm_ctx(111, fsm_data, bot)
+        with pytest.raises(storefront_admin.AdminCommandError) as exc:
+            await storefront_admin.update_trial(s, bot.id, ctx, enabled=True)
+        assert exc.value.code == "config_conflict"
+
+        # The bot maps that to exactly one user-visible reload/retry message.
+        assert "دوباره تلاش" in sfh._admin_error(exc.value)
+
+    _run(body, tmp_path, "botconflict.db")

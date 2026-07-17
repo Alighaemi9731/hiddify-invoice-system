@@ -287,11 +287,17 @@ def pay_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
         return "✅" if on else "❌"
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"کارت‌به‌کارت {t(bot.pay_card_enabled)}", callback_data="sfpaytog:card"),
+        [InlineKeyboardButton(
+            text=f"کارت‌به‌کارت {t(bot.pay_card_enabled)}",
+            callback_data=f"sfpaytog:card:{int(not bot.pay_card_enabled)}:{bot.config_version}"),
          InlineKeyboardButton(text="✏️ کارت", callback_data="sfpayset:card")],
-        [InlineKeyboardButton(text=f"تتر USDT {t(bot.pay_usdt_enabled)}", callback_data="sfpaytog:usdt"),
+        [InlineKeyboardButton(
+            text=f"تتر USDT {t(bot.pay_usdt_enabled)}",
+            callback_data=f"sfpaytog:usdt:{int(not bot.pay_usdt_enabled)}:{bot.config_version}"),
          InlineKeyboardButton(text="✏️ آدرس", callback_data="sfpayset:usdt")],
-        [InlineKeyboardButton(text=f"گرام/تون {t(bot.pay_ton_enabled)}", callback_data="sfpaytog:ton"),
+        [InlineKeyboardButton(
+            text=f"گرام/تون {t(bot.pay_ton_enabled)}",
+            callback_data=f"sfpaytog:ton:{int(not bot.pay_ton_enabled)}:{bot.config_version}"),
          InlineKeyboardButton(text="✏️ آدرس", callback_data="sfpayset:ton")],
     ])
 
@@ -299,7 +305,9 @@ def pay_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
 def join_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     """Admin: toggle forced channel-join on/off, set/change the channel, or clear it."""
     state = "✅ فعال" if bot.channel_required else "❌ غیرفعال"
-    rows = [[InlineKeyboardButton(text=f"وضعیت: {state} (تغییر)", callback_data="sfjointog")],
+    rows = [[InlineKeyboardButton(
+        text=f"وضعیت: {state} (تغییر)",
+        callback_data=f"sfjointog:{int(not bot.channel_required)}:{bot.config_version}")],
             [InlineKeyboardButton(text="✏️ تنظیم/تغییرِ کانال", callback_data="sfjoinset")]]
     if bot.channel_id:
         rows.append([InlineKeyboardButton(text="🗑 حذفِ کانال", callback_data="sfjoinclear")])
@@ -319,7 +327,9 @@ def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     """Admin toggles the one-time free trial on/off and edits its volume/duration."""
     state = "✅ فعال" if bot.free_trial_enabled else "❌ غیرفعال"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"وضعیت: {state} (تغییر)", callback_data="sftrialtog")],
+        [InlineKeyboardButton(
+            text=f"وضعیت: {state} (تغییر)",
+            callback_data=f"sftrialtog:{int(not bot.free_trial_enabled)}:{bot.config_version}")],
         [InlineKeyboardButton(text="✏️ تغییرِ حجم/مدت", callback_data="sftrialset")],
     ])
 
@@ -339,7 +349,9 @@ def shop_state_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     customers can't buy/renew (they see the message) but the bot stays online."""
     toggle_text = "🟢 بازکردنِ فروشگاه" if bot.shop_closed else "🔴 بستنِ موقتِ فروشگاه"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=toggle_text, callback_data="sfshoptog")],
+        [InlineKeyboardButton(
+            text=toggle_text,
+            callback_data=f"sfshoptog:{int(not bot.shop_closed)}:{bot.config_version}")],
         [InlineKeyboardButton(text="✏️ متنِ پیامِ بسته‌بودن", callback_data="sfshopmsg")],
     ])
 

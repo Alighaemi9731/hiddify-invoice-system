@@ -14,6 +14,12 @@ export default function StorefrontShell() {
   const location = useLocation();
   const query = useQuery({ queryKey: storefrontQueryKeys.all, queryFn: listStorefronts });
   const shop = query.data?.find((item) => item.id === shopId);
+  const activeTab = location.pathname.endsWith("/health") ? "health"
+    : location.pathname.endsWith("/plans") ? "plans"
+      : location.pathname.endsWith("/settings") ? "settings"
+        : location.pathname.endsWith("/managers") ? "managers"
+          : location.pathname.endsWith("/preview") ? "preview"
+            : "dashboard";
 
   if (!Number.isSafeInteger(shopId) || shopId <= 0) {
     return <Navigate to="/portal/storefront" replace />;
@@ -75,17 +81,19 @@ export default function StorefrontShell() {
           )}
 
           <Tabs
-            value={location.pathname.endsWith("/health") ? "health" : "dashboard"}
-            onChange={(_, value) => navigate(
-              value === "health"
-                ? `/portal/storefront/${shop.id}/health`
-                : `/portal/storefront/${shop.id}`,
-            )}
+            value={activeTab}
+            onChange={(_, value) => navigate(value === "dashboard"
+              ? `/portal/storefront/${shop.id}`
+              : `/portal/storefront/${shop.id}/${value}`)}
             variant="scrollable"
             scrollButtons="auto"
             sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
           >
             <Tab value="dashboard" label="داشبورد فروش" />
+            <Tab value="plans" label="پلن‌ها" />
+            <Tab value="settings" label="تنظیمات" />
+            <Tab value="managers" label="مدیران" />
+            <Tab value="preview" label="پیش‌نمایش مشتری" />
             <Tab value="health" label="سلامت فروشگاه" />
           </Tabs>
 

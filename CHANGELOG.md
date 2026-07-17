@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.84.0 - 2026-07-17
+
+Storefront management portal Release B — plans & settings. Adds one additive database migration
+(`1b84c0a7d3e5`, applied automatically on upgrade); no manual steps.
+
+### Added
+
+- **Reseller owners can now manage their storefront's plans and settings from the web portal** (not
+  only the Telegram bot): create/edit/enable/disable/delete plans, reorder them (drag or the
+  up/down buttons), and view each plan's price history; edit payment methods, the free-trial offer,
+  welcome/support messages and the open/closed state; validate & connect the required channel; and
+  manage co-admins (owner-only, up to the existing cap). A read-only customer **preview** shows
+  exactly what a shopper sees, without ever creating a customer record.
+- Every plan/settings change — whether made from the **bot or the portal** — now goes through one
+  shared, audited command layer with optimistic-concurrency (version) checks and idempotency keys,
+  so two people editing the same shop at once get a clear "settings changed, reload and retry"
+  instead of one silently overwriting the other. A tamper-evident audit trail records who changed
+  what (with secrets redacted).
+
+### Changed
+
+- The legacy in-bot plan/co-admin mutation helpers were removed in favor of the shared command
+  layer, so there is a single set of rules for both surfaces.
+
 ## 1.83.3 - 2026-07-17
 
 Restore reliability fix for server migration; no database migration or manual upgrade step.

@@ -89,3 +89,116 @@ export interface StorefrontHealth {
   };
   operation_states: Record<StorefrontOperationState, number>;
 }
+
+export interface Versioned<T> {
+  data: T;
+  etag: string;
+}
+
+export interface StorefrontPlan {
+  id: number;
+  title: string;
+  gb: number;
+  days: number;
+  price_toman: number;
+  enabled: boolean;
+  sort_order: number;
+}
+
+export interface StorefrontPlanDraft {
+  title?: string;
+  gb: number;
+  days: number;
+  price_toman: number;
+}
+
+export interface StorefrontPlanHistoryItem {
+  id: number;
+  action: string;
+  actor_telegram_id: string | null;
+  actor_role: string;
+  source: string;
+  before: Partial<StorefrontPlan> | null;
+  after: Partial<StorefrontPlan> | null;
+  outcome: string;
+  created_at: string;
+}
+
+export interface StorefrontPaymentSettings {
+  pay_card_enabled: boolean;
+  pay_usdt_enabled: boolean;
+  pay_ton_enabled: boolean;
+  card_number: string | null;
+  card_holder: string | null;
+  usdt_address: string | null;
+  ton_address: string | null;
+}
+
+export interface StorefrontTrialSettings {
+  free_trial_enabled: boolean;
+  free_trial_gb: number;
+  free_trial_days: number;
+}
+
+export interface StorefrontMessageSettings {
+  welcome_text: string | null;
+  support_contact: string | null;
+}
+
+export interface StorefrontShopStateSettings {
+  shop_closed: boolean;
+  closed_text: string | null;
+}
+
+export type StorefrontSettingsGroup = "payment" | "trial" | "messages" | "shop-state";
+export type StorefrontSettingsByGroup = {
+  payment: StorefrontPaymentSettings;
+  trial: StorefrontTrialSettings;
+  messages: StorefrontMessageSettings;
+  "shop-state": StorefrontShopStateSettings;
+};
+
+export interface StorefrontChannel {
+  channel_id: string | null;
+  channel_link: string | null;
+  channel_required: boolean;
+  verified: boolean;
+  health: "ok" | "disabled" | "error";
+}
+
+export interface StorefrontSettings {
+  payment: StorefrontPaymentSettings;
+  trial: StorefrontTrialSettings;
+  messages: StorefrontMessageSettings;
+  shop_state: StorefrontShopStateSettings;
+  channel: StorefrontChannel;
+  config_version: number;
+}
+
+export interface StorefrontManager {
+  telegram_id: string;
+  role: "owner" | "manager";
+  removable: boolean;
+}
+
+export interface StorefrontManagers {
+  owner_id: string;
+  items: StorefrontManager[];
+  max_count: number;
+  config_version: number;
+}
+
+export interface StorefrontCustomerPreview {
+  welcome_text: string;
+  support_contact: string | null;
+  shop_closed: boolean;
+  closed_text: string | null;
+  free_trial: {
+    enabled: boolean;
+    gb: number;
+    days: number;
+  };
+  payment_methods: string[];
+  enabled_plans: Array<Pick<StorefrontPlan, "id" | "title" | "gb" | "days" | "price_toman">>;
+  channel_required: boolean;
+}

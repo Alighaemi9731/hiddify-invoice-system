@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
     text,
     true,
 )
@@ -59,6 +61,10 @@ class StorefrontBot(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(16), default="active")
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Optimistic-concurrency token shared by the bot and web portal configuration commands.
+    config_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
 
     # Storefront settings (the reseller edits these from their bot's admin side)
     support_contact: Mapped[str | None] = mapped_column(String(128), nullable=True)  # @handle / link
@@ -77,6 +83,9 @@ class StorefrontBot(Base, TimestampMixin):
     channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     channel_link: Mapped[str | None] = mapped_column(String(255), nullable=True)
     channel_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    channel_verified_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    channel_verification_error: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # One-time free trial (each customer can claim it once). Default ON for everyone, 1 GB · 1 day —
     # at/under the owner's free-config threshold, so the trial config is free for the reseller too.
@@ -279,6 +288,75 @@ class StorefrontOperation(Base, TimestampMixin):
     prior_panel_start_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     result_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # cached terminal result
     result_sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class StorefrontAuditEvent(Base):
+    """Append-only, redacted audit history for storefront administration."""
+    __tablename__ = "storefront_audit_events"
+    __table_args__ = (
+        CheckConstraint("source in ('bot','portal','system')", name="ck_sfaudit_source"),
+        Index("ix_sfaudit_shop_created", "storefront_bot_id", "created_at"),
+        Index("ix_sfaudit_actor_action", "actor_telegram_id", "action"),
+        Index("ix_sfaudit_entity", "entity_type", "entity_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    storefront_bot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("storefront_bots.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    actor_role: Mapped[str] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(16))
+    action: Mapped[str] = mapped_column(String(64))
+    entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    before_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    after_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16))
+    error_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class StorefrontApiCommand(Base, TimestampMixin):
+    """Leased idempotency record shared by storefront bot and portal commands."""
+    __tablename__ = "storefront_api_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "storefront_bot_id", "actor_telegram_id", "idempotency_key",
+            name="uq_sfcommand_actor_key",
+        ),
+        CheckConstraint(
+            "status in ('pending','succeeded','failed','unknown')",
+            name="ck_sfcommand_status",
+        ),
+        Index("ix_sfcommand_status_lease", "status", "lease_expires_at"),
+        Index("ix_sfcommand_shop_updated", "storefront_bot_id", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    storefront_bot_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_bots.id", ondelete="CASCADE"), nullable=False
+    )
+    actor_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    external_io: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    error_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lease_expires_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
 
 
 class StorefrontCreditCode(Base, TimestampMixin):

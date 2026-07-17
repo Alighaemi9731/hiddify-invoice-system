@@ -104,48 +104,9 @@ def is_shop_admin(bot: StorefrontBot, reseller: Reseller | None, user_id: int) -
     return user_id in co_admin_ids(bot)
 
 
-async def add_co_admin(session: AsyncSession, bot: StorefrontBot, telegram_id: int) -> str:
-    """Appoint a co-admin. Returns 'ok' | 'exists' | 'is_owner' | 'full' | 'invalid' | 'banned'."""
-    # A Telegram user-id is always a positive integer — reject junk in the service layer, not
-    # only in the handler (defense in depth for the portal/API/future callers).
-    if not isinstance(telegram_id, int) or telegram_id <= 0:
-        return "invalid"
-    reseller = await session.get(Reseller, bot.reseller_id)
-    if reseller is not None and reseller.bot_chat_id == telegram_id:
-        return "is_owner"
-    ids = co_admin_ids(bot)
-    if telegram_id in ids:
-        return "exists"
-    if len(ids) >= MAX_CO_ADMINS:
-        return "full"
-    # Appointing a currently-BANNED customer as co-admin would silently un-ban them for admin
-    # use (the ban gate short-circuits admins) — a confusing hidden state. Refuse it.
-    banned = (
-        await session.execute(
-            select(StorefrontCustomer.id).where(
-                StorefrontCustomer.storefront_bot_id == bot.id,
-                StorefrontCustomer.telegram_id == telegram_id,
-                StorefrontCustomer.banned.is_(True),
-            ).limit(1)
-        )
-    ).first()
-    if banned:
-        return "banned"
-    ids.append(telegram_id)
-    bot.co_admin_ids = ",".join(str(i) for i in ids)
-    await session.commit()
-    return "ok"
-
-
-async def remove_co_admin(session: AsyncSession, bot: StorefrontBot, telegram_id: int) -> bool:
-    """Revoke a co-admin. Returns True if one was removed."""
-    ids = co_admin_ids(bot)
-    if telegram_id not in ids:
-        return False
-    ids = [i for i in ids if i != telegram_id]
-    bot.co_admin_ids = ",".join(str(i) for i in ids) or None
-    await session.commit()
-    return True
+# Co-admin (manager) MUTATIONS moved to the audited/idempotent shared command layer
+# (`storefront_admin.add_manager` / `remove_manager`, plan 003). The read helpers
+# `co_admin_ids` / `is_shop_admin` above remain the single source of truth for gating.
 
 
 async def upsert_bot(
@@ -193,65 +154,9 @@ async def list_plans(
     return list((await session.execute(q)).scalars().all())
 
 
-async def add_plan(
-    session: AsyncSession, storefront_bot_id: int, *, title: str, gb: int, days: int, price_toman: int
-) -> StorefrontPlan:
-    existing = await list_plans(session, storefront_bot_id)
-    plan = StorefrontPlan(
-        storefront_bot_id=storefront_bot_id, title=title[:128], gb=int(gb), days=int(days),
-        price_toman=int(price_toman), enabled=True, sort_order=len(existing),
-    )
-    session.add(plan)
-    await session.commit()
-    return plan
-
-
-async def delete_plan(session: AsyncSession, storefront_bot_id: int, plan_id: int) -> bool:
-    plan = await session.get(StorefrontPlan, plan_id)
-    if plan is None or plan.storefront_bot_id != storefront_bot_id:
-        return False
-    await session.delete(plan)
-    await session.commit()
-    return True
-
-
-async def update_plan(
-    session: AsyncSession, storefront_bot_id: int, plan_id: int, *,
-    gb: int, days: int, price_toman: int,
-) -> bool:
-    """Edit a plan's figures in place (ownership-checked). Title stays empty (owner: «عنوان نمی‌خواهیم»)."""
-    plan = await session.get(StorefrontPlan, plan_id)
-    if plan is None or plan.storefront_bot_id != storefront_bot_id:
-        return False
-    plan.gb = int(gb)
-    plan.days = int(days)
-    plan.price_toman = int(price_toman)
-    await session.commit()
-    return True
-
-
-async def move_plan(
-    session: AsyncSession, storefront_bot_id: int, plan_id: int, direction: str
-) -> bool:
-    """Reorder a plan up/down by swapping `sort_order` with its adjacent sibling (so a new plan
-    needn't be added at the bottom and re-created to reorder). Ownership-checked; a no-op at the
-    edge. Normalizes sort_order to the current display order first, so swaps are always well-defined
-    even if legacy rows share/duplicate sort_order values."""
-    plans = await list_plans(session, storefront_bot_id)
-    # Normalize to a dense 0..n-1 sequence in the current (sort_order, id) display order.
-    for idx, p in enumerate(plans):
-        if p.sort_order != idx:
-            p.sort_order = idx
-    pos = next((i for i, p in enumerate(plans) if p.id == plan_id), None)
-    if pos is None:
-        return False
-    swap = pos - 1 if direction == "up" else pos + 1
-    if swap < 0 or swap >= len(plans):
-        await session.commit()  # persist any normalization even on an edge no-op
-        return False
-    plans[pos].sort_order, plans[swap].sort_order = plans[swap].sort_order, plans[pos].sort_order
-    await session.commit()
-    return True
+# Plan MUTATIONS (create / update / enable / delete / reorder) moved to the audited,
+# version-checked, idempotent shared command layer (`storefront_admin`, plan 003). The
+# read helper `list_plans` above remains shared by the bot, portal and provisioning paths.
 
 
 # ── customers ─────────────────────────────────────────────────────────────────

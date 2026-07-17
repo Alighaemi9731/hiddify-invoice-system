@@ -24,6 +24,8 @@ from app.models.portal_login_nonce import PortalLoginNonce
 from app.models.reseller import Reseller
 from app.models.setting import Setting
 from app.models.storefront import (
+    StorefrontApiCommand,
+    StorefrontAuditEvent,
     StorefrontBot,
     StorefrontCreditCode,
     StorefrontCreditRedemption,
@@ -51,6 +53,8 @@ __all__ = [
     "PortalLoginNonce",
     "Setting",
     "StorefrontBot",
+    "StorefrontApiCommand",
+    "StorefrontAuditEvent",
     "StorefrontPlan",
     "StorefrontCustomer",
     "StorefrontWalletTxn",

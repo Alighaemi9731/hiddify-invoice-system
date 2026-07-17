@@ -72,20 +72,9 @@ def test_manual_adjust_credits_and_never_negative(tmp_path):
     _run(body, tmp_path, "m1.db")
 
 
-def test_add_co_admin_rejects_banned_and_invalid(tmp_path):
-    async def body(s):
-        bot = await _seed_bot(s)
-        banned = StorefrontCustomer(storefront_bot_id=bot.id, telegram_id=777, banned=True)
-        s.add(banned)
-        await s.commit()
-        assert await storefront.add_co_admin(s, bot, 777) == "banned"
-        assert await storefront.add_co_admin(s, bot, 0) == "invalid"
-        assert await storefront.add_co_admin(s, bot, -5) == "invalid"
-        # A normal id succeeds.
-        assert await storefront.add_co_admin(s, bot, 888) == "ok"
-        assert 888 in storefront.co_admin_ids(bot)
-
-    _run(body, tmp_path, "m2.db")
+# Manager (co-admin) appointment — including the banned / invalid-id / owner / cap rejections —
+# is now the audited `storefront_admin.add_manager` command; its negative paths are covered in
+# tests/test_storefront_admin_service.py::test_add_manager_rejects_banned_owner_full_and_invalid.
 
 
 def test_broadcast_list_excludes_banned(tmp_path):

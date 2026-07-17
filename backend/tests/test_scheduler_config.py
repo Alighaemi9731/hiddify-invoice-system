@@ -1,4 +1,5 @@
 """Scheduler timing is owner-configurable and preserves true interval spacing."""
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -89,3 +90,34 @@ def test_full_day_and_hour_boundaries_are_valid():
     assert t["channel_guard"] == "interval[1:00:00]"
     assert t["enforcement_queue"] == "interval[1:00:00]"
     assert t["rate_refresh"] == "interval[1 day, 0:00:00]"
+
+
+def test_daily_maintenance_schedules_storefront_command_retention(monkeypatch):
+    from app.scheduler import jobs
+
+    calls: list[str] = []
+
+    class FakeSession:
+        async def commit(self):
+            calls.append("commit")
+
+    class SessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def mark(name):  # noqa: ANN001
+        calls.append(name)
+        return {}
+
+    monkeypatch.setattr(jobs, "SessionLocal", SessionContext)
+    monkeypatch.setattr(jobs.maintenance, "prune_old_logs", lambda _s: mark("logs"))
+    monkeypatch.setattr(jobs.maintenance, "prune_stale_snapshots", lambda _s: mark("snapshots"))
+    monkeypatch.setattr(jobs.maintenance, "prune_stale_storefront", lambda _s: mark("storefront"))
+    monkeypatch.setattr(jobs.maintenance, "prune_owner_data", lambda _s: mark("owner"))
+    monkeypatch.setattr(jobs.storefront_audit, "prune_commands", lambda _s: mark("commands"))
+
+    asyncio.run(jobs.daily_maintenance_job())
+    assert calls == ["logs", "snapshots", "storefront", "owner", "commands", "commit"]
