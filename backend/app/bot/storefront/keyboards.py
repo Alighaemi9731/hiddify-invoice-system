@@ -69,6 +69,23 @@ def admin_reply_kb() -> ReplyKeyboardMarkup:
     return _grid([label for label, _ in ADMIN_MENU])
 
 
+# Compact INLINE home for the primary storefront OWNER (plan 007): a plain HTTPS button that opens
+# the web portal directly + the few urgent Telegram shortcuts. The 14 legacy labels stay routable but
+# are no longer docked for the owner (co-admins keep `admin_reply_kb`). NEVER a web_app / Mini App —
+# a plain `url` InlineKeyboardButton so the browser link is directly clickable.
+def owner_home_kb(url: str | None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if url:
+        rows.append([InlineKeyboardButton(text="🌐 مدیریت فروشگاه در مرورگر", url=url)])
+    rows.extend([
+        [InlineKeyboardButton(text="🧾 شارژهای در انتظار", callback_data="sfhome:topups")],
+        [InlineKeyboardButton(text="📊 آمار سریع", callback_data="sfhome:stats")],
+        [InlineKeyboardButton(text="👤 نمای مشتری", callback_data="sfhome:preview")],
+        [InlineKeyboardButton(text="❓ راهنما", callback_data="sfhome:help")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def customer_reply_kb(*, is_admin_preview: bool = False, show_free_trial: bool = False) -> ReplyKeyboardMarkup:
     labels = [label for label, _ in CUSTOMER_MENU]
     if show_free_trial:
@@ -356,13 +373,18 @@ def shop_state_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
     ])
 
 
-def topup_decide_kb(txn_id: int) -> InlineKeyboardMarkup:
-    """Admin confirm/reject a pending top-up. «تأیید با مبلغ» lets them set the credited Toman (crypto)."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+def topup_decide_kb(txn_id: int, *, portal_url: str | None = None) -> InlineKeyboardMarkup:
+    """Admin confirm/reject a pending top-up. «تأیید با مبلغ» lets them set the credited Toman (crypto).
+    `portal_url` (owner-only) adds a plain HTTPS button that opens the shop's top-up queue in the
+    browser — the urgent confirm/reject stays inline for everyone."""
+    rows = [
         [InlineKeyboardButton(text="✅ تأیید", callback_data=f"sfok:{txn_id}"),
          InlineKeyboardButton(text="✏️ تأیید با مبلغِ دلخواه", callback_data=f"sfokamt:{txn_id}")],
         [InlineKeyboardButton(text="❌ رد", callback_data=f"sfno:{txn_id}")],
-    ])
+    ]
+    if portal_url:
+        rows.append([InlineKeyboardButton(text="🌐 مشاهده در پنل", url=portal_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def customers_page_kb(
@@ -419,8 +441,11 @@ def customer_detail_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def relay_reply_kb(customer_id: int) -> InlineKeyboardMarkup:
+def relay_reply_kb(customer_id: int, *, portal_url: str | None = None) -> InlineKeyboardMarkup:
     """A «💬 پاسخ» button attached to a customer's relayed message → opens the admin reply-compose
-    flow (`sfmsg:<id>`, the same one the customer-detail card uses)."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="💬 پاسخ به مشتری", callback_data=f"sfmsg:{customer_id}")]])
+    flow (`sfmsg:<id>`, the same one the customer-detail card uses). `portal_url` (owner-only) adds a
+    plain HTTPS button that opens that customer's page in the browser."""
+    rows = [[InlineKeyboardButton(text="💬 پاسخ به مشتری", callback_data=f"sfmsg:{customer_id}")]]
+    if portal_url:
+        rows.append([InlineKeyboardButton(text="🌐 مشاهده در پنل", url=portal_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

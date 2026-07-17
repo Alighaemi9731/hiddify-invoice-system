@@ -21,7 +21,7 @@ from aiogram.exceptions import (
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy import select
 
 # Reuse the main bot's generic membership primitives: `_is_member` (restricted-safe, fail-closed) and
@@ -141,11 +141,44 @@ async def _resolve(session, bot: Bot, user) -> tuple[StorefrontBot | None, Resel
     return sf, reseller, is_admin
 
 
-async def _send_admin_menu(answer, sf: StorefrontBot) -> None:  # noqa: ANN001
-    await answer(
+async def _send_admin_menu(  # noqa: ANN001
+    message, sf: StorefrontBot, *, session, reseller, user_id: int,
+) -> None:
+    """Show the shop-admin home. The PRIMARY OWNER gets a COMPACT inline home whose HTTPS button opens
+    the web portal directly (daily management lives in the browser); we first send `ReplyKeyboardRemove`
+    to undock any stale legacy keyboard. A CO-ADMIN (not a portal principal — no reseller JWT) keeps the
+    full 14-label reply keyboard. The 14 legacy labels stay routable via `sf_menu` for everyone."""
+    if _is_shop_owner(reseller, user_id):
+        from app.bot.handlers.common import portal_login_url
+
+        url = await portal_login_url(
+            session, reseller.bot_chat_id, next_path=f"/portal/storefront/{sf.id}")
+        # ReplyKeyboardRemove and an inline keyboard can't ride the same message → send two.
+        await message.answer(rtl("🛠 پنلِ مدیریتِ فروشگاه"), reply_markup=ReplyKeyboardRemove())
+        home = ("مدیریتِ کاملِ فروشگاه (پلن‌ها، مشتری‌ها، شارژها، کدها، پیام همگانی و تنظیمات) در "
+                "مرورگر انجام می‌شود. کارهای فوری هم همین‌جا در دسترس‌اند:")
+        if not url:
+            home += "\n\n⚠️ آدرسِ وب هنوز پیکربندی نشده است؛ فعلاً از همین دکمه‌ها استفاده کنید."
+        await message.answer(rtl(home), reply_markup=kb.owner_home_kb(url))
+        return
+    await message.answer(
         rtl(f"🛠 پنلِ مدیریتِ فروشگاه\nربات: @{sf.bot_username or '—'}\nیک گزینه را انتخاب کنید:"),
         reply_markup=kb.admin_reply_kb(),
     )
+
+
+async def _reshow_admin_menu(message, note: str, *, bot: Bot) -> None:  # noqa: ANN001
+    """Send a flow-completion `note` (with NO reply keyboard), then re-show the admin home in a FRESH
+    session — a co-admin re-docks the legacy 14-label keyboard; the OWNER gets the compact inline home
+    instead of re-docking the retired keyboard (plan 007 «hidden from the owner»). Opens its own
+    session so it works at every FSM-completion site, including those whose request session already
+    closed. `message`/`bot` are in scope at every storefront handler."""
+    await message.answer(rtl(note))
+    async with SessionLocal() as s:
+        sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
+        if sf is not None and is_admin:
+            await _send_admin_menu(
+                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
 
 
 def _trial_available(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
@@ -313,13 +346,16 @@ async def _relay_message(bot: Bot, chat_id: int, header: str, message: Message,
 
 
 async def _relay_to_admins(bot: Bot, admin_ids: list[int], cust_name: str, customer_id: int,
-                           message: Message) -> bool:
+                           message: Message, *, owner_id: int | None = None,
+                           portal_url: str | None = None) -> bool:
     """Deliver a customer's message to every shop admin with a «پاسخ» button. Returns True if at
-    least one admin received it."""
+    least one admin received it. The OWNER additionally gets a portal deep-link to that customer's
+    page (co-admins aren't portal principals)."""
     header = f"💬 پیام از مشتری «{cust_name}» (#{customer_id}):"
-    markup = kb.relay_reply_kb(customer_id)
     delivered = False
     for aid in admin_ids:
+        markup = kb.relay_reply_kb(
+            customer_id, portal_url=portal_url if aid == owner_id else None)
         if await _relay_message(bot, aid, header, message, reply_markup=markup):
             delivered = True
     return delivered
@@ -453,7 +489,8 @@ async def sf_start(message: Message, state: FSMContext, bot: Bot) -> None:
             await message.answer("این ربات هنوز پیکربندی نشده است.")
             return
         if is_admin:
-            await _send_admin_menu(message.answer, sf)
+            await _send_admin_menu(
+                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
             return
         customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
         if customer.banned:
@@ -476,11 +513,12 @@ async def sf_cmd_cancel(message: Message, state: FSMContext, bot: Bot) -> None:
     it — and the ban/join middlewares already exempt `/cancel`, so it's reachable mid-flow."""
     await state.clear()
     async with SessionLocal() as s:
-        sf, _r, is_admin = await _resolve(s, bot, message.from_user)
+        sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None:
             return
         if is_admin:
-            await _send_admin_menu(message.answer, sf)
+            await _send_admin_menu(
+                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
         else:
             cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
             await _send_customer_menu(message.answer, sf, cust)
@@ -496,7 +534,8 @@ async def sf_menu(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         await state.clear()
         if text == kb.BACK_TO_ADMIN and is_admin:
-            await _send_admin_menu(message.answer, sf)
+            await _send_admin_menu(
+                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
             return
         if is_admin and text in kb.ADMIN_LABEL_TO_ACTION:
             await _admin_action(kb.ADMIN_LABEL_TO_ACTION[text], message, state, s, sf, reseller)
@@ -681,8 +720,7 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
         sf, reseller, _a = await _resolve(s, bot, message.from_user)
         if sf is None or not _is_shop_owner(reseller, message.from_user.id):
             await state.clear()
-            await message.answer(rtl("فقط مدیرِ اصلی می‌تواند مدیر اضافه کند."),
-                                 reply_markup=kb.admin_reply_kb())
+            await message.answer(rtl("فقط مدیرِ اصلی می‌تواند مدیر اضافه کند."))
             return
         try:
             await storefront_admin.add_manager(
@@ -707,7 +745,7 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             "banned": "این کاربر مسدود است؛ ابتدا رفعِ مسدودی کنید، سپس مدیر کنید.",
             "conflict": "⚠️ فهرست مدیران تغییر کرده است؛ دوباره تلاش کنید.",
         }.get(result, "خطا در افزودنِ مدیر.")
-        await message.answer(rtl(note), reply_markup=kb.admin_reply_kb())
+        await message.answer(rtl(note))
         await _send_admins_panel(message.answer, s, sf, reseller)
     if result == "ok":
         # Best-effort: let the new admin know (only works if they've started the bot).
@@ -1311,18 +1349,17 @@ async def sf_dm_send(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         cust = await s.get(StorefrontCustomer, cid) if cid else None
         if cust is None or cust.storefront_bot_id != sf.id:
-            await message.answer(rtl("مشتری یافت نشد."), reply_markup=kb.admin_reply_kb())
+            await _reshow_admin_menu(message, "مشتری یافت نشد.", bot=bot)
             return
         target, cust_name = cust.telegram_id, (cust.name or str(cust.telegram_id))
     ok = await _relay_message(bot, target, "📨 پیام از پشتیبانیِ فروشگاه:", message)
     if ok:
-        await message.answer(rtl(f"✅ پیام برای «{cust_name}» ارسال شد."),
-                             reply_markup=kb.admin_reply_kb())
+        await _reshow_admin_menu(message, f"✅ پیام برای «{cust_name}» ارسال شد.", bot=bot)
     else:
-        await message.answer(
-            rtl(f"❌ ارسالِ پیام به «{cust_name}» ناموفق بود — احتمالاً ربات را مسدود کرده "
-                "یا هنوز /start را نزده است."),
-            reply_markup=kb.admin_reply_kb())
+        await _reshow_admin_menu(
+            message,
+            f"❌ ارسالِ پیام به «{cust_name}» ناموفق بود — احتمالاً ربات را مسدود کرده "
+            "یا هنوز /start را نزده است.", bot=bot)
 
 
 @storefront_router.callback_query(F.data == "sfcustsearch")
@@ -1348,7 +1385,7 @@ async def sf_customers_search(message: Message, state: FSMContext, bot: Bot) -> 
         rows, total = await storefront.list_customers_page(
             s, sf.id, offset=0, limit=_SEARCH_LIMIT, query=q)
     if total == 0:
-        await message.answer(rtl("مشتری‌ای یافت نشد."), reply_markup=kb.admin_reply_kb())
+        await _reshow_admin_menu(message, "مشتری‌ای یافت نشد.", bot=bot)
         return
     header = f"🔍 نتایج ({total})"
     if total > _SEARCH_LIMIT:
@@ -1659,15 +1696,22 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
                + (f"\nمتن/TXID: {txid}" if txid else ""))
         # Send the proof + decide buttons to the owner AND every co-admin (whoever acts first
         # settles it; the confirm/reject is idempotent so a second tap can't double-credit).
+        from app.bot.handlers.common import portal_login_url
+
+        owner_id = reseller.bot_chat_id if reseller is not None else None
+        owner_url = (await portal_login_url(
+            s, owner_id, next_path=f"/portal/storefront/{sf.id}/topups") if owner_id else None)
         for admin_id in _admin_chat_ids(reseller, sf):
+            # Only the OWNER gets the portal deep-link (co-admins aren't portal principals).
+            decide_kb = kb.topup_decide_kb(
+                txn.id, portal_url=owner_url if admin_id == owner_id else None)
             try:
                 if message.photo:  # forward by file_id — no disk read, no leaked file handle
                     await bot.send_photo(
                         admin_id, message.photo[-1].file_id,
-                        caption=rtl(cap), reply_markup=kb.topup_decide_kb(txn.id))
+                        caption=rtl(cap), reply_markup=decide_kb)
                 else:
-                    await bot.send_message(admin_id, rtl(cap),
-                                           reply_markup=kb.topup_decide_kb(txn.id))
+                    await bot.send_message(admin_id, rtl(cap), reply_markup=decide_kb)
             except Exception:  # noqa: BLE001 — one blocked admin shouldn't stop the others
                 log.warning("notify admin of topup failed", exc_info=True)
 
@@ -2523,10 +2567,10 @@ async def sf_support_set(message: Message, state: FSMContext, bot: Bot) -> None:
                 support_contact=(message.text or "").strip())
         except storefront_admin.AdminCommandError as exc:
             await state.clear()
-            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.admin_reply_kb())
+            await _reshow_admin_menu(message, _admin_error(exc), bot=bot)
             return
     await state.clear()
-    await message.answer(rtl("✅ شناسهٔ پشتیبانی ذخیره شد."), reply_markup=kb.admin_reply_kb())
+    await _reshow_admin_menu(message, "✅ شناسهٔ پشتیبانی ذخیره شد.", bot=bot)
 
 
 @storefront_router.message(SF.welcome, F.text)
@@ -2542,10 +2586,10 @@ async def sf_welcome_set(message: Message, state: FSMContext, bot: Bot) -> None:
                 welcome_text=(message.text or "").strip() or None)
         except storefront_admin.AdminCommandError as exc:
             await state.clear()
-            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.admin_reply_kb())
+            await _reshow_admin_menu(message, _admin_error(exc), bot=bot)
             return
     await state.clear()
-    await message.answer(rtl("✅ پیامِ خوش‌آمد ذخیره شد."), reply_markup=kb.admin_reply_kb())
+    await _reshow_admin_menu(message, "✅ پیامِ خوش‌آمد ذخیره شد.", bot=bot)
 
 
 # ── admin: forced-join (channel membership) ───────────────────────────────────
@@ -2635,7 +2679,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
             if sf is None:
                 return
             markup = kb.join_settings_kb(sf)
-        await message.answer(rtl("✅ کانال قبلاً ثبت شده است."), reply_markup=kb.admin_reply_kb())
+        await _reshow_admin_menu(message, "✅ کانال قبلاً ثبت شده است.", bot=bot)
         await message.answer(rtl("🔒 عضویت اجباری در کانال"), reply_markup=markup)
         return
     try:
@@ -2692,14 +2736,14 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
                 s, claim, ctx, verified=True, resolved_link=link)
         except storefront_admin.AdminCommandError as exc:
             await state.clear()
-            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.admin_reply_kb())
+            await _reshow_admin_menu(message, _admin_error(exc), bot=bot)
             return
         sf, _r, _a = await _resolve(s, bot, message.from_user)
         if sf is None:
             return
         markup = kb.join_settings_kb(sf)
     await state.clear()
-    await message.answer(rtl("✅ کانال ثبت و عضویت اجباری فعال شد."), reply_markup=kb.admin_reply_kb())
+    await _reshow_admin_menu(message, "✅ کانال ثبت و عضویت اجباری فعال شد.", bot=bot)
     await message.answer(rtl("🔒 عضویت اجباری در کانال"), reply_markup=markup)
 
 
@@ -2864,7 +2908,7 @@ async def sf_closed_set(message: Message, state: FSMContext, bot: Bot) -> None:
             await message.answer(rtl(_admin_error(exc)), reply_markup=kb.shop_state_kb(sf))
             return
     await state.clear()
-    await message.answer(rtl("✅ پیامِ بسته‌بودنِ فروشگاه ذخیره شد."), reply_markup=kb.admin_reply_kb())
+    await _reshow_admin_menu(message, "✅ پیامِ بسته‌بودنِ فروشگاه ذخیره شد.", bot=bot)
 
 
 @storefront_router.callback_query(F.data == "sfjoinclear")
@@ -2951,17 +2995,52 @@ async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
         try:
             result = await storefront_admin.enqueue_broadcast(s, sf.id, ctx, segment=segment, text=text)
         except storefront_admin.AdminCommandError as exc:
-            await message.answer(rtl(f"❌ ارسال ناموفق بود: {exc}"),
-                                 reply_markup=kb.admin_reply_kb())
+            await _reshow_admin_menu(message, f"❌ ارسال ناموفق بود: {exc}", bot=bot)
             return
         total = (result.body.get("total") if isinstance(result.body, dict) else 0) or 0
     if not total:
-        await message.answer(rtl(f"در گروهِ «{scope}» مشتری‌ای نیست."),
-                             reply_markup=kb.admin_reply_kb())
+        await _reshow_admin_menu(message, f"در گروهِ «{scope}» مشتری‌ای نیست.", bot=bot)
         return
-    await message.answer(
-        rtl(f"📢 پیام برای {total} نفر ({scope}) در صفِ ارسال قرار گرفت؛ به‌تدریج ارسال می‌شود."),
-        reply_markup=kb.admin_reply_kb())
+    await _reshow_admin_menu(
+        message,
+        f"📢 پیام برای {total} نفر ({scope}) در صفِ ارسال قرار گرفت؛ به‌تدریج ارسال می‌شود.", bot=bot)
+
+
+# ── compact owner home shortcuts (plan 007) ───────────────────────────────────
+
+_OWNER_HOME_HELP = (
+    "❓ راهنمای مدیریتِ فروشگاه\n\n"
+    "مدیریتِ کاملِ فروشگاه در «پنلِ تحتِ وب» انجام می‌شود: پلن‌ها، روش‌های پرداخت، مشتری‌ها، "
+    "شارژِ کیف‌پول، کدهای شارژ/هدیه، پیامِ همگانی و همهٔ تنظیمات.\n\n"
+    "روی «🌐 مدیریت فروشگاه در مرورگر» بزنید تا بدون رمز واردِ پنل شوید (هر بار لینکِ تازه و "
+    "یک‌بارمصرف است).\n\n"
+    "در همین‌جا هم کارهای فوری در دسترس‌اند: «🧾 شارژهای در انتظار» برای تأییدِ سریعِ شارژها، "
+    "«📊 آمار سریع» و «👤 نمای مشتری».\n\n"
+    "برای گرفتنِ منو و لینکِ تازه، هر زمان /start را بزنید."
+)
+
+
+@storefront_router.callback_query(F.data.startswith("sfhome:"))
+async def sf_home_cb(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Compact owner-home shortcuts. Reuses the from_user-safe admin actions (topups/stats); the
+    preview is computed with the CALLER's Telegram id (delegating would use the bot's id)."""
+    action = cb.data.split(":", 1)[1]
+    async with SessionLocal() as s:
+        sf, reseller, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        if action == "topups":
+            await _admin_action("topups", cb.message, state, s, sf, reseller)
+        elif action == "stats":
+            await _admin_action("stats", cb.message, state, s, sf, reseller)
+        elif action == "preview":
+            await state.update_data(sf_preview=True)
+            preview = await storefront_admin.customer_preview(s, sf.id, cb.from_user.id, "bot")
+            await _send_customer_preview(cb.message.answer, preview)
+        elif action == "help":
+            await cb.message.answer(rtl(_OWNER_HOME_HELP))
+    await cb.answer()
 
 
 # ── generic cancel ────────────────────────────────────────────────────────────
@@ -2975,7 +3054,8 @@ async def sf_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             await cb.answer()
             return
         if is_admin:
-            await _send_admin_menu(cb.message.answer, sf)
+            await _send_admin_menu(
+                cb.message, sf, session=s, reseller=reseller, user_id=cb.from_user.id)
         else:
             cust = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
             await _send_customer_menu(cb.message.answer, sf, cust)
@@ -3007,16 +3087,24 @@ async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
         if sf is None:
             return
         if is_admin:
-            await _send_admin_menu(message.answer, sf)
+            await _send_admin_menu(
+                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
             return
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
         admin_ids = _admin_chat_ids(reseller, sf)
         cust_name, cust_id = (cust.name or str(cust.telegram_id)), cust.id
+        from app.bot.handlers.common import portal_login_url
+
+        owner_id = reseller.bot_chat_id if reseller is not None else None
+        owner_url = (await portal_login_url(
+            s, owner_id, next_path=f"/portal/storefront/{sf.id}/customers/{cust.id}")
+            if owner_id else None)
     # Relay only a genuine idle support message: free text (not a slash command) or a photo, and NOT a
     # stray message that fell out of a flow (that just aborts to the menu).
     txt = (message.text or "").strip()
     relayable = (not was_mid_flow) and (bool(message.photo) or bool(txt and not txt.startswith("/")))
-    if relayable and await _relay_to_admins(bot, admin_ids, cust_name, cust_id, message):
+    if relayable and await _relay_to_admins(
+            bot, admin_ids, cust_name, cust_id, message, owner_id=owner_id, portal_url=owner_url):
         await message.answer(rtl("📨 پیامِ شما برای پشتیبانیِ فروشگاه ارسال شد؛ به‌زودی پاسخ می‌گیرید."))
         return
     async with SessionLocal() as s:

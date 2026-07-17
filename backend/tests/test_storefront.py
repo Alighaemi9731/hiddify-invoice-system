@@ -1769,3 +1769,169 @@ def test_bot_stale_config_version_yields_conflict_and_single_retry(tmp_path):
         assert "دوباره تلاش" in sfh._admin_error(exc.value)
 
     _run(body, tmp_path, "botconflict.db")
+
+
+# ─────────────────── plan 007: compact owner home + safe deep links ────────────
+
+class _FakeMsg:
+    """Records .answer(text, reply_markup=…) calls so we can assert the menu shape."""
+    def __init__(self, user_id: int) -> None:
+        self.from_user = SimpleNamespace(id=user_id)
+        self.chat = SimpleNamespace(id=user_id)
+        self.message_id = 1
+        self.photo = None
+        self.answers: list[tuple[str, object]] = []
+
+    async def answer(self, text, reply_markup=None, **_kw):  # noqa: ANN001
+        self.answers.append((text, reply_markup))
+
+
+def test_owner_home_kb_shape_and_no_webapp():
+    url = "https://portal.example.test/portal/login?t=abc&next=%2Fportal%2Fstorefront%2F1"
+    home = sfkb.owner_home_kb(url)
+    buttons = [b for row in home.inline_keyboard for b in row]
+    assert len(buttons) == 5
+    assert buttons[0].url == url and buttons[0].web_app is None
+    callbacks = {b.callback_data for b in buttons if b.callback_data}
+    assert callbacks == {"sfhome:topups", "sfhome:stats", "sfhome:preview", "sfhome:help"}
+    # No web_app / Mini App anywhere.
+    assert all(b.web_app is None for b in buttons)
+    # url=None → 4 buttons (no url row), never crashes.
+    nourl = sfkb.owner_home_kb(None)
+    assert len([b for row in nourl.inline_keyboard for b in row]) == 4
+
+
+def test_send_admin_menu_owner_vs_coadmin(tmp_path):
+    async def body(s):
+        from aiogram.types import (
+            InlineKeyboardMarkup,
+            ReplyKeyboardMarkup,
+            ReplyKeyboardRemove,
+        )
+
+        from app.bot.storefront import handlers as H
+        from app.services import settings_service
+        r, bot, _ = await _seed(s)
+        r.bot_chat_id = 111
+        bot.co_admin_ids = "222"
+        await settings_service.set_value(s, "server_domain", "portal.example.test")
+        await s.commit()
+
+        # OWNER: ReplyKeyboardRemove first (undock legacy), then the compact inline home with a
+        # portal URL carrying an allow-listed &next.
+        m = _FakeMsg(111)
+        await H._send_admin_menu(m, bot, session=s, reseller=r, user_id=111)
+        assert isinstance(m.answers[0][1], ReplyKeyboardRemove)
+        home = m.answers[1][1]
+        assert isinstance(home, InlineKeyboardMarkup)
+        url = home.inline_keyboard[0][0].url
+        assert url.startswith("https://portal.example.test/portal/login?t=")
+        assert f"next=%2Fportal%2Fstorefront%2F{bot.id}" in url
+        assert home.inline_keyboard[0][0].web_app is None
+
+        # CO-ADMIN: the full 14-label legacy reply keyboard (no portal principal).
+        m2 = _FakeMsg(222)
+        await H._send_admin_menu(m2, bot, session=s, reseller=r, user_id=222)
+        rk = m2.answers[0][1]
+        assert isinstance(rk, ReplyKeyboardMarkup)
+        labels = {b.text for row in rk.keyboard for b in row}
+        assert labels == {lbl for lbl, _ in sfkb.ADMIN_MENU}
+    _run(body, tmp_path, "sf_owner_menu.db")
+
+
+def test_send_admin_menu_owner_domain_missing(tmp_path):
+    async def body(s):
+        from aiogram.types import InlineKeyboardMarkup
+
+        from app.bot.storefront import handlers as H
+        r, bot, _ = await _seed(s)
+        r.bot_chat_id = 111
+        await s.commit()  # no server_domain configured
+        m = _FakeMsg(111)
+        await H._send_admin_menu(m, bot, session=s, reseller=r, user_id=111)
+        home = m.answers[1][1]
+        assert isinstance(home, InlineKeyboardMarkup)
+        # No URL row → 4 callback buttons, and a configuration note in the text.
+        buttons = [b for row in home.inline_keyboard for b in row]
+        assert len(buttons) == 4 and all(b.url is None for b in buttons)
+    _run(body, tmp_path, "sf_owner_nodomain.db")
+
+
+def test_portal_login_url_next_allowlist_and_fresh_token(tmp_path):
+    async def body(s):
+        from app.bot.handlers import common
+        from app.services import settings_service
+        r, bot, _ = await _seed(s)
+        r.bot_chat_id = 111
+        await settings_service.set_value(s, "server_domain", "portal.example.test")
+        await s.commit()
+
+        # A valid next is appended (percent-encoded); an open-redirect next is dropped.
+        good = await common.portal_login_url(s, 111, next_path="/portal/storefront/1/customers/5")
+        assert "next=%2Fportal%2Fstorefront%2F1%2Fcustomers%2F5" in good
+        bad = await common.portal_login_url(s, 111, next_path="//evil.com")
+        assert "next=" not in bad
+        # Every call mints a FRESH one-time token.
+        u1 = await common.portal_login_url(s, 111)
+        u2 = await common.portal_login_url(s, 111)
+        assert u1 != u2 and u1.split("t=")[1] != u2.split("t=")[1]
+    _run(body, tmp_path, "sf_portal_url.db")
+
+
+def test_all_admin_labels_present_and_map_to_actions():
+    # The 14 legacy labels stay routable: every ADMIN_MENU label maps to an action (sf_menu dispatches
+    # `text in ADMIN_LABEL_TO_ACTION`), and ADMIN_MENU is unchanged (14 entries).
+    assert len(sfkb.ADMIN_MENU) == 14
+    assert set(sfkb.ADMIN_LABEL_TO_ACTION) == {lbl for lbl, _ in sfkb.ADMIN_MENU}
+    assert all(action for action in sfkb.ADMIN_LABEL_TO_ACTION.values())
+
+
+def test_sf_home_preview_uses_caller_not_bot_id(tmp_path, monkeypatch):
+    """sfhome:preview must compute the preview with the OWNER's Telegram id (cb.from_user.id), NOT
+    the bot's id — the `_admin_action('preview')` branch reads message.from_user (the bot on a
+    callback), so the callback dispatcher must call customer_preview directly with cb.from_user.id."""
+    from sqlalchemy.pool import StaticPool
+
+    async def go():
+        engine = create_async_engine(
+            "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+        from app.core.db import Base
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        from app.bot.storefront import handlers as H
+        monkeypatch.setattr(H, "SessionLocal", Session)
+        async with Session() as s:
+            r, bot, _ = await _seed(s)
+            r.bot_chat_id = 111
+            await s.commit()
+            bot_tg_id = bot.bot_telegram_id
+
+        captured: dict = {}
+
+        async def fake_preview(session, shop_id, actor_id, source):  # noqa: ANN001
+            captured["actor_id"] = actor_id
+            return {"balance": 0}
+
+        async def fake_send_preview(answer, preview):  # noqa: ANN001
+            pass
+
+        monkeypatch.setattr(H.storefront_admin, "customer_preview", fake_preview)
+        monkeypatch.setattr(H, "_send_customer_preview", fake_send_preview)
+
+        async def _noop(*a, **k):  # noqa: ANN002, ANN003
+            return None
+
+        cb = SimpleNamespace(
+            data="sfhome:preview",
+            from_user=SimpleNamespace(id=111),
+            message=SimpleNamespace(answer=_noop),
+            answer=_noop,
+        )
+        state = SimpleNamespace(update_data=_noop)
+        fake_bot = SimpleNamespace(id=bot_tg_id)
+        await H.sf_home_cb(cb, state, fake_bot)
+        assert captured["actor_id"] == 111 and captured["actor_id"] != bot_tg_id
+        await engine.dispose()
+
+    asyncio.run(go())

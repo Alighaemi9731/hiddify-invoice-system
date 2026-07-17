@@ -491,14 +491,12 @@ async def _send_portal_link(answer, chat_id: int, session) -> None:
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
-    domain = (await settings_service.get(session, "server_domain", "") or "").strip()
-    domain = domain.replace("https://", "").replace("http://", "").strip("/")
-    if not domain:
+    from app.bot.handlers.common import portal_login_url
+
+    url = await portal_login_url(session, chat_id)
+    if not url:
         await answer(rtl("🌐 پنلِ تحتِ وب هنوز پیکربندی نشده است؛ لطفاً به پشتیبانی اطلاع دهید."))
         return
-    from app.core.portal_auth import create_portal_login_token
-
-    url = f"https://{domain}/portal/login?t={create_portal_login_token(chat_id)}"
     msg = (
         "🌐 ورود به پنلِ تحتِ وب\n\n"
         "برای دیدنِ فاکتورها، پرداخت، آمار و مدیریتِ زیرمجموعه‌ها در سایت، روی لینکِ زیر بزنید "

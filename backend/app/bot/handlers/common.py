@@ -247,18 +247,35 @@ async def _resellers_for_chat(session, chat_id: int) -> list[Reseller]:
     )
 
 
-async def _portal_menu_url(session, chat_id: int) -> str | None:
-    """Build a short-lived portal URL only for a registered reseller and configured domain."""
-    if not await _resellers_for_chat(session, chat_id):
-        return None
+async def portal_login_url(session, chat_id: int, *, next_path: str | None = None) -> str | None:
+    """Mint a short-lived one-time portal login URL for `chat_id`, or None if the site domain isn't
+    configured. `next_path` (a portal deep-link) is appended ONLY when it passes the strict
+    `portal_deeplink.validate_next` allowlist; an invalid/foreign path is silently dropped (never
+    appended raw) so a stale notification link can't become an open redirect. The server still
+    authorizes the destination before the SPA navigates. Single source for every login URL."""
     domain = (await settings_service.get(session, "server_domain", "") or "").strip()
     domain = domain.replace("https://", "").replace("http://", "").strip("/")
     if not domain:
         return None
 
-    from app.core.portal_auth import create_portal_login_token
+    from urllib.parse import quote
 
-    return f"https://{domain}/portal/login?t={create_portal_login_token(chat_id)}"
+    from app.core.portal_auth import create_portal_login_token
+    from app.core.portal_deeplink import validate_next
+
+    url = f"https://{domain}/portal/login?t={create_portal_login_token(chat_id)}"
+    if next_path is not None:
+        validated = validate_next(next_path)
+        if validated is not None:
+            url += "&next=" + quote(validated, safe="")
+    return url
+
+
+async def _portal_menu_url(session, chat_id: int) -> str | None:
+    """Build a short-lived portal URL only for a registered reseller and configured domain."""
+    if not await _resellers_for_chat(session, chat_id):
+        return None
+    return await portal_login_url(session, chat_id)
 
 
 def _iso(value) -> str:

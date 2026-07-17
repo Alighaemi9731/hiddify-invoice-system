@@ -102,6 +102,38 @@ async def refresh(ctx: ResellerContext = Depends(get_current_reseller)) -> dict:
     return {"access_token": create_portal_session_token(ctx.chat_id), "token_type": "bearer"}
 
 
+class AuthorizeNextBody(BaseModel):
+    next: str | None = None
+
+
+@router.post("/authorize-next")
+async def authorize_next(
+    body: AuthorizeNextBody,
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Resolve a safe portal destination for a login deep-link's `next`. The SPA calls this AFTER the
+    token exchange (so it's bearer-authenticated) and navigates only to the returned `target`. Two
+    guards: (1) `validate_next` allow-lists the path (default-deny); (2) the shop id is authorized
+    against the caller's OWNED storefronts. An invalid OR foreign `next` returns the owner's dashboard
+    with NO existence leak (the client never sees a 404), so a stale/forged link can't open-redirect
+    or reveal another tenant's shop."""
+    from app.core import portal_deeplink
+    from app.core.storefront_access import require_owned_storefront
+
+    validated = portal_deeplink.validate_next(body.next)
+    if validated is None:
+        return {"target": "/portal/storefront"}
+    shop_id = portal_deeplink.parse_shop_id(validated)
+    try:
+        await require_owned_storefront(session, ctx, shop_id)
+    except HTTPException:
+        # Foreign/absent/disabled are indistinguishable (require_owned_storefront 404s all three);
+        # degrade to the dashboard rather than surface existence.
+        return {"target": "/portal/storefront"}
+    return {"target": validated}
+
+
 @router.get("/me")
 async def me(
     ctx: ResellerContext = Depends(get_current_reseller),

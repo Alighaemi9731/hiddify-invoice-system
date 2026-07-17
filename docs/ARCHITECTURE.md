@@ -135,6 +135,31 @@ Read path = `BackupJsonClient` (the `/admin/backup/backupfile/` endpoint). Write
 uses the write path. New read/payment adapters should be introduced only with an implemented
 workflow and migration, not as dormant enum values.
 
+## 5b. Reseller web portal & storefront management surface
+
+The reseller-facing SPA at `/portal/*` is fully independent of the owner app (own auth context,
+own `portal_token`). A reseller reaches it from their Telegram bot: the bot mints a short-lived,
+single-use login token (`portal_auth.create_portal_login_token`) inside an HTTPS URL; the SPA's
+`/portal/login` posts it to `POST /api/portal/auth/exchange`, which consumes the token's `jti`
+(via `portal_login_nonce`, strictly one-time) and returns a 30-day sliding reseller JWT
+(`role=reseller`). Every `/api/portal/*` route depends on `get_current_reseller` (secure-transport
+gate + a per-request reseller-row check, so unbinding a reseller revokes access immediately).
+
+Resellers who run a per-reseller VPN storefront bot manage the whole shop from
+`/api/portal/storefronts/*` (`portal_storefront.py`), which is backed by the SAME shared, audited,
+idempotent command/query layer the storefront bot uses — `storefront_admin` (money + config mutations,
+each one transaction with an idempotency claim + audit event), `storefront_customers`/`storefront_reporting`
+(tenant-scoped reads), `storefront_provision` (panel I/O). A machine-readable parity inventory
+(`backend/tests/fixtures/storefront_admin_parity.json`) plus `tests/test_storefront_parity.py` prove
+every admin-bot capability has a portal equivalent and that no portal mutation handler bypasses the
+shared layer with a direct session write (an AST no-bypass scan). The storefront-admin bot is a compact
+inline home for the owner whose HTTPS button opens the portal directly; co-admins keep the full legacy
+bot keyboard (no portal RBAC). Login/notification deep-links carry a `next` that is validated by a
+strict default-deny allowlist (`app/core/portal_deeplink.validate_next`: only `/portal/storefront/{id}`
++ a registered SPA suffix; rejects schemes, `//`, backslashes, control chars, `..`, double-encoding) and
+then tenant-authorized by `POST /api/portal/authorize-next` (`require_owned_storefront`), so a stale or
+forged `next` degrades to the owner's dashboard with no open redirect and no cross-tenant existence leak.
+
 ## 6. Deployment
 
 Production Compose runs `db`, `backend`, `bot`, `frontend`, and `caddy`. The bot and

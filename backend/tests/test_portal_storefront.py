@@ -351,3 +351,49 @@ def test_storefront_http_auth_and_owner_scoping():
             app.dependency_overrides.pop(get_session, None)
 
     _run(body)
+
+
+def test_authorize_next_deeplink_is_tenant_safe():
+    """Plan 007: POST /api/portal/authorize-next allow-lists + tenant-authorizes a login deep-link's
+    `next`. Owned -> the validated path; foreign/invalid -> the dashboard with NO 404 leak; unauth -> 401."""
+    async def body(session, _engine):  # noqa: ANN001
+        _p1, r1, r2, _foreign, shop, _second, other, _disabled = await _seed(session)
+
+        async def session_override():
+            yield session
+
+        async def context_override():
+            return _ctx(r1, r2)
+
+        app.dependency_overrides[get_session] = session_override
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                # Unauthenticated → 401 (inherits get_current_reseller).
+                assert (await client.post("/api/portal/authorize-next",
+                                          json={"next": f"/portal/storefront/{shop.id}"})).status_code == 401
+
+                app.dependency_overrides[get_current_reseller] = context_override
+                # Owned shop + registered suffix → the validated target.
+                owned = await client.post(
+                    "/api/portal/authorize-next",
+                    json={"next": f"/portal/storefront/{shop.id}/customers/5"})
+                assert owned.status_code == 200
+                assert owned.json()["target"] == f"/portal/storefront/{shop.id}/customers/5"
+
+                # Foreign shop → dashboard, 200, NO existence leak (never a 404).
+                foreign = await client.post(
+                    "/api/portal/authorize-next",
+                    json={"next": f"/portal/storefront/{other.id}/topups"})
+                assert foreign.status_code == 200
+                assert foreign.json()["target"] == "/portal/storefront"
+
+                # Invalid / open-redirect next → dashboard fallback.
+                for bad in ("//evil.com", "https://evil", f"/portal/storefront/{shop.id}/orders/9", None):
+                    r = await client.post("/api/portal/authorize-next", json={"next": bad})
+                    assert r.status_code == 200 and r.json()["target"] == "/portal/storefront"
+        finally:
+            app.dependency_overrides.pop(get_current_reseller, None)
+            app.dependency_overrides.pop(get_session, None)
+
+    _run(body)

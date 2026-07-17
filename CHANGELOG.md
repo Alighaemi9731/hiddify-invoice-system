@@ -8,6 +8,36 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.88.0 - 2026-07-18
+
+Storefront management portal Release F (final) — bot/portal parity + a simplified storefront-admin
+bot. No database migration (Alembic head stays `497cb88cf774`); no manual steps.
+
+### Added
+
+- **The storefront-admin Telegram bot is now a compact home for the shop OWNER**: a «🌐 مدیریت فروشگاه
+  در مرورگر» button that opens the web portal directly (one-time, password-less), plus the few urgent
+  Telegram shortcuts — «🧾 شارژهای در انتظار», «📊 آمار سریع», «👤 نمای مشتری» and «❓ راهنما». Daily
+  management (plans, payments, customers, top-ups, credits, broadcasts, settings) lives in the browser.
+  **Co-admins keep the full legacy bot menu** (they are not web-portal users; nothing about their access
+  changes). Every old menu label still works, so no existing message or shortcut breaks.
+- **Owner notifications deep-link into the portal**: a new top-up notification and a customer support
+  message now carry an owner-only «🌐 مشاهده در پنل» button that opens exactly that top-up queue or that
+  customer's page — while the urgent confirm/reject stays inline in Telegram. The one-time login link
+  carries a `next` destination that is **strictly allow-listed and server-authorized** (only your own
+  storefront pages), so a stale or forged link can never redirect elsewhere or reveal another shop.
+- A machine-readable **parity inventory** (`storefront_admin_parity.json`) + a CI contract test prove
+  every admin-bot capability has a portal equivalent backed by the shared, audited command layer, and
+  that no portal action bypasses it — so the bot can stay simple without ever losing a capability.
+
+### Notes
+
+- No migration; Alembic head stays `497cb88cf774`.
+- Co-admins intentionally retain the full legacy bot keyboard; portal role-based access for co-admins
+  is a separate future item. The legacy owner bot callbacks remain routable and will not be removed
+  before v1.90.0.
+- This completes product-roadmap item 3 (the reseller storefront management portal, Releases A–F).
+
 ## 1.87.0 - 2026-07-18
 
 Storefront management portal Release E — credit-code management + durable customer communications.

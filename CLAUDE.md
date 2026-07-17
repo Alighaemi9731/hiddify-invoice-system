@@ -54,10 +54,21 @@ reverse-on-uncertainty reconciler, provision lease F5, table `storefront_operati
 `v1.82.1` closes five edge gaps: reseller-portal strict transport, principal-bound/pre-reserved operation
 tokens, a five-minute lease floor, atomic `start_date` baseline, and verify/reapply renewal recovery
 (migration head `a6c9e2f4b7d1`). F3/F6/F7/F8/F9/F14/F15/F16 were confirmed genuinely fixed in round 1.
-**Product roadmap now active (2026-07-16):** the owner-selected roadmap is tracked in
-`plans/PRODUCT_ROADMAP_FA.md`. Item 1 shipped in `v1.82.3`: the reseller Telegram menu opens the
-existing one-time authenticated portal URL directly in a normal browser, with no Mini App and with
-the previous callback/message flow retained as the missing-account/domain fallback.
+**Product roadmap active (2026-07-16), item 3 COMPLETE:** the owner-selected roadmap is tracked in
+`plans/PRODUCT_ROADMAP_FA.md`. Item 1 shipped in `v1.82.3` (the reseller Telegram menu opens the
+one-time authenticated portal URL directly in a normal browser); item 2 was rejected by the owner.
+**Roadmap item 3 — the reseller storefront management portal — is DONE, all six releases (A–F)
+shipped and deployed** (`plans/002`–`007`): B `v1.84.0` plans/settings, C `v1.85.0`
+customers/subscriptions, D `v1.86.0` wallet/top-ups, E `v1.87.0` credit codes + durable
+communications, **F `v1.88.0`** — bot/portal parity (a machine-readable parity inventory
+`backend/tests/fixtures/storefront_admin_parity.json` + `tests/test_storefront_parity.py` prove every
+admin-bot capability maps to a shared audited command and no portal mutation bypasses it), safe portal
+deep links (a strict default-deny `next` allowlist `app/core/portal_deeplink.py` + server-side
+`POST /api/portal/authorize-next` tenant authorization; owner notifications deep-link to their owned
+resource), and a compact inline storefront-admin OWNER home (a plain HTTPS «مدیریت فروشگاه در مرورگر»
+button + urgent shortcuts; co-admins keep the full legacy bot keyboard; no Mini App; legacy owner
+callbacks stay routable, removal not before `v1.90.0`). Remaining boundaries: co-admin portal RBAC
+(item 15), CRM (item 14), accounting (item 12).
 
 Concurrency invariants are asserted by
 `pg_contract`-marked tests run against a real Postgres 16 in the CI `backend-postgres`

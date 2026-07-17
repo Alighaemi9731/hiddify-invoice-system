@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Box, Card, CardContent, CircularProgress, Stack, Typography } from "@mui/material";
 import ReceiptLongIcon from "@mui/icons-material/esm/ReceiptLong";
-import { portalExchange } from "./portalClient";
+import { portalAuthorizeNext, portalExchange } from "./portalClient";
 import { usePortalAuth } from "./PortalAuthContext";
 
-// /portal/login?t=<one-time-token> — exchange the bot-issued link for a reseller session,
-// then redirect into the portal. If the token is missing/expired, tell them to re-tap the
-// bot button (resellers have no password — the bot link is the credential).
+const NEXT_KEY = "portal_next";
+
+// /portal/login?t=<one-time-token>[&next=<deep-link>] — exchange the bot-issued link for a reseller
+// session, then land on the (server-authorized) deep-link target. If the token is missing/expired,
+// tell them to re-tap the bot button (resellers have no password — the bot link is the credential).
 export default function PortalLogin() {
   const [params] = useSearchParams();
   const nav = useNavigate();
@@ -19,23 +21,43 @@ export default function PortalLogin() {
     if (ran.current) return;
     ran.current = true;
     const t = params.get("t");
-    // Drop the one-time token from the URL immediately so it can't linger in history/referrer logs.
-    if (t) window.history.replaceState({}, "", "/portal/login");
+    const nextRaw = params.get("next");
+    // Stash `next`, then strip BOTH the token and next from the address bar immediately so neither
+    // lingers in history/referrer logs. The server re-validates + authorizes `next` before we use it.
+    if (t) {
+      sessionStorage.setItem(NEXT_KEY, nextRaw ?? "");
+      window.history.replaceState({}, "", "/portal/login");
+    }
+
+    // Resolve the safe destination server-side, then navigate (defaults to the dashboard).
+    const goToDestination = async () => {
+      const stashed = sessionStorage.getItem(NEXT_KEY);
+      sessionStorage.removeItem(NEXT_KEY);
+      let target = "/portal";
+      try {
+        if (stashed) target = await portalAuthorizeNext(stashed);
+      } catch {
+        target = "/portal";
+      }
+      nav(target, { replace: true });
+    };
+
     if (!t) {
-      // No token in the URL: if already logged in, go in; otherwise prompt to use the bot.
-      if (authed) nav("/portal", { replace: true });
+      // No token in the URL: if already logged in, honor any stashed next; otherwise prompt to use the bot.
+      if (authed) void goToDestination();
       else setError("برای ورود، از دکمهٔ «ورود به پنلِ تحتِ وب» در ربات تلگرام استفاده کنید.");
       return;
     }
     portalExchange(t)
       .then(async ({ access_token }) => {
         await finishLogin(access_token);
-        nav("/portal", { replace: true });
+        await goToDestination();
       })
       .catch((e) => {
+        sessionStorage.removeItem(NEXT_KEY);
         setError(
           e?.response?.data?.detail ||
-            "لینکِ ورود نامعتبر یا منقضی شده است؛ از ربات تلگرام دوباره وارد شوید."
+            "لینکِ ورود نامعتبر یا منقضی شده است؛ از ربات تلگرام یک لینکِ تازه بگیرید (دستور /start)."
         );
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps

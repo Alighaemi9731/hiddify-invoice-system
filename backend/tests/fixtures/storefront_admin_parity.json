@@ -1,0 +1,594 @@
+{
+  "legacy_owner_callbacks_remove_not_before": "v1.90.0",
+  "rows": [
+    {
+      "menu_key": "plans",
+      "telegram_label": "🧩 پلن‌ها",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/plans",
+      "shared_symbol": "app.services.storefront_admin.list_plans",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_plans"
+    },
+    {
+      "menu_key": "pay",
+      "telegram_label": "💳 روش‌های پرداخت",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/settings",
+      "shared_symbol": "app.services.storefront_admin.get_settings",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_pay"
+    },
+    {
+      "menu_key": "trialcfg",
+      "telegram_label": "🎁 تنظیماتِ تست رایگان",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/settings/trial",
+      "shared_symbol": "app.services.storefront_admin.update_trial",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_trial"
+    },
+    {
+      "menu_key": "joincfg",
+      "telegram_label": "🔒 عضویت اجباری",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/channel",
+      "shared_symbol": "app.services.storefront_admin.claim_external_channel",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_joincfg"
+    },
+    {
+      "menu_key": "welcome",
+      "telegram_label": "📝 پیام خوش‌آمد",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/settings/messages",
+      "shared_symbol": "app.services.storefront_admin.update_messages",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_welcome"
+    },
+    {
+      "menu_key": "topups",
+      "telegram_label": "🧾 شارژهای در انتظار",
+      "portal_route": "/portal/storefront/{shop_id}/topups",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/topups",
+      "shared_symbol": "app.services.storefront_admin.set_topup_decision",
+      "owner_mode": "bot_shortcut",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_topups"
+    },
+    {
+      "menu_key": "customers",
+      "telegram_label": "👥 مشتری‌ها",
+      "portal_route": "/portal/storefront/{shop_id}/customers",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/customers",
+      "shared_symbol": "app.services.storefront_customers.list_customers_keyset",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers"
+    },
+    {
+      "menu_key": "stats",
+      "telegram_label": "📊 آمار",
+      "portal_route": "/portal/storefront/{shop_id}",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/dashboard",
+      "shared_symbol": "app.services.storefront_reporting.dashboard",
+      "owner_mode": "bot_shortcut",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_stats"
+    },
+    {
+      "menu_key": "broadcast",
+      "telegram_label": "📢 پیام همگانی",
+      "portal_route": "/portal/storefront/{shop_id}/campaigns",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/broadcasts",
+      "shared_symbol": "app.services.storefront_admin.enqueue_broadcast",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_broadcast"
+    },
+    {
+      "menu_key": "support",
+      "telegram_label": "💬 پشتیبانی",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/settings/messages",
+      "shared_symbol": "app.services.storefront_admin.update_messages",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_support"
+    },
+    {
+      "menu_key": "admins",
+      "telegram_label": "🛡 مدیرانِ ربات",
+      "portal_route": "/portal/storefront/{shop_id}/managers",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/managers",
+      "shared_symbol": "app.services.storefront_admin.list_managers",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_admins",
+      "owner_only": true
+    },
+    {
+      "menu_key": "credits",
+      "telegram_label": "🎁 کدهای شارژ",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/credits",
+      "shared_symbol": "app.services.storefront_admin.list_credits",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits"
+    },
+    {
+      "menu_key": "shopstate",
+      "telegram_label": "🔴 وضعیت فروشگاه",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/settings/shop-state",
+      "shared_symbol": "app.services.storefront_admin.update_shop_state",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_shopstate"
+    },
+    {
+      "menu_key": "preview",
+      "telegram_label": "👤 نمای مشتری",
+      "portal_route": "/portal/storefront/{shop_id}/preview",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/preview",
+      "shared_symbol": "app.services.storefront_admin.customer_preview",
+      "owner_mode": "bot_shortcut",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_preview"
+    },
+    {
+      "menu_key": "plans.create",
+      "telegram_label": "افزودن پلن",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/plans",
+      "shared_symbol": "app.services.storefront_admin.create_plan",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_plans_create"
+    },
+    {
+      "menu_key": "plans.update",
+      "telegram_label": "ویرایش پلن",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/plans/{plan_id}",
+      "shared_symbol": "app.services.storefront_admin.update_plan",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_plans_update"
+    },
+    {
+      "menu_key": "plans.enable",
+      "telegram_label": "فعال/غیرفعال پلن",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "PUT /api/portal/storefronts/{shop_id}/plans/{plan_id}/enabled",
+      "shared_symbol": "app.services.storefront_admin.set_plan_enabled",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_plans_enable"
+    },
+    {
+      "menu_key": "plans.reorder",
+      "telegram_label": "ترتیب پلن‌ها",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "PUT /api/portal/storefronts/{shop_id}/plans/order",
+      "shared_symbol": "app.services.storefront_admin.reorder_plans",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_plans_reorder"
+    },
+    {
+      "menu_key": "plans.delete",
+      "telegram_label": "حذف پلن",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "DELETE /api/portal/storefronts/{shop_id}/plans/{plan_id}",
+      "shared_symbol": "app.services.storefront_admin.delete_plan",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_plans_delete"
+    },
+    {
+      "menu_key": "plans.history",
+      "telegram_label": "تاریخچهٔ پلن",
+      "portal_route": "/portal/storefront/{shop_id}/plans",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/plans/{plan_id}/history",
+      "shared_symbol": "app.services.storefront_admin.plan_history",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_plans_history"
+    },
+    {
+      "menu_key": "pay.update",
+      "telegram_label": "به‌روزرسانی پرداخت",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/settings/payment",
+      "shared_symbol": "app.services.storefront_admin.update_payment",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_pay_update"
+    },
+    {
+      "menu_key": "channel.enable",
+      "telegram_label": "فعال‌سازی عضویت اجباری",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PUT /api/portal/storefronts/{shop_id}/channel/enabled",
+      "shared_symbol": "app.services.storefront_admin.set_channel_required",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_channel_enable"
+    },
+    {
+      "menu_key": "channel.delete",
+      "telegram_label": "حذف کانال",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "DELETE /api/portal/storefronts/{shop_id}/channel",
+      "shared_symbol": "app.services.storefront_admin.delete_channel",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_channel_delete"
+    },
+    {
+      "menu_key": "channel.finalize",
+      "telegram_label": "تأیید کانال (سرور)",
+      "portal_route": "",
+      "api_operation": "",
+      "shared_symbol": "app.services.storefront_admin.finalize_verified_channel",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_channel_finalize"
+    },
+    {
+      "menu_key": "channel.unknown",
+      "telegram_label": "کانال نامشخص (سرور)",
+      "portal_route": "",
+      "api_operation": "",
+      "shared_symbol": "app.services.storefront_admin.mark_external_channel_unknown",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_channel_unknown"
+    },
+    {
+      "menu_key": "channel.claim_enable",
+      "telegram_label": "ادعای فعال‌سازی کانال (سرور)",
+      "portal_route": "",
+      "api_operation": "",
+      "shared_symbol": "app.services.storefront_admin.claim_external_channel_enable",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_channel_claim_enable"
+    },
+    {
+      "menu_key": "topups.list",
+      "telegram_label": "فهرست شارژها",
+      "portal_route": "/portal/storefront/{shop_id}/topups",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/topups",
+      "shared_symbol": "app.services.storefront_customers.list_topups_keyset",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_topups_list"
+    },
+    {
+      "menu_key": "topups.detail",
+      "telegram_label": "جزئیات شارژ",
+      "portal_route": "/portal/storefront/{shop_id}/topups",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/topups/{txn_id}",
+      "shared_symbol": "app.services.storefront_customers.topup_detail",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_topups_detail"
+    },
+    {
+      "menu_key": "topups.decision",
+      "telegram_label": "تصمیم شارژ",
+      "portal_route": "/portal/storefront/{shop_id}/topups",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/topups/{txn_id}/decision",
+      "shared_symbol": "app.services.storefront_admin.set_topup_decision",
+      "owner_mode": "bot_shortcut",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_topups_decision"
+    },
+    {
+      "menu_key": "topups.bulk",
+      "telegram_label": "تصمیم گروهی شارژ",
+      "portal_route": "/portal/storefront/{shop_id}/topups",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/topups/bulk-decisions",
+      "shared_symbol": "app.services.storefront_admin.bulk_topup_decisions",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_topups_bulk"
+    },
+    {
+      "menu_key": "customers.detail",
+      "telegram_label": "جزئیات مشتری",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/customers/{customer_id}",
+      "shared_symbol": "app.services.storefront_customers.customer_detail",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers_detail"
+    },
+    {
+      "menu_key": "customers.ledger",
+      "telegram_label": "دفتر مشتری",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/customers/{customer_id}/ledger",
+      "shared_symbol": "app.services.storefront_customers.customer_ledger",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers_ledger"
+    },
+    {
+      "menu_key": "customers.orders",
+      "telegram_label": "سرویس‌های مشتری",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/customers/{customer_id}/orders",
+      "shared_symbol": "app.services.storefront_customers.list_customer_orders_keyset",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers_orders"
+    },
+    {
+      "menu_key": "customers.ban",
+      "telegram_label": "مسدودی مشتری",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/customers/{customer_id}/status",
+      "shared_symbol": "app.services.storefront_admin.set_customer_banned",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers_ban"
+    },
+    {
+      "menu_key": "customers.message",
+      "telegram_label": "پیام مستقیم",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/customers/{customer_id}/message",
+      "shared_symbol": "app.services.storefront_admin.enqueue_direct",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers_message"
+    },
+    {
+      "menu_key": "customers.wallet_adjust",
+      "telegram_label": "اصلاح کیف‌پول",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/customers/{customer_id}/wallet-adjustments",
+      "shared_symbol": "app.services.storefront_admin.adjust_wallet",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_customers_wallet"
+    },
+    {
+      "menu_key": "subs.detail",
+      "telegram_label": "جزئیات سرویس",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/orders/{order_id}",
+      "shared_symbol": "app.services.storefront_customers.order_detail",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_subs_detail"
+    },
+    {
+      "menu_key": "subs.renew",
+      "telegram_label": "تمدید سرویس",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/orders/{order_id}/renew",
+      "shared_symbol": "app.services.storefront_admin.renew_order",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_subs_renew",
+      "owner_only": true
+    },
+    {
+      "menu_key": "subs.pause_resume",
+      "telegram_label": "توقف/ادامهٔ سرویس",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "PUT /api/portal/storefronts/{shop_id}/orders/{order_id}/enabled",
+      "shared_symbol": "app.services.storefront_admin.set_order_enabled",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_subs_pause",
+      "owner_only": true
+    },
+    {
+      "menu_key": "subs.delete",
+      "telegram_label": "حذف سرویس",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "DELETE /api/portal/storefronts/{shop_id}/orders/{order_id}",
+      "shared_symbol": "app.services.storefront_admin.delete_order",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_subs_delete",
+      "owner_only": true
+    },
+    {
+      "menu_key": "subs.refresh",
+      "telegram_label": "به‌روزرسانی زندهٔ سرویس",
+      "portal_route": "/portal/storefront/{shop_id}/customers/{customer_id}",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/orders/{order_id}/refresh",
+      "shared_symbol": "app.services.storefront_provision.refresh_order_live",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_subs_refresh"
+    },
+    {
+      "menu_key": "credits.create",
+      "telegram_label": "افزودن کد",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/credits",
+      "shared_symbol": "app.services.storefront_admin.create_credit",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits_create"
+    },
+    {
+      "menu_key": "credits.update",
+      "telegram_label": "ویرایش کد",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/credits/{code_id}",
+      "shared_symbol": "app.services.storefront_admin.update_credit",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits_update"
+    },
+    {
+      "menu_key": "credits.enable",
+      "telegram_label": "فعال/غیرفعال کد",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "PUT /api/portal/storefronts/{shop_id}/credits/{code_id}/enabled",
+      "shared_symbol": "app.services.storefront_admin.set_credit_enabled",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits_enable"
+    },
+    {
+      "menu_key": "credits.archive",
+      "telegram_label": "بایگانی کد",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/credits/{code_id}/archive",
+      "shared_symbol": "app.services.storefront_admin.archive_credit",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits_archive"
+    },
+    {
+      "menu_key": "credits.usage",
+      "telegram_label": "آمار کد",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/credits/{code_id}/usage",
+      "shared_symbol": "app.services.storefront_admin.credit_usage",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits_usage"
+    },
+    {
+      "menu_key": "credits.redemptions",
+      "telegram_label": "استفاده‌های کد",
+      "portal_route": "/portal/storefront/{shop_id}/credits",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/credits/{code_id}/redemptions",
+      "shared_symbol": "app.services.storefront_admin.list_credit_redemptions",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_credits_redemptions"
+    },
+    {
+      "menu_key": "broadcast.progress",
+      "telegram_label": "پیشرفت کمپین",
+      "portal_route": "/portal/storefront/{shop_id}/campaigns",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/broadcasts/{job_id}",
+      "shared_symbol": "app.services.storefront_admin.get_broadcast",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_broadcast_progress"
+    },
+    {
+      "menu_key": "broadcast.list",
+      "telegram_label": "تاریخچهٔ کمپین",
+      "portal_route": "/portal/storefront/{shop_id}/campaigns",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/broadcasts",
+      "shared_symbol": "app.services.storefront_admin.list_broadcasts",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_broadcast_list"
+    },
+    {
+      "menu_key": "broadcast.cancel",
+      "telegram_label": "لغو کمپین",
+      "portal_route": "/portal/storefront/{shop_id}/campaigns",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/broadcasts/{job_id}/cancel",
+      "shared_symbol": "app.services.storefront_admin.cancel_broadcast",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_broadcast_cancel"
+    },
+    {
+      "menu_key": "broadcast.audience",
+      "telegram_label": "پیش‌نمایش مخاطبان",
+      "portal_route": "/portal/storefront/{shop_id}/campaigns",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/audience/preview",
+      "shared_symbol": "app.services.storefront_admin.preview_audience",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_broadcast_audience"
+    },
+    {
+      "menu_key": "managers.add",
+      "telegram_label": "افزودن مدیر",
+      "portal_route": "/portal/storefront/{shop_id}/managers",
+      "api_operation": "POST /api/portal/storefronts/{shop_id}/managers",
+      "shared_symbol": "app.services.storefront_admin.add_manager",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_managers_add",
+      "owner_only": true
+    },
+    {
+      "menu_key": "managers.remove",
+      "telegram_label": "حذف مدیر",
+      "portal_route": "/portal/storefront/{shop_id}/managers",
+      "api_operation": "DELETE /api/portal/storefronts/{shop_id}/managers/{telegram_id}",
+      "shared_symbol": "app.services.storefront_admin.remove_manager",
+      "owner_mode": "browser",
+      "coadmin_fallback": "denied",
+      "test_id": "parity_managers_remove",
+      "owner_only": true
+    },
+    {
+      "menu_key": "stats.health",
+      "telegram_label": "سلامت فروشگاه",
+      "portal_route": "/portal/storefront/{shop_id}/health",
+      "api_operation": "GET /api/portal/storefronts/{shop_id}/health",
+      "shared_symbol": "app.services.storefront_reporting.health",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_stats_health"
+    },
+    {
+      "menu_key": "stats.summary",
+      "telegram_label": "خلاصهٔ فروشگاه",
+      "portal_route": "/portal/storefront/{shop_id}",
+      "api_operation": "",
+      "shared_symbol": "app.services.storefront_reporting.storefront_summary",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_stats_summary"
+    },
+    {
+      "menu_key": "support.inbound_relay",
+      "telegram_label": "پاسخ به پیام مشتری (ربات)",
+      "portal_route": "",
+      "api_operation": "",
+      "shared_symbol": "",
+      "owner_mode": "bot_native",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_gap_support_relay",
+      "gap_reason": "Customer→admin support relay is a Telegram-native inbox; no portal inbox this release."
+    },
+    {
+      "menu_key": "customer.config_qr_delivery",
+      "telegram_label": "تحویل کانفیگ و QR (ربات)",
+      "portal_route": "",
+      "api_operation": "",
+      "shared_symbol": "",
+      "owner_mode": "bot_native",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_gap_config_qr",
+      "gap_reason": "Config/QR delivery is customer-side and stays Telegram-native."
+    },
+    {
+      "menu_key": "membership.join_gate",
+      "telegram_label": "گیتِ عضویت اجباری (ربات)",
+      "portal_route": "",
+      "api_operation": "",
+      "shared_symbol": "",
+      "owner_mode": "bot_native",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_gap_join_gate",
+      "gap_reason": "Customer join-gate enforcement is Telegram-native."
+    }
+  ]
+}

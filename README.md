@@ -56,6 +56,16 @@ both Compose stacks.
    once your panel admin API keys are set.
 6. **تاریخچهٔ مالی** → a permanent ledger of every reseller's monthly amount and paid/unpaid
    status; it survives data wipes and panel/reseller removal.
+7. **Reseller web portal & storefront management**: a reseller opens the standalone web portal from
+   their Telegram bot — one tap sends a one-time login link (`/portal/login` exchanges it, single-use)
+   that opens the browser already logged in (no password). Resellers who run their own VPN storefront
+   bot manage the whole shop there — plans, payments, customers, top-ups, credit codes, broadcasts and
+   settings — all backed by the same audited, idempotent command layer the bot uses. The storefront-admin
+   bot itself is now a compact 5-button inline home whose HTTPS button opens that portal directly (no
+   Mini App), keeping only urgent shortcuts in Telegram; co-admins keep the full legacy bot menu. Login
+   deep-links carry a `next` destination that is strictly allow-listed and server-authorized to the
+   caller's own storefront pages, so a stale or forged link can never redirect elsewhere or reveal
+   another shop.
 
 ## Configuration & secrets
 

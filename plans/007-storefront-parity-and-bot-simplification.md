@@ -1,5 +1,19 @@
 # Plan 007: Close bot/portal parity and simplify the storefront bot
 
+> **SHIPPED in v1.88.0 (2026-07-18).** Reconciled against shipped v1.87.0 before execution: plans
+> 002–006 had already shipped the FULL portal surface (including credit analytics + durable
+> communications), so this slice was *prove-and-simplify*, not *build-parity*. Delivered: the
+> machine-readable parity fixture + contract test (`backend/tests/fixtures/storefront_admin_parity.json`,
+> `tests/test_storefront_parity.py`), a strict default-deny login-`next` allowlist
+> (`app/core/portal_deeplink.py`) + server-side `POST /api/portal/authorize-next` tenant authorization,
+> and a compact inline owner storefront-admin home (`keyboards.owner_home_kb`, `_send_admin_menu`
+> owner/co-admin branch, `sfhome:*` callback, owner-only notification deep-links). No migration, no Mini
+> App. The `next` allowlist matches the REGISTERED SPA routes (`/topups`, `/campaigns`, `/customers/{id}`
+> …), not finer API paths. **Follow-up task (do NOT before v1.90.0):** remove the now-hidden legacy owner
+> bot callbacks (`sfplan*`, `sfpaytog`, `sftrialtog`, `sfjoin*`, `sfcred*`, `sfcust*`, `sfok/sfno`,
+> `sfbcseg`, `sfmsg`, `sfadj`, …) — they stay routable for ≥2 releases per the parity fixture's
+> `legacy_owner_callbacks_remove_not_before`.
+>
 > Execute only after explicit approval and plans 002–006 are DONE. **Drift check**:
 > `git diff --stat 2514a96..HEAD -- backend/app/bot/storefront backend/app/bot/handlers/common.py backend/app/bot/handlers/storefront_setup.py backend/app/api/portal_storefront.py frontend/src/portal plans docs CHANGELOG.md`
 > Plans 002–006 will intentionally cause drift; this is a design blueprint. Re-read the released

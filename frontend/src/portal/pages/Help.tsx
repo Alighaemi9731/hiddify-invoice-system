@@ -6,6 +6,7 @@ import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import GroupIcon from "@mui/icons-material/esm/Group";
 import DnsIcon from "@mui/icons-material/esm/Dns";
 import SupportAgentIcon from "@mui/icons-material/esm/SupportAgent";
+import StorefrontIcon from "@mui/icons-material/esm/Storefront";
 import { ReactNode } from "react";
 
 const SECTIONS: { icon: ReactNode; color: string; title: string; body: string[] }[] = [
@@ -44,6 +45,15 @@ const SECTIONS: { icon: ReactNode; color: string; title: string; body: string[] 
     body: [
       "لینکِ مدیریتِ شما روی هر پنل (با دکمهٔ کپی).",
       "بخشِ «ظرفیتِ من» میزانِ پُریِ سهمیهٔ کاربرانتان را نشان می‌دهد؛ با «درخواستِ افزایش» می‌توانید از مالک ظرفیتِ بیشتر بخواهید.",
+    ],
+  },
+  {
+    icon: <StorefrontIcon />, color: "#6d5efc", title: "مدیریت فروشگاه (ربات فروش)",
+    body: [
+      "اگر ربات فروشگاهِ خودتان را دارید، همهٔ مدیریتِ روزمره — پلن‌ها، روش‌های پرداخت، مشتری‌ها، شارژِ کیف‌پول، کدهای شارژ/هدیه، پیامِ همگانی و تنظیمات — در همین پورتالِ تحتِ وب انجام می‌شود.",
+      "در ربات فروشگاه با دستور /start یک منویِ فشرده می‌بینید: دکمهٔ «🌐 مدیریت فروشگاه در مرورگر» شما را بدون رمز و با یک لینکِ یک‌بارمصرف واردِ پنل می‌کند؛ کنارش کارهای فوری مثل «شارژهای در انتظار»، «آمار سریع» و «نمای مشتری» هم هست.",
+      "اعلان‌های فروشگاه (شارژِ جدید، پیامِ مشتری) یک دکمهٔ «مشاهده در پنل» دارند که مستقیم همان صفحه را باز می‌کند.",
+      "اگر برای فروشگاه هم‌مدیر (co-admin) تعریف کرده‌اید، آن‌ها همان منویِ کاملِ قبلیِ ربات را دارند (دسترسیِ تحتِ وبِ هم‌مدیرها فعلاً فعال نیست).",
     ],
   },
   {

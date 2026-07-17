@@ -67,6 +67,14 @@ portalApi.interceptors.response.use(
 export const portalExchange = (token: string) =>
   portalApi.post("/api/portal/auth/exchange", { token }).then((r) => r.data as { access_token: string });
 
+// Resolve a SAFE portal destination for a login deep-link's `next` (server allow-lists + tenant-
+// authorizes it). Called AFTER the token exchange so the bearer is set. A foreign/invalid `next`
+// returns the dashboard target, never an error — so the client never open-redirects or learns of
+// another tenant's shop. `next` may be null/"" (→ dashboard).
+export const portalAuthorizeNext = (next: string | null) =>
+  portalApi.post("/api/portal/authorize-next", { next: next || null })
+    .then((r) => (r.data as { target: string }).target);
+
 export interface PortalReseller {
   id: number;
   name: string;
