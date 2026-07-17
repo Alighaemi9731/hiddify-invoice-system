@@ -408,3 +408,25 @@ class StorefrontOrderEnabledBody(StorefrontStrictBody):
 class StorefrontOrderDeleteBody(StorefrontStrictBody):
     confirm: Literal["DELETE"]
     reason: str = Field(min_length=3, max_length=255)
+
+
+# ── wallet & top-ups (plan 005) ──────────────────────────────────────────────
+class StorefrontTopupDecisionBody(StorefrontStrictBody):
+    decision: Literal["confirm", "reject"]
+    corrected_amount: int | None = Field(default=None, ge=1, le=10**12)
+    reason: str = Field(default="", max_length=255)
+
+
+class StorefrontBulkDecisionItem(StorefrontStrictBody):
+    txn_id: int
+    decision: Literal["confirm", "reject"]
+
+
+class StorefrontBulkDecisionBody(StorefrontStrictBody):
+    items: list[StorefrontBulkDecisionItem] = Field(min_length=1, max_length=100)
+    reason: str = Field(default="", max_length=255)
+
+
+class StorefrontWalletAdjustmentBody(StorefrontStrictBody):
+    amount_toman_signed: int = Field(ge=-(10**12), le=10**12)
+    reason: str = Field(min_length=3, max_length=255)

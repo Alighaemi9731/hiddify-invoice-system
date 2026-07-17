@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.86.0 - 2026-07-17
+
+Storefront management portal Release D — the wallet & top-up operations center. Adds one additive
+database migration (`525855401b89`, applied automatically on upgrade); no manual steps.
+
+### Added
+
+- **Reseller owners can now run their storefront's money operations from the web portal.** A top-up
+  queue (pending) + history with filters (status, method, amount, date, search), a receipt/TXID
+  viewer, and per-request **confirm / reject / confirm-with-a-corrected-amount** — plus a **bulk
+  review** to decide up to 100 at once. Each customer page also gains a **manual wallet adjustment**
+  (credit or debit with a reason); an over-debit is safely floored at zero and the applied amount is
+  shown distinctly from the requested one.
+- Every money decision — from the **portal or the Telegram bot** — now goes through one shared,
+  row-locked, audited command, so a duplicate tap or a retry can never double-credit, and the
+  original requested amount is preferred even after a correction. Owners **and their co-admins** can
+  make these decisions (matching the existing bot).
+
+### Notes
+
+- Every wallet ledger row now carries its shop identity (backfilled). The wallet balance shown in the
+  customer view is now editable via the adjustment form. Payment receipts are streamed securely and
+  their file paths are never exposed. Durable customer notification of a decision arrives in the next
+  slice; for now it is best-effort.
+
 ## 1.85.0 - 2026-07-17
 
 Storefront management portal Release C — customers & subscriptions. Adds one additive database

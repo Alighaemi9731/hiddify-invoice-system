@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 import uuid
 from typing import Any, Literal
@@ -15,6 +16,7 @@ from aiogram.exceptions import (
     TelegramUnauthorizedError,
 )
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
@@ -24,7 +26,9 @@ from app.core.storefront_access import (
     get_storefront_access,
     list_owned_storefronts,
 )
+from app.models import StorefrontWalletTxn
 from app.schemas.portal_storefront import (
+    StorefrontBulkDecisionBody,
     StorefrontChannelBody,
     StorefrontChannelOut,
     StorefrontCustomerPreviewOut,
@@ -55,8 +59,10 @@ from app.schemas.portal_storefront import (
     StorefrontShopStateBody,
     StorefrontShopStateOut,
     StorefrontSummaryOut,
+    StorefrontTopupDecisionBody,
     StorefrontTrialSettingsBody,
     StorefrontTrialSettingsOut,
+    StorefrontWalletAdjustmentBody,
 )
 from app.services import (
     settings_service,
@@ -1023,6 +1029,153 @@ async def storefront_order_delete(
     try:
         result = await storefront_admin.delete_order(
             session, access.shop.id, order_id, command, reason=body.reason)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+# ── wallet & top-up operations center (plan 005) ─────────────────────────────
+_TOPUP_STATUSES = {"pending", "confirmed", "rejected"}
+_TOPUP_METHODS = {"card", "usdt", "ton"}
+_PROOF_ROOT = "data/storefront_proofs"
+
+
+@router.get("/{shop_id}/topups")
+async def storefront_topups_list(
+    shop_id: int,
+    status: str | None = Query(None),
+    method: str | None = Query(None),
+    min_amount: int | None = Query(None, ge=1, le=10**12),
+    max_amount: int | None = Query(None, ge=1, le=10**12),
+    date_from: dt.date | None = Query(None, alias="from"),
+    date_to: dt.date | None = Query(None, alias="to"),
+    q: str | None = Query(None),
+    cursor: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    if status is not None and status not in _TOPUP_STATUSES:
+        raise _bad("invalid_status")
+    if method is not None and method not in _TOPUP_METHODS:
+        raise _bad("invalid_method")
+    if q is not None and not q.strip().isdigit() and len(q.strip()) < 3:
+        raise _bad("query_too_short")
+    if date_from is not None and date_to is not None and (date_to - date_from).days > 366:
+        raise _bad("date_span_too_large")
+    dt_from = dt.datetime.combine(date_from, dt.time.min, dt.timezone.utc) if date_from else None
+    dt_to = dt.datetime.combine(date_to, dt.time.max, dt.timezone.utc) if date_to else None
+    try:
+        items, next_cursor = await storefront_customers.list_topups_keyset(
+            session, access.shop.id, status=status, method=method, min_amount=min_amount,
+            max_amount=max_amount, dt_from=dt_from, dt_to=dt_to, q=q, cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    return {"items": items, "next_cursor": next_cursor, "total_hint": None}
+
+
+@router.get("/{shop_id}/topups/{txn_id}")
+async def storefront_topup_detail(
+    shop_id: int, txn_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    detail = await storefront_customers.topup_detail(session, access.shop.id, txn_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    return detail
+
+
+@router.get("/{shop_id}/topups/{txn_id}/proof")
+async def storefront_topup_proof(
+    shop_id: int, txn_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    txn = await session.get(StorefrontWalletTxn, txn_id)
+    # Uniform 404 for foreign / non-topup / no-proof / missing-file / path-escape — no existence leak,
+    # and NEVER derive authorization from the filename.
+    if txn is None or txn.storefront_bot_id != access.shop.id or txn.kind != "topup" or not txn.proof_path:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    root = os.path.realpath(_PROOF_ROOT)
+    real = os.path.realpath(txn.proof_path)
+    if not real.startswith(root + os.sep) or not os.path.isfile(real):
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+
+    def _iter():  # noqa: ANN202
+        with open(real, "rb") as fh:
+            while chunk := fh.read(65536):
+                yield chunk
+
+    return StreamingResponse(
+        _iter(), media_type="image/jpeg",
+        headers={"Content-Disposition": f'inline; filename="proof_{txn_id}.jpg"'})
+
+
+@router.post(
+    "/{shop_id}/topups/{txn_id}/decision",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_topup_decision(
+    shop_id: int, txn_id: int,
+    body: StorefrontTopupDecisionBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.set_topup_decision(
+            session, access.shop.id, txn_id, command,
+            decision=body.decision, corrected_amount=body.corrected_amount, reason=body.reason)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.post(
+    "/{shop_id}/topups/bulk-decisions",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_topups_bulk(
+    shop_id: int,
+    body: StorefrontBulkDecisionBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    items = [{"txn_id": i.txn_id, "decision": i.decision} for i in body.items]
+    try:
+        result = await storefront_admin.bulk_topup_decisions(
+            session, access.shop.id, command, items=items, reason=body.reason)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.post(
+    "/{shop_id}/customers/{customer_id}/wallet-adjustments",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_wallet_adjustment(
+    shop_id: int, customer_id: int,
+    body: StorefrontWalletAdjustmentBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.adjust_wallet(
+            session, access.shop.id, customer_id, command,
+            amount_toman_signed=body.amount_toman_signed, reason=body.reason)
     except storefront_admin.AdminCommandError as exc:
         _raise_admin_error(exc)
     return _mutation_dict(response, result)

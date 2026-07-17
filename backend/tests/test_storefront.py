@@ -1052,7 +1052,8 @@ def test_reaper_completes_existing_and_refunds_missing(tmp_path, monkeypatch):
                                 days=30, price_toman=50_000, status="pending", panel_user_uuid="gone")
             s.add_all([a, b])
             await s.flush()
-            s.add(StorefrontWalletTxn(customer_id=cust.id, kind="purchase", amount_toman=-50_000,
+            s.add(StorefrontWalletTxn(customer_id=cust.id, storefront_bot_id=cust.storefront_bot_id,
+                                      kind="purchase", amount_toman=-50_000,
                                       status="done", order_id=b.id))
             await s.commit()
             aid, bid, cid = a.id, b.id, cust.id
@@ -1183,7 +1184,8 @@ def test_retention_purges_tire_kickers_keeps_ledger(tmp_path):
             await s.flush()
             s.add(StorefrontOrder(customer_id=b.id, panel_id=bot.panel_id, label="x", gb=10, days=30,
                                   price_toman=0, status="provisioned", panel_user_uuid="u1"))
-            s.add(StorefrontWalletTxn(customer_id=c.id, kind="topup", amount_toman=100_000,
+            s.add(StorefrontWalletTxn(customer_id=c.id, storefront_bot_id=c.storefront_bot_id,
+                                      kind="topup", amount_toman=100_000,
                                       status="confirmed"))
             # junk for B that should be swept (failed order, old)
             junk = StorefrontOrder(customer_id=b.id, panel_id=bot.panel_id, label="j", gb=1, days=1,

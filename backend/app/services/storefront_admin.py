@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import logging
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Literal
 
 from sqlalchemy import select, update
@@ -26,8 +28,11 @@ from app.models import (
     StorefrontCustomer,
     StorefrontOrder,
     StorefrontPlan,
+    StorefrontWalletTxn,
 )
 from app.services import storefront, storefront_audit
+
+log = logging.getLogger("bot.storefront")
 
 Source = Literal["bot", "portal", "system"]
 _BSC_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
@@ -1489,3 +1494,232 @@ async def renew_order(
     raise AdminCommandError(
         code, result.message or reason, response_status=status,
         response_body={"error": reason, "order_id": order_id})
+
+
+# ── wallet & top-up money commands (plan 005) ────────────────────────────────
+# Money decisions (top-up confirm/reject, manual wallet adjust, bulk) are ENTITY commands
+# (external_io=False, Idempotency-Key only). They wrap the existing row-locked wallet cores
+# (storefront_wallet._confirm_topup_core/_reject_topup_core/_manual_adjust_core) so the money write,
+# the audit event and the idempotency finalize all COMMIT in ONE transaction (`_execute_entity`).
+# The wallet cores' FOR-UPDATE lock + status re-check remain the exactly-once money authority.
+
+
+async def _owned_topup(
+    session: AsyncSession, shop_id: int, txn_id: int
+) -> StorefrontWalletTxn:
+    txn = await session.get(StorefrontWalletTxn, txn_id)
+    if txn is None or txn.storefront_bot_id != shop_id or txn.kind != "topup":
+        raise AdminCommandError("not_found", "Top-up not found")
+    return txn
+
+
+async def _notify_topup_decision(
+    session: AsyncSession, shop_id: int, txn_id: int, *, decision: str, credited: int,
+) -> None:
+    """Best-effort post-commit customer notification (plan 006 makes this a durable queue). Never
+    raises; a failure cannot roll back the already-committed money fact."""
+    try:
+        from aiogram import Bot
+
+        from app.core import crypto
+        shop = await session.get(StorefrontBot, shop_id)
+        txn = await session.get(StorefrontWalletTxn, txn_id)
+        if shop is None or txn is None:
+            return
+        cust = await session.get(StorefrontCustomer, txn.customer_id)
+        token = crypto.decrypt(shop.bot_token_enc) if shop.bot_token_enc else None
+        if not (cust and cust.telegram_id and token):
+            return
+        text = (
+            f"✅ شارژِ کیفِ پولِ شما به مبلغِ {int(credited):,} تومان تأیید شد."
+            if decision == "confirm"
+            else "❌ درخواستِ شارژِ کیفِ پولِ شما تأیید نشد."
+        )
+        tg = Bot(token=token)
+        try:
+            await tg.send_message(cust.telegram_id, text)
+        finally:
+            await tg.session.close()
+    except Exception:  # noqa: BLE001 — notification is best-effort; money already committed
+        log.warning("top-up decision notify failed (best-effort)", exc_info=True)
+
+
+async def adjust_wallet(
+    session: AsyncSession, shop_id: int, customer_id: int, ctx: CommandContext, *,
+    amount_toman_signed: int, reason: str,
+) -> CommandResult:
+    """Manually credit (+) or debit (−) a customer's wallet. Overdraw is clamped to zero, so the
+    APPLIED delta can differ from the requested — both are reported. Idempotent + audited."""
+    from app.services import storefront_wallet
+    if int(amount_toman_signed) == 0:
+        raise AdminCommandError("validation", "amount must be non-zero")
+    reason = (reason or "").strip()
+    if not 3 <= len(reason) <= 255:
+        raise AdminCommandError("validation", "reason must be 3..255 characters")
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"customer_id": int(customer_id), "amount_toman_signed": int(amount_toman_signed),
+              "reason": reason}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="wallet.adjust", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        cust = await _owned_customer(session, shop_id, customer_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="wallet.adjust", command=command, exc=exc)
+        raise
+    old_balance = int(storefront_wallet.balance(cust))
+
+    async def mutate() -> _Mutation:
+        txn = await storefront_wallet._manual_adjust_core(
+            session, cust, int(amount_toman_signed), note=reason)
+        applied = int(Decimal(str(txn.amount_toman)))
+        new_balance = int(storefront_wallet.balance(cust))
+        # Derive old from new−applied so it's accurate even if a concurrent adjust moved the balance
+        # between our pre-lock read and the locked mutation (the row lock refreshed it inside the core).
+        body = {"ledger_id": txn.id, "requested_delta": int(amount_toman_signed),
+                "applied_delta": applied, "old_balance": new_balance - applied,
+                "new_balance": new_balance}
+        return _Mutation(body, body, "wallet", customer_id)
+
+    return await _execute_entity(
+        session, shop, ctx, action="wallet.adjust", command=command,
+        before={"balance": old_balance}, mutate=mutate)
+
+
+async def set_topup_decision(
+    session: AsyncSession, shop_id: int, txn_id: int, ctx: CommandContext, *,
+    decision: Literal["confirm", "reject"], corrected_amount: int | None = None, reason: str = "",
+) -> CommandResult:
+    """Confirm or reject a pending top-up (the row-locked wallet core is the money authority). An
+    optional corrected credited amount is allowed only on confirm; a reason is mandatory for a
+    rejection or a correction. Idempotent (a re-decided top-up is a no-op `already_decided`)."""
+    from app.services import storefront_wallet
+    if decision not in ("confirm", "reject"):
+        raise AdminCommandError("validation", "decision must be confirm or reject")
+    reason = (reason or "").strip()
+    if corrected_amount is not None:
+        if decision != "confirm":
+            raise AdminCommandError("validation", "corrected_amount is only allowed with confirm")
+        if not 1 <= int(corrected_amount) <= 10**12:
+            raise AdminCommandError("validation", "corrected_amount out of range")
+    if (decision == "reject" or corrected_amount is not None) and not 3 <= len(reason) <= 255:
+        raise AdminCommandError("validation", "reason must be 3..255 characters")
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"txn_id": int(txn_id), "decision": decision,
+              "corrected_amount": int(corrected_amount) if corrected_amount is not None else None,
+              "reason": reason}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="topup.decide", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        txn0 = await _owned_topup(session, shop_id, txn_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="topup.decide", command=command, exc=exc)
+        raise
+    before = {"status": txn0.status, "amount_toman": int(Decimal(str(txn0.amount_toman or 0)))}
+    holder: dict = {}
+
+    async def mutate() -> _Mutation:
+        if decision == "confirm":
+            changed, t = await storefront_wallet._confirm_topup_core(
+                session, txn_id, expected_storefront_bot_id=shop.id, amount_toman=corrected_amount)
+        else:
+            changed, t = await storefront_wallet._reject_topup_core(
+                session, txn_id, expected_storefront_bot_id=shop.id)
+        holder["changed"] = bool(changed)
+        holder["credited"] = (
+            int(Decimal(str(t.amount_toman))) if (t is not None and decision == "confirm") else None)
+        body = {
+            "txn_id": int(txn_id), "decision": decision, "changed": bool(changed),
+            "already_decided": (not changed), "credited": holder["credited"],
+            "requested": (int(Decimal(str(t.requested_amount_toman)))
+                          if (t is not None and t.requested_amount_toman is not None) else None),
+            "status": t.status if t is not None else None,
+        }
+        return _Mutation(body, body, "wallet_txn", txn_id)
+
+    result = await _execute_entity(
+        session, shop, ctx, action="topup.decide", command=command, before=before, mutate=mutate)
+    # Portal path notifies the customer best-effort AFTER commit; the bot path notifies itself.
+    if ctx.source == "portal" and holder.get("changed"):
+        await _notify_topup_decision(
+            session, shop_id, txn_id, decision=decision, credited=holder.get("credited") or 0)
+    return result
+
+
+async def bulk_topup_decisions(
+    session: AsyncSession, shop_id: int, ctx: CommandContext, *,
+    items: list[dict], reason: str = "",
+) -> CommandResult:
+    """Decide up to 100 top-ups in one request. The PARENT idempotency key covers the whole item
+    set; each item runs a full `set_topup_decision` under a DETERMINISTIC child key so each commits
+    independently and a crashed batch replays completed children + continues the rest. NEVER
+    all-or-nothing: an already-committed child is never rolled back."""
+    if not items or len(items) > 100:
+        raise AdminCommandError("validation", "items must be 1..100")
+    seen: set[int] = set()
+    norm: list[dict] = []
+    for it in items:
+        try:
+            tid = int(it["txn_id"])
+            dec = str(it["decision"]).strip().lower()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AdminCommandError("validation", "each item needs txn_id + decision") from exc
+        if dec not in ("confirm", "reject"):
+            raise AdminCommandError("validation", "decision must be confirm or reject")
+        if tid in seen:
+            raise AdminCommandError("validation", "duplicate txn_id in batch")
+        seen.add(tid)
+        norm.append({"txn_id": tid, "decision": dec})
+    reason = (reason or "").strip()
+    if any(i["decision"] == "reject" for i in norm) and not 3 <= len(reason) <= 255:
+        raise AdminCommandError("validation", "reason 3..255 required when the batch has a reject")
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    parent_req = {"items": sorted((i["txn_id"], i["decision"]) for i in norm), "reason": reason}
+    parent = await storefront_audit.claim_command(
+        session, shop_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+        idempotency_key=ctx.idempotency_key, action="topup.bulk_decide", request=parent_req)
+    if parent.outcome == "conflict":
+        raise AdminCommandError("idempotency_conflict", "bulk key payload conflict")
+    if parent.outcome == "in_flight":
+        raise AdminCommandError("in_flight", "a bulk decision is already in progress")
+    if parent.outcome == "replay":
+        return _replay_result(parent.command, ctx)
+    parent_command_id = parent.command.id
+    await session.commit()  # make the parent claim durable before running children
+
+    counts = {"changed": 0, "already_decided": 0, "not_found": 0, "failed": 0}
+    results: list[dict] = []
+    parent_key = ctx.idempotency_key
+    for i in norm:
+        tid, dec = i["txn_id"], i["decision"]
+        child_key = hashlib.sha256(f"{parent_key}|{tid}|{dec}".encode()).hexdigest()
+        child_ctx = CommandContext(
+            actor_telegram_id=ctx.actor_telegram_id, actor_role=ctx.actor_role, source=ctx.source,
+            idempotency_key=child_key, expected_version=1, correlation_id=ctx.correlation_id or parent_key)
+        try:
+            child = await set_topup_decision(
+                session, shop_id, tid, child_ctx,
+                decision=dec, reason=(reason if dec == "reject" else ""))
+            body = child.body if isinstance(child.body, dict) else {}
+            res = "changed" if body.get("changed") else "already_decided"
+        except AdminCommandError as exc:
+            res = "not_found" if exc.code == "not_found" else "failed"
+        except Exception:  # noqa: BLE001 — one bad item must not abort the batch
+            await session.rollback()
+            log.warning("bulk top-up child failed", exc_info=True)
+            res = "failed"
+        results.append({"txn_id": tid, "result": res})
+        counts[res] = counts.get(res, 0) + 1
+
+    agg = storefront_audit.safe_cached_response({"results": results, "counts": counts})
+    parent_command = await session.get(StorefrontApiCommand, parent_command_id)
+    if parent_command is not None:
+        await storefront_audit.finalize_command(
+            session, parent_command, succeeded=True, response_status=200, response_body=agg)
+    await session.commit()
+    return CommandResult(200, agg, await _current_version(session, shop_id))

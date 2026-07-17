@@ -349,3 +349,94 @@ export interface OrderOpResult {
 export interface CustomerBanResult {
   customer: { id: number; banned: boolean };
 }
+
+// ── wallet & top-up operations center (plan 005) ─────────────────────────────
+
+export type TopupStatus = "pending" | "confirmed" | "rejected";
+export type TopupMethod = "card" | "usdt" | "ton";
+
+export interface TopupCustomerRef {
+  id: number;
+  telegram_id: number;
+  name: string | null;
+  username: string | null;
+}
+
+export interface TopupListItem {
+  id: number;
+  customer: TopupCustomerRef;
+  // The current/credited value; `requested_amount_toman` preserves the customer's original request.
+  amount_toman: number;
+  requested_amount_toman: number | null;
+  status: string;
+  method: string | null;
+  chain: string | null;
+  txid: string | null;
+  has_proof: boolean;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export interface TopupDetail extends TopupListItem {
+  note: string | null;
+  credit_code_id: number | null;
+}
+
+export interface TopupListFilters {
+  status?: TopupStatus;
+  method?: TopupMethod;
+  min_amount?: number;
+  max_amount?: number;
+  from?: string;
+  to?: string;
+  q?: string;
+}
+
+export interface TopupDecisionBody {
+  decision: "confirm" | "reject";
+  corrected_amount?: number;
+  reason?: string;
+}
+
+export interface TopupDecisionResult {
+  txn_id: number;
+  decision: string;
+  changed: boolean;
+  already_decided: boolean;
+  credited: number | null;
+  requested: number | null;
+  status: string | null;
+}
+
+export type BulkItemDecision = "confirm" | "reject";
+export type BulkItemResult = "changed" | "already_decided" | "not_found" | "failed";
+
+export interface BulkDecisionItem {
+  txn_id: number;
+  decision: BulkItemDecision;
+}
+
+export interface BulkDecisionBody {
+  items: BulkDecisionItem[];
+  reason?: string;
+}
+
+export interface BulkDecisionResult {
+  results: Array<{ txn_id: number; result: BulkItemResult }>;
+  counts: { changed: number; already_decided: number; not_found: number; failed: number };
+}
+
+export interface WalletAdjustmentBody {
+  amount_toman_signed: number;
+  reason: string;
+}
+
+export interface WalletAdjustmentResult {
+  ledger_id: number;
+  // The requested delta and the delta ACTUALLY applied can differ: a debit past zero is clamped so
+  // the wallet floors at 0. The UI must show both distinctly when they diverge.
+  requested_delta: number;
+  applied_delta: number;
+  old_balance: number;
+  new_balance: number;
+}

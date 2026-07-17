@@ -61,6 +61,9 @@ async def create_topup(
     txn = StorefrontWalletTxn(
         customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
         kind="topup", amount_toman=Decimal(str(int(amount_toman))),
+        # The customer's ORIGINALLY requested amount — immutable. `amount_toman` is later overwritten
+        # with the admin-credited value on confirm (esp. crypto), so this preserves requested-vs-credited.
+        requested_amount_toman=Decimal(str(int(amount_toman))),
         status="pending", method=method, proof_path=proof_path, txid=norm_txid, chain=chain,
         credit_code_id=credit_code_id,
     )
@@ -75,8 +78,14 @@ async def create_topup(
 
 async def _get_for_update(session: AsyncSession, model, pk: int):  # noqa: ANN001, ANN202
     """Fetch a row by id under a write lock (Postgres `SELECT … FOR UPDATE`; a no-op on SQLite,
-    where writes serialize anyway). Lets two admins decide the same top-up without a double credit."""
-    stmt = select(model).where(model.id == pk)
+    where writes serialize anyway). Lets two admins decide the same top-up without a double credit.
+
+    `populate_existing=True` is CRITICAL: if the row is already in the session's identity map (e.g. a
+    customer loaded by an ownership check before this lock), a plain FOR UPDATE query acquires the lock
+    but returns the CACHED instance with its STALE attributes — so a concurrent adjustment computed off
+    the stale balance would silently lose the other's update. Refreshing under the lock reads the true
+    current row."""
+    stmt = select(model).where(model.id == pk).execution_options(populate_existing=True)
     try:
         stmt = stmt.with_for_update()
     except Exception:  # noqa: BLE001 — dialect without row locks
@@ -84,18 +93,13 @@ async def _get_for_update(session: AsyncSession, model, pk: int):  # noqa: ANN00
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def confirm_topup(
+async def _confirm_topup_core(
     session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int,
     amount_toman: int | None = None,
 ) -> tuple[bool, StorefrontWalletTxn | None]:
-    """Confirm a pending top-up and credit the wallet. `amount_toman` lets the admin set the credited
-    Toman (used for crypto deposits — manual, no rates). Atomic + idempotent: the txn row is locked
-    and re-checked, so if a second admin taps «تأیید» concurrently they block until the first commits
-    and then see it's no longer pending → a no-op (never a double credit). Returns (changed, txn).
-
-    `expected_storefront_bot_id` enforces TENANT ISOLATION (F3): txn ids are a global sequence and
-    the callback data is client-controllable, so an admin may only decide a top-up whose customer
-    belongs to THEIR OWN storefront — otherwise a shop A admin could credit/re-amount shop B's deposit."""
+    """Commit-less core of `confirm_topup` (row lock + tenant re-check + credit + optional code bonus).
+    Ends WITHOUT committing so the shared money command can wrap it in ONE audited transaction (audit +
+    idempotency finalize + the money write commit atomically). The public `confirm_topup` wrapper commits."""
     txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
         return False, txn
@@ -126,19 +130,38 @@ async def confirm_topup(
             session, txn.credit_code_id, storefront_bot_id=customer.storefront_bot_id,
             topup_toman=int(credited), customer_id=customer.id)
     customer.wallet_balance_toman = float(balance(customer) + credited)
-    txn.amount_toman = float(credited)
+    txn.amount_toman = float(credited)   # NOTE: requested_amount_toman is immutable and untouched
     txn.status = "confirmed"
     txn.decided_at = _now()
     if q is not None and q.ok and q.bonus_toman > 0 and q.code_id is not None:
         bonus_txn = StorefrontWalletTxn(
-            customer_id=customer.id, kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
+            customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+            kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
             status="done", note="بونوسِ کدِ شارژ", decided_at=_now())
         session.add(bonus_txn)
         await session.flush()
         customer.wallet_balance_toman = float(balance(customer) + q.bonus_toman)
         await storefront_credit.record(session, q.code_id, customer.id, bonus_txn.id, q.bonus_toman)
-    await session.commit()
     return True, txn
+
+
+async def confirm_topup(
+    session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int,
+    amount_toman: int | None = None,
+) -> tuple[bool, StorefrontWalletTxn | None]:
+    """Confirm a pending top-up and credit the wallet. `amount_toman` lets the admin set the credited
+    Toman (used for crypto deposits — manual, no rates). Atomic + idempotent: the txn row is locked
+    and re-checked, so if a second admin taps «تأیید» concurrently they block until the first commits
+    and then see it's no longer pending → a no-op (never a double credit). Returns (changed, txn).
+
+    `expected_storefront_bot_id` enforces TENANT ISOLATION (F3): txn ids are a global sequence and
+    the callback data is client-controllable, so an admin may only decide a top-up whose customer
+    belongs to THEIR OWN storefront — otherwise a shop A admin could credit/re-amount shop B's deposit."""
+    changed, txn = await _confirm_topup_core(
+        session, txn_id, expected_storefront_bot_id=expected_storefront_bot_id,
+        amount_toman=amount_toman)
+    await session.commit()
+    return changed, txn
 
 
 async def apply_gift_code(session: AsyncSession, customer_id: int, storefront_bot_id: int, code_str: str):  # noqa: ANN201
@@ -156,7 +179,8 @@ async def apply_gift_code(session: AsyncSession, customer_id: int, storefront_bo
         await session.rollback()
         return q
     gift_txn = StorefrontWalletTxn(
-        customer_id=customer_id, kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
+        customer_id=customer_id, storefront_bot_id=storefront_bot_id,
+        kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
         status="done", note="کدِ هدیه", decided_at=_now())
     session.add(gift_txn)
     await session.flush()
@@ -166,12 +190,10 @@ async def apply_gift_code(session: AsyncSession, customer_id: int, storefront_bo
     return q
 
 
-async def reject_topup(
+async def _reject_topup_core(
     session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int
 ) -> tuple[bool, StorefrontWalletTxn | None]:
-    """Reject a pending top-up (no credit). Atomic + idempotent (locks + re-checks the txn row so a
-    concurrent confirm/reject by another admin can't both act). `expected_storefront_bot_id` enforces
-    tenant isolation (F3), same as confirm_topup. Returns (changed, txn)."""
+    """Commit-less core of `reject_topup` (row lock + tenant re-check). The caller commits."""
     txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
         return False, txn
@@ -182,8 +204,45 @@ async def reject_topup(
         return False, txn  # missing / cross-tenant — refuse
     txn.status = "rejected"
     txn.decided_at = _now()
-    await session.commit()
     return True, txn
+
+
+async def reject_topup(
+    session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int
+) -> tuple[bool, StorefrontWalletTxn | None]:
+    """Reject a pending top-up (no credit). Atomic + idempotent (locks + re-checks the txn row so a
+    concurrent confirm/reject by another admin can't both act). `expected_storefront_bot_id` enforces
+    tenant isolation (F3), same as confirm_topup. Returns (changed, txn)."""
+    changed, txn = await _reject_topup_core(
+        session, txn_id, expected_storefront_bot_id=expected_storefront_bot_id)
+    await session.commit()
+    return changed, txn
+
+
+async def _manual_adjust_core(
+    session: AsyncSession, customer: StorefrontCustomer, amount_toman_signed: int, *, note: str = ""
+) -> StorefrontWalletTxn:
+    """Commit-less core of `manual_adjust` (row lock + overdraw clamp-to-zero). The caller commits.
+    The returned txn's `amount_toman` is the ACTUAL applied delta (which differs from the requested
+    signed amount when a debit is clamped at zero)."""
+    locked = await _get_for_update(session, StorefrontCustomer, customer.id)
+    if locked is not None:
+        customer = locked
+    delta = Decimal(str(int(amount_toman_signed)))
+    new_balance = balance(customer) + delta
+    if new_balance < 0:
+        new_balance = Decimal(0)
+        delta = new_balance - balance(customer)   # the ACTUAL movement (clamped)
+    customer.wallet_balance_toman = float(new_balance)
+    txn = StorefrontWalletTxn(
+        customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+        kind="manual_credit" if delta >= 0 else "manual_debit",
+        amount_toman=delta, status="done", method="manual", note=(note or "")[:255],
+        decided_at=_now(),
+    )
+    session.add(txn)
+    await session.flush()
+    return txn
 
 
 async def manual_adjust(
@@ -193,22 +252,7 @@ async def manual_adjust(
 
     Re-reads the customer under a row lock before the read-modify-write so two admins adjusting
     the same wallet at once (realistic now that co-admins share the panel) can't lose an update."""
-    locked = await _get_for_update(session, StorefrontCustomer, customer.id)
-    if locked is not None:
-        customer = locked
-    delta = Decimal(str(int(amount_toman_signed)))
-    new_balance = balance(customer) + delta
-    if new_balance < 0:
-        new_balance = Decimal(0)
-        delta = new_balance - balance(customer)
-    customer.wallet_balance_toman = float(new_balance)
-    txn = StorefrontWalletTxn(
-        customer_id=customer.id,
-        kind="manual_credit" if delta >= 0 else "manual_debit",
-        amount_toman=delta, status="done", method="manual", note=(note or "")[:255],
-        decided_at=_now(),
-    )
-    session.add(txn)
+    txn = await _manual_adjust_core(session, customer, amount_toman_signed, note=note)
     await session.commit()
     return txn
 
@@ -224,7 +268,9 @@ async def charge_purchase(
     `operation_id` links the debit to its durable StorefrontOperation (F4/F11) so the reconciler can
     tell whether a crashed renewal actually charged and reverse it exactly once."""
     price = Decimal(str(int(price_toman)))
-    stmt = select(StorefrontCustomer).where(StorefrontCustomer.id == customer_id)
+    # populate_existing so a pre-loaded customer's balance is refreshed under the lock (no lost update).
+    stmt = select(StorefrontCustomer).where(
+        StorefrontCustomer.id == customer_id).execution_options(populate_existing=True)
     try:
         stmt = stmt.with_for_update()
     except Exception:  # noqa: BLE001 — sqlite has no row locks; the test path is single-threaded
@@ -234,7 +280,8 @@ async def charge_purchase(
         return False, None
     customer.wallet_balance_toman = float(balance(customer) - price)
     txn = StorefrontWalletTxn(
-        customer_id=customer.id, kind="purchase", amount_toman=-price, status="done",
+        customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+        kind="purchase", amount_toman=-price, status="done",
         order_id=order_id, operation_id=operation_id, decided_at=_now(),
     )
     session.add(txn)

@@ -37,6 +37,7 @@ from app.models import (
     StorefrontCustomer,
     StorefrontOrder,
     StorefrontPlan,
+    StorefrontWalletTxn,
 )
 from app.services import (
     broadcast,
@@ -1683,21 +1684,33 @@ async def _strip_buttons(cb: CallbackQuery) -> None:
         pass
 
 
+_BOT_REJECT_REASON = "رد شده توسط مدیر از طریق ربات"
+
+
 @storefront_router.callback_query(F.data.startswith("sfok:"))
 async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
     txn_id = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         sf, reseller, is_admin = await _resolve(s, bot, cb.from_user)
-        if not is_admin:
+        if not (is_admin and sf):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        changed, txn = await storefront_wallet.confirm_topup(
-            s, txn_id, expected_storefront_bot_id=sf.id if sf else 0)
-        if not changed:
+        ctx = storefront_admin.CommandContext(
+            actor_telegram_id=cb.from_user.id, actor_role="admin", source="bot",
+            idempotency_key=f"sf-topup:{cb.id}", expected_version=1, correlation_id=f"sf-topup:{cb.id}")
+        try:
+            result = await storefront_admin.set_topup_decision(s, sf.id, txn_id, ctx, decision="confirm")
+        except storefront_admin.AdminCommandError:
             await _strip_buttons(cb)
             await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
             return
-        cust = await s.get(StorefrontCustomer, txn.customer_id)
+        body = result.body if isinstance(result.body, dict) else {}
+        if not body.get("changed"):
+            await _strip_buttons(cb)
+            await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
+            return
+        txn = await s.get(StorefrontWalletTxn, txn_id)
+        cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
     await _strip_buttons(cb)
     await cb.message.answer(rtl(f"✅ شارژِ #{txn_id} تأیید و کیفِ پول شارژ شد."))
     if cust:
@@ -1712,14 +1725,26 @@ async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
 @storefront_router.callback_query(F.data.startswith("sfno:"))
 async def sf_topup_no(cb: CallbackQuery, bot: Bot) -> None:
     txn_id = int(cb.data.split(":")[1])
+    changed = False
+    cust = None
     async with SessionLocal() as s:
         sf, reseller, is_admin = await _resolve(s, bot, cb.from_user)
-        if not is_admin:
+        if not (is_admin and sf):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        changed, txn = await storefront_wallet.reject_topup(
-            s, txn_id, expected_storefront_bot_id=sf.id if sf else 0)
-        cust = await s.get(StorefrontCustomer, txn.customer_id) if (changed and txn) else None
+        ctx = storefront_admin.CommandContext(
+            actor_telegram_id=cb.from_user.id, actor_role="admin", source="bot",
+            idempotency_key=f"sf-topup:{cb.id}", expected_version=1, correlation_id=f"sf-topup:{cb.id}")
+        try:
+            result = await storefront_admin.set_topup_decision(
+                s, sf.id, txn_id, ctx, decision="reject", reason=_BOT_REJECT_REASON)
+            body = result.body if isinstance(result.body, dict) else {}
+            changed = bool(body.get("changed"))
+            if changed:
+                txn = await s.get(StorefrontWalletTxn, txn_id)
+                cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
+        except storefront_admin.AdminCommandError:
+            changed = False
     await _strip_buttons(cb)
     if changed:
         await cb.message.answer(rtl(f"❌ شارژِ #{txn_id} رد شد."))
@@ -1743,10 +1768,13 @@ async def sf_topup_ok_amount(cb: CallbackQuery, state: FSMContext, bot: Bot) -> 
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.confirm_amount)
-    await state.update_data(confirm_txn=txn_id)
+    await state.update_data(confirm_txn=txn_id, sf_topup_key=f"sf-topup-amt:{cb.id}")
     await cb.message.answer(rtl("مبلغی که باید به کیفِ پولِ مشتری اضافه شود (تومان) را بفرستید:"),
                             reply_markup=kb.cancel_kb())
     await cb.answer()
+
+
+_BOT_CORRECTION_REASON = "مبلغ توسط مدیر از طریق ربات اصلاح شد"
 
 
 @storefront_router.message(SF.confirm_amount, F.text)
@@ -1757,14 +1785,28 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
     if not raw.isdigit() or int(raw) <= 0:
         await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
         return
+    key = str(data.get("sf_topup_key") or f"sf-topup-amt:{message.message_id}")
     await state.clear()
+    changed = False
+    cust = None
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
-        if not is_admin:
+        if not (is_admin and sf):
             return
-        changed, txn = await storefront_wallet.confirm_topup(
-            s, txn_id, expected_storefront_bot_id=sf.id if sf else 0, amount_toman=int(raw))
-        cust = await s.get(StorefrontCustomer, txn.customer_id) if (changed and txn) else None
+        ctx = storefront_admin.CommandContext(
+            actor_telegram_id=message.from_user.id, actor_role="admin", source="bot",
+            idempotency_key=key, expected_version=1, correlation_id=key)
+        try:
+            result = await storefront_admin.set_topup_decision(
+                s, sf.id, txn_id, ctx, decision="confirm", corrected_amount=int(raw),
+                reason=_BOT_CORRECTION_REASON)
+            body = result.body if isinstance(result.body, dict) else {}
+            changed = bool(body.get("changed"))
+            if changed:
+                txn = await s.get(StorefrontWalletTxn, txn_id)
+                cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
+        except storefront_admin.AdminCommandError:
+            changed = False
     if changed:
         await message.answer(rtl(f"✅ شارژِ #{txn_id} با مبلغِ {_toman(raw)} تومان تأیید شد."))
         if cust:
@@ -2411,10 +2453,13 @@ async def sf_adjust_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> Non
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.adjust_amount)
-    await state.update_data(adj_customer=int(cid), adj_sign=sign)
+    await state.update_data(adj_customer=int(cid), adj_sign=sign, adj_key=f"sf-adj:{cb.id}")
     await cb.message.answer(rtl(f"مبلغِ {'افزایش' if sign == '+' else 'کاهش'} (تومان) را بفرستید:"),
                             reply_markup=kb.cancel_kb())
     await cb.answer()
+
+
+_BOT_ADJUST_REASON = "تغییرِ دستیِ موجودی توسط مدیر از طریق ربات"
 
 
 @storefront_router.message(SF.adjust_amount, F.text)
@@ -2426,17 +2471,26 @@ async def sf_adjust_amount(message: Message, state: FSMContext, bot: Bot) -> Non
         return
     await state.clear()
     signed = int(raw) * (1 if data.get("adj_sign") == "+" else -1)
+    key = str(data.get("adj_key") or f"sf-adj:{message.message_id}")
+    customer_id = int(data.get("adj_customer") or 0)
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        cust = await s.get(StorefrontCustomer, int(data.get("adj_customer") or 0))
-        if cust is None or cust.storefront_bot_id != sf.id:
+        ctx = storefront_admin.CommandContext(
+            actor_telegram_id=message.from_user.id, actor_role="admin", source="bot",
+            idempotency_key=key, expected_version=1, correlation_id=key)
+        try:
+            await storefront_admin.adjust_wallet(
+                s, sf.id, customer_id, ctx, amount_toman_signed=signed, reason=_BOT_ADJUST_REASON)
+        except storefront_admin.AdminCommandError:
             await message.answer(rtl("مشتری پیدا نشد."))
             return
-        await storefront_wallet.manual_adjust(s, cust, signed, note="admin")
-        await message.answer(rtl(
-            f"✅ موجودیِ «{cust.name or cust.telegram_id}» اکنون {_toman(cust.wallet_balance_toman)} تومان است."))
+        cust = await s.get(StorefrontCustomer, customer_id)
+        if cust is not None:
+            await message.answer(rtl(
+                f"✅ موجودیِ «{cust.name or cust.telegram_id}» اکنون "
+                f"{_toman(cust.wallet_balance_toman)} تومان است."))
 
 
 @storefront_router.message(SF.support, F.text)

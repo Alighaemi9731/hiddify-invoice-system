@@ -229,13 +229,24 @@ describe("storefront customer detail", () => {
     expect(await screen.findByText(/این مشتری پیدا نشد/)).toBeInTheDocument();
   });
 
-  it("shows read-only wallet figures with no money-adjustment controls", async () => {
+  // Plan 005 intentionally REPLACES the old read-only wallet: the page now carries a manual
+  // wallet-adjustment form. This asserts the form exists, gates submit on a valid amount + reason,
+  // and stays read-only until both are provided.
+  it("shows the wallet figures with a manual adjustment form gated on amount + reason", async () => {
     mockDetail();
+    const user = userEvent.setup();
     renderStorefront("/portal/storefront/1/customers/5");
-    expect(await screen.findByText("کیف پول (فقط نمایش)")).toBeInTheDocument();
-    expect(screen.getByText("تغییر موجودی کیف پول از این صفحه امکان‌پذیر نیست.")).toBeInTheDocument();
-    // No top-up / credit / debit / balance-adjust actions on this page.
-    expect(screen.queryByRole("button", { name: /شارژ|افزودن موجودی|کسر|اعتبار|واریز|موجودی/ })).toBeNull();
+    expect(await screen.findByText("کیف پول")).toBeInTheDocument();
+    expect(screen.getByText("تنظیم دستی موجودی")).toBeInTheDocument();
+
+    const submit = screen.getByRole("button", { name: "ثبت تغییر موجودی" });
+    expect(submit).toBeDisabled();
+    await user.type(screen.getByLabelText(/مبلغ \(تومان\)/), "25000");
+    expect(submit).toBeDisabled(); // amount alone is not enough
+    await user.type(screen.getByLabelText(/دلیل/), "اص"); // < 3 chars
+    expect(submit).toBeDisabled();
+    await user.type(screen.getByLabelText(/دلیل/), "لاح");
+    expect(submit).toBeEnabled();
   });
 
   it("issues a single renew request for a double-click", async () => {

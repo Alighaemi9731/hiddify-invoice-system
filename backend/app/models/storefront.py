@@ -175,6 +175,11 @@ class StorefrontWalletTxn(Base, TimestampMixin):
         Index("uq_sfwallet_reversal_per_operation", "operation_id", unique=True,
               sqlite_where=text("kind = 'renew_reversal'"),
               postgresql_where=text("kind = 'renew_reversal'")),
+        # Plan 005: the top-up operations queue/history (per shop, by kind+status, newest first).
+        Index("ix_sfwallet_shop_kind_status_created",
+              "storefront_bot_id", "kind", "status", "created_at", "id"),
+        # Plan 005: a customer's ledger keyset (newest first).
+        Index("ix_sfwallet_customer_created", "customer_id", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -182,11 +187,16 @@ class StorefrontWalletTxn(Base, TimestampMixin):
         ForeignKey("storefront_customers.id", ondelete="CASCADE"), index=True
     )
     # Denormalized tenant (= customer.storefront_bot_id) so txid uniqueness can be scoped PER SHOP
-    # by a partial unique index (a cross-table join can't back a unique constraint). Nullable for
-    # non-crypto rows; the migration backfills it from the customer.
-    storefront_bot_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # by a partial unique index (a cross-table join can't back a unique constraint). NON-NULL for
+    # every ledger kind (plan 005): all writers populate it from the locked customer, and the
+    # migration backfilled + enforced it.
+    storefront_bot_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     kind: Mapped[str] = mapped_column(String(16))
     amount_toman: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    # The customer's ORIGINALLY requested top-up amount — immutable; only `create_topup` sets it.
+    # `amount_toman` is overwritten with the admin-credited value on confirm (esp. crypto), so this
+    # preserves requested-vs-credited for the audit. NULL for non-topup rows and legacy decided topups.
+    requested_amount_toman: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # card|usdt|ton|manual
     # Links a purchase/refund to its order so the reaper can reconcile money ↔ provisioning.

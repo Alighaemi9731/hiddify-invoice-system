@@ -85,7 +85,8 @@ async def _seed(session):  # noqa: ANN001, ANN202
         ("credit_bonus", 10_000, "done"), ("purchase", -30_000, "pending"),
     ]:
         session.add(StorefrontWalletTxn(
-            customer_id=a.id, kind=kind, amount_toman=amt, status=status,
+            customer_id=a.id, storefront_bot_id=a.storefront_bot_id, kind=kind,
+            amount_toman=amt, status=status,
             proof_path="/secret/proof.jpg", created_at=dt.datetime(2026, 7, 1, 2, tzinfo=UTC)))
     await session.commit()
     return owner, shop, other, a, b, c

@@ -330,3 +330,86 @@ async def order_detail(session: AsyncSession, shop_id: int, order_id: int) -> di
         "username": cust.username, "banned": cust.banned,
     }
     return dto
+
+
+# ── top-ups (plan 005) ───────────────────────────────────────────────────────
+def _topup_item_dto(txn: StorefrontWalletTxn, cust: StorefrontCustomer) -> dict:
+    """A top-up row for the ops queue. `amount_toman` is the current/credited value;
+    `requested_amount_toman` preserves the customer's original request. Never exposes proof_path."""
+    return {
+        "id": txn.id,
+        "customer": {"id": cust.id, "telegram_id": cust.telegram_id,
+                     "name": cust.name, "username": cust.username},
+        "amount_toman": int(Decimal(txn.amount_toman or 0)),
+        "requested_amount_toman": (
+            int(Decimal(txn.requested_amount_toman)) if txn.requested_amount_toman is not None else None),
+        "status": txn.status, "method": txn.method, "chain": txn.chain, "txid": txn.txid,
+        "has_proof": bool(txn.proof_path), "created_at": txn.created_at, "decided_at": txn.decided_at,
+    }
+
+
+async def list_topups_keyset(
+    session: AsyncSession, shop_id: int, *,
+    status: str | None = None, method: str | None = None,
+    min_amount: int | None = None, max_amount: int | None = None,
+    dt_from: dt.datetime | None = None, dt_to: dt.datetime | None = None,
+    q: str | None = None, cursor: str | None = None, limit: int = 25,
+) -> tuple[list[dict], str | None]:
+    where = [StorefrontWalletTxn.storefront_bot_id == shop_id, StorefrontWalletTxn.kind == "topup"]
+    if status:
+        where.append(StorefrontWalletTxn.status == status)
+    if method:
+        where.append(StorefrontWalletTxn.method == method)
+    if min_amount is not None:
+        where.append(StorefrontWalletTxn.amount_toman >= min_amount)
+    if max_amount is not None:
+        where.append(StorefrontWalletTxn.amount_toman <= max_amount)
+    if dt_from is not None:
+        where.append(StorefrontWalletTxn.created_at >= dt_from)
+    if dt_to is not None:
+        where.append(StorefrontWalletTxn.created_at <= dt_to)
+    if q:
+        s = q.strip()
+        if s.isdigit():
+            where.append(StorefrontCustomer.telegram_id == int(s))
+        else:
+            like = f"%{s}%"
+            where.append(or_(
+                StorefrontCustomer.name.ilike(like), StorefrontCustomer.username.ilike(like),
+                StorefrontWalletTxn.txid.ilike(like)))
+    if cursor:
+        c_at, c_id = storefront_cursor.decode_cursor(f"topups:{shop_id}", cursor)
+        where.append(or_(
+            StorefrontWalletTxn.created_at < c_at,
+            and_(StorefrontWalletTxn.created_at == c_at, StorefrontWalletTxn.id < c_id)))
+    rows = (
+        await session.execute(
+            select(StorefrontWalletTxn, StorefrontCustomer)
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontWalletTxn.customer_id)
+            .where(*where)
+            .order_by(StorefrontWalletTxn.created_at.desc(), StorefrontWalletTxn.id.desc())
+            .limit(limit + 1)
+        )
+    ).all()
+    page = rows[:limit]
+    next_cursor = (
+        storefront_cursor.encode_cursor(
+            endpoint=f"topups:{shop_id}", created_at=page[-1][0].created_at, row_id=page[-1][0].id)
+        if len(rows) > limit and page else None
+    )
+    items = [_topup_item_dto(txn, cust) for txn, cust in page]
+    return items, next_cursor
+
+
+async def topup_detail(session: AsyncSession, shop_id: int, txn_id: int) -> dict | None:
+    txn = await session.get(StorefrontWalletTxn, txn_id)
+    if txn is None or txn.storefront_bot_id != shop_id or txn.kind != "topup":
+        return None
+    cust = await session.get(StorefrontCustomer, txn.customer_id)
+    if cust is None:
+        return None
+    dto = _topup_item_dto(txn, cust)
+    dto["note"] = txn.note
+    dto["credit_code_id"] = txn.credit_code_id
+    dto["decided_at"] = txn.decided_at
+    return dto

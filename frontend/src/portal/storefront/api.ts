@@ -1,5 +1,7 @@
 import { portalApi } from "../portalClient";
 import type {
+  BulkDecisionBody,
+  BulkDecisionResult,
   CustomerBanResult,
   CustomerDetail,
   CustomerListFilters,
@@ -25,7 +27,14 @@ import type {
   StorefrontSettingsGroup,
   StorefrontSettings,
   StorefrontShop,
+  TopupDecisionBody,
+  TopupDecisionResult,
+  TopupDetail,
+  TopupListFilters,
+  TopupListItem,
   Versioned,
+  WalletAdjustmentBody,
+  WalletAdjustmentResult,
 } from "./types";
 
 export const storefrontQueryKeys = {
@@ -49,6 +58,10 @@ export const storefrontQueryKeys = {
     ["portal-storefronts", shopId, "customer", customerId, "ledger", filters] as const,
   order: (shopId: number, orderId: number) =>
     ["portal-storefronts", shopId, "order", orderId] as const,
+  topups: (shopId: number, filters: TopupListFilters) =>
+    ["portal-storefronts", shopId, "topups", filters] as const,
+  topup: (shopId: number, txnId: number) =>
+    ["portal-storefronts", shopId, "topup", txnId] as const,
 };
 
 const etagOf = (headers: Record<string, unknown>, configVersion?: number) =>
@@ -323,6 +336,75 @@ export const deleteOrder = (
   data: { confirm: "DELETE", reason },
   headers: entityHeaders(idempotencyKey),
 }).then((response) => mutationResult<OrderOpResult>(response));
+
+// ── wallet & top-up operations center (plan 005) ─────────────────────────────
+// Reads are plain lists; mutations carry ONLY an Idempotency-Key (entity edits, no If-Match).
+
+export const listTopups = (
+  shopId: number,
+  filters: TopupListFilters,
+  cursor?: string | null,
+  limit = 25,
+) => portalApi.get(`/api/portal/storefronts/${shopId}/topups`, {
+  params: {
+    status: filters.status || undefined,
+    method: filters.method || undefined,
+    min_amount: filters.min_amount ?? undefined,
+    max_amount: filters.max_amount ?? undefined,
+    from: filters.from || undefined,
+    to: filters.to || undefined,
+    q: filters.q || undefined,
+    cursor: cursor || undefined,
+    limit,
+  },
+}).then((response) => response.data as KeysetPage<TopupListItem>);
+
+export const getTopup = (shopId: number, txnId: number) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/topups/${txnId}`)
+    .then((response) => response.data as TopupDetail);
+
+// The raw GET path for the proof stream. Because the portal authenticates with a bearer header
+// (not a cookie), a plain <img src> would 401 — the proof is fetched as an authenticated blob
+// (getTopupProof) and shown via an object URL, mirroring openPortalPaymentProof.
+export const topupProofUrl = (shopId: number, txnId: number) =>
+  `/api/portal/storefronts/${shopId}/topups/${txnId}/proof`;
+
+// Fetch the proof as an ArrayBuffer, NOT responseType:"blob". Axios's blob response transform
+// calls `.stream()` on the mocked/undici Response, which throws under Node 22 (CI). We wrap the raw
+// bytes in a Blob ourselves; a 404 still rejects as a normal axios error, so isNotFound() holds.
+export const getTopupProof = (shopId: number, txnId: number) =>
+  portalApi.get(topupProofUrl(shopId, txnId), { responseType: "arraybuffer" })
+    .then((response) => new Blob([response.data as ArrayBuffer], {
+      type: (response.headers["content-type"] as string | undefined) || "image/jpeg",
+    }));
+
+export const decideTopup = (
+  shopId: number,
+  txnId: number,
+  body: TopupDecisionBody,
+  idempotencyKey: string,
+) => portalApi.post(`/api/portal/storefronts/${shopId}/topups/${txnId}/decision`, body, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<TopupDecisionResult>(response));
+
+export const bulkDecideTopups = (
+  shopId: number,
+  body: BulkDecisionBody,
+  idempotencyKey: string,
+) => portalApi.post(`/api/portal/storefronts/${shopId}/topups/bulk-decisions`, body, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<BulkDecisionResult>(response));
+
+export const adjustWallet = (
+  shopId: number,
+  customerId: number,
+  body: WalletAdjustmentBody,
+  idempotencyKey: string,
+) => portalApi.post(
+  `/api/portal/storefronts/${shopId}/customers/${customerId}/wallet-adjustments`, body, {
+    headers: entityHeaders(idempotencyKey),
+  },
+).then((response) => mutationResult<WalletAdjustmentResult>(response));
 
 function parseManagerJson(data: unknown) {
   if (typeof data !== "string") return data;

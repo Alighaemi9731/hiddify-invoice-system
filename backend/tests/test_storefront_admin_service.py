@@ -17,6 +17,7 @@ from app.models import (
     StorefrontBot,
     StorefrontCustomer,
     StorefrontPlan,
+    StorefrontWalletTxn,
 )
 from app.services import storefront, storefront_admin, storefront_audit
 from tests.pg_barrier import make_engine, requires_pg
@@ -615,3 +616,46 @@ def test_pg_customer_ban_idempotency_race():
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_money_commands_work_from_the_bot_source_and_are_idempotent():
+    """Parity: a bot co-admin (source='bot') can confirm a top-up and adjust a wallet through the
+    SAME shared money commands the portal uses; both are idempotent (no double credit)."""
+    from decimal import Decimal
+    async def body(session):  # noqa: ANN001
+        owner, _foreign, shop, _other = await _seed(session)
+        shop.co_admin_ids = "333"
+        cust = StorefrontCustomer(storefront_bot_id=shop.id, telegram_id=901, name="X",
+                                  wallet_balance_toman=0)
+        session.add(cust)
+        await session.flush()
+        topup = StorefrontWalletTxn(
+            storefront_bot_id=shop.id, customer_id=cust.id, kind="topup",
+            amount_toman=Decimal("50000"), requested_amount_toman=Decimal("50000"),
+            status="pending", method="card")
+        session.add(topup)
+        await session.commit()
+
+        def ctx(key):  # noqa: ANN001, ANN202 — co-admin via the bot
+            return storefront_admin.CommandContext(
+                actor_telegram_id=333, actor_role="admin", source="bot",
+                idempotency_key=key, expected_version=1)
+
+        # Bot co-admin confirms → credits once; replay of the same key does not double-credit.
+        r = await storefront_admin.set_topup_decision(
+            session, shop.id, topup.id, ctx("bot-confirm"), decision="confirm")
+        assert r.body["changed"] is True and r.body["credited"] == 50_000
+        assert int((await session.get(StorefrontCustomer, cust.id)).wallet_balance_toman) == 50_000
+        await storefront_admin.set_topup_decision(
+            session, shop.id, topup.id, ctx("bot-confirm"), decision="confirm")  # replay
+        assert int((await session.get(StorefrontCustomer, cust.id)).wallet_balance_toman) == 50_000
+
+        # Bot co-admin adjusts (+10,000) → 60,000; replay same key → still 60,000.
+        await storefront_admin.adjust_wallet(
+            session, shop.id, cust.id, ctx("bot-adj"), amount_toman_signed=10_000, reason="via bot")
+        assert int((await session.get(StorefrontCustomer, cust.id)).wallet_balance_toman) == 60_000
+        await storefront_admin.adjust_wallet(
+            session, shop.id, cust.id, ctx("bot-adj"), amount_toman_signed=10_000, reason="via bot")
+        assert int((await session.get(StorefrontCustomer, cust.id)).wallet_balance_toman) == 60_000
+
+    _run(body)

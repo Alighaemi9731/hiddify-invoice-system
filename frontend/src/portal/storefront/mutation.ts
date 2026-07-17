@@ -57,6 +57,16 @@ export const isVersionConflict = (error: unknown) =>
 export const isNotFound = (error: unknown) =>
   axios.isAxiosError(error) && error.response?.status === 404;
 
+// A hard conflict that warrants the reload/reapply dialog: either a shop-config version clash
+// (config_conflict) or an idempotency-key payload clash (idempotency_conflict). A soft 409
+// (in_flight / unknown) is NOT one of these — it is surfaced via commandRecoveryMessage instead.
+export const isConflict = (error: unknown) =>
+  axios.isAxiosError(error)
+  && error.response?.status === 409
+  && ["config_conflict", "idempotency_conflict"].includes(
+    (error.response?.data as { detail?: { code?: string } } | undefined)?.detail?.code ?? "",
+  );
+
 // A rate-limited live refresh (HTTP 429) is a soft outcome, not a failure. Returns the
 // server's Retry-After in whole seconds (defaulting to 5s when the header is absent/invalid),
 // or null when the error is not a 429 — so the caller can say "try again in N seconds".

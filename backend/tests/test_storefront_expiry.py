@@ -301,13 +301,13 @@ def test_stats_for_bot_aggregates(tmp_path):
                            days=30, price_toman=200_000, enabled=False, sort_order=1),
             # This month's ledger: one purchase (negative debit), a partial refund, one
             # confirmed top-up, one pending top-up.
-            StorefrontWalletTxn(customer_id=cust.id, kind="purchase",
+            StorefrontWalletTxn(customer_id=cust.id, storefront_bot_id=cust.storefront_bot_id, kind="purchase",
                                 amount_toman=-100_000, status="done", order_id=order.id),
-            StorefrontWalletTxn(customer_id=cust.id, kind="refund",
+            StorefrontWalletTxn(customer_id=cust.id, storefront_bot_id=cust.storefront_bot_id, kind="refund",
                                 amount_toman=20_000, status="done", order_id=order.id),
-            StorefrontWalletTxn(customer_id=cust.id, kind="topup",
+            StorefrontWalletTxn(customer_id=cust.id, storefront_bot_id=cust.storefront_bot_id, kind="topup",
                                 amount_toman=150_000, status="confirmed", method="card"),
-            StorefrontWalletTxn(customer_id=cust.id, kind="topup",
+            StorefrontWalletTxn(customer_id=cust.id, storefront_bot_id=cust.storefront_bot_id, kind="topup",
                                 amount_toman=80_000, status="pending", method="card"),
         ])
         await s.commit()

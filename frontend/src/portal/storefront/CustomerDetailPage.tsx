@@ -17,13 +17,14 @@ import { DataState } from "../../components/DataState";
 import { fmtDateTime, fmtGb, fmtNum, fmtToman } from "../../format";
 import { SectionCard } from "../ui";
 import {
-  deleteOrder, getCustomer, getCustomerLedger, listCustomerOrders, refreshOrder, renewOrder,
-  setCustomerStatus, setOrderEnabled, storefrontQueryKeys,
+  adjustWallet, deleteOrder, getCustomer, getCustomerLedger, listCustomerOrders, refreshOrder,
+  renewOrder, setCustomerStatus, setOrderEnabled, storefrontQueryKeys,
 } from "./api";
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type {
   LedgerFilters, LedgerRow, OrderCard, OrderRefreshResult, OrderRenewResult, Versioned,
+  WalletAdjustmentBody, WalletAdjustmentResult,
 } from "./types";
 import {
   commandRecoveryMessage, isNotFound, isVersionConflict, rateLimitRetryAfter, useIdempotentMutation,
@@ -150,6 +151,38 @@ export default function CustomerDetailPage() {
     },
   );
 
+  const [adjAmount, setAdjAmount] = useState("");
+  const [adjReason, setAdjReason] = useState("");
+  const [adjResult, setAdjResult] = useState<WalletAdjustmentResult | null>(null);
+
+  const walletMutation = useIdempotentMutation<Versioned<WalletAdjustmentResult>, WalletAdjustmentBody>(
+    (input, key) => adjustWallet(shop.id, customerId, input, key),
+    {
+      onSuccess: async (result) => {
+        await invalidateAfterCommand();
+        setAdjResult(result.data);
+        setAdjAmount("");
+        setAdjReason("");
+      },
+    },
+  );
+
+  const adjNum = Number(adjAmount);
+  const adjAmountValid = adjAmount.trim() !== "" && Number.isFinite(adjNum) && adjNum !== 0
+    && adjNum >= -(10 ** 12) && adjNum <= 10 ** 12;
+  const adjReasonValid = adjReason.trim().length >= 3 && adjReason.trim().length <= 255;
+  const adjValid = adjAmountValid && adjReasonValid;
+  const submitAdjustment = () => {
+    if (!adjValid || walletMutation.isPending) return;
+    walletMutation.mutate({ amount_toman_signed: Math.round(adjNum), reason: adjReason.trim() });
+  };
+  const walletError = walletMutation.isError
+    ? commandRecoveryMessage(walletMutation.error)
+      || (isNotFound(walletMutation.error)
+        ? "این مشتری دیگر در دسترس نیست؛ صفحه را تازه‌سازی کنید."
+        : "ثبت تغییر موجودی ناموفق بود. مبلغ و دلیل را بررسی کنید.")
+    : null;
+
   const commandError = command.isError && !isVersionConflict(command.error)
     ? commandRecoveryMessage(command.error)
       || (isNotFound(command.error)
@@ -260,7 +293,7 @@ export default function CustomerDetailPage() {
             </Grid>
 
             <Grid item xs={12}>
-              <SectionCard title="کیف پول (فقط نمایش)">
+              <SectionCard title="کیف پول">
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={3}>
                   <Box>
                     <Typography variant="caption" color="text.secondary">موجودی کیف پول</Typography>
@@ -275,9 +308,61 @@ export default function CustomerDetailPage() {
                     </Typography>
                   </Box>
                 </Stack>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5 }}>
-                  تغییر موجودی کیف پول از این صفحه امکان‌پذیر نیست.
-                </Typography>
+
+                <Divider sx={{ my: 2 }} />
+
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>تنظیم دستی موجودی</Typography>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "flex-start" }}>
+                  <TextField
+                    size="small" label="مبلغ (تومان)" value={adjAmount}
+                    onChange={(event) => setAdjAmount(event.target.value)}
+                    error={adjAmount.trim() !== "" && !adjAmountValid}
+                    helperText="مثبت برای افزایش، منفی برای کاهش"
+                    inputProps={{ dir: "ltr", inputMode: "numeric" }}
+                    disabled={walletMutation.isPending}
+                    sx={{ minWidth: { xs: "100%", sm: 180 } }}
+                  />
+                  <TextField
+                    size="small" fullWidth label="دلیل (الزامی)" value={adjReason}
+                    onChange={(event) => setAdjReason(event.target.value)}
+                    error={!!adjReason && !adjReasonValid}
+                    helperText="بین ۳ تا ۲۵۵ نویسه"
+                    inputProps={{ maxLength: 255 }}
+                    disabled={walletMutation.isPending}
+                  />
+                  <Button
+                    variant="contained"
+                    disabled={!adjValid || walletMutation.isPending}
+                    onClick={submitAdjustment}
+                    sx={{ whiteSpace: "nowrap", alignSelf: { xs: "stretch", sm: "flex-start" }, mt: { sm: 0.25 } }}
+                  >
+                    ثبت تغییر موجودی
+                  </Button>
+                </Stack>
+
+                {walletError && <Alert severity="error" sx={{ mt: 1.5 }}>{walletError}</Alert>}
+                {adjResult && (
+                  <Alert
+                    severity={adjResult.requested_delta !== adjResult.applied_delta ? "warning" : "success"}
+                    onClose={() => setAdjResult(null)}
+                    sx={{ mt: 1.5 }}
+                  >
+                    <Typography variant="body2">
+                      موجودی از {fmtToman(adjResult.old_balance)} به {fmtToman(adjResult.new_balance)} تغییر کرد.
+                    </Typography>
+                    <Typography variant="body2">
+                      تغییر درخواستی: {fmtSignedToman(adjResult.requested_delta)}
+                      {adjResult.requested_delta !== adjResult.applied_delta
+                        ? ` · تغییر اعمال‌شده: ${fmtSignedToman(adjResult.applied_delta)}`
+                        : ""}
+                    </Typography>
+                    {adjResult.requested_delta !== adjResult.applied_delta && (
+                      <Typography variant="caption" sx={{ display: "block", mt: 0.5 }}>
+                        موجودی نمی‌تواند منفی شود؛ کسر تا صفر اعمال شد.
+                      </Typography>
+                    )}
+                  </Alert>
+                )}
               </SectionCard>
             </Grid>
 
@@ -401,6 +486,11 @@ export default function CustomerDetailPage() {
       />
     </Box>
   );
+}
+
+// A signed Toman delta with an explicit +/− (fmtToman itself is unsigned/absolute-friendly).
+function fmtSignedToman(delta: number): string {
+  return `${delta >= 0 ? "+" : "−"}${fmtToman(Math.abs(delta))}`;
 }
 
 function successMessage(variables: EntityCommand, result: Versioned<unknown>): string {
