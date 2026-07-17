@@ -21,8 +21,10 @@ Safety invariants (B02):
     empty dump raises `BackupError` instead of producing a useless "successful" archive.
   • Restore is atomic: the Postgres import runs in a single transaction, so a mid-restore
     failure rolls back and the live DB is left untouched (a pre-restore safety dump is
-    also kept on disk). The restored SECRET_KEY is written to .env ONLY after the DB
-    restore succeeds.
+    also kept on disk). A cross-server restore (backup encrypted under a DIFFERENT
+    SECRET_KEY) is made self-sufficient by RE-ENCRYPTING every secret to the running
+    server's key right after the import — so restoring via the bot needs no .env edit and
+    no container recreate. This runs ONLY after the DB restore succeeds.
   • Uploaded archives are validated (size cap, member allowlist, decompression-bomb
     guard, metadata shape) before anything is read out of them.
   • Optional password-protected export: when `backup_passphrase` is configured the whole
@@ -33,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime as dt
+import hashlib
 import io
 import json
 import logging
@@ -352,6 +355,122 @@ def _persist_secret_key(secret_key: str) -> None:
             log.warning("could not persist SECRET_KEY to %s", p, exc_info=True)
 
 
+# ------------------------- cross-server key assimilation -------------------------
+# A backup carries its own SECRET_KEY in meta.json. On a CROSS-SERVER restore the running
+# server has a DIFFERENT key, so every Fernet secret in the restored DB (bot tokens, panel
+# credentials, TOTP secrets, encrypted settings) would be undecryptable. Rather than swap
+# SECRET_KEY in .env — which only takes effect on a full container RECREATE that a sandboxed
+# container cannot trigger, and which the bot-restore path can't even write to the host —
+# we RE-ENCRYPT every secret from the backup's key to THIS server's key right after the DB
+# import. The running process already holds this server's key, so the data is readable
+# immediately; no .env change, no recreate, no host-watcher dependency.
+
+
+def _fernet_for_key(secret_key: str) -> Fernet:
+    """Build the Fernet used for `secret_key` (mirrors app.core.crypto._fernet)."""
+    digest = hashlib.sha256(secret_key.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _recrypt_value(value: object, old_fernet: Fernet) -> str | None:
+    """Decrypt `value` with the backup key and re-encrypt with the CURRENT key.
+
+    Returns the new ciphertext, or None when there is nothing to migrate: a non-string,
+    a plaintext/empty value, or a value that does not decrypt under the backup key (already
+    under the current key, or corrupt — left untouched either way)."""
+    from app.core import crypto
+
+    if not isinstance(value, str) or not value.startswith(crypto._PREFIX):
+        return None
+    raw = value[len(crypto._PREFIX):]
+    try:
+        plaintext = old_fernet.decrypt(raw.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        return None
+    return crypto.encrypt(plaintext)  # under the current SECRET_KEY
+
+
+async def _reencrypt_async(old_key: str, db_url: str) -> dict:
+    """Re-encrypt every Fernet secret in the (just-restored) DB at `db_url` to the current key."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models import AppUser, Panel, StorefrontBot
+
+    new_key = boot.secret_key
+    if not old_key or old_key == new_key:
+        return {"migrated": 0, "same_key": True}
+    old_fernet = _fernet_for_key(old_key)
+
+    eng = create_async_engine(db_url, pool_pre_ping=True)
+    migrated = 0
+    try:
+        maker = async_sessionmaker(eng, expire_on_commit=False)
+        async with maker() as session:
+            for st in (await session.execute(select(Setting))).scalars().all():
+                nv = _recrypt_value(st.value, old_fernet)
+                if nv is not None:
+                    st.value = nv
+                    migrated += 1
+            for p in (await session.execute(select(Panel))).scalars().all():
+                for col in ("proxy_path_enc", "client_proxy_path_enc", "admin_api_key_enc"):
+                    nv = _recrypt_value(getattr(p, col), old_fernet)
+                    if nv is not None:
+                        setattr(p, col, nv)
+                        migrated += 1
+            for b in (await session.execute(select(StorefrontBot))).scalars().all():
+                nv = _recrypt_value(b.bot_token_enc, old_fernet)
+                if nv is not None:
+                    b.bot_token_enc = nv
+                    migrated += 1
+            for u in (await session.execute(select(AppUser))).scalars().all():
+                for col in ("totp_secret_enc", "totp_pending_secret_enc"):
+                    nv = _recrypt_value(getattr(u, col), old_fernet)
+                    if nv is not None:
+                        setattr(u, col, nv)
+                        migrated += 1
+            await session.commit()
+    finally:
+        await eng.dispose()
+    return {"migrated": migrated, "same_key": False}
+
+
+def _reencrypt_after_restore(old_key: str, db_url: str) -> dict:
+    """Run the async re-encryption in a dedicated thread with its own event loop, so it is
+    safe whether `restore_from_zip` is called from a worker thread (bot / API `to_thread`)
+    or directly inside a running loop (tests)."""
+    box: dict = {}
+
+    def _worker() -> None:
+        try:
+            box["res"] = asyncio.run(_reencrypt_async(old_key, db_url))
+        except BaseException as exc:  # noqa: BLE001
+            box["err"] = exc
+
+    t = __import__("threading").Thread(target=_worker, name="restore-reencrypt")
+    t.start()
+    t.join()
+    if "err" in box:
+        raise box["err"]
+    return box["res"]
+
+
+def _finalize_restore_key(old_key: str, db_url: str) -> str:
+    """After a successful DB restore, make the restored secrets readable under THIS server's
+    key by re-encrypting them (no SECRET_KEY change). Falls back to the legacy .env key-swap
+    only if re-encryption fails. Returns a short Persian status note for the owner."""
+    try:
+        res = _reencrypt_after_restore(old_key, db_url)
+        if res.get("same_key"):
+            return "کلید رمز یکسان بود؛ نیازی به تبدیل نبود."
+        n = res.get("migrated", 0)
+        log.info("restore: re-encrypted %d secret(s) to this server's key", n)
+        return f"{n} مقدار رمزنگاری‌شده به کلید این سرور منتقل شد."
+    except Exception:  # noqa: BLE001
+        log.warning("restore: re-encrypt failed; falling back to .env key swap", exc_info=True)
+        _persist_secret_key(old_key)
+        return "انتقال کلید ناموفق بود؛ کلید در .env نوشته شد (نیازمند بازسازی سرویس)."
+
+
 # ------------------------------- restore -------------------------------
 def _open_validated_zip(zip_bytes: bytes) -> zipfile.ZipFile:
     """Open the archive after enforcing size/member/decompression-bomb limits."""
@@ -408,11 +527,14 @@ def restore_from_zip(zip_bytes: bytes, *, passphrase: str | None = None) -> dict
             if sqlite.exists():
                 shutil.copy(sqlite, sqlite.with_suffix(".sqlite.pre-restore"))
             sqlite.write_bytes(data)
-            # Persist the key + signal peers ONLY after the DB swap succeeded.
-            _persist_secret_key(meta.get("secret_key") or "")
+            # Assimilate the backup's secrets to THIS server's key, then signal peers —
+            # ONLY after the DB swap succeeded.
+            key_note = _finalize_restore_key(
+                meta.get("secret_key") or "", f"sqlite+aiosqlite:///{sqlite}"
+            )
             restart_signal.request_restart(dt.datetime.now(dt.timezone.utc).isoformat())
             return {"status": "ok", "db_kind": "sqlite", "restored": True,
-                    "note": "سرویس بک‌اند باید یک‌بار ری‌استارت شود.", "meta": meta}
+                    "note": "سرویس بک‌اند باید یک‌بار ری‌استارت شود. " + key_note, "meta": meta}
 
         if "db.sql" in names:
             sql = z.read("db.sql")
@@ -421,11 +543,13 @@ def restore_from_zip(zip_bytes: bytes, *, passphrase: str | None = None) -> dict
             except BackupError as exc:
                 raise ValueError(str(exc)) from exc
             if _pg_restore(sql):
-                # DB import committed — now it's safe to persist the key + signal peers.
-                _persist_secret_key(meta.get("secret_key") or "")
+                # DB import committed — assimilate the backup's secrets to this server's key,
+                # then signal peers.
+                key_note = _finalize_restore_key(meta.get("secret_key") or "", boot.sqlalchemy_url)
                 restart_signal.request_restart(dt.datetime.now(dt.timezone.utc).isoformat())
                 return {"status": "ok", "db_kind": "postgres", "restored": True,
-                        "note": "بازیابی انجام شد؛ سرویس‌ها به‌صورت خودکار به دادهٔ جدید وصل می‌شوند.",
+                        "note": "بازیابی انجام شد؛ سرویس‌ها به‌صورت خودکار به دادهٔ جدید وصل می‌شوند. "
+                                + key_note,
                         "meta": meta}
             # The single-transaction import rolled back: the live DB is unchanged and the
             # original SECRET_KEY is intact. Keep the SQL on disk for a manual psql import.

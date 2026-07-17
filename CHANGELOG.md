@@ -8,7 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
-## 1.83.2 - 2026-07-17
+## 1.83.3 - 2026-07-17
+
+Restore reliability fix for server migration; no database migration or manual upgrade step.
+
+### Fixed
+
+- **Restoring a backup onto a freshly-installed server now works without any extra steps.**
+  A backup is encrypted with the server's `SECRET_KEY`, and a clean install generates a *new*
+  key. Previously, restoring such a backup (especially by forwarding the ZIP to the bot) left
+  every encrypted secret — both bot tokens, panel credentials, TOTP secrets, encrypted
+  settings — unreadable, because the old mechanism tried to swap `SECRET_KEY` in `.env` (which
+  the bot container can't write, and which only takes effect on a full container recreate).
+  The symptom was the main bot and all customer/storefront bots going silent right after a
+  restore. Restore now **re-encrypts every secret to the running server's own key** (read from
+  the backup's `meta.json`), so the data is readable immediately — no `.env` edit, no container
+  recreate, no manual key recovery. A restore is now fully self-sufficient: after a clean
+  install you only set the bot token to receive the backup, forward it, and everything else
+  comes back on its own.
 
 Install reliability fix; no runtime behavior change, database migration or manual upgrade.
 

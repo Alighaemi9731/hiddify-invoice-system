@@ -162,13 +162,98 @@ def test_restore_persists_key_only_after_success(monkeypatch, tmp_path):
     assert "oldkey0000000000" in env_path.read_text(), "key must NOT change on failed restore"
     assert not sqlite_path.exists(), "DB must NOT be written on failed restore"
 
-    # 2) A valid restore writes the DB and only then persists the new key.
+    # 2) A valid restore writes the DB and then finalizes the key. The DB image here is a
+    #    stub sqlite header (no real tables), so re-encryption can't run and the code FALLS
+    #    BACK to the legacy .env key-swap — which must still happen only after the DB write.
     res = backup.restore_from_zip(_backup_zip("newkey1111111111", _SQLITE))
     assert res["restored"] is True
     assert sqlite_path.read_bytes() == _SQLITE
     assert "SECRET_KEY=newkey1111111111" in env_path.read_text()
     # ...and it signalled a peer restart.
     assert (tmp_path / ".restart").exists()
+
+
+def test_cross_server_restore_reencrypts_secrets_to_current_key(monkeypatch, tmp_path):
+    """A backup encrypted under a DIFFERENT SECRET_KEY (cross-server migration) is made
+    self-sufficient: on restore every Fernet secret is re-encrypted to THIS server's key,
+    so it is readable immediately — WITHOUT any .env change or container recreate."""
+    import asyncio
+    import json
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.core import crypto
+    from app.core.db import Base
+    from app.models import Panel, Setting
+
+    OLD = "oldkeyAAAAAAAAAA"   # the backup's key (meta.json)
+    NEW = "newkeyBBBBBBBBBB"   # this server's key
+
+    src = tmp_path / "src.db"
+
+    # Seed a real DB with secrets encrypted under the OLD (backup) key.
+    monkeypatch.setattr(backup.boot, "secret_key", OLD)
+
+    async def _seed():
+        eng = create_async_engine(f"sqlite+aiosqlite:///{src}")
+        async with eng.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        maker = async_sessionmaker(eng, expire_on_commit=False)
+        async with maker() as s:
+            s.add(Setting(key="telegram_bot_token", value=crypto.encrypt("8873:TOKEN"), is_secret=True))
+            s.add(Setting(key="usdt_bep20_address", value="0xPLAINTEXT", is_secret=False))
+            p = Panel(key="p1", host="h.example.com", owner_uuid="u-1")
+            p.proxy_path = "sSECRETpath"          # setter encrypts under OLD
+            s.add(p)
+            await s.commit()
+        await eng.dispose()
+
+    asyncio.run(_seed())
+    db_bytes = src.read_bytes()
+
+    # The running server now uses a DIFFERENT key.
+    monkeypatch.setattr(backup.boot, "secret_key", NEW)
+
+    target = tmp_path / "restored.db"
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"SECRET_KEY={NEW}\n")
+    monkeypatch.setattr(backup, "_sqlite_path", lambda: target)
+    monkeypatch.setattr(backup, "_ENV_PATHS", [env_path])
+    monkeypatch.setattr(backup.restart_signal, "_MARKER", tmp_path / ".restart")
+    monkeypatch.setattr(backup.restart_signal, "_inited", False)
+    monkeypatch.setattr(backup.restart_signal, "_startup_token", None)
+
+    zip_bytes = _zip_with({
+        "meta.json": json.dumps({"app_version": "t", "db_kind": "sqlite", "secret_key": OLD}).encode(),
+        "settings.json": b"[]",
+        "db.sqlite": db_bytes,
+    })
+    res = backup.restore_from_zip(zip_bytes)
+    assert res["restored"] is True
+
+    # .env key is UNCHANGED — no swap needed, secrets were migrated in-DB instead.
+    txt = env_path.read_text()
+    assert f"SECRET_KEY={NEW}" in txt
+    assert OLD not in txt
+
+    # The restored secrets now decrypt under the CURRENT key; plaintext is untouched.
+    async def _verify():
+        eng = create_async_engine(f"sqlite+aiosqlite:///{target}")
+        maker = async_sessionmaker(eng, expire_on_commit=False)
+        async with maker() as s:
+            tok = (await s.execute(
+                select(Setting).where(Setting.key == "telegram_bot_token"))).scalar_one()
+            assert tok.value.startswith(crypto._PREFIX)
+            assert crypto.decrypt(tok.value) == "8873:TOKEN"
+            plain = (await s.execute(
+                select(Setting).where(Setting.key == "usdt_bep20_address"))).scalar_one()
+            assert plain.value == "0xPLAINTEXT"
+            p = (await s.execute(select(Panel))).scalar_one()
+            assert crypto.decrypt(p.proxy_path_enc) == "sSECRETpath"
+        await eng.dispose()
+
+    asyncio.run(_verify())
 
 
 def test_restore_rejects_encrypted_archive_without_passphrase(monkeypatch, tmp_path):
