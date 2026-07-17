@@ -21,7 +21,7 @@ migration, external prerequisite, product choice, or scope expansion not already
 |---|---|:---:|:---:|:---:|---|
 | 001 | Open the reseller portal directly in a normal browser | P1 | S | — | DONE |
 | 002 | Add the storefront portal shell and read-only dashboard | P1 | L | 001 | DONE |
-| 003 | Add audited shared plan and settings management | P1 | L | 002 | IN PROGRESS |
+| 003 | Add audited shared plan and settings management | P1 | L | 002 | DONE (v1.84.0) |
 | 004 | Add tenant-safe customer and subscription management | P1 | L | 003 | TODO |
 | 005 | Add the wallet and top-up operations center | P1 | L | 003, 004 | TODO |
 | 006 | Add credit-code analytics and durable communications | P2 | L | 003, 004, 005 | TODO |
