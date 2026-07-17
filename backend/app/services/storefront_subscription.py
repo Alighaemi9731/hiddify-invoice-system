@@ -75,6 +75,7 @@ async def renew(
     order_id: int,
     by_admin: bool = False,
     op_id: str | None = None,
+    expected_sf_id: int | None = None,
 ) -> SubResult:
     """Renew a subscription in place at the CURRENT plan price (admin renews are free grants).
 
@@ -99,6 +100,10 @@ async def renew(
         sf, customer, reseller, panel = await _panel_ctx(s, order)
         if not (sf and customer and reseller and panel and order.panel_user_uuid):
             return SubResult(False, "error")
+        # Defense-in-depth tenant guard: the shared command resolves ownership too, but making the
+        # command itself refuse a foreign shop means no caller can act cross-tenant with a bare id.
+        if expected_sf_id is not None and sf.id != expected_sf_id:
+            return SubResult(False, "not_found")
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
@@ -218,6 +223,7 @@ async def delete_subscription(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,
     order_id: int,
+    expected_sf_id: int | None = None,
 ) -> SubResult:
     """Remove the panel config and mark the order deleted (no refund). Idempotent."""
     async with session_factory() as s:
@@ -225,6 +231,8 @@ async def delete_subscription(
         if order is None or order.status in ("deleted", "failed"):
             return SubResult(False, "not_found")
         sf, customer, reseller, panel = await _panel_ctx(s, order)
+        if expected_sf_id is not None and (sf is None or sf.id != expected_sf_id):
+            return SubResult(False, "not_found")
         uuid, api_key = order.panel_user_uuid, (reseller.admin_uuid if reseller else None)
         panel_id = panel.id if panel else None
     if panel_id and uuid:
@@ -249,6 +257,7 @@ async def set_enabled(
     *,
     order_id: int,
     enabled: bool,
+    expected_sf_id: int | None = None,
 ) -> SubResult:
     """Pause (disable) or resume (enable) the panel config; reflect it in the order status."""
     async with session_factory() as s:
@@ -256,6 +265,8 @@ async def set_enabled(
         if order is None or order.status not in _ACTIVE:
             return SubResult(False, "not_found")
         sf, customer, reseller, panel = await _panel_ctx(s, order)
+        if expected_sf_id is not None and (sf is None or sf.id != expected_sf_id):
+            return SubResult(False, "not_found")
         uuid, api_key = order.panel_user_uuid, (reseller.admin_uuid if reseller else None)
         panel_id = panel.id if panel else None
     if not (panel_id and uuid):

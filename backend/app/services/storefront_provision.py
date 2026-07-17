@@ -637,3 +637,71 @@ async def _notify_completed(
             await bot.session.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+class RateLimited(Exception):
+    """The owner refreshed this order's live status too soon; retry after `retry_after` seconds."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("live refresh rate limited")
+        self.retry_after = int(retry_after)
+
+
+async def refresh_order_live(
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    *, order_id: int, window_seconds: int,
+) -> tuple[dict, str]:
+    """Owner-triggered LIVE panel read for one order, throttled to one per `window_seconds` (cross
+    process, via `storefront_orders.live_refreshed_at` under a row lock). No DB session is held across
+    the panel network call. Returns (status, freshness): freshness ∈ {live, stale, unknown}. The caller
+    resolves ownership first; this raises `RateLimited` when called again inside the window."""
+    session_factory = session_factory or SessionLocal
+    now = dt.datetime.now(dt.timezone.utc)
+    # STEP 1 — short session: lock the order row, enforce the throttle, stamp, capture ctx, release.
+    async with session_factory() as s:
+        stmt = select(StorefrontOrder).where(StorefrontOrder.id == order_id)
+        try:
+            stmt = stmt.with_for_update()
+        except Exception:  # noqa: BLE001 — dialect without row locks
+            pass
+        order = (await s.execute(stmt)).scalar_one_or_none()
+        if order is None:
+            return {"ok": False}, "unknown"
+        last = order.live_refreshed_at
+        if last is not None:
+            last = last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc)
+            elapsed = (now - last).total_seconds()
+            if elapsed < window_seconds:
+                await s.rollback()
+                raise RateLimited(int(window_seconds - elapsed) + 1)
+        order.live_refreshed_at = now
+        customer = await s.get(StorefrontCustomer, order.customer_id)
+        sf = await s.get(StorefrontBot, customer.storefront_bot_id) if customer else None
+        reseller = await s.get(Reseller, sf.reseller_id) if sf else None
+        panel = await s.get(Panel, reseller.panel_id) if reseller else None
+        uuid, api_key = order.panel_user_uuid, (reseller.admin_uuid if reseller else None)
+        panel_id, order_gb = (panel.id if panel else None), order.gb
+        await s.commit()  # releases the row lock BEFORE any panel I/O
+    # STEP 2 — no DB session held across the panel read.
+    if not (panel_id and uuid):
+        return {"ok": False}, "unknown"
+    try:
+        async with session_factory() as s:
+            panel = await s.get(Panel, panel_id)
+        data = await AdminApiClient().get_user(panel, uuid, api_key=api_key) if panel else None
+    except Exception:  # noqa: BLE001 — live read is best-effort; fall back to the stored snapshot
+        log.warning("refresh_order_live panel read failed for order %s", order_id, exc_info=True)
+        return {"ok": False}, "stale"
+    if not data:
+        return {"ok": False}, "stale"
+    remaining = data.get("remaining_day")
+    try:
+        remaining_days = int(remaining) if remaining is not None else None
+    except (TypeError, ValueError):
+        remaining_days = None
+    return {
+        "ok": True,
+        "used_gb": _to_float(data.get("current_usage_GB")),
+        "limit_gb": _to_float(data.get("usage_limit_GB")) or float(order_gb or 0),
+        "remaining_days": remaining_days,
+    }, "live"

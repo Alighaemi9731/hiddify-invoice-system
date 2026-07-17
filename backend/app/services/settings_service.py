@@ -230,6 +230,10 @@ DEFS: list[SettingDef] = [
     # valid, so a live provision is never reaped mid-flight. A renewal performs GET+PATCH (each may use
     # the 90s panel timeout), therefore the validated minimum is five minutes including safety margin.
     SettingDef("storefront_operation_lease_seconds", 300, False, "schedule"),
+    # Minimum seconds between an owner's explicit "live refresh" of one storefront order's panel
+    # status (plan 004). Cross-process throttle via storefront_orders.live_refreshed_at; a repeat
+    # inside the window returns 429. Keeps list/detail off the panel and rate-limits manual reads.
+    SettingDef("storefront_live_refresh_seconds", 30, False, "schedule"),
     # Storefront retention: the daily maintenance purges customers with NO financial footprint (zero
     # balance, no provisioned/disabled order, no confirmed top-up) inactive for this many days, plus
     # failed/deleted orders + rejected top-ups. Confirmed top-ups + provisioned services are kept. 0 = off.
@@ -335,6 +339,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "meter_retention_months": (0, 120),
     "storefront_pending_order_reaper_minutes": (1, 1440),
     "storefront_operation_lease_seconds": (300, 3600),
+    "storefront_live_refresh_seconds": (5, 3600),
     "storefront_stale_customer_days": (0, 3650),
     "owner_data_retention_days": (0, 3650),
     "storefront_expiry_notify_days": (0, 60),

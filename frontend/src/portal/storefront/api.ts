@@ -1,5 +1,18 @@
 import { portalApi } from "../portalClient";
 import type {
+  CustomerBanResult,
+  CustomerDetail,
+  CustomerListFilters,
+  CustomerListItem,
+  CustomerStatusBody,
+  KeysetPage,
+  LedgerFilters,
+  LedgerRow,
+  OrderCard,
+  OrderDetail,
+  OrderOpResult,
+  OrderRefreshResult,
+  OrderRenewResult,
   StorefrontChannel,
   StorefrontCustomerPreview,
   StorefrontDashboard,
@@ -26,6 +39,16 @@ export const storefrontQueryKeys = {
   settings: (shopId: number) => ["portal-storefronts", shopId, "settings"] as const,
   managers: (shopId: number) => ["portal-storefronts", shopId, "managers"] as const,
   preview: (shopId: number) => ["portal-storefronts", shopId, "preview"] as const,
+  customers: (shopId: number, filters: CustomerListFilters) =>
+    ["portal-storefronts", shopId, "customers", filters] as const,
+  customer: (shopId: number, customerId: number) =>
+    ["portal-storefronts", shopId, "customer", customerId] as const,
+  customerOrders: (shopId: number, customerId: number, status?: string) =>
+    ["portal-storefronts", shopId, "customer", customerId, "orders", status ?? null] as const,
+  customerLedger: (shopId: number, customerId: number, filters: LedgerFilters) =>
+    ["portal-storefronts", shopId, "customer", customerId, "ledger", filters] as const,
+  order: (shopId: number, orderId: number) =>
+    ["portal-storefronts", shopId, "order", orderId] as const,
 };
 
 const etagOf = (headers: Record<string, unknown>, configVersion?: number) =>
@@ -206,6 +229,100 @@ export const removeStorefrontManager = (
 export const getStorefrontPreview = (shopId: number) =>
   portalApi.get(`/api/portal/storefronts/${shopId}/preview`)
     .then((response) => response.data as StorefrontCustomerPreview);
+
+// ── customer & order management (plan 004) ───────────────────────────────────
+// Entity mutations carry ONLY an Idempotency-Key (they are not shop-config edits, so no If-Match).
+const entityHeaders = (idempotencyKey: string) => ({ "Idempotency-Key": idempotencyKey });
+
+export const listCustomers = (
+  shopId: number,
+  filters: CustomerListFilters,
+  cursor?: string | null,
+  limit = 25,
+) => portalApi.get(`/api/portal/storefronts/${shopId}/customers`, {
+  params: {
+    q: filters.q || undefined,
+    banned: filters.banned,
+    activity: filters.activity || undefined,
+    has_service: filters.has_service,
+    cursor: cursor || undefined,
+    limit,
+  },
+}).then((response) => response.data as KeysetPage<CustomerListItem>);
+
+export const getCustomer = (shopId: number, customerId: number) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/customers/${customerId}`)
+    .then((response) => response.data as CustomerDetail);
+
+export const getCustomerLedger = (
+  shopId: number,
+  customerId: number,
+  filters: LedgerFilters,
+  cursor?: string | null,
+  limit = 25,
+) => portalApi.get(`/api/portal/storefronts/${shopId}/customers/${customerId}/ledger`, {
+  params: {
+    kind: filters.kind || undefined,
+    status: filters.status || undefined,
+    from: filters.from || undefined,
+    to: filters.to || undefined,
+    cursor: cursor || undefined,
+    limit,
+  },
+}).then((response) => response.data as KeysetPage<LedgerRow>);
+
+export const listCustomerOrders = (
+  shopId: number,
+  customerId: number,
+  status?: string,
+  cursor?: string | null,
+  limit = 25,
+) => portalApi.get(`/api/portal/storefronts/${shopId}/customers/${customerId}/orders`, {
+  params: { status: status || undefined, cursor: cursor || undefined, limit },
+}).then((response) => response.data as KeysetPage<OrderCard>);
+
+export const getOrder = (shopId: number, orderId: number) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/orders/${orderId}`)
+    .then((response) => response.data as OrderDetail);
+
+export const setCustomerStatus = (
+  shopId: number,
+  customerId: number,
+  body: CustomerStatusBody,
+  idempotencyKey: string,
+) => portalApi.patch(`/api/portal/storefronts/${shopId}/customers/${customerId}/status`, body, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<CustomerBanResult>(response));
+
+// Live panel read. NOT wrapped in the {result} envelope; rate-limited (429 + Retry-After).
+export const refreshOrder = (shopId: number, orderId: number, idempotencyKey: string) =>
+  portalApi.post(`/api/portal/storefronts/${shopId}/orders/${orderId}/refresh`, undefined, {
+    headers: entityHeaders(idempotencyKey),
+  }).then((response) => response.data as OrderRefreshResult);
+
+export const renewOrder = (shopId: number, orderId: number, idempotencyKey: string) =>
+  portalApi.post(`/api/portal/storefronts/${shopId}/orders/${orderId}/renew`, undefined, {
+    headers: entityHeaders(idempotencyKey),
+  }).then((response) => mutationResult<OrderRenewResult>(response));
+
+export const setOrderEnabled = (
+  shopId: number,
+  orderId: number,
+  enabled: boolean,
+  idempotencyKey: string,
+) => portalApi.put(`/api/portal/storefronts/${shopId}/orders/${orderId}/enabled`, { enabled }, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<OrderOpResult>(response));
+
+export const deleteOrder = (
+  shopId: number,
+  orderId: number,
+  reason: string,
+  idempotencyKey: string,
+) => portalApi.delete(`/api/portal/storefronts/${shopId}/orders/${orderId}`, {
+  data: { confirm: "DELETE", reason },
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<OrderOpResult>(response));
 
 function parseManagerJson(data: unknown) {
   if (typeof data !== "string") return data;

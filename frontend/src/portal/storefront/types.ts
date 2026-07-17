@@ -202,3 +202,150 @@ export interface StorefrontCustomerPreview {
   enabled_plans: Array<Pick<StorefrontPlan, "id" | "title" | "gb" | "days" | "price_toman">>;
   channel_required: boolean;
 }
+
+// ── customer & order management (plan 004) ───────────────────────────────────
+
+export type StorefrontOrderStatus =
+  | "pending" | "provisioned" | "disabled" | "renewing" | "failed" | "deleted";
+
+export type StorefrontLedgerKind =
+  | "topup" | "purchase" | "manual_credit" | "manual_debit"
+  | "refund" | "renew_reversal" | "credit_bonus";
+
+export type StorefrontLedgerStatus = "pending" | "confirmed" | "rejected" | "done";
+
+export type StorefrontActivityFilter = "active30" | "inactive30";
+
+export interface CustomerListItem {
+  id: number;
+  telegram_id: number;
+  name: string | null;
+  username: string | null;
+  banned: boolean;
+  free_trial_used: boolean;
+  wallet_balance_toman: number;
+  last_seen_at: string | null;
+  created_at: string;
+  has_service: boolean;
+}
+
+export interface CustomerServiceCounts {
+  total: number;
+  active: number;
+  by_status: Record<string, number>;
+}
+
+export interface CustomerDetail {
+  id: number;
+  telegram_id: number;
+  name: string | null;
+  username: string | null;
+  banned: boolean;
+  free_trial_used: boolean;
+  wallet_balance_toman: number;
+  net_ltv_toman: number;
+  last_seen_at: string | null;
+  created_at: string;
+  service_counts: CustomerServiceCounts;
+}
+
+export interface LedgerRow {
+  id: number;
+  kind: StorefrontLedgerKind;
+  amount_toman: number;
+  status: StorefrontLedgerStatus;
+  method: string | null;
+  order_id: number | null;
+  txid: string | null;
+  chain: string | null;
+  note: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export interface OrderSnapshot {
+  used_gb: number;
+  limit_gb: number;
+  start_date: string | null;
+  enabled: boolean;
+  last_online: string | null;
+}
+
+export interface OrderCard {
+  id: number;
+  customer_id: number;
+  label: string | null;
+  status: StorefrontOrderStatus;
+  is_trial: boolean;
+  gb: number;
+  days: number;
+  price_toman: number;
+  created_at: string;
+  last_renewed_at: string | null;
+  live_refreshed_at: string | null;
+  snapshot: OrderSnapshot | null;
+  freshness: "stored";
+}
+
+export interface OrderDetail extends OrderCard {
+  customer: {
+    id: number;
+    telegram_id: number;
+    name: string | null;
+    username: string | null;
+    banned: boolean;
+  };
+}
+
+export interface CustomerListFilters {
+  q?: string;
+  banned?: boolean;
+  activity?: StorefrontActivityFilter;
+  has_service?: boolean;
+}
+
+export interface LedgerFilters {
+  kind?: StorefrontLedgerKind;
+  status?: StorefrontLedgerStatus;
+  from?: string;
+  to?: string;
+}
+
+export interface KeysetPage<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+
+export interface CustomerStatusBody {
+  banned: boolean;
+  reason: string;
+}
+
+export interface OrderDeleteBody {
+  confirm: "DELETE";
+  reason: string;
+}
+
+export interface OrderLiveStatus {
+  ok: boolean;
+  used_gb?: number;
+  limit_gb?: number;
+  remaining_days?: number;
+}
+
+export interface OrderRefreshResult {
+  status: OrderLiveStatus;
+  freshness: "live" | "stale" | "unknown";
+}
+
+export interface OrderRenewResult {
+  order: { id: number; renewed: boolean; gb: number; days: number };
+}
+
+export interface OrderOpResult {
+  order: { id: number; status: string };
+}
+
+export interface CustomerBanResult {
+  customer: { id: number; banned: boolean };
+}

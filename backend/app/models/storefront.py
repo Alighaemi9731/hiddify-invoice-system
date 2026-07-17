@@ -135,6 +135,8 @@ class StorefrontCustomer(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("storefront_bot_id", "telegram_id", name="uq_storefront_customer"),
         CheckConstraint("wallet_balance_toman >= 0", name="ck_storefront_wallet_nonneg"),
+        # Keyset pagination for the web customer list (per shop, newest first).
+        Index("ix_sfcustomer_keyset", "storefront_bot_id", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -205,7 +207,9 @@ class StorefrontWalletTxn(Base, TimestampMixin):
 
 class StorefrontOrder(Base, TimestampMixin):
     """A purchase → one config on the reseller's panel. Plan figures are snapshotted so later plan
-    edits don't rewrite history. `status`: pending | provisioned | disabled | failed | deleted.
+    edits don't rewrite history. `status`: pending | provisioned | disabled | failed | deleted, plus
+    the transient `renewing` (held during a renew) — read models treat `renewing` as an active,
+    in-flight service, never as gone.
 
     `(panel_id, panel_user_uuid)` is the durable reference to the real panel user — joinable to
     end_user_snapshots(panel_id, user_uuid) but NOT a hard FK (snapshots are pruned when a user/panel
@@ -213,6 +217,8 @@ class StorefrontOrder(Base, TimestampMixin):
     __tablename__ = "storefront_orders"
     __table_args__ = (
         Index("ix_storefront_order_panel_user", "panel_id", "panel_user_uuid"),
+        # Keyset pagination for a customer's order list (newest first, status-filterable).
+        Index("ix_sforder_customer_keyset", "customer_id", "status", "created_at", "id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -236,6 +242,10 @@ class StorefrontOrder(Base, TimestampMixin):
     panel_user_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_renewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Cross-process throttle stamp for the owner's per-order explicit live refresh (plan 004). Set
+    # under a row lock before the panel read; a repeat within `storefront_live_refresh_seconds` → 429.
+    live_refreshed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     # F5/F11 (round 2): a durable provisioning/renewal LEASE. While `lease_expires_at` is in the future
     # the reaper/reconciler leaves this order alone (a live purchase/renew is holding it across the panel
     # network call). Set before the network I/O, cleared on finalize. NULL = no active lease.

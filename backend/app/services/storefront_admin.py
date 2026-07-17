@@ -17,12 +17,14 @@ from typing import Any, Literal
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db import SessionLocal
 from app.models import (
     Reseller,
     StorefrontApiCommand,
     StorefrontAuditEvent,
     StorefrontBot,
     StorefrontCustomer,
+    StorefrontOrder,
     StorefrontPlan,
 )
 from app.services import storefront, storefront_audit
@@ -1200,3 +1202,290 @@ async def customer_preview(
         },
         "plans": [_plan_dict(plan) for plan in plans],
     }
+
+
+# ── customer & order commands (plan 004) ─────────────────────────────────────
+# Customer ban and order enable/delete/renew are ENTITY-scoped, not shop-config-scoped: running
+# them through the config_version CAS would spuriously 409 against a concurrent plan/settings edit.
+# So they use idempotency + audit WITHOUT the version bump (`_execute_entity`) and require only an
+# Idempotency-Key, not If-Match. Order enable/delete are durable external-I/O commands (started →
+# release DB → panel I/O → finalize/unknown), reconciled by the reaper on an ambiguous result.
+
+
+async def _owned_customer(
+    session: AsyncSession, shop_id: int, customer_id: int
+) -> StorefrontCustomer:
+    cust = await session.get(StorefrontCustomer, customer_id)
+    if cust is None or cust.storefront_bot_id != shop_id:
+        raise AdminCommandError("not_found", "Customer not found")
+    return cust
+
+
+async def _owned_order(
+    session: AsyncSession, shop_id: int, order_id: int, *, customer_id: int | None = None
+) -> StorefrontOrder:
+    order = await session.get(StorefrontOrder, order_id)
+    if order is None:
+        raise AdminCommandError("not_found", "Order not found")
+    cust = await session.get(StorefrontCustomer, order.customer_id)
+    if cust is None or cust.storefront_bot_id != shop_id or (
+        customer_id is not None and cust.id != customer_id
+    ):
+        raise AdminCommandError("not_found", "Order not found")
+    return order
+
+
+async def _claim_entity_command(
+    session: AsyncSession, shop: StorefrontBot, ctx: CommandContext, *,
+    action: str, intent: dict, external_io: bool = False,
+) -> tuple[StorefrontApiCommand, CommandResult | None]:
+    """Claim an entity command keyed on client intent ONLY (no config_version), so a same-key retry
+    replays cleanly and never conflicts with a concurrent shop-config edit."""
+    claim = await storefront_audit.claim_command(
+        session,
+        shop_id=shop.id,
+        actor_telegram_id=ctx.actor_telegram_id,
+        idempotency_key=ctx.idempotency_key,
+        action=action,
+        request=dict(intent),
+        external_io=external_io,
+    )
+    if claim.outcome == "conflict":
+        raise AdminCommandError("idempotency_conflict", "Idempotency key payload conflict")
+    if claim.outcome == "in_flight":
+        raise AdminCommandError("in_flight", "Command is already in progress")
+    if claim.outcome == "unknown":
+        await session.commit()
+        raise AdminCommandError("unknown", "Command outcome requires reconciliation")
+    if claim.outcome == "replay":
+        return claim.command, _replay_result(claim.command, ctx)
+    return claim.command, None
+
+
+async def _execute_entity(
+    session: AsyncSession, shop: StorefrontBot, ctx: CommandContext, *,
+    action: str, command: StorefrontApiCommand,
+    before: dict | list | None, mutate: Callable[[], Awaitable[_Mutation]],
+) -> CommandResult:
+    """Like `_execute` but WITHOUT the config_version CAS (entity-scoped write)."""
+    try:
+        current = await _current_version(session, shop.id)
+        mutation = await mutate()
+        body: dict | list | None = mutation.body
+        if isinstance(body, dict):
+            body = {**body, "config_version": current}
+        body = storefront_audit.safe_cached_response(body)
+        await storefront_audit.append_event(
+            session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+            actor_role=await _audit_role(session, shop, ctx), source=ctx.source,
+            action=action, outcome="succeeded", entity_type=mutation.entity_type,
+            entity_id=mutation.entity_id, correlation_id=ctx.correlation_id or ctx.idempotency_key,
+            before=before, after=mutation.after,
+        )
+        await storefront_audit.finalize_command(
+            session, command, succeeded=True, response_status=mutation.response_status,
+            response_body=body,
+        )
+        await session.commit()
+        return CommandResult(mutation.response_status, body, current)
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def set_customer_banned(
+    session: AsyncSession, shop_id: int, customer_id: int, ctx: CommandContext, *,
+    banned: bool, reason: str,
+) -> CommandResult:
+    """Set a customer's ban flag to an ABSOLUTE value with a mandatory audited reason."""
+    reason = (reason or "").strip()
+    if not 3 <= len(reason) <= 255:
+        raise AdminCommandError("validation", "reason must be 3..255 characters")
+    # Customer ban is an admin action (owner OR a bot co-admin), unlike owner-only manager management.
+    shop, _ = await _authorized_shop(
+        session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"customer_id": int(customer_id), "banned": bool(banned), "reason": reason}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="customer.ban", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        cust = await _owned_customer(session, shop_id, customer_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="customer.ban", command=command, exc=exc)
+        raise
+    before = {"banned": cust.banned}
+
+    async def mutate() -> _Mutation:
+        cust.banned = bool(banned)
+        await session.flush()
+        state = {"banned": bool(banned), "reason": reason}
+        return _Mutation({"customer": {"id": cust.id, "banned": bool(banned)}}, state,
+                         "customer", cust.id)
+
+    return await _execute_entity(
+        session, shop, ctx, action="customer.ban", command=command, before=before, mutate=mutate)
+
+
+async def _finalize_order_command(
+    session: AsyncSession, shop: StorefrontBot, ctx: CommandContext, *,
+    action: str, command: StorefrontApiCommand, order_id: int,
+    before: dict, result, is_delete: bool,  # noqa: ANN001
+) -> CommandResult:
+    from app.services.storefront_subscription import SubResult
+    assert isinstance(result, SubResult)
+    role = await _audit_role(session, shop, ctx)
+    # Success (including an idempotent delete of an already-deleted order).
+    if result.ok or (is_delete and result.reason == "not_found"):
+        order = await session.get(StorefrontOrder, order_id)
+        status = order.status if order is not None else ("deleted" if is_delete else "unknown")
+        body = storefront_audit.safe_cached_response({"order": {"id": order_id, "status": status}})
+        await storefront_audit.append_event(
+            session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+            actor_role=role, source=ctx.source, action=action, outcome="succeeded",
+            entity_type="order", entity_id=order_id,
+            correlation_id=ctx.correlation_id or ctx.idempotency_key,
+            before=before, after={"status": status},
+        )
+        await storefront_audit.finalize_command(
+            session, command, succeeded=True, response_status=200, response_body=body)
+        await session.commit()
+        return CommandResult(200, body, await _current_version(session, shop.id))
+    # Definite validation failure (order not in an actionable state).
+    if result.reason in ("not_found", "trial"):
+        body = {"error": result.reason, "order_id": order_id}
+        await storefront_audit.append_event(
+            session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+            actor_role=role, source=ctx.source, action=action, outcome="failed",
+            entity_type="order", entity_id=order_id,
+            correlation_id=ctx.correlation_id or ctx.idempotency_key,
+            before=before, error_class=result.reason,
+        )
+        await storefront_audit.finalize_command(
+            session, command, succeeded=False, response_status=422, response_body=body,
+            error_class=result.reason)
+        await session.commit()
+        raise AdminCommandError(
+            "validation", result.message or result.reason, response_status=422, response_body=body)
+    # Ambiguous panel result → never a false success. Mark unknown; the reaper reconciles by an
+    # idempotent absolute re-apply (enable/delete are absolute, so a re-apply is a no-op if it landed).
+    command.status = "unknown"
+    command.lease_expires_at = None
+    command.error_class = "external_unknown"
+    await storefront_audit.append_event(
+        session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+        actor_role=role, source=ctx.source, action=action, outcome="unknown",
+        entity_type="order", entity_id=order_id,
+        correlation_id=ctx.correlation_id or ctx.idempotency_key,
+        before=before, error_class="external_unknown",
+    )
+    await session.commit()
+    raise AdminCommandError(
+        "external_unknown", "Panel result uncertain; will reconcile",
+        response_status=502, response_body={"error": "external_unknown", "order_id": order_id})
+
+
+async def _external_order_command(
+    session: AsyncSession, shop_id: int, ctx: CommandContext, *,
+    action: str, order_id: int, intent: dict, io_call: Callable[[], Awaitable], is_delete: bool = False,
+) -> CommandResult:
+    shop, _ = await _authorized_shop(
+        session, shop_id, ctx.actor_telegram_id, ctx.source, owner_only=True)
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action=action, intent=intent, external_io=True)
+    if replay is not None:
+        return replay
+    try:
+        order = await _owned_order(session, shop_id, order_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(session, shop, ctx, action=action, command=command, exc=exc)
+        raise
+    before = {"status": order.status}
+    await storefront_audit.append_event(
+        session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+        actor_role=await _audit_role(session, shop, ctx), source=ctx.source,
+        action=action, outcome="started", entity_type="order", entity_id=order_id,
+        correlation_id=ctx.correlation_id or ctx.idempotency_key, before=before,
+    )
+    await session.commit()  # release the DB transaction BEFORE the panel network call
+    result = await io_call()
+    return await _finalize_order_command(
+        session, shop, ctx, action=action, command=command, order_id=order_id,
+        before=before, result=result, is_delete=is_delete)
+
+
+async def set_order_enabled(
+    session: AsyncSession, shop_id: int, order_id: int, ctx: CommandContext, *, enabled: bool,
+) -> CommandResult:
+    """Pause/resume (absolute) a customer's service. Idempotent external-I/O command."""
+    from app.services import storefront_subscription
+    return await _external_order_command(
+        session, shop_id, ctx, action="order.set_enabled", order_id=order_id,
+        intent={"order_id": int(order_id), "enabled": bool(enabled)},
+        io_call=lambda: storefront_subscription.set_enabled(
+            SessionLocal, order_id=order_id, enabled=bool(enabled), expected_sf_id=shop_id),
+    )
+
+
+async def delete_order(
+    session: AsyncSession, shop_id: int, order_id: int, ctx: CommandContext, *, reason: str,
+) -> CommandResult:
+    """Delete a customer's service (no refund). Idempotent external-I/O command."""
+    from app.services import storefront_subscription
+    reason = (reason or "").strip()
+    if not 3 <= len(reason) <= 255:
+        raise AdminCommandError("validation", "reason must be 3..255 characters")
+    return await _external_order_command(
+        session, shop_id, ctx, action="order.delete", order_id=order_id,
+        intent={"order_id": int(order_id), "reason": reason},
+        io_call=lambda: storefront_subscription.delete_subscription(
+            SessionLocal, order_id=order_id, expected_sf_id=shop_id),
+        is_delete=True,
+    )
+
+
+async def renew_order(
+    session: AsyncSession, shop_id: int, order_id: int, ctx: CommandContext,
+) -> CommandResult:
+    """Free admin renewal of a customer's service. Idempotency + crash safety are provided by the
+    money-layer StorefrontOperation: the op_id is derived from the browser Idempotency-Key so a retry
+    REPLAYS the same operation (no second grant). Tenant + actor authorization is enforced here."""
+    import hashlib as _hashlib
+
+    from app.core.config import settings as _settings
+    from app.services import storefront_subscription
+    shop, _ = await _authorized_shop(
+        session, shop_id, ctx.actor_telegram_id, ctx.source, owner_only=True)
+    await _owned_order(session, shop_id, order_id)
+    op_id = _hashlib.sha256(
+        f"{_settings.secret_key}|sf-renew:{shop_id}:{order_id}:{ctx.idempotency_key}".encode()
+    ).hexdigest()[:32]
+    result = await storefront_subscription.renew(
+        SessionLocal, order_id=order_id, by_admin=True, op_id=op_id, expected_sf_id=shop_id)
+    current = await _current_version(session, shop_id)
+    role = await _audit_role(session, shop, ctx)
+    if result.ok:
+        body = storefront_audit.safe_cached_response(
+            {"order": {"id": order_id, "renewed": True, "gb": result.gb, "days": result.days},
+             "config_version": current})
+        await storefront_audit.append_event(
+            session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+            actor_role=role, source=ctx.source, action="order.renew", outcome="succeeded",
+            entity_type="order", entity_id=order_id,
+            correlation_id=ctx.correlation_id or ctx.idempotency_key,
+            after={"gb": result.gb, "days": result.days})
+        await session.commit()
+        return CommandResult(200, body, current)
+    reason = result.reason or "error"
+    outcome, code, status = ("failed", "validation", 422) if reason in ("not_found", "trial") else (
+        ("failed", "in_flight", 409) if reason == "processing" else ("failed", "external_failure", 502))
+    await storefront_audit.append_event(
+        session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
+        actor_role=role, source=ctx.source, action="order.renew", outcome=outcome,
+        entity_type="order", entity_id=order_id,
+        correlation_id=ctx.correlation_id or ctx.idempotency_key, error_class=reason)
+    await session.commit()
+    raise AdminCommandError(
+        code, result.message or reason, response_status=status,
+        response_body={"error": reason, "order_id": order_id})

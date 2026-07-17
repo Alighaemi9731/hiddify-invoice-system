@@ -28,6 +28,7 @@ from app.schemas.portal_storefront import (
     StorefrontChannelBody,
     StorefrontChannelOut,
     StorefrontCustomerPreviewOut,
+    StorefrontCustomerStatusBody,
     StorefrontDashboardOut,
     StorefrontEnabledBody,
     StorefrontHealthOut,
@@ -37,6 +38,8 @@ from app.schemas.portal_storefront import (
     StorefrontMessageSettingsBody,
     StorefrontMessageSettingsOut,
     StorefrontMutationOut,
+    StorefrontOrderDeleteBody,
+    StorefrontOrderEnabledBody,
     StorefrontPaymentSettingsBody,
     StorefrontPaymentSettingsOut,
     StorefrontPlanCreate,
@@ -55,7 +58,15 @@ from app.schemas.portal_storefront import (
     StorefrontTrialSettingsBody,
     StorefrontTrialSettingsOut,
 )
-from app.services import storefront, storefront_admin, storefront_reporting
+from app.services import (
+    settings_service,
+    storefront,
+    storefront_admin,
+    storefront_cursor,
+    storefront_customers,
+    storefront_provision,
+    storefront_reporting,
+)
 
 router = APIRouter(prefix="/api/portal/storefronts", tags=["portal-storefront"])
 _ETAG = re.compile(r'^"sf-config-([1-9][0-9]*)"$')
@@ -774,3 +785,244 @@ async def storefront_preview(
         ) for item in raw["plans"]],
         channel_required=bool(raw.get("channel_required", False)),
     )
+
+
+# ── customer & order management (plan 004) ───────────────────────────────────
+_LEDGER_KINDS = {
+    "topup", "purchase", "manual_credit", "manual_debit", "refund", "renew_reversal", "credit_bonus",
+}
+_LEDGER_STATUSES = {"pending", "confirmed", "rejected", "done"}
+_ORDER_STATUSES = {"pending", "provisioned", "disabled", "renewing", "failed", "deleted"}
+
+
+def _entity_command_context(
+    ctx: ResellerContext, *, idempotency_key: str,
+) -> storefront_admin.CommandContext:
+    """Command context for entity (customer/order) mutations: Idempotency-Key only, no If-Match —
+    they are not shop-config changes, so `expected_version` is an unused placeholder."""
+    key = idempotency_key.strip()
+    if not key or len(key) > 128:
+        raise HTTPException(status_code=422, detail={"code": "invalid_idempotency_key"})
+    return storefront_admin.CommandContext(
+        actor_telegram_id=ctx.chat_id, actor_role="owner", source="portal",
+        idempotency_key=key, expected_version=1, correlation_id=str(uuid.uuid4()),
+    )
+
+
+def _bad(code: str) -> HTTPException:
+    return HTTPException(status_code=422, detail={"code": code})
+
+
+@router.get("/{shop_id}/customers")
+async def storefront_customers_list(
+    shop_id: int,
+    q: str | None = Query(None),
+    banned: bool | None = Query(None),
+    activity: str | None = Query(None),
+    has_service: bool | None = Query(None),
+    cursor: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    if q is not None and not q.strip().isdigit() and len(q.strip()) < 3:
+        raise _bad("query_too_short")
+    if activity is not None and activity not in ("active30", "inactive30"):
+        raise _bad("invalid_activity")
+    try:
+        items, next_cursor = await storefront_customers.list_customers_keyset(
+            session, access.shop.id, q=q, banned=banned, activity=activity,
+            has_service=has_service, cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/{shop_id}/customers/{customer_id}")
+async def storefront_customer_detail(
+    shop_id: int, customer_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    detail = await storefront_customers.customer_detail(session, access.shop.id, customer_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    return detail
+
+
+@router.get("/{shop_id}/customers/{customer_id}/ledger")
+async def storefront_customer_ledger(
+    shop_id: int, customer_id: int,
+    kind: str | None = Query(None),
+    status: str | None = Query(None),
+    date_from: dt.date | None = Query(None, alias="from"),
+    date_to: dt.date | None = Query(None, alias="to"),
+    cursor: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    if kind is not None and kind not in _LEDGER_KINDS:
+        raise _bad("invalid_kind")
+    if status is not None and status not in _LEDGER_STATUSES:
+        raise _bad("invalid_status")
+    if date_from is not None and date_to is not None and (date_to - date_from).days > 366:
+        raise _bad("date_span_too_large")
+    dt_from = dt.datetime.combine(date_from, dt.time.min, dt.timezone.utc) if date_from else None
+    dt_to = dt.datetime.combine(date_to, dt.time.max, dt.timezone.utc) if date_to else None
+    try:
+        result = await storefront_customers.customer_ledger(
+            session, access.shop.id, customer_id, kind=kind, status=status,
+            dt_from=dt_from, dt_to=dt_to, cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    items, next_cursor = result
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/{shop_id}/customers/{customer_id}/orders")
+async def storefront_customer_orders(
+    shop_id: int, customer_id: int,
+    status: str | None = Query(None),
+    cursor: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    if status is not None and status not in _ORDER_STATUSES:
+        raise _bad("invalid_status")
+    try:
+        result = await storefront_customers.list_customer_orders_keyset(
+            session, access.shop.id, customer_id, status=status, cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    items, next_cursor = result
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/{shop_id}/orders/{order_id}")
+async def storefront_order_detail(
+    shop_id: int, order_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    detail = await storefront_customers.order_detail(session, access.shop.id, order_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    return detail
+
+
+@router.patch(
+    "/{shop_id}/customers/{customer_id}/status",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_customer_status(
+    shop_id: int, customer_id: int,
+    body: StorefrontCustomerStatusBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.set_customer_banned(
+            session, access.shop.id, customer_id, command, banned=body.banned, reason=body.reason)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.post("/{shop_id}/orders/{order_id}/refresh")
+async def storefront_order_refresh(
+    shop_id: int, order_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        await storefront_admin._owned_order(session, access.shop.id, order_id)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    window = 30
+    try:
+        window = max(5, min(3600, int(
+            await settings_service.get(session, "storefront_live_refresh_seconds", 30) or 30)))
+    except (TypeError, ValueError):
+        window = 30
+    try:
+        status, freshness = await storefront_provision.refresh_order_live(
+            order_id=order_id, window_seconds=window)
+    except storefront_provision.RateLimited as exc:
+        raise HTTPException(
+            status_code=429, detail={"code": "rate_limited"},
+            headers={"Retry-After": str(exc.retry_after)}) from exc
+    return {"status": status, "freshness": freshness}
+
+
+@router.post(
+    "/{shop_id}/orders/{order_id}/renew",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_order_renew(
+    shop_id: int, order_id: int,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.renew_order(session, access.shop.id, order_id, command)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.put(
+    "/{shop_id}/orders/{order_id}/enabled",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_order_enabled(
+    shop_id: int, order_id: int,
+    body: StorefrontOrderEnabledBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.set_order_enabled(
+            session, access.shop.id, order_id, command, enabled=body.enabled)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.delete(
+    "/{shop_id}/orders/{order_id}",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_order_delete(
+    shop_id: int, order_id: int,
+    body: StorefrontOrderDeleteBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.delete_order(
+            session, access.shop.id, order_id, command, reason=body.reason)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)

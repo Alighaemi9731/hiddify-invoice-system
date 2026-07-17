@@ -393,3 +393,18 @@ class StorefrontCustomerPreviewOut(BaseModel):
     payment_methods: list[Literal["card", "usdt", "ton"]]
     enabled_plans: list[StorefrontPreviewPlanOut]
     channel_required: bool
+
+
+# ── customer & order management (plan 004) ───────────────────────────────────
+class StorefrontCustomerStatusBody(StorefrontStrictBody):
+    banned: bool
+    reason: str = Field(min_length=3, max_length=255)
+
+
+class StorefrontOrderEnabledBody(StorefrontStrictBody):
+    enabled: bool
+
+
+class StorefrontOrderDeleteBody(StorefrontStrictBody):
+    confirm: Literal["DELETE"]
+    reason: str = Field(min_length=3, max_length=255)

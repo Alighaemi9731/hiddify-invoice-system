@@ -19,7 +19,8 @@ export default function StorefrontShell() {
       : location.pathname.endsWith("/settings") ? "settings"
         : location.pathname.endsWith("/managers") ? "managers"
           : location.pathname.endsWith("/preview") ? "preview"
-            : "dashboard";
+            : location.pathname.includes("/customers") ? "customers"
+              : "dashboard";
 
   if (!Number.isSafeInteger(shopId) || shopId <= 0) {
     return <Navigate to="/portal/storefront" replace />;
@@ -91,6 +92,7 @@ export default function StorefrontShell() {
           >
             <Tab value="dashboard" label="داشبورد فروش" />
             <Tab value="plans" label="پلن‌ها" />
+            <Tab value="customers" label="مشتریان" />
             <Tab value="settings" label="تنظیمات" />
             <Tab value="managers" label="مدیران" />
             <Tab value="preview" label="پیش‌نمایش مشتری" />

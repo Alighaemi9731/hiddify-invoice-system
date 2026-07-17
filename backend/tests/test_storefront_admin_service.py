@@ -521,3 +521,97 @@ def test_add_manager_rejects_banned_owner_full_and_invalid():
         assert ok.body["managers"]["co_admin_ids"] == [888]
 
     _run(body)
+
+
+def test_customer_ban_allows_bot_coadmin_refuses_foreign_and_is_visible_to_portal():
+    """Parity: the bot ban and the portal ban are the SAME audited command over the same field.
+    A bot co-admin may ban (customer ban is not owner-only); a non-admin id is refused; the
+    resulting banned flag is what portal reads return."""
+    async def body(session):  # noqa: ANN001
+        owner, _foreign, shop, _other = await _seed(session)
+        cust = StorefrontCustomer(storefront_bot_id=shop.id, telegram_id=901, name="X")
+        session.add(cust)
+        await session.flush()
+        shop.co_admin_ids = "333"
+        await session.commit()
+
+        coadmin = storefront_admin.CommandContext(
+            actor_telegram_id=333, actor_role="admin", source="bot",
+            idempotency_key="ban-bot-1", expected_version=1)
+        res = await storefront_admin.set_customer_banned(
+            session, shop.id, cust.id, coadmin, banned=True, reason="via bot test")
+        assert res.response_status == 200
+        assert (await session.get(StorefrontCustomer, cust.id)).banned is True
+
+        stranger = storefront_admin.CommandContext(
+            actor_telegram_id=999, actor_role="admin", source="bot",
+            idempotency_key="ban-bot-2", expected_version=1)
+        with pytest.raises(storefront_admin.AdminCommandError) as exc:
+            await storefront_admin.set_customer_banned(
+                session, shop.id, cust.id, stranger, banned=False, reason="not allowed here")
+        assert exc.value.code == "not_found"
+        # the stranger's attempt changed nothing
+        assert (await session.get(StorefrontCustomer, cust.id)).banned is True
+
+    _run(body)
+
+
+@pytest.mark.pg_contract
+@requires_pg
+def test_pg_customer_ban_idempotency_race():
+    """Two concurrent bans with the SAME idempotency key must collapse to ONE durable command
+    row (uq_sfcommand_actor_key) and one applied ban, on real Postgres 16 under contention."""
+    async def run():
+        import uuid
+        suffix = uuid.uuid4().hex[:10]
+        engine, factory = make_engine()
+        try:
+            async with factory() as session:
+                panel = Panel(key=f"cb{suffix}", host=f"{suffix}.invalid", proxy_path_enc="x",
+                              owner_uuid=f"o-{suffix}")
+                session.add(panel)
+                await session.flush()
+                reseller = Reseller(panel_id=panel.id, admin_uuid=f"a-{suffix}", name="race",
+                                    bot_chat_id=9_100_000_000 + int(suffix[:5], 16))
+                session.add(reseller)
+                await session.flush()
+                shop = StorefrontBot(reseller_id=reseller.id, panel_id=panel.id, bot_token_enc="x",
+                                     pay_card_enabled=False)
+                session.add(shop)
+                await session.flush()
+                cust = StorefrontCustomer(storefront_bot_id=shop.id,
+                                          telegram_id=7_000_000 + int(suffix[:4], 16), name="C")
+                session.add(cust)
+                await session.commit()
+                ids = panel.id, reseller.id, shop.id, cust.id, reseller.bot_chat_id
+
+            async def ban():
+                async with factory() as session:
+                    return await storefront_admin.set_customer_banned(
+                        session, ids[2], ids[3],
+                        storefront_admin.CommandContext(
+                            actor_telegram_id=ids[4], actor_role="owner", source="portal",
+                            idempotency_key="ban-race", expected_version=1),
+                        banned=True, reason="concurrent ban race")
+
+            a, b = await asyncio.gather(ban(), ban(), return_exceptions=True)
+            assert sum(isinstance(x, storefront_admin.CommandResult) for x in (a, b)) >= 1, (a, b)
+            async with factory() as session:
+                assert await session.scalar(select(func.count(StorefrontApiCommand.id)).where(
+                    StorefrontApiCommand.storefront_bot_id == ids[2],
+                    StorefrontApiCommand.idempotency_key == "ban-race")) == 1
+                assert (await session.get(StorefrontCustomer, ids[3])).banned is True
+                await session.execute(delete(StorefrontAuditEvent).where(
+                    StorefrontAuditEvent.storefront_bot_id == ids[2]))
+                await session.execute(delete(StorefrontApiCommand).where(
+                    StorefrontApiCommand.storefront_bot_id == ids[2]))
+                await session.execute(delete(StorefrontCustomer).where(
+                    StorefrontCustomer.id == ids[3]))
+                await session.execute(delete(StorefrontBot).where(StorefrontBot.id == ids[2]))
+                await session.execute(delete(Reseller).where(Reseller.id == ids[1]))
+                await session.execute(delete(Panel).where(Panel.id == ids[0]))
+                await session.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())

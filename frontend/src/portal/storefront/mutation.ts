@@ -57,6 +57,16 @@ export const isVersionConflict = (error: unknown) =>
 export const isNotFound = (error: unknown) =>
   axios.isAxiosError(error) && error.response?.status === 404;
 
+// A rate-limited live refresh (HTTP 429) is a soft outcome, not a failure. Returns the
+// server's Retry-After in whole seconds (defaulting to 5s when the header is absent/invalid),
+// or null when the error is not a 429 — so the caller can say "try again in N seconds".
+export function rateLimitRetryAfter(error: unknown): number | null {
+  if (!axios.isAxiosError(error) || error.response?.status !== 429) return null;
+  const header = error.response.headers?.["retry-after"];
+  const seconds = Number(Array.isArray(header) ? header[0] : header);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 5;
+}
+
 export function commandRecoveryMessage(error: unknown) {
   if (!axios.isAxiosError(error)) return null;
   const code = (error.response?.data as { detail?: { code?: string } } | undefined)?.detail?.code;

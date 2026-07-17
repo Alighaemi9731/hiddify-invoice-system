@@ -8,6 +8,28 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.85.0 - 2026-07-17
+
+Storefront management portal Release C — customers & subscriptions. Adds one additive database
+migration (`6e34a6ce638a`, applied automatically on upgrade); no manual steps.
+
+### Added
+
+- **Reseller owners can now manage their storefront's customers and their services from the web
+  portal.** A searchable, filterable customer list (by name/Telegram-ID, banned, active-in-30-days,
+  has-a-service) with fast "load more" pagination; a customer page showing identity, lifetime net
+  spend (LTV), a redacted transaction history, and each service's stored status. From there the owner
+  can **ban/unban** a customer (with a reason), and per service: **renew** (free admin grant),
+  **pause/resume**, **delete**, and pull a **live status** from the panel on demand.
+- Every one of those actions — from the **portal or the Telegram bot** — now goes through the same
+  audited, idempotency-keyed command layer, so a double-click or a retry can never double-apply, and
+  the owner and bot always see the same result. The live-status refresh is rate-limited per service.
+
+### Notes
+
+- The wallet balance and LTV are shown **read-only** in this release; adding/adjusting credit and
+  approving top-ups arrive in the next slice. Customer service links are never exposed in the portal.
+
 ## 1.84.0 - 2026-07-17
 
 Storefront management portal Release B — plans & settings. Adds one additive database migration

@@ -1088,6 +1088,7 @@ async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
+        sf_id = sf.id
         if sf.shop_closed:
             await cb.answer()
             await cb.message.answer(rtl(_shop_closed_text(sf)))
@@ -1097,7 +1098,8 @@ async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
     await _strip_buttons(cb)
     await cb.answer()
     await cb.message.answer(rtl("⏳ در حال تمدید…"))
-    res = await storefront_subscription.renew(SessionLocal, order_id=order_id, by_admin=False, op_id=op_id)
+    res = await storefront_subscription.renew(
+        SessionLocal, order_id=order_id, by_admin=False, op_id=op_id, expected_sf_id=sf_id)
     if res.ok:
         await cb.message.answer(rtl(
             f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز. لینکِ شما تغییری نکرده است."))
@@ -1126,7 +1128,9 @@ async def sf_toggle(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer("یافت نشد.", show_alert=True)
             return
         enable = order.status == "disabled"
-    res = await storefront_subscription.set_enabled(SessionLocal, order_id=order_id, enabled=enable)
+        sf_id = sf.id
+    res = await storefront_subscription.set_enabled(
+        SessionLocal, order_id=order_id, enabled=enable, expected_sf_id=sf_id)
     if res.ok:
         await cb.answer("فعال شد." if enable else "متوقف شد.", show_alert=False)
     else:
@@ -1155,8 +1159,10 @@ async def sf_delete_ok(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
+        sf_id = sf.id
     await cb.answer()
-    res = await storefront_subscription.delete_subscription(SessionLocal, order_id=order_id)
+    res = await storefront_subscription.delete_subscription(
+        SessionLocal, order_id=order_id, expected_sf_id=sf_id)
     await cb.message.answer(rtl("✅ سرویس حذف شد." if res.ok else "❌ حذف ناموفق بود."))
 
 
@@ -1241,13 +1247,20 @@ async def _set_customer_banned(cb: CallbackQuery, bot: Bot, *, banned: bool) -> 
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        cust = await s.get(StorefrontCustomer, cid)
-        if cust is None or cust.storefront_bot_id != sf.id:
-            await cb.answer("یافت نشد.", show_alert=True)
+        ctx = storefront_admin.CommandContext(
+            actor_telegram_id=cb.from_user.id, actor_role="admin", source="bot",
+            idempotency_key=f"tg-ban:{cb.id}", expected_version=1,
+            correlation_id=f"tg-ban:{cb.id}")
+        try:
+            await storefront_admin.set_customer_banned(
+                s, sf.id, cid, ctx, banned=banned, reason="اعمال از طریق ربات")
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer("یافت نشد." if exc.code == "not_found" else "ناموفق بود.",
+                            show_alert=True)
             return
-        cust.banned = banned
-        await s.commit()
-        await _show_customer_detail(cb, cust)
+        cust = await s.get(StorefrontCustomer, cid)
+        if cust is not None:
+            await _show_customer_detail(cb, cust)
     await cb.answer("مسدود شد." if banned else "رفعِ مسدودی شد.")
 
 
@@ -1411,12 +1424,14 @@ async def sf_admin_renew(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or not is_admin or order is None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
+        sf_id = sf.id
         if order.is_trial:
             await cb.answer()
             await cb.message.answer(rtl(_TRIAL_NO_RENEW))
             return
     await cb.answer()
-    res = await storefront_subscription.renew(SessionLocal, order_id=oid, by_admin=True)
+    res = await storefront_subscription.renew(
+        SessionLocal, order_id=oid, by_admin=True, expected_sf_id=sf_id)
     await cb.message.answer(
         rtl(f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز." if res.ok else "❌ تمدید ناموفق بود."))
 
@@ -1434,7 +1449,9 @@ async def sf_admin_toggle(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer("یافت نشد.", show_alert=True)
             return
         enable = order.status == "disabled"
-    res = await storefront_subscription.set_enabled(SessionLocal, order_id=oid, enabled=enable)
+        sf_id = sf.id
+    res = await storefront_subscription.set_enabled(
+        SessionLocal, order_id=oid, enabled=enable, expected_sf_id=sf_id)
     await cb.answer(("فعال شد." if enable else "متوقف شد.") if res.ok else "ناموفق بود.",
                     show_alert=not res.ok)
 
@@ -1447,8 +1464,10 @@ async def sf_admin_delete(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or not is_admin or await _admin_order(s, sf, oid) is None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
+        sf_id = sf.id
     await cb.answer()
-    res = await storefront_subscription.delete_subscription(SessionLocal, order_id=oid)
+    res = await storefront_subscription.delete_subscription(
+        SessionLocal, order_id=oid, expected_sf_id=sf_id)
     await cb.message.answer(rtl("✅ سرویس حذف شد." if res.ok else "❌ حذف ناموفق بود."))
 
 
