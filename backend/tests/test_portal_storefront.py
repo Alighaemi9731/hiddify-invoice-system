@@ -216,6 +216,7 @@ async def _seed_dashboard(session, shop: StorefrontBot):  # noqa: ANN001, ANN202
     await session.flush()
     session.add(StorefrontCreditRedemption(
         code_id=code.id, customer_id=c1.id, bonus_toman=25,
+        created_at=dt.datetime(2026, 7, 1, tzinfo=UTC),   # pin in-window; else defaults to real now → flaky
     ))
     session.add(StorefrontCreditRedemption(
         code_id=code.id, customer_id=c1.id, bonus_toman=999,
