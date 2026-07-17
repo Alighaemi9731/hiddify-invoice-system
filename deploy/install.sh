@@ -64,7 +64,12 @@ if [[ "$BEHIND_RELAY" == "1" ]]; then
   CADDY_HTTPS_PUBLISH="${CADDY_HTTPS_PUBLISH:-127.0.0.1:8443}"
   # A domain is required — passed now OR already in .env from a prior install (so a plain re-run /
   # in-panel update on an established relay box doesn't error just because DOMAIN wasn't re-passed).
-  _existing_domain="$(sed -n 's/^SERVER_DOMAIN=//p' "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  # Read it only when .env EXISTS: on a truly fresh relay box there is no .env yet, and `sed` on a
+  # missing file returns non-zero, which under `set -euo pipefail` would abort the whole install.
+  _existing_domain=""
+  if [[ -f "$ENV_FILE" ]]; then
+    _existing_domain="$(sed -n 's/^SERVER_DOMAIN=//p' "$ENV_FILE" | tail -1 | tr -d '[:space:]')"
+  fi
   if [[ -z "$DOMAIN" && -z "$_existing_domain" ]]; then
     err "This server runs a TLS relay, so the panel installs behind it and needs a DOMAIN (there is"
     err "no bare-IP access behind a relay). Re-run with e.g.:"

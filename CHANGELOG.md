@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.83.2 - 2026-07-17
+
+Install reliability fix; no runtime behavior change, database migration or manual upgrade.
+
+### Fixed
+
+- **Installing on a brand-new server that already runs the TLS relay no longer aborts.** On a truly
+  fresh box (relay present but no `.env` yet), `install.sh` read the existing domain from `.env` with a
+  `sed` that returned non-zero on the missing file, which under `set -euo pipefail` killed the whole
+  install right after "installing the panel behind the relay". The domain is now read only when `.env`
+  exists, so a first-time behind-a-relay install completes normally. (Re-installs on an established box
+  were unaffected because they already had an `.env`.)
+
 ## 1.83.1 - 2026-07-16
 
 Release-gate reliability patch; no runtime behavior change, database migration or manual upgrade.
