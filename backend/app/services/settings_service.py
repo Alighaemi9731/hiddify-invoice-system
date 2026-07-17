@@ -234,6 +234,11 @@ DEFS: list[SettingDef] = [
     # status (plan 004). Cross-process throttle via storefront_orders.live_refreshed_at; a repeat
     # inside the window returns 429. Keeps list/detail off the panel and rate-limits manual reads.
     SettingDef("storefront_live_refresh_seconds", 30, False, "schedule"),
+    # Plan 006 durable delivery: how often the storefront broadcast/direct-message worker runs (minutes),
+    # and how long a delivered job's per-recipient DETAIL rows are kept before the daily maintenance
+    # prunes them (job aggregate totals + audit are kept forever; 0 = never prune detail).
+    SettingDef("storefront_delivery_worker_interval_minutes", 1, False, "schedule"),
+    SettingDef("storefront_delivery_retention_days", 90, False, "schedule"),
     # Storefront retention: the daily maintenance purges customers with NO financial footprint (zero
     # balance, no provisioned/disabled order, no confirmed top-up) inactive for this many days, plus
     # failed/deleted orders + rejected top-ups. Confirmed top-ups + provisioned services are kept. 0 = off.
@@ -340,6 +345,8 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "storefront_pending_order_reaper_minutes": (1, 1440),
     "storefront_operation_lease_seconds": (300, 3600),
     "storefront_live_refresh_seconds": (5, 3600),
+    "storefront_delivery_worker_interval_minutes": (1, 60),
+    "storefront_delivery_retention_days": (0, 3650),
     "storefront_stale_customer_days": (0, 3650),
     "owner_data_retention_days": (0, 3650),
     "storefront_expiry_notify_days": (0, 60),

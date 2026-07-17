@@ -5,7 +5,7 @@ import datetime as dt
 import os
 import re
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -28,12 +28,16 @@ from app.core.storefront_access import (
 )
 from app.models import StorefrontWalletTxn
 from app.schemas.portal_storefront import (
+    StorefrontBroadcastBody,
     StorefrontBulkDecisionBody,
     StorefrontChannelBody,
     StorefrontChannelOut,
+    StorefrontCreditCreate,
+    StorefrontCreditUpdate,
     StorefrontCustomerPreviewOut,
     StorefrontCustomerStatusBody,
     StorefrontDashboardOut,
+    StorefrontDirectMessageBody,
     StorefrontEnabledBody,
     StorefrontHealthOut,
     StorefrontManagerBody,
@@ -116,7 +120,7 @@ def _command_context(
     )
 
 
-def _raise_admin_error(exc: storefront_admin.AdminCommandError) -> None:
+def _raise_admin_error(exc: storefront_admin.AdminCommandError) -> NoReturn:
     if exc.code == "not_found":
         status_code = 404
     elif exc.code in {"config_conflict", "idempotency_conflict", "in_flight", "unknown"}:
@@ -1179,3 +1183,270 @@ async def storefront_wallet_adjustment(
     except storefront_admin.AdminCommandError as exc:
         _raise_admin_error(exc)
     return _mutation_dict(response, result)
+
+
+# ─────────────────────────── credit codes ────────────────────────────────────
+
+@router.get("/{shop_id}/credits")
+async def storefront_credits_list(
+    shop_id: int,
+    include_archived: bool = Query(False),
+    cursor: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await storefront_admin.list_credits(
+            session, access.shop.id, ctx.chat_id, "portal",
+            include_archived=include_archived, cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+
+
+@router.post(
+    "/{shop_id}/credits",
+    response_model=StorefrontMutationOut[dict[str, Any]], status_code=201,
+)
+async def storefront_credit_create(
+    shop_id: int,
+    body: StorefrontCreditCreate,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.create_credit(
+            session, access.shop.id, command,
+            code=body.code, kind=body.kind, percent_off=body.percent_off,
+            amount_toman=body.amount_toman, max_bonus_toman=body.max_bonus_toman,
+            min_topup_toman=body.min_topup_toman, is_gift=body.is_gift,
+            max_uses=body.max_uses, per_customer_limit=body.per_customer_limit,
+            starts_at=body.starts_at, expires_at=body.expires_at)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    out = _mutation_dict(response, result)
+    response.status_code = result.response_status
+    return out
+
+
+@router.patch(
+    "/{shop_id}/credits/{code_id}",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_credit_update(
+    shop_id: int, code_id: int,
+    body: StorefrontCreditUpdate,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    changes = body.model_dump(exclude_unset=True)
+    try:
+        result = await storefront_admin.update_credit(
+            session, access.shop.id, code_id, command, changes=changes)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.put(
+    "/{shop_id}/credits/{code_id}/enabled",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_credit_set_enabled(
+    shop_id: int, code_id: int,
+    body: StorefrontEnabledBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.set_credit_enabled(
+            session, access.shop.id, code_id, command, enabled=body.enabled)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.post(
+    "/{shop_id}/credits/{code_id}/archive",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_credit_archive(
+    shop_id: int, code_id: int,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.archive_credit(
+            session, access.shop.id, code_id, command)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.get("/{shop_id}/credits/{code_id}/usage")
+async def storefront_credit_usage(
+    shop_id: int, code_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await storefront_admin.credit_usage(
+            session, access.shop.id, code_id, ctx.chat_id, "portal")
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+
+
+@router.get("/{shop_id}/credits/{code_id}/redemptions")
+async def storefront_credit_redemptions(
+    shop_id: int, code_id: int,
+    cursor: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await storefront_admin.list_credit_redemptions(
+            session, access.shop.id, code_id, ctx.chat_id, "portal", cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+
+
+# ─────────────────────── communications (broadcast + direct) ──────────────────
+
+@router.get("/{shop_id}/audience/preview")
+async def storefront_audience_preview(
+    shop_id: int,
+    segment: str = Query(...),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await storefront_admin.preview_audience(
+            session, access.shop.id, segment, ctx.chat_id, "portal")
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+
+
+@router.get("/{shop_id}/broadcasts")
+async def storefront_broadcasts_list(
+    shop_id: int,
+    cursor: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await storefront_admin.list_broadcasts(
+            session, access.shop.id, ctx.chat_id, "portal", cursor=cursor, limit=limit)
+    except storefront_cursor.CursorError:
+        raise _bad("invalid_cursor") from None
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+
+
+@router.post(
+    "/{shop_id}/broadcasts",
+    response_model=StorefrontMutationOut[dict[str, Any]], status_code=202,
+)
+async def storefront_broadcast_create(
+    shop_id: int,
+    body: StorefrontBroadcastBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.enqueue_broadcast(
+            session, access.shop.id, command, segment=body.segment, text=body.text)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    out = _mutation_dict(response, result)
+    response.status_code = result.response_status
+    return out
+
+
+@router.get("/{shop_id}/broadcasts/{job_id}")
+async def storefront_broadcast_status(
+    shop_id: int, job_id: int,
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        return await storefront_admin.get_broadcast(
+            session, access.shop.id, job_id, ctx.chat_id, "portal")
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+
+
+@router.post(
+    "/{shop_id}/broadcasts/{job_id}/cancel",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_broadcast_cancel(
+    shop_id: int, job_id: int,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.cancel_broadcast(
+            session, access.shop.id, job_id, command)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.post(
+    "/{shop_id}/customers/{customer_id}/message",
+    response_model=StorefrontMutationOut[dict[str, Any]], status_code=202,
+)
+async def storefront_customer_message(
+    shop_id: int, customer_id: int,
+    body: StorefrontDirectMessageBody,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _entity_command_context(ctx, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.enqueue_direct(
+            session, access.shop.id, customer_id, command, text=body.text)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    out = _mutation_dict(response, result)
+    response.status_code = result.response_status
+    return out

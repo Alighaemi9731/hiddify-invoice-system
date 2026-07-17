@@ -24,7 +24,7 @@ migration, external prerequisite, product choice, or scope expansion not already
 | 003 | Add audited shared plan and settings management | P1 | L | 002 | DONE (v1.84.0) |
 | 004 | Add tenant-safe customer and subscription management | P1 | L | 003 | DONE (v1.85.0) |
 | 005 | Add the wallet and top-up operations center | P1 | L | 003, 004 | DONE (v1.86.0) |
-| 006 | Add credit-code analytics and durable communications | P2 | L | 003, 004, 005 | TODO |
+| 006 | Add credit-code analytics and durable communications | P2 | L | 003, 004, 005 | DONE (v1.87.0) |
 | 007 | Close bot/portal parity and simplify the storefront bot | P2 | M | 002–006 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED

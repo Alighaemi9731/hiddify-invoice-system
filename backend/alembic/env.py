@@ -56,6 +56,7 @@ _POST_BASELINE_TABLES = {
     "storefront_credit_codes", "storefront_credit_redemptions",
     "storefront_operations",
     "storefront_audit_events", "storefront_api_commands",
+    "storefront_broadcast_jobs", "storefront_delivery_recipients",
     "payment_settlements",
 }
 

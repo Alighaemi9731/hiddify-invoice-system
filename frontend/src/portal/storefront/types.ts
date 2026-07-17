@@ -440,3 +440,116 @@ export interface WalletAdjustmentResult {
   old_balance: number;
   new_balance: number;
 }
+
+// ── credit codes (plan 006) ──────────────────────────────────────────────────
+export type CreditKind = "percent" | "fixed";
+
+export interface CreditCode {
+  id: number;
+  code: string;
+  kind: CreditKind;
+  percent_off: number | null;
+  amount_toman: number | null;
+  max_bonus_toman: number | null;
+  min_topup_toman: number;
+  is_gift: boolean;
+  max_uses: number | null;
+  per_customer_limit: number | null;
+  used_count: number;
+  enabled: boolean;
+  archived: boolean;
+  archived_at: string | null;
+  starts_at: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+}
+
+export interface CreditCodesPage {
+  items: CreditCode[];
+  next_cursor: string | null;
+  config_version: number;
+}
+
+export interface CreditCreateBody {
+  code: string;
+  kind: CreditKind;
+  percent_off?: number | null;
+  amount_toman?: number | null;
+  max_bonus_toman?: number | null;
+  min_topup_toman?: number;
+  is_gift?: boolean;
+  max_uses?: number | null;
+  per_customer_limit?: number | null;
+  starts_at?: string | null;
+  expires_at?: string | null;
+}
+
+export type CreditUpdateBody = Partial<Omit<CreditCreateBody, "code">> & { enabled?: boolean };
+
+export interface CreditUsage {
+  code: CreditCode;
+  total_redemptions: number;
+  unique_customers: number;
+  total_bonus_toman: number;
+  config_version: number;
+}
+
+export interface CreditRedemption {
+  id: number;
+  customer_id: number;
+  wallet_txn_id: number | null;
+  bonus_toman: number;
+  created_at: string | null;
+}
+
+export interface CreditRedemptionsPage {
+  items: CreditRedemption[];
+  next_cursor: string | null;
+  config_version: number;
+}
+
+// ── communications: broadcasts + direct messages (plan 006) ───────────────────
+export type AudienceSegment = "all" | "expired" | "inactive30" | "trial_no_purchase";
+export type BroadcastKind = "broadcast" | "direct";
+export type BroadcastStatus = "queued" | "running" | "completed" | "canceled";
+
+export interface AudiencePreview {
+  segment: string;
+  count: number;
+  over_cap: boolean;
+  sample: Array<{ id: number; name: string | null; username: string | null; telegram_id: number }>;
+  config_version: number;
+}
+
+export interface BroadcastJob {
+  id: number;
+  kind: BroadcastKind;
+  segment: string | null;
+  status: BroadcastStatus;
+  text: string;
+  total: number;
+  sent: number;
+  blocked: number;
+  failed: number;
+  pending: number;
+  created_at: string | null;
+  canceled_at: string | null;
+}
+
+export interface BroadcastsPage {
+  items: BroadcastJob[];
+  next_cursor: string | null;
+  config_version: number;
+}
+
+export interface BroadcastCreateResult {
+  job_id: number;
+  status: string;
+  total: number;
+}
+
+export interface DirectMessageResult {
+  delivery_id: number;
+  status: string;
+  total: number;
+}

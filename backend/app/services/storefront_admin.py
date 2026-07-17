@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionLocal
@@ -25,12 +25,14 @@ from app.models import (
     StorefrontApiCommand,
     StorefrontAuditEvent,
     StorefrontBot,
+    StorefrontBroadcastJob,
+    StorefrontCreditCode,
     StorefrontCustomer,
     StorefrontOrder,
     StorefrontPlan,
     StorefrontWalletTxn,
 )
-from app.services import storefront, storefront_audit
+from app.services import storefront, storefront_audit, storefront_credit
 
 log = logging.getLogger("bot.storefront")
 
@@ -47,6 +49,15 @@ def _as_utc(value: dt.datetime) -> dt.datetime:
     return value.replace(tzinfo=dt.timezone.utc) if value.tzinfo is None else value.astimezone(
         dt.timezone.utc
     )
+
+
+def _iso(value: dt.datetime | None) -> str | None:
+    return _as_utc(value).isoformat() if value is not None else None
+
+
+def _jsonable(mapping: dict) -> dict:
+    """A JSON-safe copy of a field dict for the idempotency-claim intent (datetimes → ISO strings)."""
+    return {k: (_iso(v) if isinstance(v, dt.datetime) else v) for k, v in mapping.items()}
 
 
 class AdminCommandError(Exception):
@@ -1513,37 +1524,6 @@ async def _owned_topup(
     return txn
 
 
-async def _notify_topup_decision(
-    session: AsyncSession, shop_id: int, txn_id: int, *, decision: str, credited: int,
-) -> None:
-    """Best-effort post-commit customer notification (plan 006 makes this a durable queue). Never
-    raises; a failure cannot roll back the already-committed money fact."""
-    try:
-        from aiogram import Bot
-
-        from app.core import crypto
-        shop = await session.get(StorefrontBot, shop_id)
-        txn = await session.get(StorefrontWalletTxn, txn_id)
-        if shop is None or txn is None:
-            return
-        cust = await session.get(StorefrontCustomer, txn.customer_id)
-        token = crypto.decrypt(shop.bot_token_enc) if shop.bot_token_enc else None
-        if not (cust and cust.telegram_id and token):
-            return
-        text = (
-            f"✅ شارژِ کیفِ پولِ شما به مبلغِ {int(credited):,} تومان تأیید شد."
-            if decision == "confirm"
-            else "❌ درخواستِ شارژِ کیفِ پولِ شما تأیید نشد."
-        )
-        tg = Bot(token=token)
-        try:
-            await tg.send_message(cust.telegram_id, text)
-        finally:
-            await tg.session.close()
-    except Exception:  # noqa: BLE001 — notification is best-effort; money already committed
-        log.warning("top-up decision notify failed (best-effort)", exc_info=True)
-
-
 async def adjust_wallet(
     session: AsyncSession, shop_id: int, customer_id: int, ctx: CommandContext, *,
     amount_toman_signed: int, reason: str,
@@ -1621,34 +1601,55 @@ async def set_topup_decision(
             session, shop, ctx, action="topup.decide", command=command, exc=exc)
         raise
     before = {"status": txn0.status, "amount_toman": int(Decimal(str(txn0.amount_toman or 0)))}
-    holder: dict = {}
 
     async def mutate() -> _Mutation:
+        credit_q = None
         if decision == "confirm":
-            changed, t = await storefront_wallet._confirm_topup_core(
+            changed, t, credit_q = await storefront_wallet._confirm_topup_core(
                 session, txn_id, expected_storefront_bot_id=shop.id, amount_toman=corrected_amount)
         else:
             changed, t = await storefront_wallet._reject_topup_core(
                 session, txn_id, expected_storefront_bot_id=shop.id)
-        holder["changed"] = bool(changed)
-        holder["credited"] = (
+        credited = (
             int(Decimal(str(t.amount_toman))) if (t is not None and decision == "confirm") else None)
+        # Record the captured-code outcome so an archived/expired/no-bonus code is auditable (a
+        # committed decision never silently drops the bonus it did or didn't grant).
+        code_applied = bool(credit_q and credit_q.ok and credit_q.bonus_toman > 0)
+        credit_bonus = int(credit_q.bonus_toman) if code_applied and credit_q else 0
+        code_no_bonus_reason = (
+            credit_q.reason if (credit_q is not None and not credit_q.ok) else None)
         body = {
             "txn_id": int(txn_id), "decision": decision, "changed": bool(changed),
-            "already_decided": (not changed), "credited": holder["credited"],
+            "already_decided": (not changed), "credited": credited,
             "requested": (int(Decimal(str(t.requested_amount_toman)))
                           if (t is not None and t.requested_amount_toman is not None) else None),
             "status": t.status if t is not None else None,
+            "credit_applied": code_applied, "credit_bonus_toman": credit_bonus,
+            "credit_no_bonus_reason": code_no_bonus_reason,
         }
+        # Durable customer notification (portal source): enqueue a kind='direct' delivery in the SAME
+        # transaction as the money decision, so it can never fire for a rolled-back decision and a
+        # committed decision can never lose its notification. `source='system'` bypasses the direct
+        # rate gate; the worker delivers it with flood control. (The bot source notifies inline.)
+        if changed and ctx.source == "portal" and t is not None:
+            from app.services import storefront_delivery
+            cust = await session.get(StorefrontCustomer, t.customer_id)
+            if cust is not None and cust.telegram_id:
+                if decision == "confirm":
+                    bonus_note = (f" (+{credit_bonus:,} تومان بونوسِ کدِ شارژ)"
+                                  if code_applied else "")
+                    note = (f"✅ شارژِ کیفِ پولِ شما به مبلغِ {int(credited or 0):,} تومان "
+                            f"تأیید شد.{bonus_note}")
+                else:
+                    note = "❌ درخواستِ شارژِ کیفِ پولِ شما تأیید نشد."
+                await storefront_delivery.snapshot_job(
+                    session, storefront_bot_id=shop.id, kind="direct", segment=None,
+                    message_text=note, actor_telegram_id=ctx.actor_telegram_id,
+                    idempotency_key=f"topup-notify:{ctx.idempotency_key}", customers=[cust])
         return _Mutation(body, body, "wallet_txn", txn_id)
 
-    result = await _execute_entity(
+    return await _execute_entity(
         session, shop, ctx, action="topup.decide", command=command, before=before, mutate=mutate)
-    # Portal path notifies the customer best-effort AFTER commit; the bot path notifies itself.
-    if ctx.source == "portal" and holder.get("changed"):
-        await _notify_topup_decision(
-            session, shop_id, txn_id, decision=decision, credited=holder.get("credited") or 0)
-    return result
 
 
 async def bulk_topup_decisions(
@@ -1723,3 +1724,492 @@ async def bulk_topup_decisions(
             session, parent_command, succeeded=True, response_status=200, response_body=agg)
     await session.commit()
     return CommandResult(200, agg, await _current_version(session, shop_id))
+
+
+# ── credit codes («کد شارژ/هدیه») ──────────────────────────────────────────────
+# History-preserving credit-code management on the shared audited entity-command layer. The
+# redemption authority (reserve/record/quote, FOR UPDATE on the code row) stays in
+# `storefront_credit`; these commands only manage the code definition (create/edit/enable/archive).
+
+_CREDIT_KINDS = ("percent", "fixed")
+# Fields a caller may PATCH; `code`/`code_ci` are immutable (the redemption ledger keys on the code).
+_CREDIT_EDITABLE = frozenset({
+    "kind", "percent_off", "amount_toman", "max_bonus_toman", "min_topup_toman", "is_gift",
+    "max_uses", "per_customer_limit", "starts_at", "expires_at", "enabled",
+})
+# After ANY redemption, only these may still change (economics are frozen once money has moved).
+_CREDIT_POST_REDEMPTION = frozenset({"enabled", "expires_at"})
+
+
+def _credit_dict(c: StorefrontCreditCode) -> dict:
+    return {
+        "id": c.id, "code": c.code, "kind": c.kind, "percent_off": c.percent_off,
+        "amount_toman": c.amount_toman, "max_bonus_toman": c.max_bonus_toman,
+        "min_topup_toman": c.min_topup_toman, "is_gift": bool(c.is_gift),
+        "max_uses": c.max_uses, "per_customer_limit": c.per_customer_limit,
+        "used_count": int(c.used_count or 0), "enabled": bool(c.enabled),
+        "archived": c.archived_at is not None, "archived_at": _iso(c.archived_at),
+        "starts_at": _iso(c.starts_at), "expires_at": _iso(c.expires_at),
+        "created_at": _iso(c.created_at),
+    }
+
+
+def _norm_credit_code(raw: str) -> str:
+    code = storefront_credit.normalize_code(raw)
+    if not 1 <= len(code) <= 32:
+        raise AdminCommandError("validation", "code must be 1..32 characters")
+    return code
+
+
+def _validate_credit_economics(
+    *, kind, percent_off, amount_toman, max_bonus_toman, min_topup_toman, is_gift,
+    max_uses, per_customer_limit, starts_at, expires_at,  # noqa: ANN001
+) -> dict:
+    """Validate + normalize the economic/scheduling fields (shared by create + edit). Returns a dict
+    with the canonical values (e.g. a percent code has amount_toman cleared, a gift has min_topup 0)."""
+    if kind not in _CREDIT_KINDS:
+        raise AdminCommandError("validation", "kind must be percent or fixed")
+    is_gift = bool(is_gift)
+    if is_gift and kind != "fixed":
+        raise AdminCommandError("validation", "a gift code must be a fixed amount")
+    percent_off = int(percent_off) if percent_off is not None else None
+    amount_toman = int(amount_toman) if amount_toman is not None else None
+    max_bonus_toman = int(max_bonus_toman) if max_bonus_toman is not None else None
+    if kind == "percent":
+        if percent_off is None or not 1 <= percent_off <= 100:
+            raise AdminCommandError("validation", "percent_off must be 1..100 for a percent code")
+        amount_toman = None
+        if max_bonus_toman is not None and not 1 <= max_bonus_toman <= 10**12:
+            raise AdminCommandError("validation", "max_bonus_toman out of range")
+    else:  # fixed / gift
+        if amount_toman is None or not 1 <= amount_toman <= 10**12:
+            raise AdminCommandError("validation", "amount_toman must be 1..10^12 for a fixed code")
+        percent_off = None
+        max_bonus_toman = None
+    min_topup_toman = int(min_topup_toman or 0)
+    if not 0 <= min_topup_toman <= 10**12:
+        raise AdminCommandError("validation", "min_topup_toman out of range")
+    if is_gift:
+        min_topup_toman = 0  # a gift is standalone; it ignores the top-up amount
+    if max_uses is not None and not 1 <= int(max_uses) <= 10**9:
+        raise AdminCommandError("validation", "max_uses must be 1..10^9")
+    if per_customer_limit is not None and not 1 <= int(per_customer_limit) <= 10**9:
+        raise AdminCommandError("validation", "per_customer_limit must be 1..10^9")
+    s_at = _as_utc(starts_at) if isinstance(starts_at, dt.datetime) else None
+    e_at = _as_utc(expires_at) if isinstance(expires_at, dt.datetime) else None
+    if s_at and e_at and s_at >= e_at:
+        raise AdminCommandError("validation", "expires_at must be after starts_at")
+    return {
+        "kind": kind, "percent_off": percent_off, "amount_toman": amount_toman,
+        "max_bonus_toman": max_bonus_toman, "min_topup_toman": min_topup_toman, "is_gift": is_gift,
+        "max_uses": int(max_uses) if max_uses is not None else None,
+        "per_customer_limit": int(per_customer_limit) if per_customer_limit is not None else None,
+        "starts_at": s_at, "expires_at": e_at,
+    }
+
+
+async def _owned_credit_code(
+    session: AsyncSession, shop_id: int, code_id: int
+) -> StorefrontCreditCode:
+    code = await session.get(StorefrontCreditCode, code_id)
+    if code is None or code.storefront_bot_id != shop_id:
+        raise AdminCommandError("not_found", "Credit code not found")
+    return code
+
+
+async def create_credit(
+    session: AsyncSession, shop_id: int, ctx: CommandContext, *, code: str, kind: str,
+    percent_off: int | None = None, amount_toman: int | None = None,
+    max_bonus_toman: int | None = None, min_topup_toman: int = 0, is_gift: bool = False,
+    max_uses: int | None = None, per_customer_limit: int | None = 1,
+    starts_at: dt.datetime | None = None, expires_at: dt.datetime | None = None,
+) -> CommandResult:
+    """Create a credit code (201). Uniqueness is enforced per shop on the normalized code."""
+    code_ci = _norm_credit_code(code)
+    fields = _validate_credit_economics(
+        kind=kind, percent_off=percent_off, amount_toman=amount_toman,
+        max_bonus_toman=max_bonus_toman, min_topup_toman=min_topup_toman, is_gift=is_gift,
+        max_uses=max_uses, per_customer_limit=per_customer_limit,
+        starts_at=starts_at, expires_at=expires_at)
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"code_ci": code_ci, **_jsonable(fields)}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="credit.create", intent=intent)
+    if replay is not None:
+        return replay
+    if await storefront_credit.code_exists(session, shop.id, code_ci):
+        exc = AdminCommandError(
+            "code_exists", "code already exists", response_status=422,
+            response_body={"error": "code_exists"})
+        await _cache_known_failure(session, shop, ctx, action="credit.create", command=command, exc=exc)
+        raise exc
+
+    async def mutate() -> _Mutation:
+        c = storefront_credit.create_code_core(session, shop.id, code=code, **fields)
+        await session.flush()
+        d = _credit_dict(c)
+        return _Mutation({"credit": d}, d, "credit_code", c.id, response_status=201)
+
+    return await _execute_entity(
+        session, shop, ctx, action="credit.create", command=command, before=None, mutate=mutate)
+
+
+async def update_credit(
+    session: AsyncSession, shop_id: int, code_id: int, ctx: CommandContext, *, changes: dict,
+) -> CommandResult:
+    """Partially edit a code. Before the first redemption every economic/scheduling field is editable;
+    after ANY redemption only `enabled` + `expires_at` may change (money already moved). `code` is
+    always immutable."""
+    unknown = set(changes) - _CREDIT_EDITABLE
+    if unknown:
+        raise AdminCommandError("validation", f"unknown fields: {sorted(unknown)}")
+    if not changes:
+        raise AdminCommandError("validation", "no fields to update")
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"code_id": int(code_id), "changes": _jsonable(changes)}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="credit.edit", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        code = await _owned_credit_code(session, shop_id, code_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(session, shop, ctx, action="credit.edit", command=command, exc=exc)
+        raise
+    redeemed = int(code.used_count or 0) > 0 or await storefront_credit.has_redemptions(session, code.id)
+    if redeemed:
+        locked = set(changes) - _CREDIT_POST_REDEMPTION
+        if locked:
+            err = AdminCommandError(
+                "locked_after_redemption", "locked_after_redemption", response_status=422,
+                response_body={"error": "locked_after_redemption", "fields": sorted(locked)})
+            await _cache_known_failure(
+                session, shop, ctx, action="credit.edit", command=command, exc=err)
+            raise err
+    effective = {
+        "kind": changes.get("kind", code.kind),
+        "percent_off": changes.get("percent_off", code.percent_off),
+        "amount_toman": changes.get("amount_toman", code.amount_toman),
+        "max_bonus_toman": changes.get("max_bonus_toman", code.max_bonus_toman),
+        "min_topup_toman": changes.get("min_topup_toman", code.min_topup_toman),
+        "is_gift": changes.get("is_gift", code.is_gift),
+        "max_uses": changes.get("max_uses", code.max_uses),
+        "per_customer_limit": changes.get("per_customer_limit", code.per_customer_limit),
+        "starts_at": changes.get("starts_at", code.starts_at),
+        "expires_at": changes.get("expires_at", code.expires_at),
+    }
+    try:
+        validated = _validate_credit_economics(**effective)
+    except AdminCommandError as exc:
+        await _cache_known_failure(session, shop, ctx, action="credit.edit", command=command, exc=exc)
+        raise
+    apply_fields = {
+        k: (bool(changes[k]) if k == "enabled" else validated[k]) for k in changes
+    }
+    before = _credit_dict(code)
+
+    async def mutate() -> _Mutation:
+        storefront_credit.update_code_core(code, apply_fields)
+        await session.flush()
+        d = _credit_dict(code)
+        return _Mutation({"credit": d}, d, "credit_code", code.id)
+
+    return await _execute_entity(
+        session, shop, ctx, action="credit.edit", command=command, before=before, mutate=mutate)
+
+
+async def set_credit_enabled(
+    session: AsyncSession, shop_id: int, code_id: int, ctx: CommandContext, *, enabled: bool,
+) -> CommandResult:
+    """Absolute enable/disable of a code (does NOT archive)."""
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"code_id": int(code_id), "enabled": bool(enabled)}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="credit.enable", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        code = await _owned_credit_code(session, shop_id, code_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="credit.enable", command=command, exc=exc)
+        raise
+    before = {"enabled": bool(code.enabled)}
+
+    async def mutate() -> _Mutation:
+        storefront_credit.set_enabled_core(code, enabled)
+        await session.flush()
+        d = _credit_dict(code)
+        return _Mutation({"credit": d}, d, "credit_code", code.id)
+
+    return await _execute_entity(
+        session, shop, ctx, action="credit.enable", command=command, before=before, mutate=mutate)
+
+
+async def archive_credit(
+    session: AsyncSession, shop_id: int, code_id: int, ctx: CommandContext,
+) -> CommandResult:
+    """Archive a code (disable + stamp `archived_at`), preserving its redemption history and unique
+    code. Idempotent (re-archiving replays the same result)."""
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"code_id": int(code_id)}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="credit.archive", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        code = await _owned_credit_code(session, shop_id, code_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="credit.archive", command=command, exc=exc)
+        raise
+    before = _credit_dict(code)
+
+    async def mutate() -> _Mutation:
+        storefront_credit.archive_code_core(code)
+        await session.flush()
+        d = _credit_dict(code)
+        return _Mutation({"credit": d}, d, "credit_code", code.id)
+
+    return await _execute_entity(
+        session, shop, ctx, action="credit.archive", command=command, before=before, mutate=mutate)
+
+
+# ── credit reads (tenant-gated; not commands) ─────────────────────────────────
+
+async def list_credits(
+    session: AsyncSession, shop_id: int, actor_id: int, source: Source, *,
+    include_archived: bool = False, cursor: str | None = None, limit: int = 50,
+) -> dict:
+    shop, _ = await _authorized_shop(session, shop_id, actor_id, source)
+    codes, nxt = await storefront_credit.list_credit_codes(
+        session, shop.id, include_archived=include_archived, cursor=cursor, limit=limit)
+    return {"config_version": shop.config_version,
+            "items": [_credit_dict(c) for c in codes], "next_cursor": nxt}
+
+
+async def credit_usage(
+    session: AsyncSession, shop_id: int, code_id: int, actor_id: int, source: Source,
+) -> dict:
+    shop, _ = await _authorized_shop(session, shop_id, actor_id, source)
+    code = await _owned_credit_code(session, shop.id, code_id)
+    total, unique, bonus = await storefront_credit.usage_summary(session, code.id)
+    return {"config_version": shop.config_version, "code": _credit_dict(code),
+            "total_redemptions": total, "unique_customers": unique, "total_bonus_toman": bonus}
+
+
+async def list_credit_redemptions(
+    session: AsyncSession, shop_id: int, code_id: int, actor_id: int, source: Source, *,
+    cursor: str | None = None, limit: int = 50,
+) -> dict:
+    shop, _ = await _authorized_shop(session, shop_id, actor_id, source)
+    code = await _owned_credit_code(session, shop.id, code_id)
+    rows, nxt = await storefront_credit.list_redemptions(
+        session, code.id, cursor=cursor, limit=limit)
+    items = [{"id": r.id, "customer_id": r.customer_id, "wallet_txn_id": r.wallet_txn_id,
+              "bonus_toman": int(r.bonus_toman or 0), "created_at": _iso(r.created_at)} for r in rows]
+    return {"config_version": shop.config_version, "items": items, "next_cursor": nxt}
+
+
+# ── communications: durable broadcasts + direct messages ──────────────────────
+# A broadcast/direct is enqueued as a job + a create-time recipient snapshot (storefront_delivery),
+# then delivered by the durable worker. Enqueue is a 202 entity command; the request path never
+# touches Telegram.
+
+_DIRECT_RATE_LIMIT = 10       # owner-typed direct messages per shop per minute
+_DIRECT_RATE_WINDOW = 60
+
+
+def _job_dict(j: StorefrontBroadcastJob) -> dict:
+    return {
+        "id": j.id, "kind": j.kind, "segment": j.segment, "status": j.status,
+        "text": j.message_text, "total": int(j.total_count or 0), "sent": int(j.sent_count or 0),
+        "blocked": int(j.blocked_count or 0), "failed": int(j.failed_count or 0),
+        "pending": int(j.pending_count or 0), "created_at": _iso(j.created_at),
+        "canceled_at": _iso(j.canceled_at),
+    }
+
+
+async def _owned_broadcast_job(
+    session: AsyncSession, shop_id: int, job_id: int
+) -> StorefrontBroadcastJob:
+    job = await session.get(StorefrontBroadcastJob, job_id)
+    if job is None or job.storefront_bot_id != shop_id:
+        raise AdminCommandError("not_found", "Broadcast not found")
+    return job
+
+
+async def _enforce_direct_rate(session: AsyncSession, shop_id: int, actor_id: int) -> None:
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=_DIRECT_RATE_WINDOW)
+    n = await session.scalar(
+        select(func.count()).select_from(StorefrontBroadcastJob).where(
+            StorefrontBroadcastJob.storefront_bot_id == shop_id,
+            StorefrontBroadcastJob.kind == "direct",
+            StorefrontBroadcastJob.actor_telegram_id == actor_id,
+            StorefrontBroadcastJob.created_at >= cutoff,
+        ))
+    if int(n or 0) >= _DIRECT_RATE_LIMIT:
+        raise AdminCommandError(
+            "rate_limited", "rate_limited", response_status=422,
+            response_body={"error": "rate_limited"})
+
+
+async def enqueue_broadcast(
+    session: AsyncSession, shop_id: int, ctx: CommandContext, *, segment: str, text: str,
+) -> CommandResult:
+    """Queue a segment broadcast (202). Recipients are snapshotted at create time; delivery is the
+    worker's job. A same key + same text replays the same job (no second fan-out); a same key +
+    different text is an idempotency conflict."""
+    from app.services import storefront_delivery
+    text = (text or "").strip()
+    if not 1 <= len(text) <= 4000:
+        raise AdminCommandError("validation", "text must be 1..4000 characters")
+    if segment not in storefront.SEGMENTS:
+        raise AdminCommandError("validation", "unknown segment")
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"kind": "broadcast", "segment": segment,
+              "text_hash": hashlib.sha256(text.encode()).hexdigest()}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="broadcast.create", intent=intent)
+    if replay is not None:
+        return replay
+    customers = await storefront.customers_in_segment(session, shop.id, segment)
+    if len(customers) > storefront.AUDIENCE_CAP:
+        exc = AdminCommandError(
+            "audience_too_large", f"audience exceeds {storefront.AUDIENCE_CAP}", response_status=422,
+            response_body={"error": "audience_too_large", "count": len(customers)})
+        await _cache_known_failure(
+            session, shop, ctx, action="broadcast.create", command=command, exc=exc)
+        raise exc
+
+    async def mutate() -> _Mutation:
+        job = await storefront_delivery.snapshot_job(
+            session, storefront_bot_id=shop.id, kind="broadcast", segment=segment,
+            message_text=text, actor_telegram_id=ctx.actor_telegram_id,
+            idempotency_key=ctx.idempotency_key, customers=customers)
+        await session.flush()
+        body = {"job_id": job.id, "status": job.status, "total": int(job.total_count or 0)}
+        return _Mutation(body, {"job_id": job.id, "segment": segment, "total": job.total_count},
+                         "broadcast_job", job.id, response_status=202)
+
+    return await _execute_entity(
+        session, shop, ctx, action="broadcast.create", command=command, before=None, mutate=mutate)
+
+
+async def enqueue_direct(
+    session: AsyncSession, shop_id: int, customer_id: int, ctx: CommandContext, *, text: str,
+) -> CommandResult:
+    """Queue a durable direct message to one customer (202). Owner/co-admin-typed messages are rate
+    limited (10/shop/min); `source='system'` (e.g. a top-up decision notice) bypasses that gate."""
+    from app.services import storefront_delivery
+    text = (text or "").strip()
+    if not 1 <= len(text) <= 4000:
+        raise AdminCommandError("validation", "text must be 1..4000 characters")
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"kind": "direct", "customer_id": int(customer_id),
+              "text_hash": hashlib.sha256(text.encode()).hexdigest()}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="message.direct", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        if ctx.source != "system":
+            await _enforce_direct_rate(session, shop.id, ctx.actor_telegram_id)
+        cust = await _owned_customer(session, shop_id, customer_id)
+        if cust.banned:
+            raise AdminCommandError(
+                "banned", "customer is banned", response_status=422,
+                response_body={"error": "banned"})
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="message.direct", command=command, exc=exc)
+        raise
+
+    async def mutate() -> _Mutation:
+        job = await storefront_delivery.snapshot_job(
+            session, storefront_bot_id=shop.id, kind="direct", segment=None, message_text=text,
+            actor_telegram_id=ctx.actor_telegram_id, idempotency_key=ctx.idempotency_key,
+            customers=[cust])
+        await session.flush()
+        body = {"delivery_id": job.id, "status": job.status, "total": int(job.total_count or 0)}
+        return _Mutation(body, {"delivery_id": job.id, "customer_id": cust.id},
+                         "broadcast_job", job.id, response_status=202)
+
+    return await _execute_entity(
+        session, shop, ctx, action="message.direct", command=command, before=None, mutate=mutate)
+
+
+async def cancel_broadcast(
+    session: AsyncSession, shop_id: int, job_id: int, ctx: CommandContext,
+) -> CommandResult:
+    """Cancel a job's still-unsent recipients (already-claimed 'sending' rows may finish)."""
+    from app.services import storefront_delivery
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    intent = {"job_id": int(job_id)}
+    command, replay = await _claim_entity_command(
+        session, shop, ctx, action="broadcast.cancel", intent=intent)
+    if replay is not None:
+        return replay
+    try:
+        job = await _owned_broadcast_job(session, shop_id, job_id)
+    except AdminCommandError as exc:
+        await _cache_known_failure(
+            session, shop, ctx, action="broadcast.cancel", command=command, exc=exc)
+        raise
+    before = {"status": job.status}
+
+    async def mutate() -> _Mutation:
+        await storefront_delivery.cancel_unsent(session, job.id)
+        await session.flush()
+        j = await session.get(StorefrontBroadcastJob, job.id)
+        assert j is not None
+        return _Mutation(_job_dict(j), {"status": j.status}, "broadcast_job", job.id)
+
+    return await _execute_entity(
+        session, shop, ctx, action="broadcast.cancel", command=command, before=before, mutate=mutate)
+
+
+# ── communications reads (tenant-gated; not commands) ─────────────────────────
+
+async def preview_audience(
+    session: AsyncSession, shop_id: int, segment: str, actor_id: int, source: Source,
+) -> dict:
+    shop, _ = await _authorized_shop(session, shop_id, actor_id, source)
+    try:
+        data = await storefront.audience_preview(session, shop.id, segment)
+    except ValueError as exc:
+        raise AdminCommandError("validation", str(exc), response_status=422) from exc
+    return {"config_version": shop.config_version, **data}
+
+
+async def get_broadcast(
+    session: AsyncSession, shop_id: int, job_id: int, actor_id: int, source: Source,
+) -> dict:
+    shop, _ = await _authorized_shop(session, shop_id, actor_id, source)
+    job = await _owned_broadcast_job(session, shop.id, job_id)
+    return {"config_version": shop.config_version, "job": _job_dict(job)}
+
+
+async def list_broadcasts(
+    session: AsyncSession, shop_id: int, actor_id: int, source: Source, *,
+    cursor: str | None = None, limit: int = 50,
+) -> dict:
+    from app.services import storefront_cursor
+    shop, _ = await _authorized_shop(session, shop_id, actor_id, source)
+    endpoint = f"broadcasts:{shop.id}"
+    where = [StorefrontBroadcastJob.storefront_bot_id == shop.id]
+    if cursor:
+        c_at, c_id = storefront_cursor.decode_cursor(endpoint, cursor)
+        where.append(
+            (StorefrontBroadcastJob.created_at < c_at)
+            | ((StorefrontBroadcastJob.created_at == c_at) & (StorefrontBroadcastJob.id < c_id)))
+    rows = list((await session.execute(
+        select(StorefrontBroadcastJob).where(*where)
+        .order_by(StorefrontBroadcastJob.created_at.desc(), StorefrontBroadcastJob.id.desc())
+        .limit(limit + 1))).scalars().all())
+    page = rows[:limit]
+    nxt = (storefront_cursor.encode_cursor(
+        endpoint=endpoint, created_at=page[-1].created_at, row_id=page[-1].id)
+        if len(rows) > limit and page else None)
+    return {"config_version": shop.config_version,
+            "items": [_job_dict(j) for j in page], "next_cursor": nxt}

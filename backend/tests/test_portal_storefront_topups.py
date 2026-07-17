@@ -21,6 +21,7 @@ from app.models import (
     StorefrontApiCommand,
     StorefrontAuditEvent,
     StorefrontBot,
+    StorefrontBroadcastJob,
     StorefrontCustomer,
     StorefrontWalletTxn,
 )
@@ -91,39 +92,37 @@ def _client(session, owner):  # noqa: ANN001, ANN202
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _mute_notify(monkeypatch):  # noqa: ANN001, ANN202
-    """Replace the best-effort notify with a self-guarding counter (the real one never raises and
-    runs AFTER the money commit, so it can never roll back money)."""
-    calls = {"n": 0}
-
-    async def fake(*a, **k):  # noqa: ANN002, ANN003
-        calls["n"] += 1
-
-    monkeypatch.setattr(storefront_admin, "_notify_topup_decision", fake)
-    return calls
+async def _direct_jobs(session, shop_id):  # noqa: ANN001, ANN202
+    """The durable kind='direct' notification jobs a top-up decision enqueued (plan 006 replaced the
+    fire-and-forget Telegram send with an in-transaction durable enqueue delivered by the worker)."""
+    return list((await session.execute(
+        select(StorefrontBroadcastJob).where(
+            StorefrontBroadcastJob.storefront_bot_id == shop_id,
+            StorefrontBroadcastJob.kind == "direct"))).scalars().all())
 
 
-def test_confirm_reject_corrected_idempotent_and_notify_best_effort(monkeypatch):  # noqa: ANN001
+def test_confirm_reject_corrected_idempotent_and_notify_durable(monkeypatch):  # noqa: ANN001
     async def body(session):  # noqa: ANN001
         owner, shop, other, a, c = await _seed(session)
-        calls = _mute_notify(monkeypatch)
         t1 = await _topup(session, shop, a, 100_000)
         t2 = await _topup(session, shop, a, 60_000)
         async with _client(session, owner) as client:
             base = f"/api/portal/storefronts/{shop.id}/topups"
 
-            # Confirm t1 → credits 100,000 once; notify fired despite raising.
+            # Confirm t1 → credits 100,000 once; a durable notification rides the same txn.
             r = await client.post(f"{base}/{t1.id}/decision", json={"decision": "confirm"},
                                   headers={"Idempotency-Key": "c1"})
             assert r.status_code == 200 and r.json()["result"]["credited"] == 100_000
             assert int((await session.get(StorefrontCustomer, a.id)).wallet_balance_toman) == 100_000
-            assert calls["n"] == 1  # best-effort notify called; its failure didn't roll back money
+            # A durable direct notification was enqueued in the SAME transaction as the money.
+            assert len(await _direct_jobs(session, shop.id)) == 1
 
-            # Replay same key → NO second credit.
+            # Replay same key → NO second credit AND no second notification (idempotent).
             again = await client.post(f"{base}/{t1.id}/decision", json={"decision": "confirm"},
                                       headers={"Idempotency-Key": "c1"})
             assert again.status_code == 200
             assert int((await session.get(StorefrontCustomer, a.id)).wallet_balance_toman) == 100_000
+            assert len(await _direct_jobs(session, shop.id)) == 1
 
             # A fresh decision on the already-confirmed t1 → already_decided, no credit.
             dup = await client.post(f"{base}/{t1.id}/decision", json={"decision": "confirm"},
@@ -147,7 +146,6 @@ def test_confirm_reject_corrected_idempotent_and_notify_best_effort(monkeypatch)
 def test_reject_credits_nothing_and_validation(monkeypatch):  # noqa: ANN001
     async def body(session):  # noqa: ANN001
         owner, shop, other, a, c = await _seed(session)
-        _mute_notify(monkeypatch)
         t = await _topup(session, shop, a, 50_000)
         tf = await _topup(session, other, c, 30_000)
         async with _client(session, owner) as client:
@@ -176,7 +174,6 @@ def test_reject_credits_nothing_and_validation(monkeypatch):  # noqa: ANN001
 def test_bulk_decisions_partial_and_validation(monkeypatch):  # noqa: ANN001
     async def body(session):  # noqa: ANN001
         owner, shop, other, a, c = await _seed(session)
-        _mute_notify(monkeypatch)
         p1 = await _topup(session, shop, a, 10_000)
         p2 = await _topup(session, shop, a, 20_000)
         done = await _topup(session, shop, a, 5_000, status="confirmed")

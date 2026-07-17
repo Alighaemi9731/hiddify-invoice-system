@@ -414,6 +414,10 @@ class StorefrontCreditCode(Base, TimestampMixin):
     starts_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # Archive (plan 006): archiving atomically sets enabled=False AND stamps this. The row + code_ci
+    # unique key REMAIN so a normalized code can never be reused, and redemption history is preserved
+    # (archive replaces the old hard delete). NULL = active.
+    archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class StorefrontCreditRedemption(Base, TimestampMixin):
@@ -431,3 +435,65 @@ class StorefrontCreditRedemption(Base, TimestampMixin):
     # Plain reference (no hard FK) — mirrors StorefrontWalletTxn.order_id so the ledger never cascades.
     wallet_txn_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     bonus_toman: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StorefrontBroadcastJob(Base, TimestampMixin):
+    """A durable delivery job (plan 006): a one-shot broadcast to a customer segment, OR a single
+    `direct` message (same model, kind='direct'). Recipients are snapshotted at create time into
+    StorefrontDeliveryRecipient and delivered by the scheduler's delivery worker. Aggregate counts +
+    audit are kept permanently; recipient detail rows are pruned after a retention window."""
+    __tablename__ = "storefront_broadcast_jobs"
+    __table_args__ = (
+        CheckConstraint("kind in ('broadcast','direct')", name="ck_sfbjob_kind"),
+        CheckConstraint("status in ('queued','running','completed','canceled')",
+                        name="ck_sfbjob_status"),
+        Index("ix_sfbjob_shop_created", "storefront_bot_id", "created_at"),
+        Index("ix_sfbjob_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    storefront_bot_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_bots.id", ondelete="CASCADE"), index=True)
+    actor_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(16))                # broadcast | direct
+    segment: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    message_text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), server_default=text("'queued'"))
+    total_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    sent_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    blocked_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    failed_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    pending_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    idempotency_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    canceled_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StorefrontDeliveryRecipient(Base, TimestampMixin):
+    """One recipient of a StorefrontBroadcastJob. The delivery worker claims `pending`/`retry_wait`
+    rows whose `next_attempt_at` is due with FOR UPDATE SKIP LOCKED, leases them (`sending` +
+    `lease_expires_at`), sends OUTSIDE any DB transaction via the shop's own bot credential, then
+    records a terminal (`sent|blocked|failed|canceled`) or a `retry_wait`. An expired `sending`
+    lease becomes `unknown` and is retried once — delivery is at-least-once."""
+    __tablename__ = "storefront_delivery_recipients"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending','sending','retry_wait','sent','blocked','failed','unknown','canceled')",
+            name="ck_sfdr_status"),
+        UniqueConstraint("job_id", "customer_id", name="uq_sfdr_job_customer"),
+        Index("ix_sfdr_claimable", "status", "next_attempt_at", "lease_expires_at"),
+        Index("ix_sfdr_job_status", "job_id", "status"),
+        Index("ix_sfdr_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_broadcast_jobs.id", ondelete="CASCADE"), index=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("storefront_customers.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(16), server_default=text("'pending'"))
+    attempt_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_class: Mapped[str | None] = mapped_column(String(64), nullable=True)

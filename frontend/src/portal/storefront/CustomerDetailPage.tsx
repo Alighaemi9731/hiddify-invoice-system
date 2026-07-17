@@ -8,6 +8,7 @@ import AutorenewIcon from "@mui/icons-material/esm/Autorenew";
 import BlockIcon from "@mui/icons-material/esm/Block";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import LockOpenIcon from "@mui/icons-material/esm/LockOpen";
+import MailOutlineIcon from "@mui/icons-material/esm/MailOutline";
 import PauseCircleOutlineIcon from "@mui/icons-material/esm/PauseCircleOutline";
 import PlayCircleOutlineIcon from "@mui/icons-material/esm/PlayCircleOutline";
 import RefreshIcon from "@mui/icons-material/esm/Refresh";
@@ -18,13 +19,13 @@ import { fmtDateTime, fmtGb, fmtNum, fmtToman } from "../../format";
 import { SectionCard } from "../ui";
 import {
   adjustWallet, deleteOrder, getCustomer, getCustomerLedger, listCustomerOrders, refreshOrder,
-  renewOrder, setCustomerStatus, setOrderEnabled, storefrontQueryKeys,
+  renewOrder, sendDirectMessage, setCustomerStatus, setOrderEnabled, storefrontQueryKeys,
 } from "./api";
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type {
-  LedgerFilters, LedgerRow, OrderCard, OrderRefreshResult, OrderRenewResult, Versioned,
-  WalletAdjustmentBody, WalletAdjustmentResult,
+  DirectMessageResult, LedgerFilters, LedgerRow, OrderCard, OrderRefreshResult, OrderRenewResult,
+  Versioned, WalletAdjustmentBody, WalletAdjustmentResult,
 } from "./types";
 import {
   commandRecoveryMessage, isNotFound, isVersionConflict, rateLimitRetryAfter, useIdempotentMutation,
@@ -154,6 +155,7 @@ export default function CustomerDetailPage() {
   const [adjAmount, setAdjAmount] = useState("");
   const [adjReason, setAdjReason] = useState("");
   const [adjResult, setAdjResult] = useState<WalletAdjustmentResult | null>(null);
+  const [msgOpen, setMsgOpen] = useState(false);
 
   const walletMutation = useIdempotentMutation<Versioned<WalletAdjustmentResult>, WalletAdjustmentBody>(
     (input, key) => adjustWallet(shop.id, customerId, input, key),
@@ -278,16 +280,25 @@ export default function CustomerDetailPage() {
                       label={`سرویس‌ها: ${fmtNum(customer.service_counts.active)} فعال از ${fmtNum(customer.service_counts.total)}`}
                     />
                   </Stack>
-                  <Button
-                    variant="outlined"
-                    color={customer.banned ? "success" : "error"}
-                    startIcon={customer.banned ? <LockOpenIcon /> : <BlockIcon />}
-                    disabled={command.isPending}
-                    onClick={() => openConfirm({ kind: "ban", banned: !customer.banned })}
-                    sx={{ alignSelf: "flex-start" }}
-                  >
-                    {customer.banned ? "رفع مسدودی" : "مسدودسازی مشتری"}
-                  </Button>
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ alignSelf: "flex-start" }}>
+                    <Button
+                      variant="outlined"
+                      color={customer.banned ? "success" : "error"}
+                      startIcon={customer.banned ? <LockOpenIcon /> : <BlockIcon />}
+                      disabled={command.isPending}
+                      onClick={() => openConfirm({ kind: "ban", banned: !customer.banned })}
+                    >
+                      {customer.banned ? "رفع مسدودی" : "مسدودسازی مشتری"}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<MailOutlineIcon />}
+                      disabled={customer.banned}
+                      onClick={() => setMsgOpen(true)}
+                    >
+                      ارسال پیام
+                    </Button>
+                  </Stack>
                 </Stack>
               </SectionCard>
             </Grid>
@@ -484,6 +495,10 @@ export default function CustomerDetailPage() {
           setConflictReloadError(false);
         }}
       />
+
+      {msgOpen && (
+        <DirectMessageDialog shopId={shop.id} customerId={customerId} onClose={() => setMsgOpen(false)} />
+      )}
     </Box>
   );
 }
@@ -764,5 +779,52 @@ function LedgerRowView({ row }: { row: LedgerRow }) {
         </Typography>
       </Stack>
     </Box>
+  );
+}
+
+const MSG_MAX = 4000;
+
+function DirectMessageDialog({
+  shopId, customerId, onClose,
+}: { shopId: number; customerId: number; onClose: () => void }) {
+  const [text, setText] = useState("");
+  const [sent, setSent] = useState(false);
+  const mut = useIdempotentMutation<Versioned<DirectMessageResult>, { text: string }>(
+    (v, key) => sendDirectMessage(shopId, customerId, v.text, key),
+    { onSuccess: () => setSent(true) },
+  );
+  const len = text.trim().length;
+  const rateLimited = rateLimitRetryAfter(mut.error) != null
+    || (mut.error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code === "rate_limited";
+
+  return (
+    <Dialog open onClose={() => !mut.isPending && onClose()} maxWidth="xs" fullWidth>
+      <DialogTitle>ارسال پیام به مشتری</DialogTitle>
+      <DialogContent>
+        {sent ? (
+          <Alert severity="success">پیام در صف ارسال قرار گرفت و به‌زودی برای مشتری ارسال می‌شود.</Alert>
+        ) : (
+          <Stack spacing={1.5} sx={{ mt: 0.5 }}>
+            <TextField autoFocus label="متن پیام" value={text} onChange={(e) => setText(e.target.value)}
+              multiline minRows={3} fullWidth error={len > MSG_MAX}
+              helperText={`${fmtNum(len)} / ${fmtNum(MSG_MAX)} نویسه`} />
+            {rateLimited && (
+              <Alert severity="warning">در دقیقهٔ اخیر پیام‌های زیادی فرستاده‌اید؛ کمی بعد دوباره تلاش کنید.</Alert>
+            )}
+            {mut.isError && !rateLimited && <Alert severity="error">ارسال ناموفق بود.</Alert>}
+          </Stack>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={mut.isPending}>{sent ? "بستن" : "انصراف"}</Button>
+        {!sent && (
+          <Button variant="contained" disabled={mut.isPending || len < 1 || len > MSG_MAX}
+            onClick={() => mut.mutate({ text: text.trim() })}>
+            {mut.isPending ? "در حال ارسال…" : "ارسال"}
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
   );
 }

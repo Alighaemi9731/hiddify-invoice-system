@@ -7,10 +7,10 @@ All money is manual: the admin confirms each top-up and sets the credited Toman 
 """
 from __future__ import annotations
 
-import asyncio
 import html
 import logging
 import secrets
+import uuid
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import (
@@ -40,7 +40,6 @@ from app.models import (
     StorefrontWalletTxn,
 )
 from app.services import (
-    broadcast,
     settings_service,
     storefront,
     storefront_admin,
@@ -2205,18 +2204,24 @@ async def _credit_finalize(ans, state: FSMContext, bot: Bot, from_user) -> None:
         if sf is None or not is_admin:
             return
         kind = data.get("c_kind", "fixed")
-        code = await storefront_credit.create_code(
-            s, sf.id, code=data.get("c_code", ""), kind=kind,
-            percent_off=data.get("c_percent") if kind == "percent" else None,
-            amount_toman=data.get("c_amount") if kind == "fixed" else None,
-            max_bonus_toman=data.get("c_maxbonus"),
-            min_topup_toman=int(data.get("c_mintopup") or 0),
-            is_gift=bool(data.get("c_is_gift")), max_uses=data.get("c_maxuses"),
-            per_customer_limit=data.get("c_percustomer", 1), expires_at=expires_at,
-        )
+        ctx = _command_ctx(from_user.id, sf.config_version, f"sf-credit-create:{uuid.uuid4().hex}")
+        try:
+            result = await storefront_admin.create_credit(
+                s, sf.id, ctx, code=data.get("c_code", ""), kind=kind,
+                percent_off=data.get("c_percent") if kind == "percent" else None,
+                amount_toman=data.get("c_amount") if kind == "fixed" else None,
+                max_bonus_toman=data.get("c_maxbonus"),
+                min_topup_toman=int(data.get("c_mintopup") or 0),
+                is_gift=bool(data.get("c_is_gift")), max_uses=data.get("c_maxuses"),
+                per_customer_limit=data.get("c_percustomer", 1), expires_at=expires_at,
+            )
+        except storefront_admin.AdminCommandError:
+            await ans(rtl("❌ ساختِ کد ناموفق بود (شاید این کد قبلاً وجود دارد)."))
+            return
+        credit = result.body.get("credit", {}) if isinstance(result.body, dict) else {}
         codes = await storefront_credit.list_codes(s, sf.id)
         warn = ("\n⚠️ این کد سقفِ تخفیف ندارد؛ روی شارژِ بزرگ، بونوسِ زیادی می‌دهد."
-                if kind == "percent" and not code.max_bonus_toman else "")
+                if kind == "percent" and not credit.get("max_bonus_toman") else "")
     await ans(rtl(f"✅ کدِ «{data.get('c_code', '')}» ساخته شد.{warn}"),
               reply_markup=kb.credit_codes_manage_kb(codes))
 
@@ -2233,8 +2238,15 @@ async def sf_credit_toggle(cb: CallbackQuery, bot: Bot) -> None:
         if code is None:
             await cb.answer("یافت نشد.", show_alert=True)
             return
-        await storefront_credit.set_enabled(s, code, not code.enabled)
-        now_on = code.enabled
+        ctx = _callback_ctx(cb, sf)
+        try:
+            result = await storefront_admin.set_credit_enabled(
+                s, sf.id, code_id, ctx, enabled=not code.enabled)
+        except storefront_admin.AdminCommandError:
+            await cb.answer("خطا در تغییرِ وضعیت.", show_alert=True)
+            return
+        credit = result.body.get("credit", {}) if isinstance(result.body, dict) else {}
+        now_on = bool(credit.get("enabled"))
         codes = await storefront_credit.list_codes(s, sf.id)
     try:
         await cb.message.edit_reply_markup(reply_markup=kb.credit_codes_manage_kb(codes))
@@ -2251,13 +2263,18 @@ async def sf_credit_del(cb: CallbackQuery, bot: Bot) -> None:
         if sf is None or not is_admin:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        await storefront_credit.delete_code(s, sf.id, code_id)
+        ctx = _callback_ctx(cb, sf)
+        try:
+            await storefront_admin.archive_credit(s, sf.id, code_id, ctx)
+        except storefront_admin.AdminCommandError:
+            await cb.answer("خطا در بایگانی.", show_alert=True)
+            return
         codes = await storefront_credit.list_codes(s, sf.id)
     try:
         await cb.message.edit_reply_markup(reply_markup=kb.credit_codes_manage_kb(codes))
     except Exception:  # noqa: BLE001
         pass
-    await cb.answer("حذف شد.")
+    await cb.answer("بایگانی شد.")
 
 
 @storefront_router.callback_query(F.data.startswith("sfcredusage:"))
@@ -2915,54 +2932,35 @@ async def sf_broadcast_segment(cb: CallbackQuery, state: FSMContext, bot: Bot) -
     await cb.answer()
 
 
-async def _sf_broadcast_bg(bot: Bot, admin_chat_id: int, chat_ids: list[int],
-                           text: str, scope: str) -> None:
-    """Background fan-out for the shop broadcast under the SHARED flood-control policy
-    (`broadcast.send_with_flood_control`: rate limit + bounded 429 retry; a blocked
-    customer is counted, never retried; a throttled recipient is no longer silently
-    dropped). Reports the final counts to the admin chat. Must never raise — it runs
-    as a fire-and-forget task."""
-    try:
-        limiter = broadcast.rate_limiter()
-        counts = {"sent": 0, "blocked": 0, "failed": 0}
-        body = rtl(text)
-        for cid in chat_ids:
-            outcome = await broadcast.send_with_flood_control(bot, cid, body, limiter)
-            counts[outcome] += 1
-        summary = f"📢 به {counts['sent']} نفر ({scope}) ارسال شد."
-        if counts["blocked"]:
-            summary += f"\n🚫 {counts['blocked']} نفر ربات را مسدود کرده‌اند."
-        if counts["failed"]:
-            summary += f"\n❌ {counts['failed']} ارسال ناموفق بود."
-        await bot.send_message(admin_chat_id, rtl(summary),
-                               reply_markup=kb.admin_reply_kb())
-    except Exception:  # noqa: BLE001 — a background task must never die silently
-        log.exception("storefront broadcast background send failed")
-
-
 @storefront_router.message(SF.broadcast, F.text)
 async def sf_broadcast(message: Message, state: FSMContext, bot: Bot) -> None:
     text = message.text or ""
     data = await state.get_data()
     segment = data.get("bc_segment") or "all"
     await state.clear()
+    scope = _SEGMENT_FA.get(segment, "مشتری‌ها")
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
-        chat_ids = [c.telegram_id
-                    for c in await storefront.customers_in_segment(s, sf.id, segment)]
-    scope = _SEGMENT_FA.get(segment, "مشتری‌ها")
-    if not chat_ids:
+        # Durable enqueue: a job + a create-time recipient snapshot in ONE transaction. The scheduler
+        # delivery worker sends them with flood control + retries; no fire-and-forget task remains, so
+        # a bot restart mid-send never loses the broadcast.
+        ctx = _command_ctx(message.from_user.id, sf.config_version,
+                           f"sf-broadcast:{message.chat.id}:{message.message_id}")
+        try:
+            result = await storefront_admin.enqueue_broadcast(s, sf.id, ctx, segment=segment, text=text)
+        except storefront_admin.AdminCommandError as exc:
+            await message.answer(rtl(f"❌ ارسال ناموفق بود: {exc}"),
+                                 reply_markup=kb.admin_reply_kb())
+            return
+        total = (result.body.get("total") if isinstance(result.body, dict) else 0) or 0
+    if not total:
         await message.answer(rtl(f"در گروهِ «{scope}» مشتری‌ای نیست."),
                              reply_markup=kb.admin_reply_kb())
         return
-    # Send in the BACKGROUND (mirrors the owner bot's _do_broadcast) so the admin's bot
-    # stays responsive during a large send; the summary arrives here when it finishes.
-    asyncio.create_task(_sf_broadcast_bg(bot, message.chat.id, chat_ids, text, scope))
     await message.answer(
-        rtl(f"📢 ارسال به {len(chat_ids)} نفر ({scope}) در پس‌زمینه شروع شد؛ "
-            "خلاصهٔ نتیجه همین‌جا می‌آید."),
+        rtl(f"📢 پیام برای {total} نفر ({scope}) در صفِ ارسال قرار گرفت؛ به‌تدریج ارسال می‌شود."),
         reply_markup=kb.admin_reply_kb())
 
 

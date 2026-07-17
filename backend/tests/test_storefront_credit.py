@@ -189,3 +189,33 @@ def test_double_confirm_credits_bonus_once():
         await s.refresh(code)
         assert wallet.balance(cust) == Decimal(55_000) and code.used_count == 1
     _run(body)
+
+
+def test_archive_preserves_redemptions_and_makes_code_inert():
+    """Plan 006: archiving disables + stamps `archived_at` WITHOUT destroying redemption history — the
+    old hard delete CASCADE-wiped the ledger. An archived code quotes as 'disabled' (inert), and its
+    normalized code stays reserved so it can't be re-created."""
+    async def body(s):
+        bot, cust = await _seed(s)
+        code = await cc.create_code(s, bot.id, code="Keep", kind="fixed", amount_toman=7_000)
+        txn = await wallet.create_topup(s, cust, 40_000, method="card", credit_code_id=code.id)
+        await wallet.confirm_topup(s, txn.id, expected_storefront_bot_id=cust.storefront_bot_id)
+        await s.refresh(code)
+        assert code.used_count == 1
+
+        assert await cc.archive_code(s, bot.id, code.id) is True
+        await s.refresh(code)
+        assert code.enabled is False and code.archived_at is not None
+        # Redemption history + used_count survive.
+        assert code.used_count == 1
+        assert len((await s.execute(select(StorefrontCreditRedemption))).scalars().all()) == 1
+        # Inert: an archived code yields no bonus.
+        q = await cc.quote(s, bot.id, "keep", topup_toman=100_000, customer_id=cust.id)
+        assert not q.ok and q.reason == "disabled"
+        # The normalized code stays reserved (can't be re-created).
+        assert await cc.code_exists(s, bot.id, "KEEP") is True
+        # Bot management list hides archived codes; include_archived surfaces them.
+        assert await cc.list_codes(s, bot.id) == []
+        page, _ = await cc.list_credit_codes(s, bot.id, include_archived=True)
+        assert len(page) == 1
+    _run(body)

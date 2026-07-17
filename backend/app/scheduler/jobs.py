@@ -50,6 +50,7 @@ class ScheduleConfig:
     enforcement_minutes: int = 5  # queued live enforcement worker cadence (1–60)
     digest_hour: int = 9       # daily owner digest: hour (0–23)
     storefront_reaper_minutes: int = 15  # storefront pending-order reaper cadence (1–1440)
+    storefront_delivery_minutes: int = 1  # storefront broadcast/direct delivery worker cadence (1–60)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -67,7 +68,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         "invoice_day_of_month", "invoice_hour", "dunning_hour",
         "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
         "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
-        "storefront_pending_order_reaper_minutes",
+        "storefront_pending_order_reaper_minutes", "storefront_delivery_worker_interval_minutes",
     ])
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
@@ -81,6 +82,8 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         digest_hour=_clamp(s.get("daily_digest_hour"), 0, 23, 9),
         storefront_reaper_minutes=_clamp(
             s.get("storefront_pending_order_reaper_minutes"), 1, 1440, 15),
+        storefront_delivery_minutes=_clamp(
+            s.get("storefront_delivery_worker_interval_minutes"), 1, 60, 1),
     )
 
 
@@ -275,8 +278,30 @@ async def daily_maintenance_job() -> None:
         async with SessionLocal() as session:
             await storefront_audit.prune_commands(session)
             await session.commit()
+        async with SessionLocal() as session:
+            from app.services import storefront_delivery
+            retention = _clamp(
+                await settings_service.get(session, "storefront_delivery_retention_days", 90),
+                0, 3650, 90)
+            pruned = await storefront_delivery.prune_recipients(session, retention)
+            await session.commit()
+            if pruned:
+                log.info("storefront delivery retention: pruned %s recipient rows", pruned)
     except Exception:  # noqa: BLE001
         log.exception("daily_maintenance_job failed")
+
+
+async def storefront_delivery_worker_job() -> None:
+    """Deliver queued storefront broadcasts + direct messages in bounded, resumable batches. Never
+    crashes the scheduler loop; the worker itself is fully restart-safe."""
+    try:
+        from app.services import storefront_delivery
+
+        summary = await storefront_delivery.run_once()
+        if summary.get("claimed"):
+            log.info("storefront delivery: %s", summary)
+    except Exception:  # noqa: BLE001
+        log.exception("storefront_delivery_worker_job failed")
 
 
 async def storefront_reaper_job() -> None:
@@ -384,6 +409,10 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         # Storefront pending-order reaper: complete/refund purchases orphaned by a mid-buy crash.
         ("storefront_reaper", storefront_reaper_job,
          IntervalTrigger(minutes=cfg.storefront_reaper_minutes, start_date=interval_anchor,
+                         timezone=tz), 300),
+        # Storefront durable delivery worker: send queued broadcasts + direct messages.
+        ("storefront_delivery", storefront_delivery_worker_job,
+         IntervalTrigger(minutes=cfg.storefront_delivery_minutes, start_date=interval_anchor,
                          timezone=tz), 300),
         # Liveness stamp read by /health; fixed cadence on purpose (not a setting).
         ("scheduler_heartbeat", scheduler_heartbeat_job,

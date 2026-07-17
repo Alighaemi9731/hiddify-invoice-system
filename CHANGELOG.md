@@ -8,6 +8,41 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.87.0 - 2026-07-18
+
+Storefront management portal Release E — credit-code management + durable customer communications.
+Adds one additive database migration (`497cb88cf774`, applied automatically on upgrade); no manual
+steps.
+
+### Added
+
+- **Credit codes (کد شارژ / هدیه) are now fully manageable from the web portal.** Create percent or
+  fixed-amount bonuses and standalone gifts, set usage caps, minimum top-up, and an expiry; enable or
+  disable a code; and open an **usage report** (total redemptions, unique customers, total bonus
+  granted, and the redemption history). Codes are now **archived** instead of deleted — the redemption
+  history and the code itself are preserved, so past accounting is never lost and a code can't be
+  re-used. After a code has been redeemed, only its enabled state + expiry can change (the economics
+  are frozen once money has moved). The Telegram bot's credit buttons now go through the same audited,
+  idempotent commands.
+- **Send messages to your customers from the portal.** A new «پیام‌رسانی» tab composes a broadcast to
+  a chosen audience (everyone / expired / 30-day-inactive / took-a-trial-but-never-bought), with a
+  live recipient count and preview, and each customer page gains a **«ارسال پیام»** button for a
+  one-off direct message. Every send is **durable**: it's queued and delivered in the background by a
+  worker with flood-control + retries, with live progress (sent / blocked / failed / remaining) and a
+  **cancel** for anything not yet sent — so a restart never loses a campaign and the bot never blocks
+  while sending. Delivery is at-least-once (a rare mid-send crash can deliver one message twice; this
+  is stated in the UI).
+- Top-up **approval/rejection notifications** to customers are now durable too (queued in the same
+  transaction as the money decision), so a committed decision can never lose its notification.
+
+### Notes
+
+- New settings (auto-seeded): `storefront_delivery_worker_interval_minutes` (default 1) and
+  `storefront_delivery_retention_days` (default 90 — how long delivered per-recipient detail rows are
+  kept; the campaign totals + audit are kept permanently). A new scheduler job runs the delivery
+  worker; the daily maintenance sweep prunes aged recipient detail.
+- Alembic head is now `497cb88cf774`.
+
 ## 1.86.0 - 2026-07-17
 
 Storefront management portal Release D — the wallet & top-up operations center. Adds one additive

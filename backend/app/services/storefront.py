@@ -256,6 +256,38 @@ async def _expired_customers(
     return list(seen.values())
 
 
+# Broadcast/direct SEGMENTS an admin can target. Every branch excludes banned customers.
+SEGMENTS: tuple[str, ...] = ("all", "expired", "inactive30", "trial_no_purchase")
+# Hard ceiling on a single broadcast's recipient snapshot (protects the durable enqueue + worker
+# from materializing an unbounded shop). Above this the enqueue is refused.
+AUDIENCE_CAP = 50_000
+
+
+def _sql_segment_query(storefront_bot_id: int, segment: str):  # noqa: ANN202
+    """Base SELECT (non-banned customers, newest first) for a SQL-expressible segment, or None for
+    'expired' (which is computed per-order in Python) / an unknown segment."""
+    from app.models import StorefrontOrder
+
+    base = select(StorefrontCustomer).where(
+        StorefrontCustomer.storefront_bot_id == storefront_bot_id,
+        StorefrontCustomer.banned.is_(False),
+    ).order_by(StorefrontCustomer.created_at.desc(), StorefrontCustomer.id.desc())
+    if segment == "all":
+        return base
+    if segment == "inactive30":
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+        activity = func.coalesce(StorefrontCustomer.last_seen_at, StorefrontCustomer.created_at)
+        return base.where(activity < cutoff)
+    if segment == "trial_no_purchase":
+        paid = exists().where(
+            StorefrontOrder.customer_id == StorefrontCustomer.id,
+            StorefrontOrder.is_trial.is_(False),
+            StorefrontOrder.status.in_(("provisioned", "disabled")),
+        )
+        return base.where(StorefrontCustomer.free_trial_used.is_(True), ~paid)
+    return None
+
+
 async def customers_in_segment(
     session: AsyncSession, storefront_bot_id: int, segment: str
 ) -> list[StorefrontCustomer]:
@@ -265,32 +297,42 @@ async def customers_in_segment(
       trial_no_purchase — used the free trial but never bought a paid plan
       expired           — has a provisioned config that is already expired
     """
-    from app.models import StorefrontOrder
-
-    if segment == "all":
-        return await list_customers(session, storefront_bot_id)
     if segment == "expired":
         return await _expired_customers(session, storefront_bot_id)
-
-    base = select(StorefrontCustomer).where(
-        StorefrontCustomer.storefront_bot_id == storefront_bot_id,
-        StorefrontCustomer.banned.is_(False),
-    ).order_by(StorefrontCustomer.created_at.desc())
-
-    if segment == "inactive30":
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-        activity = func.coalesce(StorefrontCustomer.last_seen_at, StorefrontCustomer.created_at)
-        base = base.where(activity < cutoff)
-    elif segment == "trial_no_purchase":
-        paid = exists().where(
-            StorefrontOrder.customer_id == StorefrontCustomer.id,
-            StorefrontOrder.is_trial.is_(False),
-            StorefrontOrder.status.in_(("provisioned", "disabled")),
-        )
-        base = base.where(StorefrontCustomer.free_trial_used.is_(True), ~paid)
-    else:
+    q = _sql_segment_query(storefront_bot_id, segment)
+    if q is None:
         return []
-    return list((await session.execute(base)).scalars().all())
+    return list((await session.execute(q)).scalars().all())
+
+
+async def audience_preview(
+    session: AsyncSession, storefront_bot_id: int, segment: str, *, sample_size: int = 20
+) -> dict:
+    """Bounded audience size + a small sample for a segment — WITHOUT materializing every recipient.
+    Raises ValueError for an unknown segment (the route maps that to 422). No message is sent."""
+    if segment not in SEGMENTS:
+        raise ValueError(f"unknown segment: {segment}")
+    if segment == "expired":
+        # 'expired' is order-derived (days-left in Python); bounded by provisioned orders.
+        customers = await _expired_customers(session, storefront_bot_id)
+        count = len(customers)
+        sample = customers[:sample_size]
+    else:
+        q = _sql_segment_query(storefront_bot_id, segment)
+        assert q is not None
+        count = int((await session.execute(
+            select(func.count()).select_from(q.order_by(None).subquery())
+        )).scalar_one() or 0)
+        sample = list((await session.execute(q.limit(sample_size))).scalars().all())
+    return {
+        "segment": segment,
+        "count": count,
+        "over_cap": count > AUDIENCE_CAP,
+        "sample": [
+            {"id": c.id, "name": c.name, "username": c.username, "telegram_id": c.telegram_id}
+            for c in sample
+        ],
+    }
 
 
 async def count_customers(session: AsyncSession, storefront_bot_id: int) -> int:

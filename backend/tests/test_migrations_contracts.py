@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "525855401b89"
+HEAD = "497cb88cf774"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -86,6 +86,31 @@ def test_storefront_admin_audit_command_schema_contract(tmp_path):
         "ix_sfaudit_shop_created", "ix_sfaudit_actor_action", "ix_sfaudit_entity",
         "ix_sfcommand_status_lease", "ix_sfcommand_shop_updated",
     } <= indexes
+    conn.close()
+
+
+def test_storefront_credits_communications_schema_contract(tmp_path):
+    """Plan 006: `archived_at` on credit codes, the two durable-delivery tables + their indexes /
+    unique / status CHECK all reach a fresh HEAD database."""
+    db = tmp_path / "sf-comms.db"
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    credit_cols = {row[1] for row in conn.execute("PRAGMA table_info(storefront_credit_codes)")}
+    assert "archived_at" in credit_cols
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"storefront_broadcast_jobs", "storefront_delivery_recipients"} <= tables
+    recip_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='storefront_delivery_recipients'"
+    ).fetchone()[0]
+    assert "uq_sfdr_job_customer" in recip_sql and "ck_sfdr_status" in recip_sql
+    job_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='storefront_broadcast_jobs'"
+    ).fetchone()[0]
+    assert "ck_sfbjob_kind" in job_sql and "ck_sfbjob_status" in job_sql
+    indexes = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert {"ix_sfdr_claimable", "ix_sfdr_job_status", "ix_sfbjob_shop_created"} <= indexes
     conn.close()
 
 
@@ -255,6 +280,8 @@ def test_setting_allowlist_types_and_ranges():
     assert settings_service.validate_api_value("guard_interval_minutes", 60) == 60
     assert settings_service.validate_api_value("rate_refresh_hours", 24) == 24
     assert settings_service.validate_api_value("excluded_usage_gb", [0, 1.5]) == [0.0, 1.5]
+    assert settings_service.validate_api_value("storefront_delivery_worker_interval_minutes", 60) == 60
+    assert settings_service.validate_api_value("storefront_delivery_retention_days", 3650) == 3650
     for key, value in [
         ("unknown_key", 1),
         ("unknown_key", "••••"),
@@ -264,6 +291,8 @@ def test_setting_allowlist_types_and_ranges():
         ("rate_mode", "automatic"),
         ("excluded_usage_gb", [-1]),
         ("overage_tolerance_gb", float("inf")),
+        ("storefront_delivery_worker_interval_minutes", 61),
+        ("storefront_delivery_retention_days", 3651),
     ]:
         with pytest.raises(ValueError):
             if value == "••••":

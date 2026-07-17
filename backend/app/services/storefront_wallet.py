@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -96,21 +97,23 @@ async def _get_for_update(session: AsyncSession, model, pk: int):  # noqa: ANN00
 async def _confirm_topup_core(
     session: AsyncSession, txn_id: int, *, expected_storefront_bot_id: int,
     amount_toman: int | None = None,
-) -> tuple[bool, StorefrontWalletTxn | None]:
+) -> tuple[bool, StorefrontWalletTxn | None, Any]:
     """Commit-less core of `confirm_topup` (row lock + tenant re-check + credit + optional code bonus).
     Ends WITHOUT committing so the shared money command can wrap it in ONE audited transaction (audit +
-    idempotency finalize + the money write commit atomically). The public `confirm_topup` wrapper commits."""
+    idempotency finalize + the money write commit atomically). The public `confirm_topup` wrapper commits.
+    Returns (changed, txn, credit_quote) — the quote is the redemption outcome of any captured code
+    (`None` when no code was attached), so the caller can audit a no-bonus/expired-code decision."""
     txn = await _get_for_update(session, StorefrontWalletTxn, txn_id)
     if txn is None or txn.kind != "topup":
-        return False, txn
+        return False, txn, None
     if txn.status != "pending":
-        return False, txn  # already decided — no double credit
+        return False, txn, None  # already decided — no double credit
     # Lock the customer row too, so two DIFFERENT top-ups for the same wallet can't lose an update.
     customer = await _get_for_update(session, StorefrontCustomer, txn.customer_id)
     if customer is None:
-        return False, txn
+        return False, txn, None
     if customer.storefront_bot_id != expected_storefront_bot_id:
-        return False, txn  # cross-tenant attempt — never touch another shop's money
+        return False, txn, None  # cross-tenant attempt — never touch another shop's money
     # The admin may override the Toman to credit (esp. for crypto deposits, where the amount is set
     # manually — the bot never depends on online rates). Otherwise credit the requested amount.
     credited = Decimal(str(int(amount_toman))) if amount_toman is not None else Decimal(
@@ -142,7 +145,7 @@ async def _confirm_topup_core(
         await session.flush()
         customer.wallet_balance_toman = float(balance(customer) + q.bonus_toman)
         await storefront_credit.record(session, q.code_id, customer.id, bonus_txn.id, q.bonus_toman)
-    return True, txn
+    return True, txn, q
 
 
 async def confirm_topup(
@@ -157,7 +160,7 @@ async def confirm_topup(
     `expected_storefront_bot_id` enforces TENANT ISOLATION (F3): txn ids are a global sequence and
     the callback data is client-controllable, so an admin may only decide a top-up whose customer
     belongs to THEIR OWN storefront — otherwise a shop A admin could credit/re-amount shop B's deposit."""
-    changed, txn = await _confirm_topup_core(
+    changed, txn, _q = await _confirm_topup_core(
         session, txn_id, expected_storefront_bot_id=expected_storefront_bot_id,
         amount_toman=amount_toman)
     await session.commit()

@@ -430,3 +430,50 @@ class StorefrontBulkDecisionBody(StorefrontStrictBody):
 class StorefrontWalletAdjustmentBody(StorefrontStrictBody):
     amount_toman_signed: int = Field(ge=-(10**12), le=10**12)
     reason: str = Field(min_length=3, max_length=255)
+
+
+# ── credit codes ──────────────────────────────────────────────────────────────
+
+class StorefrontCreditCreate(StorefrontStrictBody):
+    code: str = Field(min_length=1, max_length=32)
+    kind: Literal["percent", "fixed"]
+    percent_off: int | None = Field(default=None, ge=1, le=100)
+    amount_toman: int | None = Field(default=None, ge=1, le=10**12)
+    max_bonus_toman: int | None = Field(default=None, ge=1, le=10**12)
+    min_topup_toman: int = Field(default=0, ge=0, le=10**12)
+    is_gift: bool = False
+    max_uses: int | None = Field(default=None, ge=1, le=10**9)
+    per_customer_limit: int | None = Field(default=1, ge=1, le=10**9)
+    starts_at: dt.datetime | None = None
+    expires_at: dt.datetime | None = None
+
+
+class StorefrontCreditUpdate(StorefrontStrictBody):
+    kind: Literal["percent", "fixed"] | None = None
+    percent_off: int | None = Field(default=None, ge=1, le=100)
+    amount_toman: int | None = Field(default=None, ge=1, le=10**12)
+    max_bonus_toman: int | None = Field(default=None, ge=1, le=10**12)
+    min_topup_toman: int | None = Field(default=None, ge=0, le=10**12)
+    is_gift: bool | None = None
+    max_uses: int | None = Field(default=None, ge=1, le=10**9)
+    per_customer_limit: int | None = Field(default=None, ge=1, le=10**9)
+    starts_at: dt.datetime | None = None
+    expires_at: dt.datetime | None = None
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> StorefrontCreditUpdate:
+        if not self.model_fields_set:
+            raise ValueError("at least one field is required")
+        return self
+
+
+# ── communications: broadcasts + direct messages ──────────────────────────────
+
+class StorefrontBroadcastBody(StorefrontStrictBody):
+    segment: Literal["all", "expired", "inactive30", "trial_no_purchase"]
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class StorefrontDirectMessageBody(StorefrontStrictBody):
+    text: str = Field(min_length=1, max_length=4000)

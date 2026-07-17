@@ -1,8 +1,20 @@
 import { portalApi } from "../portalClient";
 import type {
+  AudiencePreview,
+  AudienceSegment,
+  BroadcastCreateResult,
+  BroadcastJob,
+  BroadcastsPage,
   BulkDecisionBody,
   BulkDecisionResult,
+  CreditCode,
+  CreditCodesPage,
+  CreditCreateBody,
+  CreditRedemptionsPage,
+  CreditUpdateBody,
+  CreditUsage,
   CustomerBanResult,
+  DirectMessageResult,
   CustomerDetail,
   CustomerListFilters,
   CustomerListItem,
@@ -62,6 +74,17 @@ export const storefrontQueryKeys = {
     ["portal-storefronts", shopId, "topups", filters] as const,
   topup: (shopId: number, txnId: number) =>
     ["portal-storefronts", shopId, "topup", txnId] as const,
+  credits: (shopId: number, includeArchived: boolean) =>
+    ["portal-storefronts", shopId, "credits", includeArchived] as const,
+  creditUsage: (shopId: number, codeId: number) =>
+    ["portal-storefronts", shopId, "credit", codeId, "usage"] as const,
+  creditRedemptions: (shopId: number, codeId: number) =>
+    ["portal-storefronts", shopId, "credit", codeId, "redemptions"] as const,
+  audience: (shopId: number, segment: string) =>
+    ["portal-storefronts", shopId, "audience", segment] as const,
+  broadcasts: (shopId: number) => ["portal-storefronts", shopId, "broadcasts"] as const,
+  broadcast: (shopId: number, jobId: number) =>
+    ["portal-storefronts", shopId, "broadcast", jobId] as const,
 };
 
 const etagOf = (headers: Record<string, unknown>, configVersion?: number) =>
@@ -431,3 +454,79 @@ export function currentTehranMonthRange(now = new Date()) {
   const to = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   return { from, to };
 }
+
+// ── credit codes (plan 006) ──────────────────────────────────────────────────
+// Reads are plain; mutations carry ONLY an Idempotency-Key (entity edits, no If-Match).
+
+export const listCreditCodes = (
+  shopId: number,
+  includeArchived: boolean,
+  cursor?: string | null,
+  limit = 50,
+) => portalApi.get(`/api/portal/storefronts/${shopId}/credits`, {
+  params: { include_archived: includeArchived, cursor: cursor || undefined, limit },
+}).then((response) => response.data as CreditCodesPage);
+
+export const createCreditCode = (shopId: number, body: CreditCreateBody, idempotencyKey: string) =>
+  portalApi.post(`/api/portal/storefronts/${shopId}/credits`, body, {
+    headers: entityHeaders(idempotencyKey),
+  }).then((response) => mutationResult<{ credit: CreditCode }>(response));
+
+export const updateCreditCode = (
+  shopId: number, codeId: number, body: CreditUpdateBody, idempotencyKey: string,
+) => portalApi.patch(`/api/portal/storefronts/${shopId}/credits/${codeId}`, body, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<{ credit: CreditCode }>(response));
+
+export const setCreditCodeEnabled = (
+  shopId: number, codeId: number, enabled: boolean, idempotencyKey: string,
+) => portalApi.put(`/api/portal/storefronts/${shopId}/credits/${codeId}/enabled`, { enabled }, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<{ credit: CreditCode }>(response));
+
+export const archiveCreditCode = (shopId: number, codeId: number, idempotencyKey: string) =>
+  portalApi.post(`/api/portal/storefronts/${shopId}/credits/${codeId}/archive`, {}, {
+    headers: entityHeaders(idempotencyKey),
+  }).then((response) => mutationResult<{ credit: CreditCode }>(response));
+
+export const getCreditUsage = (shopId: number, codeId: number) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/credits/${codeId}/usage`)
+    .then((response) => response.data as CreditUsage);
+
+export const listCreditRedemptions = (
+  shopId: number, codeId: number, cursor?: string | null, limit = 50,
+) => portalApi.get(`/api/portal/storefronts/${shopId}/credits/${codeId}/redemptions`, {
+  params: { cursor: cursor || undefined, limit },
+}).then((response) => response.data as CreditRedemptionsPage);
+
+// ── communications: broadcasts + direct messages (plan 006) ───────────────────
+
+export const previewAudience = (shopId: number, segment: AudienceSegment) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/audience/preview`, { params: { segment } })
+    .then((response) => response.data as AudiencePreview);
+
+export const listBroadcasts = (shopId: number, cursor?: string | null, limit = 25) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/broadcasts`, {
+    params: { cursor: cursor || undefined, limit },
+  }).then((response) => response.data as BroadcastsPage);
+
+export const getBroadcast = (shopId: number, jobId: number) =>
+  portalApi.get(`/api/portal/storefronts/${shopId}/broadcasts/${jobId}`)
+    .then((response) => (response.data as { job: BroadcastJob }).job);
+
+export const createBroadcast = (
+  shopId: number, segment: AudienceSegment, text: string, idempotencyKey: string,
+) => portalApi.post(`/api/portal/storefronts/${shopId}/broadcasts`, { segment, text }, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<BroadcastCreateResult>(response));
+
+export const cancelBroadcast = (shopId: number, jobId: number, idempotencyKey: string) =>
+  portalApi.post(`/api/portal/storefronts/${shopId}/broadcasts/${jobId}/cancel`, {}, {
+    headers: entityHeaders(idempotencyKey),
+  }).then((response) => mutationResult<BroadcastJob>(response));
+
+export const sendDirectMessage = (
+  shopId: number, customerId: number, text: string, idempotencyKey: string,
+) => portalApi.post(`/api/portal/storefronts/${shopId}/customers/${customerId}/message`, { text }, {
+  headers: entityHeaders(idempotencyKey),
+}).then((response) => mutationResult<DirectMessageResult>(response));
