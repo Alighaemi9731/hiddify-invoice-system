@@ -12,6 +12,7 @@ renewal), exactly like `expiry_alerted_at`.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "d4f7a2b9c1e8"
