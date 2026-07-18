@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import EndUserSnapshot, Panel, Reseller
 from app.services import settings_service
 from app.services.panel_client.admin_api import AdminApiClient, UserLimitError
+from app.services.presence import snapshot_present_filter
 
 log = logging.getLogger("usercreate")
 
@@ -55,12 +56,21 @@ def qr_png(data: str) -> bytes:
 
 
 async def current_user_count(session: AsyncSession, reseller: Reseller) -> int:
-    """How many end-users this reseller has created on its panel (case-insensitive added_by)."""
+    """How many end-users this reseller currently OCCUPIES on its panel (case-insensitive added_by).
+
+    Counts only users present in the panel's latest sync. Snapshots of users deleted from Hiddify
+    are retained for billing (see `services/presence`), but they occupy no slot on the panel, so
+    counting them here would charge the reseller capacity for services that no longer exist and
+    block creates that Hiddify itself would happily accept.
+    """
     return (
         await session.execute(
-            select(func.count(EndUserSnapshot.user_uuid)).where(
+            select(func.count(EndUserSnapshot.user_uuid))
+            .join(Panel, Panel.id == EndUserSnapshot.panel_id)
+            .where(
                 EndUserSnapshot.panel_id == reseller.panel_id,
                 func.lower(EndUserSnapshot.added_by_uuid) == (reseller.admin_uuid or "").lower(),
+                snapshot_present_filter(),
             )
         )
     ).scalar_one()

@@ -32,6 +32,7 @@ from app.schemas.reseller import (
 )
 from app.services import admin_capacity, enforcement, pricing
 from app.services.invoice_engine import build_children_map
+from app.services.presence import snapshot_present_filter
 
 # Resellers removed from Hiddify keep their DB row for billing history but must not
 # appear in the UI.  This filter, applied to queries that JOIN Panel, keeps only
@@ -131,12 +132,19 @@ async def _usage_counts(
     sub-resellers), keyed by (panel_id, admin_uuid). total = all snapshots, active = enabled AND
     is_active. This mirrors what Hiddify shows as an admin's capacity (own + subs), compared
     against the admin's own max_users — so a full subtree can read >100% (red), which is correct.
-    UUID matching is case-insensitive throughout (project-wide identity rule)."""
+    UUID matching is case-insensitive throughout (project-wide identity rule).
+
+    Counts only users present in the panel's latest sync — same operational semantics as the
+    creation guard in `usercreate.current_user_count`, so the «پُری ظرفیت» bar the owner reads and
+    the capacity the reseller can actually use never disagree. (The two still differ in SCOPE by
+    design: this one is subtree-wide, the guard is own-users-only.) Snapshots retained for billing
+    after deletion occupy no panel slot and so are not counted here."""
     # 1) Own counts per creating admin (case-insensitive uuid key).
     base_q = (
         select(EndUserSnapshot.panel_id, func.lower(EndUserSnapshot.added_by_uuid),
                func.count(EndUserSnapshot.id))
-        .where(EndUserSnapshot.added_by_uuid.is_not(None))
+        .join(Panel, Panel.id == EndUserSnapshot.panel_id)
+        .where(EndUserSnapshot.added_by_uuid.is_not(None), snapshot_present_filter())
         .group_by(EndUserSnapshot.panel_id, func.lower(EndUserSnapshot.added_by_uuid))
     )
     if panel_id is not None:

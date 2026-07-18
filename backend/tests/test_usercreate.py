@@ -201,3 +201,91 @@ def test_create_loop_stops_on_limit(monkeypatch):
         res = await usercreate.create_for_reseller(s, r, count=5, gb=20, days=30, base_name="c")
         assert res.limit_hit and len(res.created) == 1  # first ok, second hit the limit → stop
     _run(body)
+
+
+async def _seed_with_sync(s, *, max_users, fresh, stale):
+    """`fresh` users present in the panel's latest sync + `stale` retained rows from an earlier
+    sync (users since deleted from Hiddify — kept for billing, but occupying no panel slot)."""
+    import datetime as dt
+
+    synced = dt.datetime(2026, 7, 1, 12, 0, tzinfo=dt.timezone.utc)
+    p = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o",
+              last_synced_at=synced)
+    p.client_proxy_path = "clientpath"
+    s.add(p)
+    await s.flush()
+    r = Reseller(panel_id=p.id, admin_uuid="A", name="Ali", bot_chat_id=111,
+                 panel_max_users=max_users)
+    s.add(r)
+    await s.flush()
+    for i in range(fresh):
+        # Sync stamps ONE `now` on the panel and every user it saw → present means EQUAL.
+        s.add(EndUserSnapshot(panel_id=p.id, user_uuid=f"fresh{i}", added_by_uuid="A",
+                              last_synced_at=synced))
+    for i in range(stale):
+        s.add(EndUserSnapshot(panel_id=p.id, user_uuid=f"stale{i}", added_by_uuid="A",
+                              last_synced_at=synced - dt.timedelta(days=3)))
+    await s.commit()
+    return r
+
+
+def test_fresh_users_count_against_capacity():
+    async def body(s):
+        r = await _seed_with_sync(s, max_users=3, fresh=3, stale=0)
+        assert await usercreate.current_user_count(s, r) == 3
+        res = await usercreate.create_for_reseller(s, r, count=1, gb=20, days=30, base_name="x")
+        assert res.capacity_blocked
+    _run(body)
+
+
+def test_deleted_users_retained_for_billing_do_not_occupy_capacity():
+    """The bug: a reseller who deleted services could not create new ones.
+
+    Snapshots of users removed from Hiddify are kept deliberately (billing must still charge for a
+    service sold and then removed mid-month). But they hold no slot on the panel, so counting them
+    as occupied capacity blocked creates that Hiddify itself would have accepted — the reseller was
+    locked out of quota they had actually freed.
+    """
+    async def body(s):
+        r = await _seed_with_sync(s, max_users=3, fresh=1, stale=2)
+        assert await usercreate.current_user_count(s, r) == 1, "stale rows still counted"
+        res = await usercreate.create_for_reseller(s, r, count=2, gb=20, days=30, base_name="x")
+        assert not res.capacity_blocked
+        assert res.remaining == 2
+        # …and the retained rows are still in the DB: billing keeps reading them.
+        from sqlalchemy import func as _f
+        from sqlalchemy import select as _s
+        total = (await s.execute(_s(_f.count(EndUserSnapshot.user_uuid)))).scalar_one()
+        assert total == 3, "capacity fix must not delete retained snapshots"
+    _run(body)
+
+
+def test_stale_rows_still_block_when_they_would_exceed_nothing():
+    """Mixed set: remaining capacity reflects only the users actually present."""
+    async def body(s):
+        r = await _seed_with_sync(s, max_users=5, fresh=2, stale=3)
+        assert await usercreate.current_user_count(s, r) == 2
+        res = await usercreate.create_for_reseller(s, r, count=4, gb=20, days=30, base_name="x")
+        assert res.capacity_blocked and res.remaining == 3
+    _run(body)
+
+
+def test_never_synced_panel_counts_every_snapshot():
+    """Fail-open: with no successful sync we cannot claim anything was deleted. Counting them as
+    gone would hand out capacity that may well be occupied."""
+    async def body(s):
+        r = await _seed(s, max_users=5, existing=3)   # no last_synced_at anywhere
+        assert await usercreate.current_user_count(s, r) == 3
+    _run(body)
+
+
+def test_capacity_count_is_case_insensitive_on_added_by():
+    async def body(s):
+        import datetime as dt
+        synced = dt.datetime(2026, 7, 1, 12, 0, tzinfo=dt.timezone.utc)
+        r = await _seed_with_sync(s, max_users=9, fresh=0, stale=0)
+        s.add(EndUserSnapshot(panel_id=r.panel_id, user_uuid="mixed", added_by_uuid="a",
+                              last_synced_at=synced))
+        await s.commit()
+        assert await usercreate.current_user_count(s, r) == 1
+    _run(body)

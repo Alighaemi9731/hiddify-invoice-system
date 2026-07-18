@@ -305,3 +305,260 @@ def test_reassert_leaves_a_settled_reseller_alone(tmp_path, monkeypatch):
         assert (await enforcement.reassert_enforced(s))["requeued"] == 0
 
     _run(body, tmp_path, "reassert_paid.db")
+
+
+async def _seed_reassert_presence(s, *, fresh: int, stale: int):
+    """An ENFORCED reseller with an unpaid invoice, whose users are enabled again.
+
+    `fresh` rows were seen in the panel's latest sync; `stale` rows are retained snapshots of users
+    since deleted from Hiddify (kept for billing, but gone from the panel).
+    """
+    from app.services import settings_service
+
+    await settings_service.set_value(s, "enforcement_enabled", True)
+    synced = dt.datetime(2026, 3, 20, 9, 0, tzinfo=dt.timezone.utc)
+    s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner",
+                last_synced_at=synced))
+    r = Reseller(panel_id=1, admin_uuid="A", name="R", panel_max_users=10,
+                 panel_max_active_users=10, enforcement_state=EnforcementState.enforced,
+                 max_users_snapshot=600, max_active_users_snapshot=600)
+    s.add(r)
+    await s.flush()
+    for i in range(fresh):
+        # Sync stamps the SAME instant on the panel and on every user it saw.
+        s.add(EndUserSnapshot(panel_id=1, user_uuid=f"fresh{i}", name=f"fresh{i}",
+                              added_by_uuid="A", enable=True, last_synced_at=synced))
+    for i in range(stale):
+        s.add(EndUserSnapshot(panel_id=1, user_uuid=f"stale{i}", name=f"stale{i}",
+                              added_by_uuid="A", enable=True,
+                              last_synced_at=synced - dt.timedelta(days=1)))
+    s.add(_invoice(r.id))
+    await s.commit()
+    return r
+
+
+def _queued_disable_actions(s):
+    return (
+        select(EnforcementAction)
+        .where(EnforcementAction.action == EnforcementActionType.disable_users)
+        .order_by(EnforcementAction.id)
+    )
+
+
+def test_reassert_ignores_users_deleted_from_the_panel(tmp_path):
+    """A retained snapshot must not look like a debtor re-enabling their service.
+
+    Deleted users keep `enable=True` forever (nothing clears it — the column mirrors panel truth
+    and is read by billing), and the queue worker can only resolve them as "missing on the panel"
+    without changing the row. The duplicate guard only covers planned/partial actions, so once the
+    no-op action COMPLETED the next daily sweep queued an identical one — every day, for the whole
+    ~2-month retention window, each pass re-running the limits phase and logging a false alarm.
+    """
+    async def body(s, _Session):
+        from app.services import enforcement
+
+        await _seed_reassert_presence(s, fresh=0, stale=2)
+        out = await enforcement.reassert_enforced(s)
+        assert out["requeued"] == 0, "queued a disable for users that no longer exist on the panel"
+        assert (await s.execute(_queued_disable_actions(s))).scalars().all() == []
+
+    _run(body, tmp_path, "reassert_stale.db")
+
+
+def test_reassert_still_catches_a_user_who_really_is_back_online(tmp_path):
+    """The guard must not blunt the real detection it exists for."""
+    async def body(s, _Session):
+        from app.services import enforcement
+
+        await _seed_reassert_presence(s, fresh=2, stale=0)
+        out = await enforcement.reassert_enforced(s)
+        assert out["requeued"] == 1
+        act = (await s.execute(_queued_disable_actions(s))).scalars().all()[0]
+        assert set(act.snapshot["users"]) == {"fresh0", "fresh1"}
+        assert act.snapshot["reassert"] is True
+
+    _run(body, tmp_path, "reassert_fresh.db")
+
+
+def test_reassert_mixes_only_the_present_users_into_the_action(tmp_path):
+    async def body(s, _Session):
+        from app.services import enforcement
+
+        await _seed_reassert_presence(s, fresh=2, stale=3)
+        out = await enforcement.reassert_enforced(s)
+        assert out["requeued"] == 1
+        act = (await s.execute(_queued_disable_actions(s))).scalars().all()[0]
+        assert set(act.snapshot["users"]) == {"fresh0", "fresh1"}
+        assert act.affected_count == 2
+
+    _run(body, tmp_path, "reassert_mixed.db")
+
+
+def test_reassert_does_not_repeat_after_the_action_completed(tmp_path):
+    """Once the sweep's action has run to completion, a later sweep must not re-queue the same
+    work for rows that are only still `enable=True` because they were deleted."""
+    async def body(s, _Session):
+        from app.services import enforcement
+
+        await _seed_reassert_presence(s, fresh=1, stale=2)
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 1
+        act = (await s.execute(_queued_disable_actions(s))).scalars().all()[0]
+        # Simulate the worker finishing: the present user really got disabled; the deleted rows
+        # were resolved as missing and (correctly) left untouched.
+        row = (await s.execute(
+            select(EndUserSnapshot).where(EndUserSnapshot.user_uuid == "fresh0")
+        )).scalar_one()
+        row.enable = False
+        act.status = EnforcementActionStatus.done
+        await s.commit()
+
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 0
+        assert len((await s.execute(_queued_disable_actions(s))).scalars().all()) == 1
+
+    _run(body, tmp_path, "reassert_norepeat.db")
+
+
+def test_reassert_on_a_never_synced_panel_falls_open(tmp_path):
+    """No successful sync → we cannot claim a user was deleted, so keep detecting them. Losing a
+    real re-enable is worse than one redundant action."""
+    async def body(s, _Session):
+        from app.services import enforcement, settings_service
+
+        await settings_service.set_value(s, "enforcement_enabled", True)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        r = Reseller(panel_id=1, admin_uuid="A", name="R", panel_max_users=10,
+                     panel_max_active_users=10,
+                     enforcement_state=EnforcementState.enforced)
+        s.add(r)
+        await s.flush()
+        s.add(EndUserSnapshot(panel_id=1, user_uuid="u0", name="u0", added_by_uuid="A",
+                              enable=True))
+        s.add(_invoice(r.id))
+        await s.commit()
+
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 1
+
+    _run(body, tmp_path, "reassert_nosync.db")
+
+
+def test_reassert_action_touches_no_admin_limits(tmp_path, monkeypatch):
+    """A users-only re-assert must NOT re-run the admin-limits phase.
+
+    `reassert_enforced` sets `admins: []` to mean "touch no limits", but the worker read it as
+    `snapshot.get("admins") or [all descendants]` — and `[]` is falsy, so the instruction was
+    silently inverted into "every descendant". Each daily sweep then re-captured
+    max_users_snapshot from the already-zeroed panel: the same shape as the M38 bug that
+    permanently destroyed real max_users values.
+    """
+    from app.services import enforcement
+
+    async def body(s, _Session):
+        await _seed_reassert_presence(s, fresh=1, stale=0)
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 1
+
+        limit_writes: list[tuple] = []
+
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return 42
+
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
+            return None
+
+        async def fake_get_user(self, panel, user_uuid, *, api_key=None):
+            return {"enable": False}
+
+        async def fake_get_limits(self, panel, admin_uuid, api_key=None):
+            return (0, 0)          # already suspended → the panel reads zeros
+
+        async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
+            limit_writes.append((admin_uuid, mu, mau))
+
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
+        monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
+
+        await enforcement.process_enforcement_queue(s, action_limit=5, user_chunk_size=10)
+
+        assert limit_writes == [], f"users-only re-assert wrote admin limits: {limit_writes}"
+        # …and the real pre-suspension limits survive untouched.
+        r = (await s.execute(select(Reseller).where(Reseller.admin_uuid == "A"))).scalar_one()
+        await s.refresh(r)
+        assert r.max_users_snapshot == 600 and r.max_active_users_snapshot == 600
+
+    _run(body, tmp_path, "reassert_limits.db")
+
+
+def test_reassert_action_actually_disables_the_users(tmp_path, monkeypatch):
+    """The re-assertion path must reach the panel — it was queueing work nobody ever executed.
+
+    `reassert_enforced` only ever selects resellers already in `enforced` state, but the worker's
+    M38 idempotency guard finalized any suspension for an already-enforced reseller as `done`
+    without touching the panel. So every queued re-assert was discarded unexecuted, the debtor's
+    re-enabled users stayed online, and the sweep re-queued the same no-op the next day. The guard
+    is exempted for re-asserts only, which is safe because they are users-only (asserted by
+    `test_reassert_action_touches_no_admin_limits`).
+    """
+    from app.services import enforcement
+
+    async def body(s, _Session):
+        await _seed_reassert_presence(s, fresh=2, stale=0)
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 1
+
+        disabled: list[int] = []
+
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return {"fresh0": 10, "fresh1": 11}[user_uuid]
+
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
+            assert enabled is False
+            disabled.extend(user_ids)
+
+        async def fake_get_user(self, panel, user_uuid, *, api_key=None):
+            return {"enable": False}          # the write landed
+
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
+
+        res = await enforcement.process_enforcement_queue(s, action_limit=5, user_chunk_size=10)
+
+        assert sorted(disabled) == [10, 11], "re-assert never reached the panel"
+        assert res["patched_users"] == 2
+        rows = (await s.execute(select(EndUserSnapshot))).scalars().all()
+        assert all(r.enable is False for r in rows)
+
+    _run(body, tmp_path, "reassert_executes.db")
+
+
+def test_a_normal_suspension_of_an_enforced_reseller_is_still_idempotent(tmp_path, monkeypatch):
+    """The M38 guard must survive for ordinary suspensions — only re-asserts are exempt."""
+    from app.services import enforcement
+
+    async def body(s, _Session):
+        r = await _seed_reassert_presence(s, fresh=1, stale=0)
+        act = EnforcementAction(
+            reseller_id=r.id, action=EnforcementActionType.disable_users, dry_run=False,
+            affected_count=1, status=EnforcementActionStatus.planned,
+            snapshot={"limits": {}, "admins": ["A"], "users": {"fresh0": "A"}},
+        )
+        s.add(act)
+        await s.commit()
+
+        touched: list[str] = []
+
+        async def boom(self, *a, **k):
+            touched.append("panel")
+            raise AssertionError("an already-enforced reseller must not be re-suspended")
+
+        for name in ("get_user_id", "bulk_set_users_enabled", "get_admin_limits",
+                     "set_admin_limits"):
+            monkeypatch.setattr(enforcement.AdminApiClient, name, boom)
+
+        await enforcement.process_enforcement_queue(s, action_limit=5, user_chunk_size=10)
+        assert touched == []
+        await s.refresh(act)
+        assert act.status == EnforcementActionStatus.done
+
+    _run(body, tmp_path, "reassert_guard_kept.db")

@@ -180,11 +180,17 @@ class AdminApiClient(PanelClient):
         self, panel, user_uuid: str, *, api_key: str | None = None
     ) -> None:
         """Delete ONE end-user. Hiddify v2 has no single-user DELETE, so resolve the numeric id (as the
-        owning admin) and use the native bulk action. A missing user (already gone) is a no-op."""
+        owning admin) and use the native bulk action. A missing user (already gone) is a no-op.
+
+        The SAME `api_key` must travel to BOTH calls. Resolving the id as the owning admin but then
+        deleting as the super-admin would throw away the panel-side scoping that is our second line
+        of defence against a stale/foreign numeric id — the exact hole that let one reseller's
+        suspension disable 305 other resellers' users (M-incident 2026-07-18). Deletion is
+        unrecoverable, so here the id must fail closed, not merely be believed."""
         uid = await self.get_user_id(panel, user_uuid, api_key=api_key)
         if uid is None:
             return
-        await self.bulk_delete_users(panel, [uid])
+        await self.bulk_delete_users(panel, [uid], api_key=api_key)
 
     async def prepare_renew_user(  # noqa: ANN001
         self, panel, user_uuid: str, *, gb: int, days: int, api_key: str | None = None

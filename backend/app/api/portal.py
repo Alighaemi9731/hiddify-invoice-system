@@ -4,9 +4,12 @@ Telegram one-time link. Every route except the public token exchange depends on
 trusted. Mirrors the data the Telegram bot already shows, reusing the same services."""
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import html as _html
+import logging
 import os
+import tempfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -38,6 +41,7 @@ from app.services.periods import today as tehran_today
 # Receipt upload safety cap (matches a phone screenshot; refuse anything larger).
 _MAX_PROOF_BYTES = 8 * 1024 * 1024
 
+log = logging.getLogger("portal")
 router = APIRouter(prefix="/api/portal", tags=["portal"])
 
 # Delivered-but-unpaid states (the reseller's "due") — mirrors the bot.
@@ -157,15 +161,21 @@ async def auth_telegram(
     uid = (body.uuid or "").strip().lower()
     if not uid:
         raise denied
-    # The uuid addresses a reseller row; that row must belong to the PROVEN Telegram id.
+    # Select BY the proven identity, never by uuid alone. `admin_uuid` is unique only per PANEL
+    # (uq_reseller_panel_uuid), so the same uuid can legitimately name two independent reseller
+    # rows on two panels owned by two different Telegram accounts. Picking an arbitrary uuid match
+    # first and comparing bot_chat_id afterwards made the outcome depend on undefined row order:
+    # one of the two owners was locked out of their own portal, and which one could flip whenever
+    # Postgres rewrote the winning row. Asking for (uuid AND proven chat id) makes order
+    # irrelevant and lets each owner in — still scoped, below, to only their own rows.
     owner_chat_id = (await session.execute(
         select(Reseller.bot_chat_id).where(
             sa_func.lower(Reseller.admin_uuid) == uid,
-            Reseller.bot_chat_id.isnot(None),
+            Reseller.bot_chat_id == int(telegram_id),
         ).limit(1)
     )).scalar_one_or_none()
-    if owner_chat_id is None or int(owner_chat_id) != int(telegram_id):
-        raise denied
+    if owner_chat_id is None:
+        raise denied  # same 403 whether the uuid is unknown or simply not theirs (no enumeration)
     return {"access_token": create_portal_session_token(int(owner_chat_id)), "token_type": "bearer"}
 
 
@@ -680,45 +690,65 @@ async def pay_screenshot(
     if not data:
         raise HTTPException(400, "فایل خالی است.")
     ids = _form_invoice_ids(invoice_id, invoice_ids)
-    result = await payments.submit_reseller_payment(
-        session, reseller_ids=set(ctx.ids), invoice_ids=ids, screenshot=True)
-    if result.status != "ok" or result.payment is None:
-        return {"status": result.status, "message": result.user_message, "number": None}
-    payment = result.payment
+    # Store the bytes BEFORE creating the payment. The old order (create + commit, then write)
+    # meant a failed write left a pending row with no proof — and that row blocked the very resend
+    # the error message asked for, making the invoice unpayable by screenshot until an owner
+    # intervened. Writing first means a storage failure costs a temp file and nothing else.
     proof_dir = "data/payment_proofs"
-    os.makedirs(proof_dir, exist_ok=True)
-    proof_path = f"{proof_dir}/payment_{payment.id}.jpg"
-    saved = False
     try:
-        with open(proof_path, "wb") as fh:
+        os.makedirs(proof_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=proof_dir, prefix=".incoming-", suffix=".jpg")
+        with os.fdopen(fd, "wb") as fh:
             fh.write(data)
+    except OSError:
+        log.warning("could not store payment proof; no payment recorded", exc_info=True)
+        raise HTTPException(
+            503, "ذخیرهٔ تصویرِ رسید ممکن نشد؛ پرداختی ثبت نشد. لطفاً دوباره تلاش کنید."
+        ) from None
+
+    try:
+        result = await payments.submit_reseller_payment(
+            session, reseller_ids=set(ctx.ids), invoice_ids=ids, screenshot=True)
+    except Exception:
+        os.unlink(tmp_path)  # no row was created → don't leave the orphan behind
+        raise
+    if result.status != "ok" or result.payment is None:
+        os.unlink(tmp_path)
+        return {"status": result.status, "message": result.user_message, "number": None}
+
+    payment = result.payment
+    # The final name needs the payment id, so publish by atomic same-directory rename. This is
+    # the only remaining failure window and it cannot leave a partially written file.
+    proof_path = f"{proof_dir}/payment_{payment.id}.jpg"
+    try:
+        os.replace(tmp_path, proof_path)
         payment.proof_path = proof_path
         await session.commit()
-        saved = True
     except OSError:
-        pass  # keep the pending payment even if the file write fails (see below)
+        log.warning("could not publish payment proof for payment %s", payment.id, exc_info=True)
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        await session.rollback()
+        # Compensate: drop the proofless row so these invoices stay payable and the resend we are
+        # about to ask for can actually go through. Declines if an owner already acted on it.
+        if await payments.discard_unproven_screenshot(session, payment.id):
+            raise HTTPException(
+                503, "ذخیرهٔ تصویرِ رسید ممکن نشد؛ پرداختی ثبت نشد. لطفاً دوباره تلاش کنید."
+            ) from None
+        return {
+            "status": "proof_not_saved",
+            "message": "پرداخت ثبت شد اما ذخیرهٔ تصویرِ رسید ناموفق بود؛ پشتیبانی بررسی می‌کند.",
+            "number": payment_code(payment.id),
+        }
+
     from app.bot import keyboards as kb
     from app.bot.handlers import _payment_review_html
 
     review = await _payment_review_html(session, payment, invs=result.invoices)
     kbd = kb.owner_payment_detail_keyboard(payment.id)
-    if saved:
-        await owner_notify.notify_owner_photo(
-            session, proof_path, result.owner_intro + "\n\n" + review, reply_markup=kbd)
-        return {"status": "ok", "message": result.user_message, "number": payment_code(payment.id)}
-    # The proof file could not be stored → DON'T claim success with a photo that doesn't exist.
-    # Tell the owner (text-only) the image is missing, and ask the reseller to resend.
-    await owner_notify.notify_owner(
-        session,
-        result.owner_intro + "\n\n" + review
-        + "\n\n⚠️ تصویرِ رسید ذخیره نشد؛ از نماینده بخواهید دوباره ارسال کند.",
-        html=True, reply_markup=kbd,
-    )
-    return {
-        "status": "proof_not_saved",
-        "message": "پرداخت ثبت شد اما ذخیرهٔ تصویرِ رسید ناموفق بود؛ لطفاً تصویر را دوباره بفرستید.",
-        "number": payment_code(payment.id),
-    }
+    await owner_notify.notify_owner_photo(
+        session, proof_path, result.owner_intro + "\n\n" + review, reply_markup=kbd)
+    return {"status": "ok", "message": result.user_message, "number": payment_code(payment.id)}
 
 
 # ------------------------------ sub-reseller management ------------------------------

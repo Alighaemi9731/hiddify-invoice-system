@@ -28,6 +28,7 @@ from app.services import settings_service
 from app.services.invoice_engine import build_children_map, collect_descendants
 from app.services.panel_client.admin_api import AdminApiClient
 from app.services.periods import today as tehran_today
+from app.services.presence import snapshot_present_filter
 
 log = logging.getLogger("enforcement")
 
@@ -90,6 +91,39 @@ async def _enabled_users(
                 # here while still being deleted/billed — i.e. a debtor kept users online.
                 func.lower(EndUserSnapshot.added_by_uuid).in_({u.lower() for u in admin_uuids}),
                 EndUserSnapshot.enable.is_(True),
+            )
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def _enabled_present_users(
+    session: AsyncSession, panel_id: int, admin_uuids: set[str]
+) -> list[EndUserSnapshot]:
+    """`_enabled_users`, narrowed to users still present in the panel's latest sync.
+
+    For REASSERTION only — deliberately NOT folded into `_enabled_users`, because the two callers
+    have opposite failure economics:
+
+    * Initial enforcement runs ONCE per suspension and is never revisited, so a false negative
+      there leaves a debtor's user online forever. It must keep casting the wide net; the worker
+      already discards users that turn out to be absent (404 → `missing_users`) at execution time.
+    * Reassertion runs every day and is self-healing, so a false negative costs at most one day.
+
+    Without the filter, a snapshot retained after deletion (still `enable=True`, stale stamp — see
+    `services/presence`) makes every daily sweep queue an identical action that the worker can only
+    resolve as "user missing". That loop repeats for the whole retention window (up to ~2 months per
+    dead user), each pass re-running the admin-limits phase and logging a false alarm claiming the
+    debtor re-enabled their users."""
+    rows = (
+        await session.execute(
+            select(EndUserSnapshot)
+            .join(Panel, Panel.id == EndUserSnapshot.panel_id)
+            .where(
+                EndUserSnapshot.panel_id == panel_id,
+                func.lower(EndUserSnapshot.added_by_uuid).in_({u.lower() for u in admin_uuids}),
+                EndUserSnapshot.enable.is_(True),
+                snapshot_present_filter(),
             )
         )
     ).scalars().all()
@@ -790,7 +824,7 @@ async def reassert_enforced(session: AsyncSession, *, limit: int = 50) -> dict:
             continue          # debt settled; a restore is that path's job, not ours
         descendants = await _bundle(session, reseller)
         admin_uuids = {d.admin_uuid for d in descendants}
-        back_online = await _enabled_users(session, reseller.panel_id, admin_uuids)
+        back_online = await _enabled_present_users(session, reseller.panel_id, admin_uuids)
         if not back_online:
             continue
         # An identical re-assert already waiting/running → don't pile up duplicates.
@@ -1084,7 +1118,20 @@ async def _process_enforcement_action(
             return {"skipped": 1}
         return {"restore_queued": 1}
 
-    if reseller.enforcement_state == EnforcementState.enforced:
+    # A RE-ASSERT exists precisely to run against an already-enforced reseller — the debtor turned
+    # their users back on while suspended — so the idempotency guard below must not swallow it.
+    # Without this exemption the whole re-assertion path was inert: `reassert_enforced` only ever
+    # selects resellers in `enforced` state, so every action it queued was marked done here having
+    # disabled nobody, and the sweep re-queued it again the next day.
+    #
+    # Exempting it is safe ONLY because a re-assert is users-only. The guard was added in M38
+    # because re-running the LIMITS phase against an enforced reseller re-read the now-zero
+    # on-panel limits and overwrote max_users_snapshot with 0/0, permanently destroying the real
+    # values restore depends on. A re-assert carries `admins: []` / `limits: {}` and so never
+    # enters that phase — see the `admins_planned` handling in Phase 2, which had to be fixed to
+    # honour an explicitly EMPTY list for that guarantee to actually hold.
+    is_reassert = bool((action.snapshot or {}).get("reassert"))
+    if reseller.enforcement_state == EnforcementState.enforced and not is_reassert:
         action.status = EnforcementActionStatus.done
         await session.commit()
         return {"done": 1}
@@ -1146,9 +1193,16 @@ async def _process_enforcement_action(
     by_uuid = {d.admin_uuid: d for d in descendants}
     # Bottom-up (leaf → root): children lose quota first so they can't create new
     # users while the parent still has capacity.
-    admin_order = list(
-        reversed(snapshot.get("admins") or [d.admin_uuid for d in descendants])
-    )
+    # `or` would treat an explicitly EMPTY admin list as "not supplied" and fall through to the
+    # full descendant set. A re-assert snapshot (`reassert_enforced`) sets `admins: []` precisely
+    # to mean "users only, touch no limits" — under `or` it silently re-ran the limits phase over
+    # every descendant and re-captured max_users_snapshot from the already-zeroed panel, which is
+    # the same shape as the M38 bug that destroyed real max_users. Presence of the KEY is the
+    # signal; its emptiness is an instruction, not an absence.
+    admins_planned = snapshot.get("admins")
+    if admins_planned is None:
+        admins_planned = [d.admin_uuid for d in descendants]
+    admin_order = list(reversed(admins_planned))
     done_admins: set[str] = set(progress.get("admins_done") or [])
     failed_admins: dict[str, str] = dict(progress.get("admins_failed") or {})
     admin_attempts: dict[str, int] = dict(progress.get("admin_attempts") or {})

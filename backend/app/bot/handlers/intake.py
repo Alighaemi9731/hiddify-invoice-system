@@ -7,6 +7,7 @@ and the shared TXID / screenshot payment recording used by the locked pay flow.
 from __future__ import annotations
 
 import datetime as dt
+import io
 import os
 
 from aiogram.types import Message
@@ -345,6 +346,20 @@ async def _handle_payment_proof(
         # Not a registered reseller → can't attribute the payment.
         await message.answer(await texts.render(session, "tpl_link_not_found"))
         return
+    # Fetch the image BEFORE creating the payment, mirroring the portal path: a pending row with
+    # no proof blocks the reseller's own retry (one pending payment per invoice), so a download
+    # failure must not leave one behind. Held in memory — Telegram photos are a few hundred KB.
+    photo = message.photo[-1]
+    buf = io.BytesIO()
+    try:
+        await message.bot.download(photo, destination=buf)
+    except Exception:  # noqa: BLE001 — network/Telegram hiccup; nothing recorded, retry is clean
+        log.warning("failed to download payment proof photo", exc_info=True)
+        await message.answer(rtl(
+            "دریافت تصویرِ رسید ناموفق بود؛ پرداختی ثبت نشد. لطفاً دوباره ارسال کنید."
+        ))
+        return
+
     # Shared validation + creation (identical rules on the bot and the web portal).
     result = await payments.submit_reseller_payment(
         session, reseller_ids={r.id for r in resellers},
@@ -356,17 +371,20 @@ async def _handle_payment_proof(
     payment = result.payment
     result_invoices = result.invoices
 
-    # Download the largest rendition of the photo to disk for the panel to display.
-    photo = message.photo[-1]
+    # Persist the already-downloaded bytes. If even this fails the owner still gets the photo
+    # below (Telegram hosts it by file_id), so the payment stays reviewable and we do NOT ask for
+    # a resend — the row is intact and legitimate, only the local copy is missing.
     proof_dir = "data/payment_proofs"
-    os.makedirs(proof_dir, exist_ok=True)
     proof_path = f"{proof_dir}/payment_{payment.id}.jpg"
     try:
-        await message.bot.download(photo, destination=proof_path)
+        os.makedirs(proof_dir, exist_ok=True)
+        with open(proof_path, "wb") as fh:
+            fh.write(buf.getvalue())
         payment.proof_path = proof_path
         await session.commit()
-    except Exception:  # noqa: BLE001 — keep the pending payment even if the file fails
+    except OSError:
         log.warning("failed to save payment proof for payment %s", payment.id, exc_info=True)
+        await session.rollback()
 
     await message.answer(rtl(result.user_message))
 

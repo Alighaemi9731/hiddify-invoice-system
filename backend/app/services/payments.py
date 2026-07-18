@@ -447,6 +447,78 @@ async def _maybe_restore(
         log.info("restore skipped/failed for reseller %s", reseller.id)
 
 
+async def _restore_settled_resellers(
+    session: AsyncSession, invoices: list[Invoice]
+) -> None:
+    """Evaluate restore for EVERY reseller represented by a settled payment set.
+
+    One Telegram account can own reseller rows on several panels, and «پرداخت همهٔ بدهی» is
+    explicitly allowed to settle their invoices across those panels in ONE transfer. The payment's
+    own `reseller_id` is only the FIRST invoice's owner, so restoring just that one left every
+    other panel's reseller suspended even though the debt that suspended them had just been paid —
+    and nothing later corrected it, because dunning only re-escalates, it never restores.
+
+    Each reseller is judged on its OWN remaining debt: `_maybe_restore` still refuses to lift
+    enforcement while that reseller has another due, non-deferred invoice outside this set. Paying
+    panel A's invoice therefore never releases panel B while B still owes.
+
+    Both confirm paths funnel through here so they cannot drift apart again. Safe to re-run: a
+    repeat confirmation re-evaluates the same resellers and `enforcement.queue_restore` returns the
+    already-queued action instead of creating a second one. One reseller's failure must not strand
+    the others, so each is isolated.
+    """
+    seen: set[int] = set()
+    exclude = {inv.id for inv in invoices}
+    for inv in invoices:
+        rid = inv.reseller_id
+        if rid is None or rid in seen:
+            continue
+        seen.add(rid)
+        try:
+            await _maybe_restore(
+                session, await session.get(Reseller, rid), exclude_invoice_ids=exclude
+            )
+        except Exception:  # noqa: BLE001 — one panel being unreachable must not skip the rest
+            log.warning("restore evaluation failed for reseller %s", rid, exc_info=True)
+
+
+async def discard_unproven_screenshot(session: AsyncSession, payment_id: int) -> bool:
+    """Compensate a screenshot submission whose proof never reached durable storage.
+
+    INVARIANT: we must never tell a reseller "please send the receipt again" while keeping the row
+    that makes the resend impossible. The one-pending-payment-per-invoice guard
+    (`_pending_invoice_ids_in_sets`) looks only at status + coverage, so a pending row with NO
+    proof blocks the retry exactly as hard as a legitimate one — the invoice became unpayable by
+    screenshot until the owner manually intervened, and no job cleans these up.
+
+    Callers write the image FIRST and only reach this on the residual failure (see the portal /
+    bot proof paths), so this deletes at most the row it just created, moments old.
+
+    Concurrency: re-reads under `with_for_update` + `populate_existing` and re-checks that the row
+    is STILL pending, proofless and a screenshot. On Postgres a concurrent `confirm_manually` (which
+    takes the same lock) therefore either commits first — leaving a non-pending status we refuse to
+    touch — or waits and observes the deletion. Returns False when it declined to delete, so the
+    caller can keep the "recorded, awaiting review" wording instead of asking for a resend.
+    """
+    payment = await session.get(Payment, payment_id, with_for_update=True, populate_existing=True)
+    if payment is None:
+        return False
+    if (
+        payment.status != PaymentStatus.pending
+        or payment.proof_path
+        or payment.method != PaymentMethod.screenshot
+    ):
+        return False
+    # Mirror delete_payment: drop settlements explicitly (SQLite doesn't enforce FK cascades).
+    await session.execute(
+        delete(PaymentSettlement).where(PaymentSettlement.payment_id == payment.id)
+    )
+    await session.delete(payment)
+    await session.commit()
+    log.warning("discarded proofless screenshot payment %s so the invoices stay payable", payment_id)
+    return True
+
+
 @dataclass
 class PaymentResult:
     status: str             # confirmed | pending | rejected
@@ -960,10 +1032,7 @@ async def verify_payment(
         payment.settled_invoice_ids = ",".join(str(i) for i in set_ids)
         await _sync_settlements(session, payment)
     await session.commit()
-    await _maybe_restore(
-        session, await session.get(Reseller, targets[0].reseller_id),
-        exclude_invoice_ids={t.id for t in targets},
-    )
+    await _restore_settled_resellers(session, targets)
 
     period = _periods_label([t.period_label for t in targets])
     msg = await _payment_received_text(session, period, payment.id)
@@ -1235,10 +1304,7 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     await session.commit()
 
     if all_in_set:
-        await _maybe_restore(
-            session, await session.get(Reseller, all_in_set[0].reseller_id),
-            exclude_invoice_ids={inv.id for inv in all_in_set},
-        )
+        await _restore_settled_resellers(session, all_in_set)
 
     if reseller is not None and not was_confirmed:
         period = _periods_label([inv.period_label for inv in all_in_set])

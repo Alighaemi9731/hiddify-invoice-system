@@ -136,3 +136,66 @@ def test_bulk_delete_users_posts_delete_action(monkeypatch):
     assert url == "https://panel.example/proxy/admin/user/action/"
     assert data["action"] == "delete"
     assert data["rowid"] == ["21", "22"]
+
+
+def test_delete_user_acts_as_the_owning_admin_end_to_end(monkeypatch):
+    """A single-user delete must run under the OWNING admin's key, not the super-admin's.
+
+    `delete_user` resolved the numeric id as the owning admin but then called the destructive
+    bulk action with no key, so the POST went out as the panel super-admin. That discards the
+    panel-side scoping which is our second line of defence: under the owner's key Hiddify simply
+    does not match a rowid that isn't theirs, so a stale/foreign id fails closed. As the
+    super-admin the panel has no reason to refuse — the exact shape of the 2026-07-18 incident,
+    except deletion is unrecoverable.
+    """
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen.setdefault("init_headers", []).append(kwargs.get("headers", {}))
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, headers=None):
+            if headers is not None:          # id resolution (REST)
+                seen["resolve_key"] = headers["Hiddify-API-Key"]
+                return _Response(200, json_data={"uuid": "u1", "id": 77})
+            return _Response(200, text='<input name="csrf_token" value="tok">')
+        async def post(self, url, data):
+            seen["rowid"] = data["rowid"]
+            seen["action"] = data["action"]
+            return _Response(302)
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    asyncio.run(admin_api.AdminApiClient().delete_user(_panel(), "u1", api_key="OWNER"))
+
+    assert seen["resolve_key"] == "OWNER"          # id resolved as the owning admin
+    assert seen["action"] == "delete" and seen["rowid"] == ["77"]
+    # …and the destructive POST carried the SAME credential, not the panel super-admin's.
+    bulk_headers = seen["init_headers"][-1]
+    assert bulk_headers["Hiddify-API-Key"] == "OWNER", (
+        "bulk delete fell back to the super-admin key — panel-side scoping lost"
+    )
+
+
+def test_delete_user_absent_on_panel_deletes_nothing(monkeypatch):
+    """A 404 during id resolution must short-circuit — never a keyless bulk call with no rowids."""
+    posted = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, headers=None):
+            return _Response(404)
+        async def post(self, url, data):
+            posted.append(data)
+            return _Response(302)
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    asyncio.run(admin_api.AdminApiClient().delete_user(_panel(), "gone", api_key="OWNER"))
+    assert posted == []

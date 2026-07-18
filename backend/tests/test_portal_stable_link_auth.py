@@ -139,3 +139,68 @@ def test_entry_config_leaks_nothing_about_who_owns_a_uuid():
         assert "Alice" not in real.text
 
     _run(body)
+
+
+async def _seed_duplicate_uuid(session, *, bob_first: bool):  # noqa: ANN001, ANN202
+    """The SAME admin_uuid on two panels, owned by two different Telegram accounts.
+
+    Legitimate and expected: `uq_reseller_panel_uuid` makes admin_uuid unique per PANEL, not
+    globally, and two Hiddify panels can independently hand out the same uuid. `bob_first` varies
+    only the INSERT order, which is the whole point — the outcome must not depend on it.
+    """
+    from app.services import settings_service
+
+    p1 = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o")
+    p2 = Panel(key="p2", host="p2.invalid", proxy_path_enc="x", owner_uuid="o")
+    session.add_all([p1, p2])
+    await session.flush()
+    alice = Reseller(panel_id=p1.id, admin_uuid="shared-uuid", name="Alice", bot_chat_id=111)
+    bob = Reseller(panel_id=p2.id, admin_uuid="shared-uuid", name="Bob", bot_chat_id=222)
+    session.add_all([bob, alice] if bob_first else [alice, bob])
+    await settings_service.set_value(session, "telegram_bot_token", BOT_TOKEN)
+    await session.commit()
+
+
+def test_duplicate_uuid_on_two_panels_lets_each_real_owner_in():
+    """Both owners of a shared uuid must authenticate, regardless of DB row order.
+
+    The endpoint used to pick an arbitrary `.limit(1)` uuid match and only THEN compare
+    bot_chat_id, so exactly one of the two owners was refused entry to their own portal — chosen
+    by undefined row order, and able to flip whenever Postgres rewrote the winning row.
+    """
+    for bob_first in (False, True):
+        def body(bob_first=bob_first):
+            async def inner(session, client):  # noqa: ANN001
+                await _seed_duplicate_uuid(session, bob_first=bob_first)
+                fresh = lambda uid: _signed(  # noqa: E731
+                    {"id": uid, "first_name": "X", "auth_date": int(time.time())})
+
+                for chat_id in (111, 222):
+                    resp = await client.post(
+                        "/api/portal/auth/telegram",
+                        json={"uuid": "shared-uuid", "auth": fresh(chat_id)})
+                    assert resp.status_code == 200, (
+                        f"owner {chat_id} locked out of their own portal "
+                        f"(insert order bob_first={bob_first}): {resp.text}"
+                    )
+                    assert resp.json()["access_token"]
+
+                # A third party who proves a DIFFERENT Telegram id is still refused.
+                intruder = await client.post(
+                    "/api/portal/auth/telegram",
+                    json={"uuid": "shared-uuid", "auth": fresh(999)})
+                assert intruder.status_code == 403
+            return inner
+        _run(body())
+
+
+def test_duplicate_uuid_match_stays_case_insensitive():
+    async def body(session, client):  # noqa: ANN001
+        await _seed_duplicate_uuid(session, bob_first=False)
+        resp = await client.post(
+            "/api/portal/auth/telegram",
+            json={"uuid": "SHARED-UUID",
+                  "auth": _signed({"id": 222, "first_name": "X",
+                                   "auth_date": int(time.time())})})
+        assert resp.status_code == 200, resp.text
+    _run(body)

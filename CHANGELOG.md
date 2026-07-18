@@ -8,6 +8,51 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.92.2 - 2026-07-18
+
+Six correctness and tenant-safety fixes from a targeted re-audit. No database migration.
+
+### Fixed
+
+- **Deleting one customer's service could, in principle, delete somebody else's.** When the shop bot
+  removes a single service it first looks up that service's internal panel number, correctly asking
+  as the reseller who owns it — but then performed the actual deletion as the panel super-admin. That
+  threw away the panel's own ownership check, which is the safety net that stopped the July 18th
+  incident from being worse. Deletion cannot be undone, so this is exactly where that net matters
+  most. The deletion now runs as the owning reseller, so a wrong number simply matches nothing.
+- **Paying several panels' invoices with one transfer only un-blocked one of them.** A customer with
+  panels on several servers can settle everything with a single payment — but only the first panel's
+  reseller was released from suspension. The others stayed blocked even though the debt that blocked
+  them had just been paid, and nothing ever corrected it, because the reminder system only escalates,
+  it never releases. Every reseller covered by a payment is now re-evaluated, each still judged on
+  its own remaining debt.
+- **Deleted users still counted against a reseller's capacity.** Records of users removed from
+  Hiddify are kept on purpose, so a service sold and then deleted mid-month is still billed. But they
+  were also counted as occupying space on the panel, so a reseller who cleaned up their old users
+  could not create new ones — blocked by capacity they had actually freed. Capacity now counts only
+  users still present on the panel; billing keeps every record exactly as before.
+- **A failed receipt upload made the invoice impossible to pay by receipt.** If saving the image
+  failed, the payment record was still created and the customer was asked to send it again — but that
+  leftover record was precisely what blocked the resend, leaving the invoice stuck until support
+  stepped in. The image is now stored before anything is recorded, so a failure costs nothing and the
+  next attempt just works.
+- **Two resellers sharing an admin ID locked each other out of the web portal.** Panels can
+  independently issue the same admin ID, and the portal picked whichever record the database happened
+  to return first, then checked ownership. One of the two legitimate owners was refused entry to
+  their own portal, and which one could change on its own. The portal now looks up the record by the
+  Telegram account that just proved itself, so both owners get in — each seeing only their own panels.
+- **Re-blocking a debtor who switched their users back on never actually happened.** v1.92.0 added a
+  daily check for suspended resellers turning their own users back on. It never worked: the check
+  only ever looks at already-suspended resellers, and a separate safeguard silently discarded any
+  action aimed at one. Every day it queued work that was thrown away. It now runs, and it ignores
+  users already deleted from the panel instead of chasing them forever.
+
+### Deployment notes
+
+- The last item changes visible behaviour: re-blocking has not actually run since v1.92.0, so after
+  this deploy the system will begin switching off users that suspended resellers had re-enabled. A
+  short-lived rise in enforcement activity is expected and correct.
+
 ## 1.92.1 - 2026-07-18
 
 Two more audit findings fixed. No database migration.

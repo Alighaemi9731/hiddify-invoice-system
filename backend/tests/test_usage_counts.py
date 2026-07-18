@@ -73,3 +73,42 @@ def test_subtree_counts_all_users_case_insensitive_per_panel():
         assert scoped[(p1.id, "A-UUID")] == (10, 6)
         assert (p2.id, "A-UUID") not in scoped
     _run(body)
+
+
+def test_owner_capacity_bar_ignores_deleted_but_retained_users():
+    """The «پُری ظرفیت» bar must agree with the capacity the reseller can actually use.
+
+    Same operational semantics as `usercreate.current_user_count`: snapshots retained for billing
+    after the user was deleted from Hiddify occupy no slot, so showing them made the owner's bar
+    read fuller than the panel really was (and disagree with the creation guard).
+    """
+    import datetime as dt
+
+    async def body(s):
+        synced = dt.datetime(2026, 7, 1, 12, 0, tzinfo=dt.timezone.utc)
+        s.add(Panel(id=1, key="p1", host="h1", proxy_path_enc="x", owner_uuid="o",
+                    last_synced_at=synced))
+        s.add(Reseller(panel_id=1, admin_uuid="A", name="A", parent_admin_uuid="o"))
+        for i in range(2):   # present in the latest sync
+            s.add(EndUserSnapshot(panel_id=1, user_uuid=f"fresh{i}", added_by_uuid="A",
+                                  enable=True, is_active=True, last_synced_at=synced))
+        for i in range(3):   # deleted from Hiddify, row retained for billing
+            s.add(EndUserSnapshot(panel_id=1, user_uuid=f"stale{i}", added_by_uuid="A",
+                                  enable=True, is_active=True,
+                                  last_synced_at=synced - dt.timedelta(days=2)))
+        await s.commit()
+        counts = await _usage_counts(s, None)
+        assert counts[(1, "A")] == (2, 2), "retained deleted users inflated the capacity bar"
+    _run(body)
+
+
+def test_usage_counts_fail_open_when_panel_never_synced():
+    """No trustworthy sync → count everything rather than pretend users were deleted."""
+    async def body(s):
+        s.add(Panel(id=1, key="p1", host="h1", proxy_path_enc="x", owner_uuid="o"))
+        s.add(Reseller(panel_id=1, admin_uuid="A", name="A", parent_admin_uuid="o"))
+        s.add_all(_users(1, "A", 4, 2))
+        await s.commit()
+        counts = await _usage_counts(s, None)
+        assert counts[(1, "A")] == (4, 2)
+    _run(body)

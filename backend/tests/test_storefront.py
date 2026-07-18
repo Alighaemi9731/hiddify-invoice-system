@@ -1145,6 +1145,7 @@ def test_delete_subscription_removes_panel_user(tmp_path, monkeypatch):
 
     async def fake_delete_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
         seen["uuid"] = uuid
+        seen["api_key"] = api_key
 
     monkeypatch.setattr(admin_api.AdminApiClient, "delete_user", fake_delete_user)
 
@@ -1159,6 +1160,9 @@ def test_delete_subscription_removes_panel_user(tmp_path, monkeypatch):
             oid = order.id
         res = await storefront_subscription.delete_subscription(Session, order_id=oid)
         assert res.ok and seen["uuid"] == "u1"
+        # The reseller's own credential must reach the delete: it is what confines the destructive
+        # action to their users on the panel. `_seed` binds the shop to the reseller below.
+        assert seen["api_key"] == "A1", "storefront delete lost the reseller credential"
         async with Session() as s:
             assert (await s.get(StorefrontOrder, oid)).status == "deleted"
         await engine.dispose()
