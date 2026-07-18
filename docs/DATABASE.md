@@ -8,6 +8,42 @@ Schema evolves on boot through versioned Alembic migrations (`backend/alembic`).
 Money is stored as `Numeric`; secrets are Fernet-encrypted at rest (columns ending
 `_enc`).
 
+## Rolling back across a migration
+
+**The database must never be left ahead of the code.** On boot the app upgrades to the
+head revision its own build ships (`app/core/db.py::_upgrade_schema`). If
+`alembic_version` names a revision that build does not contain, Alembic cannot resolve
+the chain and raises `CommandError: Can't locate revision identified by '<rev>'`. That
+happens *before* any DDL, so it blocks the boot even when the schema difference is
+purely additive and the older code would have tolerated it. Nothing catches it, and
+`restart: unless-stopped` turns it into an endless restart loop on **both** the backend
+and the bot.
+
+`deploy/rollback.sh` therefore downgrades the schema **before** swapping the code:
+
+```bash
+sudo ALLOW_DOWNGRADE=1 /opt/hiddify-invoice-system/deploy/rollback.sh v1.2.3
+```
+
+It compares the live revision against the target release's revision set, and when the
+database is ahead it takes a `pg_dump` to `update/rollback-<tag>-<ts>.sql`, then runs
+`alembic downgrade <target head>` **inside the current (newer) container** — which is
+the only place the relevant `downgrade()` bodies still exist, because the installer
+deletes files that the target release does not ship. Without `ALLOW_DOWNGRADE=1` it
+refuses and changes nothing. Any failure aborts and leaves the system on the current
+release, still running.
+
+This works because **every migration is genuinely reversible**. Four revisions have a
+deliberate no-op `downgrade()` (one-way data normalizations: obsolete enum labels,
+lowercased uuids, lowercased TON txids, the storefront-enabled backfill) — rolling back
+*past* them is still safe because they changed data, not structure.
+`backend/tests/test_migration_downgrade_chain.py` enforces this: it walks the whole
+chain down on SQLite and on real Postgres, and fails CI if a new migration ships a stub
+`downgrade()` without being explicitly documented as one-way.
+
+Every release that carries a migration records its `down_revision` in `CHANGELOG.md`, so
+the rollback target is known without reading the code.
+
 ## Growth & retention at a glance
 
 | Class | Tables | Growth | Cleanup |

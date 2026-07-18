@@ -8,6 +8,41 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.92.3 - 2026-07-18
+
+Three recoverability fixes — the things you only discover when something has already gone wrong.
+No database migration.
+
+### Fixed
+
+- **Going back to a previous version could take the whole system down.** Rolling back restored the
+  older program but left the database upgraded, and the older program refuses to start against a
+  database it does not recognise — so the panel and the bot both restarted forever, with nothing
+  explaining why. Rollback now steps the database back down first (taking its own safety backup
+  before it does), and refuses to start unless you confirm. If anything goes wrong it stops and
+  leaves you on the version you were already running. Should the mismatch ever happen another way,
+  the log now says exactly what is wrong and how to fix it instead of failing silently.
+- **A backup of an empty database was reported as a successful backup.** If the backup ever ran
+  against an empty or wrong database, the result still looked like a valid file — roughly a
+  kilobyte of headers — and you were told the backup succeeded. Every two hours, in green, with
+  nothing wrong to see. Backups are now checked for the actual tables and data before being sent;
+  if they are not there, the backup fails loudly instead of quietly. Restoring an older backup is
+  deliberately unaffected: a backup from before a feature existed is still perfectly valid.
+- **An encrypted backup could not be restored through the bot.** Password-protected backups exist
+  so you can move to a new server — but the bot only ever looked for the password in *its own*
+  settings, which on a brand-new server is empty. So on the one machine where it mattered, restore
+  was impossible. Send the file with the password written as the caption. If you forget, the error
+  message now tells you to do exactly that.
+
+### Also
+
+- The backup archive's per-file size limit was being compared against the wrong number and could
+  never actually reject anything. Corrected.
+- `docs/DATABASE.md` and `docs/RELEASE_PROCESS.md` now document the rollback procedure, which
+  previously pointed at instructions that did not exist.
+- A new test walks every migration all the way back down, on both SQLite and real PostgreSQL, so
+  the ability to roll back cannot quietly disappear in a future release.
+
 ## 1.92.2 - 2026-07-18
 
 Six correctness and tenant-safety fixes from a targeted re-audit. No database migration.

@@ -14,6 +14,7 @@ from app.bot.handlers import common
 from app.bot.handlers.common import _SETCHAT_RE, _parse_txid, _track_user, router
 from app.bot.handlers.intake import _handle_link
 from app.bot.matching import parse_link
+from app.bot.rtl import rtl
 from app.services import settings_service
 
 
@@ -57,8 +58,15 @@ async def on_document(message: Message, state: FSMContext) -> None:
 
         from app.services import backup as backup_service
 
-        async with common.SessionLocal() as session:
-            passphrase = await settings_service.get(session, "backup_passphrase", "") or None
+        # The document's CAPTION is the passphrase. This is the only way to restore an encrypted
+        # backup onto a NEW server — the flagship use case — because a fresh install's own
+        # `backup_passphrase` setting is empty, so the stored value below is useless there. The
+        # stored setting stays as a convenience fallback for restoring onto the same server.
+        caption = (message.caption or "").strip()
+        passphrase = caption or None
+        if passphrase is None:
+            async with common.SessionLocal() as session:
+                passphrase = await settings_service.get(session, "backup_passphrase", "") or None
         buf = await message.bot.download(doc)
         # Blocking dump/restore subprocess work runs off the event loop.
         result = await asyncio.to_thread(
@@ -75,6 +83,17 @@ async def on_document(message: Message, state: FSMContext) -> None:
             f"✅ بازیابی انجام شد ({result.get('db_kind')}).\n{result.get('note', '')}"
         )
     except Exception as exc:  # noqa: BLE001
+        # An encrypted archive with no usable passphrase is the ONE failure the owner can fix
+        # themselves — but only if they're told how. Without this hint the caption mechanism is
+        # undiscoverable and the restore looks simply broken.
+        text = str(exc)
+        if "رمزگذاری شده" in text or "گذرواژه" in text:
+            await message.answer(rtl(
+                f"❌ بازیابی ناموفق بود: {text}\n\n"
+                "🔑 این فایل پشتیبان رمزگذاری شده است. همان فایل را دوباره بفرستید و "
+                "گذرواژه را در «کپشن» (متن همراه فایل) بنویسید."
+            ))
+            return
         await message.answer(f"❌ بازیابی ناموفق بود: {exc}")
 
 

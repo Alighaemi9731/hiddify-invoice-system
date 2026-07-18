@@ -33,6 +33,10 @@ Then update these files to the same version:
 - `backend/app/__init__.py`
 - `CHANGELOG.md`
 
+If the release adds an Alembic migration, record its `down_revision` in the CHANGELOG
+entry. That is the schema the rollback target expects, and `deploy/rollback.sh` needs it
+to be known without reading the code.
+
 Use the existing commit style:
 
 ```text
@@ -119,6 +123,18 @@ Do not use destructive Git reset. Roll back to the verified prior archive withou
 sudo /opt/hiddify-invoice-system/deploy/rollback.sh v1.37.35
 ```
 
-If the release changed the database schema, follow that release's migration rollback
-instructions. Restoring a database backup is a last-resort operation and must use the
-validated restore procedure from B02.
+**If the release you are leaving contained a migration**, the script detects that the
+database is ahead of the target and stops, because rolling back code alone would leave
+both containers in a restart loop (Alembic cannot resolve a revision the older build does
+not ship — see `docs/DATABASE.md` § Rolling back across a migration). Confirm with:
+
+```bash
+sudo ALLOW_DOWNGRADE=1 /opt/hiddify-invoice-system/deploy/rollback.sh v1.37.35
+```
+
+It takes a `pg_dump` to `update/rollback-<tag>-<ts>.sql` and downgrades the schema from
+the current (newer) container before swapping the code. Any failure aborts and leaves the
+system on the release it is already running.
+
+Restoring a database backup remains a last-resort operation and must use the validated
+restore procedure from B02.

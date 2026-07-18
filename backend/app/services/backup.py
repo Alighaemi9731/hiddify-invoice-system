@@ -64,8 +64,11 @@ BACKUP_DIR = Path("data/backups")
 # archive must not exhaust memory/disk). Backups are normally a few MB.
 MAX_ARCHIVE_BYTES = 500 * 1024 * 1024          # reject an uploaded archive bigger than this
 MAX_TOTAL_UNCOMPRESSED = 2 * 1024 * 1024 * 1024  # total decompressed size guard
+MAX_MEMBER_UNCOMPRESSED = 64 * 1024 * 1024       # per-member cap (the DB image is exempt)
 MAX_COMPRESSION_RATIO = 500                      # per-member ratio guard (zip bomb)
 _ALLOWED_MEMBERS = {"meta.json", "settings.json", "db.sqlite", "db.sql"}
+# The database image is the one member allowed to be arbitrarily large (bounded by the total).
+_DB_MEMBERS = {"db.sqlite", "db.sql"}
 
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 # Envelope for an encrypted (passphrase-protected) archive: magic + 16-byte salt + token.
@@ -119,13 +122,58 @@ def _decrypt_archive(data: bytes, passphrase: str | None) -> bytes:
 
 
 # ------------------------------- create -------------------------------
-def _validate_dump(sql: bytes) -> None:
-    """A pg_dump we are about to ship/restore must look like a real, non-empty dump."""
+def _validate_dump(
+    sql: bytes,
+    *,
+    strict_tables: set[str] | None = None,
+    expect_settings: bool = False,
+) -> None:
+    """A pg_dump we are about to ship/restore must look like a real, non-empty dump.
+
+    The structural checks below are deliberately loose because they ALSO guard the restore path,
+    where an older backup legitimately lacks tables that have been added since. Strictness on
+    restore is wrong in principle: it would refuse a perfectly good archive.
+
+    `strict_tables` turns on the CREATE-side checks. Without them, `pg_dump` of a completely EMPTY
+    database still emits its ~1 KB banner and SET preamble — which passed every check here, so the
+    archive was built, the backup was stamped successful, and the owner saw a green «آخرین پشتیبان»
+    while holding nothing. That failure is silent until the day you actually need the backup.
+
+    Uses only bytes already in hand (no extra I/O): a plain-format dump emits one
+    `CREATE TABLE public.<name>` per table and one `COPY public.<name>` block per NON-EMPTY table.
+    We do not require COPY for every table — an empty table is perfectly legal — only for
+    `alembic_version`, which by construction always holds exactly one row, and for `settings` when
+    the caller has already read a non-empty settings table from the live database.
+    """
     if not sql or len(sql) < 64:
         raise BackupError("pg_dump خروجی خالی یا ناقص تولید کرد؛ پشتیبان معتبر ساخته نشد.")
     head = sql[:4096]
     if b"PostgreSQL database dump" not in head and b"CREATE TABLE" not in sql[:200_000]:
         raise BackupError("خروجی pg_dump ساختار معتبری ندارد؛ پشتیبان لغو شد.")
+
+    if strict_tables:
+        missing = sorted(
+            name for name in strict_tables
+            if f"CREATE TABLE public.{name} ".encode() not in sql
+            and f"CREATE TABLE public.{name}(".encode() not in sql
+        )
+        if missing:
+            raise BackupError(
+                "پشتیبان ناقص است: جدول‌های زیر در خروجی pg_dump نیستند — "
+                f"{'، '.join(missing[:5])}"
+                + (f" و {len(missing) - 5} مورد دیگر" if len(missing) > 5 else "")
+                + ". پشتیبان لغو شد."
+            )
+        # alembic_version always has exactly one row, so its COPY block is the single most reliable
+        # proof that this dump carries DATA and not just a schema skeleton.
+        if b"COPY public.alembic_version " not in sql:
+            raise BackupError(
+                "پشتیبان بدون داده است (نسخهٔ مهاجرت دیتابیس در خروجی نیست)؛ پشتیبان لغو شد."
+            )
+        if expect_settings and b"COPY public.settings " not in sql:
+            raise BackupError(
+                "پشتیبان بدون داده است (تنظیمات در خروجی pg_dump نیست)؛ پشتیبان لغو شد."
+            )
 
 
 def _validate_sqlite(data: bytes) -> None:
@@ -175,7 +223,17 @@ async def create_backup(
         db_member = ("db.sqlite", data)
     else:
         dump = (await asyncio.to_thread(_pg_dump)).encode("utf-8")
-        _validate_dump(dump)
+        # STRICT on the create side only: prove the dump really covers this application's schema
+        # and carries data. `settings_rows` was already read from the live DB above, so if it is
+        # non-empty the dump must contain those rows too — that is what catches a pg_dump pointed
+        # at the wrong (or a freshly-created, empty) database.
+        from app.core.db import Base
+
+        _validate_dump(
+            dump,
+            strict_tables=set(Base.metadata.tables),
+            expect_settings=bool(settings_rows),
+        )
         db_member = ("db.sql", dump)
 
     buf = io.BytesIO()
@@ -489,7 +547,11 @@ def _open_validated_zip(zip_bytes: bytes) -> zipfile.ZipFile:
             z.close()
             raise ValueError(f"فایل پشتیبان عضو غیرمجاز دارد: {name}")
         total += info.file_size
-        if info.file_size > MAX_TOTAL_UNCOMPRESSED:
+        # Per-MEMBER cap. This compared against MAX_TOTAL_UNCOMPRESSED (2 GB) — the *total* budget —
+        # so despite its message it never rejected anything a single member could realistically be.
+        # The DB image is exempt: it is legitimately the large one, and it is still bounded by the
+        # total check below.
+        if name not in _DB_MEMBERS and info.file_size > MAX_MEMBER_UNCOMPRESSED:
             z.close()
             raise ValueError("اندازهٔ یکی از اجزای پشتیبان بیش از حد مجاز است.")
         if info.compress_size and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
