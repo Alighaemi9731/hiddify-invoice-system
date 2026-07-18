@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.90.2 - 2026-07-18
+
+The last and most important safeguard from the cross-tenant incident. No database migration.
+
+### Security
+
+- **An action on one reseller can no longer touch another reseller's users — the panel itself now
+  refuses.** Bulk enable/disable/delete ran with the panel's *super-admin* key, so Hiddify had no
+  reason to reject anything: that is what turned a wrong-id bug into 305 disabled customers across
+  ~20 resellers instead of a harmless error. Each batch is now sent under the key of the admin who
+  actually owns those users, and user lookups during deletion are made the same way.
+
+  Verified live against a real panel: writing to the owning reseller's own user works; **reading**
+  another reseller's user is refused (`403 — you don't have permission`); and a **bulk write**
+  aimed at another reseller's user is silently confined and changes nothing. So even if an id were
+  ever wrong again, the damage is zero rather than hundreds of users. No customer was affected by
+  the test — the foreign user was untouched and the test user was restored.
+
 ## 1.90.1 - 2026-07-18
 
 Bug fixes plus follow-up hardening from a full audit of everything that talks to a Hiddify panel.

@@ -243,19 +243,28 @@ class AdminApiClient(PanelClient):
                 result[str(uuid)] = user_id
         return result
 
-    async def _user_bulk_action(self, panel, user_ids: list[int], action: str) -> None:  # noqa: ANN001
+    async def _user_bulk_action(  # noqa: ANN001
+        self, panel, user_ids: list[int], action: str, *, api_key: str | None = None
+    ) -> None:
         """Run Hiddify's native Flask-Admin user-list bulk `action` (enable/disable/delete) on the
         given numeric rowids in ONE POST.
 
         Hiddify has no bulk endpoint in its public v2 REST API. Its own user-list UI does provide
         bulk actions that update all selected rows in one SQL statement, update the core clients
         server-side, and invoke quick_apply_users only once per batch — so this is far gentler on
-        the panel than per-user REST calls (each of which quick_applies)."""
+        the panel than per-user REST calls (each of which quick_applies).
+
+        ALWAYS pass `api_key` = the uuid of the admin that OWNS these users. Hiddify then applies
+        the action within that admin's own scope, so a rowid that is not theirs simply does not
+        match and nothing happens to it. Running this as the super-admin (the old behaviour) is what
+        turned a wrong-id bug into 305 disabled users belonging to ~20 other resellers: the panel
+        had no reason to refuse. With the owning admin's key the panel itself is the second line of
+        defence, independent of any id correctness on our side."""
         if not user_ids:
             return
         list_url = f"{panel.proxy_base}/admin/user/"
         action_url = f"{panel.proxy_base}/admin/user/action/"
-        headers = self._headers(panel)
+        headers = self._headers(panel, api_key)
         headers["User-Agent"] = "invoice-system-bulk-enforcement/1"
         async with httpx.AsyncClient(
             timeout=max(self.timeout, 300.0),
@@ -289,15 +298,21 @@ class AdminApiClient(PanelClient):
                 )
 
     async def bulk_set_users_enabled(  # noqa: ANN001
-        self, panel, user_ids: list[int], enabled: bool
+        self, panel, user_ids: list[int], enabled: bool, *, api_key: str | None = None
     ) -> None:
-        """Bulk enable/disable users via Hiddify's native Flask-Admin action (one apply per batch)."""
-        await self._user_bulk_action(panel, user_ids, "enable" if enabled else "disable")
+        """Bulk enable/disable users via Hiddify's native Flask-Admin action (one apply per batch).
+        Pass `api_key` = the OWNING admin's uuid so the panel confines the action to their users."""
+        await self._user_bulk_action(
+            panel, user_ids, "enable" if enabled else "disable", api_key=api_key)
 
-    async def bulk_delete_users(self, panel, user_ids: list[int]) -> None:  # noqa: ANN001
+    async def bulk_delete_users(  # noqa: ANN001
+        self, panel, user_ids: list[int], *, api_key: str | None = None
+    ) -> None:
         """Bulk DELETE users via Hiddify's native Flask-Admin action (one quick_apply per batch).
-        Used by the cascade admin-deletion; far gentler than per-user REST deletes."""
-        await self._user_bulk_action(panel, user_ids, "delete")
+        Used by the cascade admin-deletion; far gentler than per-user REST deletes. Pass `api_key`
+        = the OWNING admin's uuid — deletion is unrecoverable, so panel-side scoping matters most
+        here."""
+        await self._user_bulk_action(panel, user_ids, "delete", api_key=api_key)
 
     async def get_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None

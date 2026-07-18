@@ -54,7 +54,7 @@ def _panel_sim(monkeypatch, set_calls, bulk_calls, *, start=(10, 10)):
         set_calls.append((admin_uuid, mu, mau))
         limits[admin_uuid] = [mu, mau]
 
-    async def fake_bulk(self, panel, user_ids, enabled):
+    async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
         bulk_calls.append((sorted(user_ids), enabled))
 
     async def fake_get_user_id(self, panel, user_uuid, *, api_key=None):

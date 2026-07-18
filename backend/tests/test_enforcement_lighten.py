@@ -54,7 +54,7 @@ def _no_whole_list(monkeypatch):
 
 
 def _stub_writes(monkeypatch, bulk_calls):
-    async def fake_bulk(self, panel, user_ids, enabled):
+    async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
         bulk_calls.append(sorted(user_ids))
     async def fake_get_limits(self, panel, admin_uuid, api_key=None):
         return (10, 10)

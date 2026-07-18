@@ -102,7 +102,7 @@ def test_stale_cached_panel_user_id_is_never_reused(tmp_path, monkeypatch):
             looked_up.append(user_uuid)
             return FRESH.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             sent_ids.extend(user_ids)
 
         async def fake_get_user(self, panel, user_uuid, *, api_key=None):
@@ -144,7 +144,7 @@ def test_bulk_write_that_missed_its_targets_fails_loudly(tmp_path, monkeypatch):
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return FRESH.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             return None                        # "succeeds" but changes nothing (the real bug)
 
         async def fake_get_user(self, panel, user_uuid, *, api_key=None):
@@ -173,3 +173,71 @@ def test_bulk_write_that_missed_its_targets_fails_loudly(tmp_path, monkeypatch):
         assert r.enforcement_state != EnforcementState.enforced
 
     _run(body, tmp_path, "missed_write.db")
+
+
+async def _seed_two_admins(s):
+    """A parent reseller A with a sub-reseller B, one user each — so one suspension spans two
+    owning admins and must send a SEPARATE, correctly-keyed batch per admin."""
+    from app.services import settings_service
+
+    await settings_service.set_value(s, "enforcement_enabled", True)
+    s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+    parent = Reseller(panel_id=1, admin_uuid="A", name="Parent", parent_admin_uuid="owner",
+                      panel_max_users=10, panel_max_active_users=10,
+                      enforcement_state=EnforcementState.active)
+    sub = Reseller(panel_id=1, admin_uuid="B", name="Sub", parent_admin_uuid="A",
+                   panel_max_users=5, panel_max_active_users=5,
+                   enforcement_state=EnforcementState.active)
+    s.add_all([parent, sub])
+    await s.flush()
+    s.add_all([
+        EndUserSnapshot(panel_id=1, user_uuid="ua", name="ua", added_by_uuid="A", enable=True),
+        EndUserSnapshot(panel_id=1, user_uuid="ub", name="ub", added_by_uuid="B", enable=True),
+    ])
+    inv = _invoice(parent.id)
+    s.add(inv)
+    await s.commit()
+    return parent, inv
+
+
+def test_each_bulk_batch_runs_under_its_owning_admins_key(tmp_path, monkeypatch):
+    """The amplifier fix: bulk writes used to run as the panel SUPER-ADMIN, so Hiddify had no
+    reason to refuse a rowid belonging to somebody else — that is what turned a wrong-id bug into
+    305 disabled users across ~20 other resellers. Each batch must now be keyed to the admin that
+    owns those users, making the panel itself refuse anything out of scope."""
+    from app.services import enforcement
+
+    async def body(s, _Session):
+        parent, inv = await _seed_two_admins(s)
+        await enforcement.queue_enforcement(s, parent, invoice_id=inv.id, dry_run=False)
+
+        calls: list[tuple] = []
+
+        async def fake_user_id(self, panel, user_uuid, *, api_key=None):
+            return {"ua": 10, "ub": 20}.get(user_uuid)
+
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
+            calls.append((tuple(sorted(user_ids)), api_key))
+
+        async def fake_get_user(self, panel, user_uuid, *, api_key=None):
+            return {"enable": False}
+
+        async def fake_get_limits(self, panel, admin_uuid, api_key=None):
+            return (10, 10)
+
+        async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
+            return None
+
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
+        monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
+
+        await enforcement.process_enforcement_queue(s, action_limit=5, user_chunk_size=50)
+
+        # Two admins → two separately-keyed batches, never one super-admin batch of both users.
+        assert sorted(calls) == [((10,), "A"), ((20,), "B")], f"got: {calls}"
+        assert all(key for _ids, key in calls), "a batch ran without an owning-admin key"
+
+    _run(body, tmp_path, "scoped_bulk.db")

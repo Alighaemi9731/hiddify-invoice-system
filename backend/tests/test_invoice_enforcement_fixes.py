@@ -99,7 +99,7 @@ def test_enforcement_processes_multiple_panels_in_one_tick(tmp_path, monkeypatch
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return 100 + panel.id if user_uuid == f"u{panel.id}" else None
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             return None
 
         async def fake_get_limits(self, panel, admin_uuid, api_key=None):

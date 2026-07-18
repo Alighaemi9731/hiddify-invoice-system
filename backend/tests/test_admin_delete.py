@@ -57,7 +57,7 @@ class _FakeClient:
         # would DELETE another reseller's user). See test_enforcement_stale_ids.py.
         return {"u1": 101, "u2": 102}.get(user_uuid)
 
-    async def bulk_delete_users(self, panel, user_ids):
+    async def bulk_delete_users(self, panel, user_ids, *, api_key=None):
         _FakeClient.bulk_deleted.extend(int(i) for i in user_ids)
 
     async def delete_admin(self, panel, admin_uuid, *, api_key=None):

@@ -392,13 +392,24 @@ async def _run_user_chunks(
     # skipped this run (the latter keep the action partial → retried next tick).
     remaining = [u for u in remaining if u in panel_user_ids and u not in missing_users]
 
+    # Chunk WITHIN one owning admin at a time and run each batch under THAT admin's own key, so
+    # Hiddify confines the action to their users. A rowid that isn't theirs then simply matches
+    # nothing instead of hitting another reseller's customer — the panel becomes a second line of
+    # defence that does not depend on our ids being right. (Running these as the super-admin is
+    # exactly what let a stale-id bug disable 305 users across ~20 other resellers.) Users whose
+    # owner we don't know fall back to the panel key, as before.
+    remaining.sort(key=lambda u: (users_map.get(u) or ""))
+
     total_patched = 0
     verb = "enable" if enable else "disable"
     while remaining:
-        chunk = remaining[:max(1, chunk_size)]
+        owner = users_map.get(remaining[0]) or ""
+        same_owner = [u for u in remaining if (users_map.get(u) or "") == owner]
+        chunk = same_owner[:max(1, chunk_size)]
         try:
             await client.bulk_set_users_enabled(
-                panel, [panel_user_ids[u] for u in chunk], enable
+                panel, [panel_user_ids[u] for u in chunk], enable,
+                api_key=owner or None,
             )
             for uuid in chunk:
                 if uuid in snapshot_rows:
@@ -1498,14 +1509,20 @@ async def _process_delete_action(
                 # user ids on a panel restore/re-import, so a stale id can point at another
                 # reseller's user. Here that would DELETE the wrong user (unrecoverable), so this
                 # path must never trade correctness for a saved lookup. See _run_user_chunks.
+                # Resolve AS THE OWNING ADMIN too: the panel then 404s a user that is not theirs,
+                # so a row whose ownership drifted since our last sync is skipped rather than
+                # deleted out of somebody else's account.
                 async with sem:
                     try:
-                        return row, await client.get_user_id(panel, row.user_uuid), None
+                        return row, await client.get_user_id(
+                            panel, row.user_uuid, api_key=row.added_by_uuid or None), None
                     except Exception as exc:  # noqa: BLE001
                         return row, None, str(exc)[:200]
 
             resolved = await asyncio.gather(*[_resolve(r) for r in batch])
-            ids_on_panel: list[int] = []
+            # Deletes are grouped per owning admin and sent under THAT admin's key, so Hiddify
+            # confines each batch to their own users (see _user_bulk_action).
+            ids_by_owner: dict[str, list[int]] = {}
             removable_uuids: list[str] = []  # rows safe to drop from our DB this chunk
             last_err: str | None = None
             for row, uid, err in resolved:
@@ -1513,8 +1530,9 @@ async def _process_delete_action(
                     last_err = err
                     continue          # transient lookup error → leave for retry
                 if uid is not None:
-                    ids_on_panel.append(uid)
+                    ids_by_owner.setdefault(row.added_by_uuid or "", []).append(uid)
                 removable_uuids.append(row.user_uuid)   # resolved OR 404 (absent) → removable
+            ids_on_panel = [i for ids in ids_by_owner.values() for i in ids]
 
             if not removable_uuids:
                 # Whole batch errored (panel down) → stop; the worker retries next tick.
@@ -1530,8 +1548,9 @@ async def _process_delete_action(
                 return result
 
             try:
-                if ids_on_panel:
-                    await client.bulk_delete_users(panel, ids_on_panel)
+                for owner_uuid, owned_ids in ids_by_owner.items():
+                    await client.bulk_delete_users(
+                        panel, owned_ids, api_key=owner_uuid or None)
             except Exception as exc:  # noqa: BLE001
                 action.error = f"bulk delete failed (will retry): {str(exc)[:300]}"
                 action.status = EnforcementActionStatus.partial

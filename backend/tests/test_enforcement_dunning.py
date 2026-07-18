@@ -94,7 +94,7 @@ def test_enforcement_completes_in_one_tick(tmp_path, monkeypatch):
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return {"u0": 10, "u1": 11, "u2": 12}.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             calls.append(("bulk", tuple(sorted(user_ids)), enabled))
 
         async def fake_get_limits(self, panel, admin_uuid, api_key=None):
@@ -158,7 +158,7 @@ def test_enforcement_partial_on_user_chunk_failure(tmp_path, monkeypatch):
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return {"u0": 10, "u1": 11, "u2": 12}.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             call_count[0] += 1
             if call_count[0] == 2:  # second chunk fails
                 raise RuntimeError("panel error")
@@ -280,7 +280,7 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return {"u1": 1, "u2": 2}.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             if 2 in user_ids and fail_uuid["u"] == "u2":
                 raise RuntimeError("panel rejected")
 
@@ -356,7 +356,7 @@ def test_restore_cancels_partial_disable_and_only_undoes_completed_work(
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return {"u0": 10, "u1": 11, "u2": 12}.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             call_count[0] += 1
             if call_count[0] == 2:
                 # Second bulk call (second chunk during disable) fails, creating a partial.

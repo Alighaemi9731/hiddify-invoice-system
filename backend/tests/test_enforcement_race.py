@@ -94,7 +94,7 @@ def test_midflight_payment_reverts_suspend_without_done_overwrite(tmp_path, monk
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return {"u0": 10, "u1": 11, "u2": 12, "u3": 13}.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             bulk_calls.append((tuple(sorted(user_ids)), enabled))
             if len(bulk_calls) == 1 and not enabled:
                 # Chunk 1 just landed on the panel; the customer's payment is confirmed NOW
@@ -170,7 +170,7 @@ def test_finalize_skips_enforced_stamp_when_invoice_paid(tmp_path, monkeypatch):
         async def fake_user_id(self, panel, user_uuid, *, api_key=None):
             return {"u0": 10, "u1": 11}.get(user_uuid)
 
-        async def fake_bulk(self, panel, user_ids, enabled):
+        async def fake_bulk(self, panel, user_ids, enabled, *, api_key=None):
             if not enabled:
                 # Payment lands mid-run but nothing reverts the action (e.g. auto-restore
                 # couldn't run) — the old finalize would stamp the paid invoice enforced.
