@@ -598,3 +598,48 @@ def test_portal_login_link_is_one_time(tmp_path):
         assert exc.value.status_code == 401
 
     _run(body, tmp_path, "nonce.db")
+
+
+def test_confirm_manually_refuses_when_the_settled_invoice_no_longer_exists(tmp_path):
+    """Money accepted, debt uncleared, receipt sent, txid burned forever.
+
+    `_lock_invoices` silently skips ids that are gone, so a payment whose invoice was reverted to
+    draft and then discarded (or reconciled away by the monthly run) had an EMPTY settle set: the
+    'draft/canceled' guard passed vacuously, nothing was marked paid, `_maybe_restore` was skipped
+    so an enforced reseller stayed suspended — and the payment was still stamped CONFIRMED with a
+    PDF receipt. Worse, the unique txid was then burned, so the customer could never resubmit it
+    against the re-issued invoice. `verify_payment` already refused this exact case."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.core.db import Base
+    from app.models import Payment, Reseller
+    from app.models.enums import PaymentMethod, PaymentStatus
+    from app.services import payments as payments_service
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'gone.db'}")
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as s:
+                r = Reseller(panel_id=1, admin_uuid="A", name="R")
+                s.add(r)
+                await s.flush()
+                # The invoice this payment settles is GONE (id 500 never existed / was discarded).
+                p = Payment(reseller_id=r.id, amount_usdt=1, method=PaymentMethod.usdt_txid,
+                            status=PaymentStatus.pending, settled_invoice_ids="500")
+                s.add(p)
+                await s.commit()
+
+                res = await payments_service.confirm_manually(s, p.id)
+                await s.refresh(p)
+                assert p.status == PaymentStatus.pending, "confirmed a payment that settled nothing"
+                assert res.status == "pending" and not res.paid
+                assert "وجود ندارد" in (res.message_fa or "")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())

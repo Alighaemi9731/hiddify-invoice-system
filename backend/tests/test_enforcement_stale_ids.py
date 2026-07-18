@@ -19,16 +19,19 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/enfstale.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.models import (  # noqa: E402
     EndUserSnapshot,
+    EnforcementAction,
     Invoice,
     Panel,
     Reseller,
 )
 from app.models.enums import (  # noqa: E402
     EnforcementActionStatus,
+    EnforcementActionType,
     EnforcementState,
     InvoiceStatus,
 )
@@ -241,3 +244,64 @@ def test_each_bulk_batch_runs_under_its_owning_admins_key(tmp_path, monkeypatch)
         assert all(key for _ids, key in calls), "a batch ran without an owning-admin key"
 
     _run(body, tmp_path, "scoped_bulk.db")
+
+
+def test_suspension_is_reasserted_when_a_debtor_re_enables_their_users(tmp_path, monkeypatch):
+    """Observed live on five resellers, one within three hours of being suspended.
+
+    Zeroing a reseller's limits stops them CREATING users — it does not remove their Hiddify admin
+    login, so a suspended debtor can simply re-enable their existing users. Nothing looked again:
+    dunning only triggers for an `active` reseller and `queue_enforcement` returns the prior `done`
+    action for an `enforced` one. They were back in business with the invoice unpaid, silently."""
+    from app.services import enforcement
+
+    async def body(s, _Session):
+        r, inv = await _seed(s, stale_ids=False)
+        r.enforcement_state = EnforcementState.enforced          # already suspended
+        r.max_users_snapshot, r.max_active_users_snapshot = 600, 600   # the restore source
+        s.add(EnforcementAction(
+            reseller_id=r.id, action=EnforcementActionType.disable_users,
+            status=EnforcementActionStatus.done, dry_run=False, snapshot={}))
+        await s.commit()
+
+        # The debtor turns their users back on; the next sync records them as enabled.
+        for row in (await s.execute(select(EndUserSnapshot))).scalars().all():
+            row.enable = True
+        await s.commit()
+
+        out = await enforcement.reassert_enforced(s)
+        assert out["requeued"] == 1, f"drift not detected: {out}"
+
+        queued = (await s.execute(
+            select(EnforcementAction).where(
+                EnforcementAction.status == EnforcementActionStatus.planned))).scalars().first()
+        assert queued is not None
+        assert set(queued.snapshot["users"]) == {"u0", "u1"}
+        # USERS-ONLY: re-capturing limits here would overwrite the pre-suspension values with the
+        # zeros now on the panel and destroy the ability to ever restore them.
+        assert queued.snapshot["admins"] == [] and queued.snapshot["limits"] == {}
+        await s.refresh(r)
+        assert (r.max_users_snapshot, r.max_active_users_snapshot) == (600, 600)
+
+        # Idempotent: a second sweep must not pile up duplicate actions.
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 0
+
+    _run(body, tmp_path, "reassert.db")
+
+
+def test_reassert_leaves_a_settled_reseller_alone(tmp_path, monkeypatch):
+    """No debt → not our business; re-suspending a reseller who has paid would be worse than the
+    bug. (The restore path owns that transition.)"""
+    from app.models.enums import InvoiceStatus
+    from app.services import enforcement
+
+    async def body(s, _Session):
+        r, inv = await _seed(s, stale_ids=False)
+        r.enforcement_state = EnforcementState.enforced
+        inv.status = InvoiceStatus.paid                    # debt settled
+        for row in (await s.execute(select(EndUserSnapshot))).scalars().all():
+            row.enable = True
+        await s.commit()
+        assert (await enforcement.reassert_enforced(s))["requeued"] == 0
+
+    _run(body, tmp_path, "reassert_paid.db")

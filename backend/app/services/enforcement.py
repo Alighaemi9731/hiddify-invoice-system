@@ -763,6 +763,72 @@ async def queue_enforcement(
     return action
 
 
+async def reassert_enforced(session: AsyncSession, *, limit: int = 50) -> dict:
+    """Re-apply a suspension whose users have come back online.
+
+    THE HOLE THIS CLOSES: dunning only ever triggers enforcement for an `active` reseller
+    (`dunning.py`: `days >= de and reseller.enforcement_state == EnforcementState.active`), and
+    `queue_enforcement` returns the prior `done` action for an already-`enforced` one. Zeroing a
+    reseller's limits stops them CREATING users — it does not remove their Hiddify admin login, so a
+    suspended debtor can simply re-enable their existing users from the panel. Nothing ever looked
+    again: the action said `done`, the state said `enforced`, and they were back in business with the
+    invoice still unpaid. Observed live on five resellers, one of them within three hours of being
+    suspended.
+
+    So: for every still-indebted `enforced` reseller, if the latest sync shows any of their subtree's
+    users enabled again, queue a USERS-ONLY re-disable. Deliberately users-only — `admins`/`limits`
+    are left empty so the limits phase no-ops and the captured pre-suspension limits (the restore
+    source) are never overwritten, which is the very thing the re-enforcement guard protects.
+    """
+    out = {"checked": 0, "requeued": 0}
+    rows = (await session.execute(
+        select(Reseller).where(Reseller.enforcement_state == EnforcementState.enforced)
+    )).scalars().all()
+    for reseller in rows:
+        out["checked"] += 1
+        if not await _has_due_invoice(session, reseller.id):
+            continue          # debt settled; a restore is that path's job, not ours
+        descendants = await _bundle(session, reseller)
+        admin_uuids = {d.admin_uuid for d in descendants}
+        back_online = await _enabled_users(session, reseller.panel_id, admin_uuids)
+        if not back_online:
+            continue
+        # An identical re-assert already waiting/running → don't pile up duplicates.
+        pending = (await session.execute(
+            select(EnforcementAction.id).where(
+                EnforcementAction.reseller_id == reseller.id,
+                EnforcementAction.action == EnforcementActionType.disable_users,
+                EnforcementAction.status.in_((
+                    EnforcementActionStatus.planned, EnforcementActionStatus.partial)),
+            ).limit(1)
+        )).first()
+        if pending:
+            continue
+        snapshot: dict = {
+            "limits": {}, "admins": [],      # users-only: never re-capture limits
+            "users": {u.user_uuid: (u.added_by_uuid or "") for u in back_online},
+            "reassert": True,
+        }
+        _progress(snapshot)
+        session.add(EnforcementAction(
+            reseller_id=reseller.id,
+            action=EnforcementActionType.disable_users,
+            dry_run=False,
+            affected_count=len(back_online),
+            snapshot=snapshot,
+            status=EnforcementActionStatus.planned,
+        ))
+        await session.commit()
+        out["requeued"] += 1
+        log.warning(
+            "re-asserting suspension for reseller %s (%s): %d users were re-enabled while enforced",
+            reseller.name, reseller.id, len(back_online),
+        )
+        if out["requeued"] >= limit:
+            break
+    return out
+
+
 async def queue_restore(
     session: AsyncSession,
     reseller: Reseller,

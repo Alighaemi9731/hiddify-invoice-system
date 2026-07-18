@@ -8,6 +8,31 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.92.0 - 2026-07-18
+
+Findings from a full audit of the codebase for bugs of the same class as the recent enforcement and
+restore incidents. No database migration.
+
+### Fixed
+
+- **A suspended reseller could switch their own users back on and we never noticed.** Blocking a
+  debtor zeroes their limits so they cannot create new users — but it does not remove their Hiddify
+  admin login, so they can simply re-enable the users we disabled. Nothing ever checked again: the
+  reminder run only ever looks at *active* resellers, so once blocked they were skipped forever and
+  went back to business with the invoice still unpaid. **This was live on five resellers**, one of
+  them within three hours of being blocked. Each daily run now re-checks every blocked reseller who
+  still owes money and re-applies the block if their users came back online.
+- **A payment could be confirmed while settling nothing.** If the invoice behind a pending payment
+  had since been removed (reverted to draft and discarded, or cleared by the monthly run), pressing
+  «تأیید» marked the payment confirmed and sent the customer a receipt while no invoice was marked
+  paid, the reseller stayed blocked, and the transaction id was permanently used up — so the
+  customer could never resubmit it against the re-issued invoice. It is now refused with an
+  explanation, exactly as the automatic checker already did.
+- **Payment and invoice actions now re-read the row they lock.** The lock was taken correctly but
+  the values used were the ones read a moment earlier, so a double-clicked «تأیید» could send a
+  second confirmation and a second PDF receipt for the same money, and any check written "under the
+  lock" was quietly ineffective.
+
 ## 1.91.2 - 2026-07-18
 
 Urgent fix: customers could get stuck on the «انصراف» button. No database migration.

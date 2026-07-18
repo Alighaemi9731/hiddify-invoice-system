@@ -278,7 +278,7 @@ async def submit_reseller_payment(
     today = tehran_today()
     fresh_by_id: dict[int, Invoice] = {}
     for iid in sorted(ids):
-        fresh = await session.get(Invoice, iid, with_for_update=True)
+        fresh = await session.get(Invoice, iid, with_for_update=True, populate_existing=True)
         if (
             fresh is None
             or fresh.reseller_id not in reseller_ids
@@ -808,7 +808,7 @@ async def verify_payment(
     Telegram; the bot path leaves it False because it answers the chat inline."""
     # Lock the row (Postgres) and re-check status under the lock so a concurrent
     # verify/confirm can't double-settle the same payment. No-op on SQLite (tests).
-    payment = await session.get(Payment, payment_id, with_for_update=True)
+    payment = await session.get(Payment, payment_id, with_for_update=True, populate_existing=True)
     if payment is None:
         return PaymentResult("rejected", False, "پرداخت یافت نشد.")
     if payment.status == PaymentStatus.confirmed:
@@ -1077,7 +1077,7 @@ async def _lock_invoices(session: AsyncSession, ids: list[int]) -> list[Invoice]
     the row lock is a no-op on SQLite (tests / single-writer)."""
     rows: list[Invoice] = []
     for iid in sorted(set(ids)):
-        inv = await session.get(Invoice, iid, with_for_update=True)
+        inv = await session.get(Invoice, iid, with_for_update=True, populate_existing=True)
         if inv is not None:
             rows.append(inv)
     return rows
@@ -1185,7 +1185,7 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     is notified only when the status actually CHANGES to confirmed (re-confirming an already-
     confirmed payment is silent), so a double-click doesn't spam them.
     """
-    payment = await session.get(Payment, payment_id, with_for_update=True)
+    payment = await session.get(Payment, payment_id, with_for_update=True, populate_existing=True)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_confirmed = payment.status == PaymentStatus.confirmed
@@ -1203,6 +1203,19 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
         return PaymentResult(
             "pending", False,
             "یک یا چند فاکتورِ مرتبط در وضعیتِ پیش‌نویس/لغوشده است؛ ابتدا آن را صادر یا اصلاح کنید.",
+        )
+    # …and refuse just as firmly when a settled invoice is GONE. `_lock_invoices` silently skips
+    # ids that no longer exist, so without this the whole set could vanish (reverted to draft then
+    # discarded, or reconciled away by the monthly run) and we would still mark the payment
+    # CONFIRMED, send a receipt, settle nothing, skip the restore — and burn the txid forever via
+    # the unique constraint, so the customer could never resubmit it against the re-issued invoice.
+    # `verify_payment` already refuses this exact case; this path was missing the guard.
+    missing_ids = [i for i in set_ids if i not in _by_id]
+    if missing_ids:
+        return PaymentResult(
+            "pending", False,
+            "فاکتورِ مرتبط با این پرداخت دیگر وجود ندارد؛ ابتدا فاکتور را دوباره صادر کنید و سپس "
+            "پرداخت را به آن متصل کنید.",
         )
     targets = [inv for inv in all_in_set if inv.status in _OWED]
 
@@ -1245,7 +1258,7 @@ async def reject_payment(session: AsyncSession, payment_id: int) -> PaymentResul
     (re-rejecting is silent), so toggling/double-clicks don't spam them. An already-enforced
     reseller is NOT re-suspended automatically — dunning re-escalates on its normal timeline,
     or the owner suspends manually."""
-    payment = await session.get(Payment, payment_id, with_for_update=True)
+    payment = await session.get(Payment, payment_id, with_for_update=True, populate_existing=True)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
     was_rejected = payment.status == PaymentStatus.rejected
@@ -1276,7 +1289,7 @@ async def delete_payment(session: AsyncSession, payment_id: int) -> bool:
     ledger updated) so we never leave a 'paid' invoice with no payment behind it. The proof
     image file, if any, is removed too. Returns False if the payment doesn't exist.
     """
-    payment = await session.get(Payment, payment_id, with_for_update=True)
+    payment = await session.get(Payment, payment_id, with_for_update=True, populate_existing=True)
     if payment is None:
         return False
     if payment.status == PaymentStatus.confirmed:

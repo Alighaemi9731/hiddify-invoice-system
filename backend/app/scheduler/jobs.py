@@ -126,6 +126,17 @@ async def monthly_invoicing_job() -> None:
 async def daily_dunning_job() -> None:
     try:
         async with SessionLocal() as session:
+            # A suspended debtor can re-enable their own users from the Hiddify panel (zeroing
+            # their limits stops new users, not their admin login) and dunning would never look
+            # again — it only triggers for an `active` reseller. Re-assert first, so the run that
+            # chases the debt also repairs a suspension that was quietly undone.
+            try:
+                drift = await enforcement.reassert_enforced(session)
+                if drift.get("requeued"):
+                    log.warning("re-asserted suspension for %d reseller(s) whose users came back "
+                                "online", drift["requeued"])
+            except Exception:  # noqa: BLE001 — never let this block the dunning run
+                log.exception("reassert_enforced failed")
             res = await dunning.run_dunning(session)
             # Only ping the owner when something actionable happened.
             acted = (
