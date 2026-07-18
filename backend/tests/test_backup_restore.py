@@ -307,3 +307,27 @@ def test_restart_signal_is_loop_free(monkeypatch, tmp_path):
     monkeypatch.setattr(restart_signal, "_startup_token", None)
     restart_signal.init()
     assert restart_signal.peer_restart_requested() is False
+
+
+def test_restart_marker_lives_on_the_shared_volume_not_the_update_bind_mount(monkeypatch):
+    """The backend and the bot must watch the SAME file, or a restore only restarts one of them.
+
+    The marker used to key off UPDATE_DIR — which is the panel self-update watcher's HOST bind
+    mount and is set only on the backend (`/app/data/update`). The bot, with no UPDATE_DIR, fell
+    back to `/app/data`. Two different files: after a restore the backend restarted itself while
+    the bot kept serving from the pre-restore database with the old SECRET_KEY. The marker must
+    depend only on the `app_data` volume both containers mount at /app/data.
+    """
+    import importlib
+
+    from app.services import restart_signal
+
+    monkeypatch.setenv("UPDATE_DIR", "/app/data/update")   # as the backend has it in compose
+    monkeypatch.delenv("RESTART_SIGNAL_DIR", raising=False)
+    reloaded = importlib.reload(restart_signal)
+    try:
+        assert str(reloaded._MARKER) == "/app/data/.restart-requested", (
+            "the restart marker followed UPDATE_DIR again — backend and bot would diverge")
+    finally:
+        monkeypatch.delenv("UPDATE_DIR", raising=False)
+        importlib.reload(restart_signal)

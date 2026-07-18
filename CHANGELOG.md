@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.92.1 - 2026-07-18
+
+Two more audit findings fixed. No database migration.
+
+### Fixed
+
+- **After restoring a backup, the bot kept running on the old data.** A restore has to restart both
+  the panel and the bot, and they coordinate through a small marker file — but each was looking in a
+  *different* folder, so the message never arrived. The panel restarted itself while the bot carried
+  on with the pre-restore database and the old encryption key. They now share one location. This only
+  ever showed up during a restore, i.e. exactly when everything needs to work.
+- **An archived discount code could be brought back to life.** Archiving a code only switched it off,
+  so switching it on again made it spendable — while it stayed hidden from the codes list, leaving a
+  live code you could not see in order to stop it. Archiving is now final: an archived code can never
+  be re-enabled and is refused at redemption even if its row says otherwise.
+
 ## 1.92.0 - 2026-07-18
 
 Findings from a full audit of the codebase for bugs of the same class as the recent enforcement and

@@ -241,3 +241,41 @@ def test_pg_credit_last_use_race():
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_archived_credit_code_is_dead_for_good():
+    """Archiving is the history-preserving replacement for deletion, so it must be one-way.
+
+    It used to work only by side effect — `archive_code_core` also set `enabled=False`, and the
+    redemption gate looked at `enabled` alone. Flipping the code back to enabled therefore made it
+    payable again while it stayed hidden from the normal management list (which excludes archived
+    rows), leaving a live code the shop could not see to switch off."""
+    import datetime as dt
+
+    from app.models import StorefrontCreditCode
+    from app.services import storefront_credit
+
+    code = StorefrontCreditCode(
+        storefront_bot_id=1, code="X1", code_ci="x1", kind="fixed", amount_toman=1000,
+        enabled=True, used_count=0, archived_at=dt.datetime.now(dt.timezone.utc),
+    )
+
+    # 1) It cannot be revived…
+    try:
+        storefront_credit.set_enabled_core(code, True)
+        raise AssertionError("an archived code was re-enabled")
+    except ValueError as err:
+        assert "archived" in str(err)
+    # …but disabling it further is harmless and still allowed.
+    storefront_credit.set_enabled_core(code, False)
+    assert code.enabled is False
+
+    # 2) And even if a row somehow reads enabled+archived, redemption refuses it.
+    code.enabled = True
+
+    async def go():
+        return await storefront_credit._evaluate(
+            None, code, topup_toman=50_000, customer_id=7)
+
+    quote = asyncio.run(go())
+    assert not quote.ok and quote.reason == "disabled"

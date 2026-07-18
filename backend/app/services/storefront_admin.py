@@ -1934,6 +1934,15 @@ async def set_credit_enabled(
         await _cache_known_failure(
             session, shop, ctx, action="credit.enable", command=command, exc=exc)
         raise
+    if enabled and code.archived_at is not None:
+        # Reviving an archived code would make it redeemable again while staying hidden from the
+        # normal list — a live code the shop can't see to switch off.
+        err = AdminCommandError(
+            "archived_code", "این کد بایگانی شده است و دیگر قابلِ فعال‌سازی نیست؛ یک کدِ تازه بسازید.",
+            response_status=422)
+        await _cache_known_failure(
+            session, shop, ctx, action="credit.enable", command=command, exc=err)
+        raise err
     before = {"enabled": bool(code.enabled)}
 
     async def mutate() -> _Mutation:

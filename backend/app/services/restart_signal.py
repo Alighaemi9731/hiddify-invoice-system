@@ -22,8 +22,17 @@ from pathlib import Path
 
 log = logging.getLogger("restart")
 
-# Same shared dir the self-update watcher uses (host-mounted at the repo data dir).
-_DIR = os.environ.get("UPDATE_DIR", "/app/data")
+# The marker MUST live on the `app_data` volume, which both the backend and the bot mount at
+# /app/data — that shared mount is the whole point of this module.
+#
+# It used to key off UPDATE_DIR, which is a DIFFERENT thing: UPDATE_DIR is the panel self-update
+# watcher's host bind mount and is set ONLY on the backend (`/app/data/update` → the repo's
+# `update/`). The bot has no UPDATE_DIR, so it fell back to `/app/data`. The two processes were
+# therefore watching two different files and could never see each other's token: after a restore
+# the backend restarted itself while the bot kept running against the pre-restore database and the
+# old SECRET_KEY — exactly the failure this module exists to prevent. Overriding is still possible
+# for tests, but it must not be UPDATE_DIR.
+_DIR = os.environ.get("RESTART_SIGNAL_DIR", "/app/data")
 _MARKER = Path(_DIR) / ".restart-requested"
 
 # Token observed when this process started watching. None until init() runs.

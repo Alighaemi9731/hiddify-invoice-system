@@ -118,7 +118,14 @@ def create_code_core(
 
 
 def set_enabled_core(code: StorefrontCreditCode, enabled: bool) -> None:
-    """Absolute enable/disable (no commit). Does NOT stamp `archived_at` — that is archive's job."""
+    """Absolute enable/disable (no commit). Does NOT stamp `archived_at` — that is archive's job.
+
+    Re-ENABLING an archived code is refused: it would be redeemable again (before `_evaluate`
+    also learned to check `archived_at`) yet invisible in the normal management list, i.e. a live
+    code the shop can't find to switch off. Disabling an archived code stays allowed — it is a
+    no-op that can only make things safer."""
+    if enabled and code.archived_at is not None:
+        raise ValueError("archived_code")
     code.enabled = bool(enabled)
 
 
@@ -208,6 +215,14 @@ async def _evaluate(
 ) -> CreditQuote:
     if code is None:
         return CreditQuote(False, "not_found")
+    # Archived is FINAL — check it independently of `enabled`. Archiving only worked by side
+    # effect (`archive_code_core` also flips `enabled=False`), so re-enabling an archived code
+    # made it redeemable again while it stays hidden from the normal management list (which
+    # excludes archived rows unless `include_archived`): a live code the shop cannot see to
+    # switch off. Archiving is the history-preserving replacement for deletion and must be
+    # one-way.
+    if code.archived_at is not None:
+        return CreditQuote(False, "disabled", code.id, is_gift=code.is_gift)
     if not code.enabled:
         return CreditQuote(False, "disabled", code.id, is_gift=code.is_gift)
     now = dt.datetime.now(dt.timezone.utc)
