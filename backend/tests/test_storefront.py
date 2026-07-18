@@ -1853,32 +1853,41 @@ def test_send_admin_menu_owner_vs_coadmin(tmp_path):
         await settings_service.set_value(s, "server_domain", "portal.example.test")
         await s.commit()
 
-        # OWNER: a one-tap INLINE portal button (URL with allow-listed &next), THEN the docked lean
-        # ≤5 reply keyboard.
+        # OWNER: ONE message docking the lean ≤5 keyboard, with the portal as a NORMAL button.
+        # It used to be pushed as a separate inline message above every menu, which cluttered the
+        # chat — the owner asked for it to live in the menu like everything else.
         m = _FakeMsg(111)
         await H._send_admin_menu(m, bot, session=s, reseller=r, user_id=111)
-        portal = m.answers[0][1]
-        assert isinstance(portal, InlineKeyboardMarkup)
-        url = portal.inline_keyboard[0][0].url
-        # PERMANENT address (/portal/u/<admin_uuid>) — the old 15-minute one-time login link kept
-        # expiring before the owner tapped it (notably from «مشاهده در پنل» notifications).
-        assert url.startswith("https://portal.example.test/portal/u/")
-        assert "t=" not in url.split("?", 1)[0]
-        assert f"next=%2Fportal%2Fstorefront%2F{bot.id}" in url
-        assert portal.inline_keyboard[0][0].web_app is None            # no Mini App
-        rk = m.answers[1][1]
+        assert len(m.answers) == 1
+        assert not any(isinstance(kbd, InlineKeyboardMarkup) for _t, kbd in m.answers)
+        rk = m.answers[0][1]
         assert isinstance(rk, ReplyKeyboardMarkup)
         owner_labels = {b.text for row in rk.keyboard for b in row}
         assert owner_labels == (
-            {sfkb._ACTION_TO_LABEL[a] for a in sfkb.ADMIN_MAIN_ACTIONS} | {sfkb.MORE_LABEL})
+            {sfkb._ACTION_TO_LABEL[a] for a in sfkb.ADMIN_MAIN_ACTIONS}
+            | {sfkb.MORE_LABEL, sfkb.PORTAL_LABEL})
+        assert len(owner_labels) <= 5                      # still lean
 
-        # CO-ADMIN: the SAME lean reply keyboard, but NO portal button (not a portal principal).
+        # Tapping it replies with the PERMANENT shop address (/portal/u/<uuid>) — the old 15-minute
+        # one-time link kept expiring before the owner got to it.
+        m3 = _FakeMsg(111)
+        await H._send_shop_portal_link(m3, bot, session=s, reseller=r)
+        link = m3.answers[0][1]
+        assert isinstance(link, InlineKeyboardMarkup)
+        url = link.inline_keyboard[0][0].url
+        assert url.startswith("https://portal.example.test/portal/u/")
+        assert f"next=%2Fportal%2Fstorefront%2F{bot.id}" in url
+        assert link.inline_keyboard[0][0].web_app is None              # no Mini App
+
+        # CO-ADMIN: same lean keyboard WITHOUT the portal button (not a portal principal).
         m2 = _FakeMsg(222)
         await H._send_admin_menu(m2, bot, session=s, reseller=r, user_id=222)
         assert len(m2.answers) == 1
         rk2 = m2.answers[0][1]
         assert isinstance(rk2, ReplyKeyboardMarkup)
-        assert {b.text for row in rk2.keyboard for b in row} == owner_labels
+        co_labels = {b.text for row in rk2.keyboard for b in row}
+        assert sfkb.PORTAL_LABEL not in co_labels
+        assert co_labels == owner_labels - {sfkb.PORTAL_LABEL}
     _run(body, tmp_path, "sf_owner_menu.db")
 
 

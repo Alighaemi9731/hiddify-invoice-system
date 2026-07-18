@@ -8,6 +8,22 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.91.1 - 2026-07-18
+
+Two presentation fixes in the shop-owner experience. No database migration.
+
+### Changed
+
+- **«🌐 مدیریت فروشگاه در مرورگر» is now a normal menu button in the shop bot.** It was still being
+  pushed as a separate message above every single menu, which cluttered the chat — the same thing
+  that was already fixed for the main bot. Tapping it replies with the shop's permanent management
+  link. Co-admins don't see it (they manage from the bot, not the web panel).
+- **The reseller portal's Help page was rebuilt to match the main panel's.** Same look and
+  behaviour: a header, grouped tabs («پنلِ من» / «فروشگاهِ من»), a search box that looks across all
+  groups at once, and expandable sections. Its storefront section was also rewritten — it still
+  described the old bot home — and it now covers the new dashboard and the automatic customer
+  reminders.
+
 ## 1.91.0 - 2026-07-18
 
 A useful storefront dashboard, and customers are no longer forgotten the moment their service

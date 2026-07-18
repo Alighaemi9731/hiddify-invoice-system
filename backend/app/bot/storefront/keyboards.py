@@ -52,6 +52,10 @@ BACK_TO_ADMIN = "« بازگشت به مدیریت"
 # Lean-menu nav + flow-lock cancel (mirrors the main bot). All labels stay routable; only which are
 # DOCKED (top-level vs «بیشتر») changes — so the plan-007 parity contract (ADMIN_LABEL_TO_ACTION) holds.
 CANCEL_LABEL = "✖️ انصراف"
+# Navigation, NOT a capability — deliberately kept out of ADMIN_MENU/ADMIN_LABEL_TO_ACTION so the
+# bot↔portal parity contract keeps describing real management actions only. Owner-only: a co-admin
+# is not a portal principal.
+PORTAL_LABEL = "🌐 مدیریت فروشگاه در مرورگر"
 MORE_LABEL = "⋯ بیشتر"
 BACK_LABEL = "« بازگشت به منو"
 _ACTION_TO_LABEL = {act: lbl for lbl, act in ADMIN_MENU}
@@ -59,7 +63,7 @@ _ACTION_TO_LABEL = {act: lbl for lbl, act in ADMIN_MENU}
 ADMIN_MAIN_ACTIONS = ["topups", "customers", "broadcast"]
 ADMIN_MORE_ACTIONS = [act for _, act in ADMIN_MENU if act not in ADMIN_MAIN_ACTIONS]
 ALL_LABELS = (set(ADMIN_LABEL_TO_ACTION) | set(CUSTOMER_LABEL_TO_ACTION)
-              | {BACK_TO_ADMIN, MORE_LABEL, BACK_LABEL})
+              | {BACK_TO_ADMIN, MORE_LABEL, BACK_LABEL, PORTAL_LABEL})
 
 
 def _reply_kb(rows: list[list[KeyboardButton]]) -> ReplyKeyboardMarkup:
@@ -98,9 +102,15 @@ def admin_reply_kb() -> ReplyKeyboardMarkup:
     return _grid([label for label, _ in ADMIN_MENU])
 
 
-def admin_main_reply_kb() -> ReplyKeyboardMarkup:
-    """Lean ≤5 top-level admin menu (urgent actions) + «بیشتر»."""
-    return _grid([_ACTION_TO_LABEL[a] for a in ADMIN_MAIN_ACTIONS], extra=[MORE_LABEL])
+def admin_main_reply_kb(*, owner: bool = False) -> ReplyKeyboardMarkup:
+    """Lean ≤5 top-level admin menu (urgent actions) + «بیشتر».
+
+    The OWNER also gets «🌐 مدیریت فروشگاه در مرورگر» as a normal menu button. It used to ride its
+    own inline message above every menu, which looked bolted-on; tapping it now simply replies with
+    their permanent portal link. Co-admins don't see it — they aren't portal principals."""
+    labels = [_ACTION_TO_LABEL[a] for a in ADMIN_MAIN_ACTIONS]
+    extra = ([PORTAL_LABEL] if owner else []) + [MORE_LABEL]
+    return _grid(labels, extra=extra)
 
 
 def admin_more_reply_kb(*, owner: bool = False) -> ReplyKeyboardMarkup:

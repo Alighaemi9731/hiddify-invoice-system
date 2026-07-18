@@ -144,21 +144,31 @@ async def _resolve(session, bot: Bot, user) -> tuple[StorefrontBot | None, Resel
 async def _send_admin_menu(  # noqa: ANN001
     message, sf: StorefrontBot, *, session, reseller, user_id: int,
 ) -> None:
-    """Show the lean shop-admin home: a ≤5 reply keyboard (urgent actions + «بیشتر»). The PRIMARY OWNER
-    additionally gets a one-tap INLINE «مدیریت فروشگاه در مرورگر» button (full management lives in the
-    browser); a CO-ADMIN (not a portal principal) gets the same reply keyboard WITHOUT the portal button.
-    All 14 labels stay routable via `sf_menu` (top-level or under «بیشتر»)."""
-    if _is_shop_owner(reseller, user_id):
-        from app.bot.handlers.common import portal_stable_url
+    """Show the lean shop-admin home: ONE message docking a ≤5 reply keyboard.
 
-        url = await portal_stable_url(
-            session, reseller.bot_chat_id, with_login_token=True, next_path=f"/portal/storefront/{sf.id}")
-        if url:
-            await message.answer(rtl("🌐 برای مدیریتِ کاملِ فروشگاه در مرورگر، دکمهٔ زیر را بزنید:"),
-                                 reply_markup=kb.owner_portal_inline_kb(url))
+    The PRIMARY OWNER's keyboard includes «🌐 مدیریت فروشگاه در مرورگر» as a normal button — it used
+    to be pushed as a separate inline message above every single menu, which looked bolted-on and
+    cluttered the chat. A CO-ADMIN doesn't get it (not a portal principal). All 14 management labels
+    stay routable via `sf_menu` (top-level or under «بیشتر»)."""
     await message.answer(
         rtl(f"🛠 پنلِ مدیریتِ فروشگاه\nربات: @{sf.bot_username or '—'}\nیک گزینه را انتخاب کنید:"),
-        reply_markup=kb.admin_main_reply_kb(),
+        reply_markup=kb.admin_main_reply_kb(owner=_is_shop_owner(reseller, user_id)),
+    )
+
+
+async def _send_shop_portal_link(message, sf: StorefrontBot, *, session, reseller) -> None:  # noqa: ANN001
+    """Reply with the owner's permanent shop-management link (tapped from the menu button)."""
+    from app.bot.handlers.common import portal_stable_url
+
+    url = await portal_stable_url(
+        session, reseller.bot_chat_id, with_login_token=True,
+        next_path=f"/portal/storefront/{sf.id}")
+    if not url:
+        await message.answer(rtl("🌐 پنلِ تحتِ وب هنوز پیکربندی نشده است."))
+        return
+    await message.answer(
+        rtl("🌐 مدیریتِ کاملِ فروشگاه در مرورگر — پلن‌ها، مشتری‌ها، شارژها و تنظیمات:"),
+        reply_markup=kb.owner_portal_inline_kb(url),
     )
 
 
@@ -563,6 +573,10 @@ async def sf_menu(message: Message, state: FSMContext, bot: Bot) -> None:
         if text in (kb.BACK_TO_ADMIN, kb.BACK_LABEL) and is_admin:
             await _send_admin_menu(
                 message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
+            return
+        if is_admin and text == kb.PORTAL_LABEL:
+            if _is_shop_owner(reseller, message.from_user.id):
+                await _send_shop_portal_link(message, sf, session=s, reseller=reseller)
             return
         if is_admin and text == kb.MORE_LABEL:
             is_owner = _is_shop_owner(reseller, message.from_user.id)
