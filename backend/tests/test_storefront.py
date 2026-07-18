@@ -705,27 +705,61 @@ def test_sf_fallback_does_not_relay_mid_flow_message(tmp_path, monkeypatch):
     assert any("انصراف" in a for a in answered)                   # re-prompted to cancel
 
 
-def test_sf_cmd_cancel_clears_state_and_shows_menu(tmp_path, monkeypatch):
-    """/cancel is a real global cancel: it clears any in-progress compose (the re-dock middleware then
-    re-shows the right menu), instead of being relayed to the customer as literal text."""
+def test_cancel_always_restores_the_menu_even_with_no_active_flow(tmp_path, monkeypatch):
+    """The reported prod trap: a customer left with ONLY the «✖️ انصراف» keyboard, tapping it over
+    and over, getting «لغو شد.» each time and never getting their menu back.
+
+    Cause: cancel relied on the re-dock middleware, which only fires when a flow was ACTIVE. The
+    storefront FSM lives in memory, so every bot restart wipes the server-side state while the
+    cancel-only keyboard stays on the customer's phone — state None → no re-dock → trapped, with no
+    way out but /start. Cancel must restore the menu unconditionally."""
     from app.bot.storefront import handlers as H
 
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
+    from app.core.db import Base
+
     answered: list = []
+
+    class FakeBot:
+        id = 991
 
     class FakeMsg:
         from_user = SimpleNamespace(id=555, first_name="Cust", username="c")
         text = "/cancel"
 
         async def answer(self, t, **kw):  # noqa: ANN001, ANN003
-            answered.append(t)
+            answered.append((t, kw.get("reply_markup")))
 
     async def go():
-        st = _FakeState("SF:dm_compose")
-        await H.sf_cmd_cancel(FakeMsg(), st)
-        assert await st.get_state() is None                       # compose cleared
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as s:
+            r, _bot, _c = await _seed(s)
+            r.bot_chat_id = 111
+            await s.commit()
+        monkeypatch.setattr(H, "SessionLocal", Session)
+        try:
+            # THE TRAP: no flow is active (state already lost), exactly as after a bot restart.
+            st = _FakeState(None)
+            await H.sf_cancel_label(FakeMsg(), st, FakeBot())
+            assert await st.get_state() is None
+            # A real menu keyboard came back — not just the «لغو شد.» acknowledgement.
+            kbs = [kb for _t, kb in answered if hasattr(kb, "keyboard")]
+            assert kbs, "cancel left the customer with no menu (the reported trap)"
+            labels = {b.text for row in kbs[-1].keyboard for b in row}
+            assert labels != {sfkb.CANCEL_LABEL}, "still stuck on the cancel-only keyboard"
+
+            # And it also works the normal way, mid-flow.
+            answered.clear()
+            st2 = _FakeState("SF:dm_compose")
+            await H.sf_cmd_cancel(FakeMsg(), st2, FakeBot())
+            assert await st2.get_state() is None
+            assert any(hasattr(kb, "keyboard") for _t, kb in answered)
+        finally:
+            await engine.dispose()
 
     asyncio.run(go())
-    assert any("لغو" in a for a in answered)                      # a cancel note (not a relay)
 
 
 def test_customer_detail_kb_ban_toggle():

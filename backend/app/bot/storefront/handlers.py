@@ -528,9 +528,11 @@ async def _sf_redock_after_flow(handler, event, data):  # noqa: ANN001, ANN202
     before = await state.get_state() if state is not None else None
     result = await handler(event, data)
     try:
-        # `/start` rebuilds the menu itself → skip re-dock to avoid a double menu.
-        first = ((getattr(event, "text", "") or "").strip().split(maxsplit=1) or [""])[0].lower()
-        if (first != "/start" and before is not None and state is not None
+        # `/start` and the cancel handlers rebuild the menu themselves → skip to avoid doubling it.
+        text = (getattr(event, "text", "") or "").strip()
+        first = (text.split(maxsplit=1) or [""])[0].lower()
+        if (first not in ("/start", "/cancel") and text != kb.CANCEL_LABEL
+                and before is not None and state is not None
                 and await state.get_state() is None):
             bot = data.get("bot")
             if bot is not None and getattr(event, "from_user", None) is not None:
@@ -541,18 +543,26 @@ async def _sf_redock_after_flow(handler, event, data):  # noqa: ANN001, ANN202
 
 
 @storefront_router.message(Command("cancel"))
-async def sf_cmd_cancel(message: Message, state: FSMContext) -> None:
-    """Global cancel: clear the flow (the re-dock middleware re-shows the right menu). Registered
-    before every FSM-state text handler, and the ban/join middlewares exempt `/cancel`."""
+async def sf_cmd_cancel(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Global cancel: clear the flow and ALWAYS restore the menu. Registered before every FSM-state
+    text handler, and the ban/join middlewares exempt `/cancel`."""
     await state.clear()
     await message.answer(rtl("لغو شد."))
+    await _redock_sf_menu(message, bot)
 
 
 @storefront_router.message(F.text == kb.CANCEL_LABEL)
-async def sf_cancel_label(message: Message, state: FSMContext) -> None:
-    """The docked «✖️ انصراف» reply button: clear the flow; the re-dock middleware restores the menu."""
+async def sf_cancel_label(message: Message, state: FSMContext, bot: Bot) -> None:
+    """The docked «✖️ انصراف» button — it must ALWAYS hand the menu back.
+
+    It used to rely on the re-dock middleware, which only fires when a flow was actually active. A
+    customer whose flow state had vanished (the storefront FSM lives in memory, so EVERY bot restart
+    wipes it) was left with the cancel-only keyboard on their phone and no state on the server: each
+    tap answered «لغو شد.» and re-docked nothing, trapping them in a loop with no way back except
+    /start. Cancel now re-docks unconditionally."""
     await state.clear()
     await message.answer(rtl("لغو شد."))
+    await _redock_sf_menu(message, bot)
 
 
 @storefront_router.message(F.text.in_(kb.ALL_LABELS))

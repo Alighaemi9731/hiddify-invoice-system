@@ -498,21 +498,18 @@ async def _send_portal_link(answer, chat_id: int, session) -> None:
         return
     from app.bot.handlers.common import portal_stable_url
 
-    # The tappable link carries a fresh sign-in token (works instantly, even on a new device); the
-    # address we tell them to save is the clean permanent one, which carries no credential.
+    # One line + one button. It used to be a paragraph, a text link AND the raw address printed
+    # underneath — three ways to say the same thing. The button carries a fresh sign-in token so it
+    # opens straight into the panel; the address behind it is permanent, so a saved/older link still
+    # works (it falls back to the session or a Telegram confirmation).
     url = await portal_stable_url(session, chat_id, with_login_token=True)
-    plain = await portal_stable_url(session, chat_id)
-    if not url or not plain:
+    if not url:
         await answer(rtl("🌐 پنلِ تحتِ وب هنوز پیکربندی نشده است؛ لطفاً به پشتیبانی اطلاع دهید."))
         return
-    msg = (
-        "🌐 پنلِ تحتِ وب شما\n\n"
-        "برای دیدنِ فاکتورها، پرداخت، آمار و مدیریتِ زیرمجموعه‌ها روی لینکِ زیر بزنید:\n\n"
-        f"<a href=\"{html.escape(url, quote=True)}\">باز کردنِ پنلِ من</a>\n\n"
-        "آدرسِ همیشگیِ شما (منقضی نمی‌شود، می‌توانید ذخیره‌اش کنید):\n"
-        f"<code>{html.escape(plain)}</code>"
+    await answer(
+        rtl("🌐 پنلِ تحتِ وب شما آمادهٔ ورود است."),
+        reply_markup=keyboards.portal_inline_kb(url),
     )
-    await answer(rtl(msg), parse_mode="HTML", disable_web_page_preview=True)
 
 
 # --------------------------- sub-reseller management helpers ---------------------------

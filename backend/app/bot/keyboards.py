@@ -161,6 +161,15 @@ def owner_more_reply_kb() -> ReplyKeyboardMarkup:
     return _reply_grid([lbl for lbl, _ in OWNER_MORE], extra=[BACK_LABEL])
 
 
+def portal_inline_kb(url: str) -> InlineKeyboardMarkup:
+    """The single «ورود به پنل» button under the portal message. Must be INLINE — a reply-keyboard
+    button cannot carry a URL — and it is the ONLY thing in that message: the old version also had
+    an explanatory paragraph, a text link and the raw address, which was three ways to say one
+    thing."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🌐 ورود به پنل تحت وب", url=url)]])
+
+
 def sub_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     """One button per panel the reseller has sub-resellers on. data: subp:<reseller_id>."""
     rows = [[InlineKeyboardButton(text=label, callback_data=f"subp:{rid}")] for rid, label in items]

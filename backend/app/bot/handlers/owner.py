@@ -14,7 +14,6 @@ from app.bot import keyboards
 from app.bot.handlers import common
 from app.bot.handlers.common import (
     _OWED,
-    _OWNER_TERMINAL,
     OwnerCapBumpState,
     OwnerSearchState,
     _iso,
@@ -43,8 +42,6 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
             await cb.answer()
             return
         await _dispatch_owner(action, cb.message.answer, s)
-        if action in _OWNER_TERMINAL:
-            await _reshow_menu(cb.message, s, cb.from_user)
     await cb.answer()
 
 

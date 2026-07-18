@@ -8,6 +8,23 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.91.2 - 2026-07-18
+
+Urgent fix: customers could get stuck on the «انصراف» button. No database migration.
+
+### Fixed
+
+- **A customer could be trapped with only the «✖️ انصراف» keyboard.** Tapping it answered «لغو شد.»
+  and gave nothing back — over and over — with no way out except `/start`, which they had no reason
+  to know. Cancel only restored the menu when an operation was genuinely in progress, but the bots
+  keep that in memory, so **every restart of the service wiped it** while the cancel keyboard stayed
+  on the customer's phone. Cancel now always returns the menu, in both bots, whether or not anything
+  was in progress.
+- **The «🌐 پنل تحت وب» reply is now one line and one button.** It used to be a paragraph, a text
+  link and the full address printed underneath — three ways of saying the same thing.
+- **No more «📋 منوی اصلی:» message after every action.** That was left over from when the menu lived
+  in the chat and scrolled away; the menu is docked above the keyboard now, so it was pure noise.
+
 ## 1.91.1 - 2026-07-18
 
 Two presentation fixes in the shop-owner experience. No database migration.

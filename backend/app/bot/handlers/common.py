@@ -186,9 +186,12 @@ async def _redock_menu_after_flow(handler, event, data):
     before = await state.get_state() if state is not None else None
     result = await handler(event, data)
     try:
-        # `/start` and `/menu` rebuild the menu themselves → skip re-dock to avoid a double menu.
-        first = ((getattr(event, "text", "") or "").strip().split(maxsplit=1) or [""])[0].lower()
-        if (first not in ("/start", "/menu") and before is not None and state is not None
+        # `/start`, `/menu` and the cancel handlers rebuild the menu themselves → skip to avoid
+        # doubling it.
+        text = (getattr(event, "text", "") or "").strip()
+        first = (text.split(maxsplit=1) or [""])[0].lower()
+        if (first not in ("/start", "/menu", "/cancel") and text != keyboards.CANCEL_LABEL
+                and before is not None and state is not None
                 and await state.get_state() is None):
             user = getattr(event, "from_user", None)
             if user is not None:
@@ -611,14 +614,11 @@ async def _sync_command_menu(bot: Bot, session, user) -> None:
     except Exception:  # noqa: BLE001
         log.warning("sync command menu failed", exc_info=True)
 
-# Terminal reseller actions whose result is complete info the user just reads → re-show the menu
-# after them. EXCLUDED: selection-list actions (pay/subs/removelink) whose result is a picker the
-# user must tap next — a trailing menu would bury those buttons; the menu re-appears when the
-# sub-action completes. FSM-entering actions (storefront/support/register/newuser) re-show on
-# completion. (Matches the owner's «اگه تموم شد» — only after a completed action.)
-_RESELLER_TERMINAL = {"invoices", "interim", "panels", "portal"}
-# Terminal owner actions. EXCLUDED: payments (a picker) + broadcast/search (open a flow).
-_OWNER_TERMINAL = {"stats", "health", "debtors", "sync", "backup"}
+# NOTE: there used to be _RESELLER_TERMINAL/_OWNER_TERMINAL sets that appended a «📋 منوی اصلی:»
+# message after every read-only action. That made sense when the menu was INLINE in the chat and
+# scrolled away. The menu is a docked reply keyboard now — always visible — so the trailing message
+# was pure clutter after every single tap. Flows still get their menu back via the re-dock
+# middleware, which is the only case where the keyboard actually changed.
 
 _SETCHAT_RE = re.compile(r"^(channel|group|کانال|گروه)\s+(-?\d{5,})$", re.IGNORECASE)
 

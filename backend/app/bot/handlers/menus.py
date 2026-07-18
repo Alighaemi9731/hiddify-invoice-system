@@ -8,8 +8,6 @@ from aiogram.types import Message
 from app.bot import keyboards
 from app.bot.handlers import common
 from app.bot.handlers.common import (
-    _OWNER_TERMINAL,
-    _RESELLER_TERMINAL,
     OwnerSearchState,
     SupportState,
     _reshow_menu,
@@ -35,9 +33,15 @@ from app.bot.handlers.views import (
 # re-docks the role menu. This is the ONLY way (besides /start) to leave a locked flow.
 @router.message(F.text == keyboards.CANCEL_LABEL)
 async def on_cancel_label(message: Message, state: FSMContext) -> None:
-    # Clearing the flow makes the re-dock middleware restore the role menu automatically.
+    """«✖️ انصراف» must ALWAYS hand the menu back — never only when a flow happened to be active.
+
+    Relying on the re-dock middleware left anyone whose flow state had vanished (a bot restart wipes
+    the in-memory FSM) stuck with the cancel-only keyboard: every tap answered «لغو شد.» and restored
+    nothing, with no way out but /start."""
     await state.clear()
     await message.answer("لغو شد.")
+    async with common.SessionLocal() as s:
+        await _reshow_menu(message, s, message.from_user)
 
 
 # Registered before every FSM text handler. UNLIKE before, a menu-label tap DURING a flow no longer
@@ -112,9 +116,6 @@ async def _do_reseller_menu(action: str, message: Message, state: FSMContext, bo
         )
     elif action == "newuser":
         await _begin_create_user(ans, cid, s, state)
-    # Keep the menu at hand after a completed (non-flow) action.
-    if action in _RESELLER_TERMINAL:
-        await _reshow_menu(message, s, message.from_user)
 
 
 async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) -> None:  # noqa: ANN001
@@ -124,5 +125,3 @@ async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) ->
         await ans("🔎 نام یا شناسهٔ نماینده را بفرستید.", reply_markup=keyboards.flow_cancel_kb())
         return
     await _dispatch_owner(action, ans, s)
-    if action in _OWNER_TERMINAL:
-        await _reshow_menu(message, s, message.from_user)

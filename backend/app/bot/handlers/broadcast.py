@@ -97,9 +97,11 @@ async def cb_broadcast_audience(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    # Clearing an active flow makes the re-dock middleware restore the role menu automatically.
+    """Always restore the menu, even when no flow was active (see on_cancel_label)."""
     await state.clear()
     await message.answer("لغو شد.")
+    async with common.SessionLocal() as s:
+        await common._reshow_menu(message, s, message.from_user)
 
 
 @router.callback_query(F.data == "cancel")
