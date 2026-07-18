@@ -90,11 +90,13 @@ async def list_panels(session: AsyncSession = Depends(get_session)) -> list[Pane
 async def create_panel(
     body: PanelCreate, background: BackgroundTasks, session: AsyncSession = Depends(get_session)
 ) -> PanelOut:
+    # `body.key` is already normalized (stripped + lowercased) by the schema; compare
+    # case-insensitively so a legacy uppercase row still counts as taken.
     exists = (
-        await session.execute(select(Panel).where(Panel.key == body.key))
+        await session.execute(select(Panel).where(func.lower(Panel.key) == body.key))
     ).scalar_one_or_none()
     if exists:
-        raise HTTPException(409, f"Panel key '{body.key}' already exists")
+        raise HTTPException(409, f"پنلی با کلید «{body.key}» از قبل وجود دارد.")
     panel = Panel(
         key=body.key,
         name=body.name or body.key,

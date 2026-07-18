@@ -85,7 +85,10 @@ async def _enabled_users(
         await session.execute(
             select(EndUserSnapshot).where(
                 EndUserSnapshot.panel_id == panel_id,
-                EndUserSnapshot.added_by_uuid.in_(admin_uuids),
+                # Case-INSENSITIVE like the delete cascade and the billing report. With a raw
+                # `.in_()` a row written before uuid normalization shipped was silently skipped
+                # here while still being deleted/billed — i.e. a debtor kept users online.
+                func.lower(EndUserSnapshot.added_by_uuid).in_({u.lower() for u in admin_uuids}),
                 EndUserSnapshot.enable.is_(True),
             )
         )
@@ -334,11 +337,13 @@ async def _run_user_chunks(
     # resellers while leaving the target's own users enabled — and the panel still answered 200, so
     # it was recorded as success. Therefore we resolve every id FRESH from the panel each run and
     # NEVER seed from the durable `EndUserSnapshot.panel_user_id` (kept only as a forensic
-    # last-resolved value). The only cache we trust is `snapshot["panel_user_ids"]`, written by THIS
-    # run so a crash/restart resumes without re-looking-up.
-    panel_user_ids: dict[str, int] = {
-        str(uuid): int(uid) for uuid, uid in (snapshot.get("panel_user_ids") or {}).items()
-    }
+    # last-resolved value). Nothing is cached between passes at all — see below.
+    # NOT seeded from, and NOT persisted into, the action snapshot either. It used to be kept there
+    # as a crash-resume cache and only stripped on SUCCESSFUL finalize — so an action that ended
+    # `partial`/`failed` (panel down, retry-exhausted lookup, worker restart) kept the ids in the DB
+    # and reseeded from them on the next tick, hours or days later. That is the original incident by
+    # another route. Ids live for exactly one pass now; a resume re-resolves.
+    panel_user_ids: dict[str, int] = {}
 
     to_lookup = [u for u in remaining if u not in panel_user_ids]
     lookup_failed = False
@@ -375,7 +380,6 @@ async def _run_user_chunks(
                 if row is not None:
                     row.panel_user_id = uid  # cache durably → next time zero lookups
         # Persist resolved ids + progress so a restart resumes without re-looking-up.
-        snapshot["panel_user_ids"] = panel_user_ids
         progress["users_done"] = sorted(done_users)
         progress["users_missing"] = sorted(missing_users)
         progress["users_failed"] = failed_users
@@ -488,7 +492,12 @@ async def _fail_if_writes_missed(
     record success. Returns True when the action was failed."""
     ok, wrong = await _verify_user_states(
         client, panel, written_uuids, expect_enabled=expect_enabled)
-    if not wrong or wrong < ok:
+    # Fail on ANY meaningful drift, not just a majority. The guarded failure is catastrophic and
+    # asymmetric (a mis-addressed bulk write hits other tenants), so a "majority wrong" bar was far
+    # too lenient — a 40%-wrong sample would still have been recorded as success. One mismatch is
+    # tolerated because a reseller can legitimately flip a single user between our write and this
+    # read; two independent mismatches in a small sample is a systemic miss.
+    if wrong < 2 and not (wrong and ok == 0):
         return False
     verb = "enabled" if expect_enabled else "disabled"
     action.status = EnforcementActionStatus.failed
@@ -1112,7 +1121,7 @@ async def _process_enforcement_action(
     action.error = None
     progress["phase"] = "done"
     action.affected_count = len(done_users - missing_users)
-    # panel_user_ids is only a retry cache; strip it from the stored snapshot so the row
+    # Legacy cleanup: older rows may still carry a persisted panel_user_ids cache; strip it so the row
     # doesn't hold ~100 KB of integer-ID mappings that have no audit value after completion.
     snapshot.pop("panel_user_ids", None)
     action.snapshot = snapshot
@@ -1532,6 +1541,34 @@ async def _process_delete_action(
                 await session.commit()
                 result["partial"] = 1
                 return result
+
+            # VERIFY before we forget who they were. The panel answers 200 for a bulk action even
+            # when the rowids matched nobody we meant, and the very next statements delete our own
+            # snapshot rows — i.e. the evidence needed to notice. Deletion is unrecoverable, so this
+            # path (unlike suspend/restore) must never take success on trust. A user that is really
+            # gone reads back as absent (get_user_id → None).
+            if ids_on_panel:
+                still_present = 0
+                for uu in removable_uuids[: max(1, len(removable_uuids) // 20)][:20]:
+                    try:
+                        if await client.get_user_id(panel, uu) is not None:
+                            still_present += 1
+                    except Exception:  # noqa: BLE001 — a flaky read must not fail the action alone
+                        continue
+                if still_present >= 2:
+                    action.status = EnforcementActionStatus.failed
+                    action.error = (
+                        f"delete verification failed: {still_present} sampled users still exist on "
+                        "the panel after the bulk delete. The panel's user ids may have been "
+                        "renumbered; refusing to drop local records."
+                    )
+                    log.error("cascade delete verification failed for action %s", action.id)
+                    snapshot["deleted_users"] = deleted_total
+                    progress["deleted_users"] = deleted_total
+                    flag_modified(action, "snapshot")
+                    await session.commit()
+                    result["failed"] = 1
+                    return result
 
             # Drop the just-deleted (or absent) users from our DB so the next batch shrinks.
             await session.execute(

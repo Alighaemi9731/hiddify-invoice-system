@@ -8,6 +8,38 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.90.1 - 2026-07-18
+
+Bug fixes plus follow-up hardening from a full audit of everything that talks to a Hiddify panel.
+No database migration (Alembic head stays `497cb88cf774`).
+
+### Fixed
+
+- **The phone's BACK button works in our bots again.** The menus asked Telegram to keep the button
+  keyboard permanently open and never let it be collapsed — and collapsing the keyboard is exactly
+  what BACK does on Android, so it appeared dead. The menu still appears with every message and can
+  be reopened from the keyboard icon.
+- **«سلامت فروشگاه» now reads consistently.** It mixed translated labels («فعال») with raw internal
+  values («active», «ok») side by side, and error states were shown in neutral grey. It was also
+  full of provider-side detail a reseller can do nothing about (panel status, last sync). It now
+  shows only what they can act on — ربات، باز/بسته بودن فروشگاه، سرویس‌دهی، و سفارش‌های ناموفق — in
+  one consistent Persian wording, with provider trouble rolled up into a single plain line.
+
+### Security / reliability
+
+Follow-up to the 2026-07-18 cross-tenant incident, from auditing every remaining Hiddify code path:
+
+- **Reseller deletion now verifies before it forgets.** The cascade delete trusted the panel's "OK"
+  and immediately removed our own records — the very data needed to notice a mistake. Deletion is
+  irreversible, so it now reads a sample back and refuses to proceed if the users are still there.
+- **Resolved panel ids are no longer kept between attempts.** They were retained whenever an action
+  ended partially (panel down, restart) and reused on the next attempt hours later — the same stale
+  id problem by another route. Ids now live for a single pass.
+- **A partly-wrong write is caught.** Verification previously only failed when *most* of the sample
+  was wrong, so a 40%-wrong write still counted as success. Any real drift now fails the action.
+- **Suspension now matches users case-insensitively**, like deletion and billing already did — a
+  debtor could otherwise keep users online because a differently-cased record was skipped.
+
 ## 1.90.0 - 2026-07-18
 
 Portal sign-in becomes permanent and simple, and the shop bots stop forwarding stray customer

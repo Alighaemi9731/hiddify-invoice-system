@@ -111,14 +111,16 @@ def test_reply_menu_keyboards_and_label_maps_are_consistent():
     # ALL_MENU_LABELS (what the label router listens for) includes the nav labels.
     assert keyboards._NAV_LABELS <= keyboards.ALL_MENU_LABELS
     kb = keyboards.owner_main_reply_kb()
-    assert kb.is_persistent and kb.resize_keyboard    # always docked at the bottom
+    # Docked and compact, but NOT is_persistent: that flag blocks collapsing the keyboard and
+    # made the Android system BACK button appear dead (reported by users).
+    assert kb.resize_keyboard and not kb.is_persistent
 
 
 def test_flow_cancel_keyboard_is_cancel_only():
     """A flow docks a cancel-ONLY reply keyboard so the menu is hidden and only «انصراف» is tappable."""
     kb = keyboards.flow_cancel_kb()
     assert _labels(kb) == [keyboards.CANCEL_LABEL]
-    assert kb.is_persistent and kb.resize_keyboard
+    assert kb.resize_keyboard and not kb.is_persistent   # collapsible → system BACK works
 
 
 def test_menu_label_during_a_flow_is_locked_not_a_universal_escape():
@@ -378,7 +380,7 @@ def test_reshow_menu_docks_role_reply_menu(tmp_path):
             _text, kb = sent[0]
             labels = _reply_labels(kb)
             assert keyboards.MORE_LABEL in labels and "🧾 فاکتور و پرداخت" in labels
-            assert kb.is_persistent
+            assert not kb.is_persistent      # collapsible → system BACK works
         finally:
             await engine.dispose()
 

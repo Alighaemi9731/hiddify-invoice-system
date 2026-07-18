@@ -2,11 +2,23 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PanelCreate(BaseModel):
     key: str = Field(min_length=1, max_length=32)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        """The key is a short human label shown everywhere a panel is named, so
+        `FA1`, `fa1 ` and `fa1` must be the SAME panel — not three near-identical
+        rows in the sales/invoice lists. Matches the lowercase key the panel-link
+        parser suggests in the UI."""
+        clean = value.strip().lower()
+        if not clean:
+            raise ValueError("key must not be blank")
+        return clean
     name: str = ""
     host: str = Field(min_length=1, description="e.g. panel-01.example.com (no scheme)")
     proxy_path: str = Field(min_length=1, description="secret URL path segment")

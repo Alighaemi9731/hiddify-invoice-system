@@ -1,29 +1,26 @@
-import { Alert, Chip, Grid, Stack, Typography } from "@mui/material";
+import { Alert, Chip, Stack, Typography } from "@mui/material";
 import CheckCircleOutlineIcon from "@mui/icons-material/esm/CheckCircleOutline";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import { useQuery } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
-import { fmtDateTime, fmtNum } from "../../format";
+import { fmtNum } from "../../format";
 import { SectionCard } from "../ui";
 import { getStorefrontHealth, storefrontQueryKeys } from "./api";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 
-const OPERATION_LABELS: Record<string, string> = {
-  pending: "در انتظار",
-  in_progress: "در حال اجرا",
-  done: "موفق",
-  failed: "ناموفق",
-  reversed: "برگشت‌خورده",
-};
-
 const ERROR_LABELS: Record<string, string> = {
-  unauthorized: "مجوز ربات یا پنل معتبر نیست",
-  network: "ارتباط با سرویس بیرونی برقرار نیست",
+  unauthorized: "توکن ربات معتبر نیست — ربات را دوباره راه‌اندازی کنید",
+  network: "ارتباط با سرویس برقرار نیست — معمولاً خودش برطرف می‌شود",
   configuration: "تنظیمات فروشگاه کامل نیست",
-  unknown: "یک خطای ناشناخته ثبت شده است",
+  unknown: "یک خطا ثبت شده است",
 };
 
+// Only the states a RESELLER can act on. Panel/infrastructure internals (panel enabled, panel
+// status enum, last sync time) were removed: they are the owner's servers, the reseller can do
+// nothing about them, and they were the source of the mismatched labels — raw backend values like
+// "active"/"ok" leaked into a Persian UI next to translated «فعال»/«غیرفعال» chips. Provider trouble
+// is now surfaced as ONE plain roll-up line instead.
 export default function StorefrontHealthPanel() {
   const { shop } = useOutletContext<StorefrontOutletContext>();
   const query = useQuery({
@@ -31,100 +28,60 @@ export default function StorefrontHealthPanel() {
     queryFn: () => getStorefrontHealth(shop.id),
   });
   const health = query.data;
-  const healthy = !!health
-    && health.bot.enabled
-    && health.bot.status === "active"
-    && health.panel.enabled
-    && health.panel.status === "ok"
-    && !shop.shop_closed
-    && !health.bot.error_class
-    && !health.panel.error_class;
+
+  const botLive = !!health?.bot.enabled && health?.bot.status === "active" && !health?.bot.error_class;
+  const serviceOk = !!health?.panel.enabled && health?.panel.status === "ok" && !health?.panel.error_class;
+  const open = !shop.shop_closed;
+  const healthy = botLive && serviceOk && open;
   const errorClass = health?.bot.error_class || health?.panel.error_class;
-  const latestStateUpdate = [health?.bot.state_updated_at, health?.panel.state_updated_at]
-    .filter((value): value is string => !!value)
-    .sort()
-    .pop() || null;
-  const stateUpdatedAt = health?.bot.error_class
-    ? health.bot.state_updated_at
-    : health?.panel.error_class
-      ? health.panel.state_updated_at
-      : latestStateUpdate;
+  const failedOps = Number(health?.operation_states?.failed || 0);
 
   return (
-    <DataState
-      isLoading={query.isLoading}
-      isError={query.isError}
-      rows={4}
-      onRetry={() => query.refetch()}
-    >
-      {query.data && (
+    <DataState isLoading={query.isLoading} isError={query.isError} rows={3} onRetry={() => query.refetch()}>
+      {health && (
         <Stack spacing={2}>
-          {errorClass && (
-            <Alert severity="warning" icon={<WarningAmberIcon />}>
-              {ERROR_LABELS[errorClass]}
-              {stateUpdatedAt
-                ? ` — آخرین به‌روزرسانی وضعیت: ${fmtDateTime(stateUpdatedAt)}`
-                : ""}
-            </Alert>
-          )}
-          {!errorClass && !healthy && (
-            <Alert severity="warning" icon={<WarningAmberIcon />}>
-              وضعیت ثبت‌شدهٔ فروشگاه عادی نیست. وضعیت ربات، پنل و باز بودن فروشگاه را بررسی کنید.
-              {stateUpdatedAt ? ` — آخرین به‌روزرسانی وضعیت: ${fmtDateTime(stateUpdatedAt)}` : ""}
-            </Alert>
-          )}
-          {healthy && (
+          {healthy ? (
             <Alert severity="success" icon={<CheckCircleOutlineIcon />}>
-              وضعیت ثبت‌شدهٔ فروشگاه عادی است.
+              فروشگاه شما سالم است و سفارش‌ها به‌درستی انجام می‌شوند.
+            </Alert>
+          ) : (
+            <Alert severity="warning" icon={<WarningAmberIcon />}>
+              {!open
+                ? "فروشگاه شما بسته است؛ مشتری‌ها نمی‌توانند خرید کنند. از «تنظیمات» می‌توانید بازش کنید."
+                : !botLive
+                  ? (errorClass ? ERROR_LABELS[errorClass] : "ربات فروشگاه فعال نیست.")
+                  : "اختلالی در سرویس‌دهی وجود دارد؛ در حال بررسی است. معمولاً خودش برطرف می‌شود."}
             </Alert>
           )}
 
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={5}>
-              <SectionCard title="وضعیت اجزا">
-                <Stack spacing={1.4}>
-                  <HealthRow label="فعال بودن ربات" ok={query.data.bot.enabled} />
-                  <HealthRow label="باز بودن فروشگاه" ok={!shop.shop_closed} />
-                  <HealthRow label="وضعیت ربات" value={query.data.bot.status} />
-                  <HealthRow label="وضعیت پنل" value={query.data.panel.status} />
-                  <HealthRow label="فعال بودن پنل" ok={query.data.panel.enabled} />
-                  <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                    <Typography variant="body2" color="text.secondary">آخرین همگام‌سازی پنل</Typography>
-                    <Typography variant="caption">{fmtDateTime(query.data.panel.last_synced_at)}</Typography>
-                  </Stack>
+          <SectionCard title="وضعیت">
+            <Stack spacing={1.4}>
+              <HealthRow label="ربات فروشگاه" ok={botLive} okText="فعال" badText="غیرفعال" />
+              <HealthRow label="فروشگاه" ok={open} okText="باز" badText="بسته" />
+              <HealthRow label="سرویس‌دهی" ok={serviceOk} okText="سالم" badText="اختلال" />
+              {failedOps > 0 && (
+                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                  <Typography variant="body2" color="text.secondary">سفارش‌های ناموفق</Typography>
+                  <Chip size="small" color="error" label={fmtNum(failedOps)} />
                 </Stack>
-              </SectionCard>
-            </Grid>
-            <Grid item xs={12} md={7}>
-              <SectionCard title="عملیات‌های ثبت‌شده">
-                <Stack direction="row" gap={1} flexWrap="wrap">
-                  {Object.entries(query.data.operation_states).map(([state, count]) => (
-                    <Chip
-                      key={state}
-                      variant="outlined"
-                      color={state === "failed" ? "error" : state === "done" ? "success" : "default"}
-                      label={`${OPERATION_LABELS[state] || state}: ${fmtNum(count)}`}
-                    />
-                  ))}
-                </Stack>
-              </SectionCard>
-            </Grid>
-          </Grid>
+              )}
+            </Stack>
+          </SectionCard>
         </Stack>
       )}
     </DataState>
   );
 }
 
-function HealthRow({ label, ok, value }: { label: string; ok?: boolean; value?: string }) {
+// One rendering path for every row — the old component had two (a translated boolean chip and a
+// raw-string chip), which is why the labels disagreed and error states showed as neutral grey.
+function HealthRow({
+  label, ok, okText, badText,
+}: { label: string; ok: boolean; okText: string; badText: string }) {
   return (
     <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
       <Typography variant="body2" color="text.secondary">{label}</Typography>
-      <Chip
-        size="small"
-        color={ok === undefined ? "default" : ok ? "success" : "warning"}
-        label={value || (ok ? "فعال" : "غیرفعال")}
-      />
+      <Chip size="small" color={ok ? "success" : "warning"} label={ok ? okText : badText} />
     </Stack>
   );
 }

@@ -172,10 +172,12 @@ describe("storefront portal", () => {
 
     renderStorefront("/portal/storefront/1/health");
 
-    expect(await screen.findByText(/ارتباط با سرویس بیرونی برقرار نیست/)).toBeInTheDocument();
-    expect(screen.getByText(/آخرین به‌روزرسانی وضعیت/)).toBeInTheDocument();
-    expect(screen.getByText("آخرین همگام‌سازی پنل")).toBeInTheDocument();
-    expect(screen.getByText("ناموفق: ۲")).toBeInTheDocument();
+    // A sanitized, ACTIONABLE message — never the raw error text, and no owner-infrastructure
+    // details (panel status/last-sync were removed: the reseller can do nothing about them).
+    expect(await screen.findByText(/ارتباط با سرویس برقرار نیست/)).toBeInTheDocument();
+    expect(screen.queryByText("آخرین همگام‌سازی پنل")).not.toBeInTheDocument();
+    // Failed provisioning attempts stay visible because they DO affect the reseller's customers.
+    expect(screen.getByText("۲")).toBeInTheDocument();
   });
 
   it("warns when persisted component statuses are unhealthy without an error class", async () => {
@@ -186,8 +188,12 @@ describe("storefront portal", () => {
 
     renderStorefront("/portal/storefront/1/health");
 
-    expect(await screen.findByText(/وضعیت ثبت‌شدهٔ فروشگاه عادی نیست/)).toBeInTheDocument();
-    expect(screen.queryByText("وضعیت ثبت‌شدهٔ فروشگاه عادی است.")).not.toBeInTheDocument();
+    expect(await screen.findByText(/ربات فروشگاه فعال نیست/)).toBeInTheDocument();
+    expect(screen.queryByText(/فروشگاه شما سالم است/)).not.toBeInTheDocument();
+    // Every chip is a translated Persian label — a raw backend value like "stopped"/"ok" must
+    // never reach the UI (that mismatch is what made this panel look broken).
+    expect(screen.queryByText("stopped")).not.toBeInTheDocument();
+    expect(screen.queryByText("ok")).not.toBeInTheDocument();
   });
 
   it("shows a green health state only for the exact healthy persisted statuses", async () => {
@@ -198,7 +204,10 @@ describe("storefront portal", () => {
 
     renderStorefront("/portal/storefront/1/health");
 
-    expect(await screen.findByText("وضعیت ثبت‌شدهٔ فروشگاه عادی است.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/فروشگاه شما سالم است و سفارش‌ها به‌درستی انجام می‌شوند/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText("active")).not.toBeInTheDocument();
   });
 
   it("exposes the storefront entry in the responsive portal menu only when a shop exists", async () => {

@@ -202,8 +202,13 @@ export default function Panels() {
               placeholder="https://host/proxy_path/owner_uuid/admin/adminuser/"
               helperText="دامنه، مسیر مخفی و UUID به‌صورت خودکار از روی لینک پر می‌شوند؛ بقیه را در صورت نیاز اصلاح کنید."
             />
-            <TextField label="کلید (مثل fa1)" value={form.key} disabled={!!form.id}
-              onChange={(e) => setForm({ ...form, key: e.target.value })} />
+            {/* Normalized to lowercase as you type so what you see is what gets saved
+                (the backend applies the same rule). Locked after creation. */}
+            <TextField label="کلید (مثل fa1)" inputProps={{ dir: "ltr" }} value={form.key} disabled={!!form.id}
+              onChange={(e) => setForm({ ...form, key: e.target.value.trimStart().toLowerCase() })}
+              helperText={form.id
+                ? "کلید پس از ساخت قابل تغییر نیست (در تاریخچهٔ مالی ثبت شده است)."
+                : "شناسهٔ کوتاه و یکتای پنل؛ فقط با حروف کوچک ذخیره می‌شود."} />
             <TextField label="نام" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <TextField label="دامنه (بدون https)" inputProps={{ dir: "ltr" }} value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
             <TextField label={form.id ? "مسیر مخفی (برای تغییر وارد کنید)" : "مسیر مخفی (proxy path)"} inputProps={{ dir: "ltr" }}

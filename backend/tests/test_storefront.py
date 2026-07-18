@@ -1809,7 +1809,9 @@ def test_admin_reply_menu_tiers_lose_no_action_and_flow_cancel_is_cancel_only():
 
     fc = sfkb.flow_cancel_kb()
     assert _reply_labels(fc) == [sfkb.CANCEL_LABEL]             # ONLY cancel (menu hidden mid-flow)
-    assert fc.is_persistent is True
+    # NOT persistent: shop customers reported the phone's BACK button doing nothing, because
+    # is_persistent forbids collapsing the custom keyboard.
+    assert not fc.is_persistent and fc.resize_keyboard
 
 
 def test_sf_menu_label_during_a_flow_is_locked_not_navigation():

@@ -104,6 +104,17 @@ _NAV_LABELS = {MORE_LABEL, BACK_LABEL}
 ALL_MENU_LABELS = set(RESELLER_LABEL_TO_ACTION) | set(OWNER_LABEL_TO_ACTION) | _NAV_LABELS
 
 
+def _reply_kb(rows: list[list[KeyboardButton]]) -> ReplyKeyboardMarkup:
+    """Build a docked reply keyboard.
+
+    NOTE — deliberately NOT `is_persistent=True`. That flag asks clients to always show the custom
+    keyboard and never let it be collapsed; on Android the system BACK button's normal job is to
+    collapse the keyboard, so with it set, back appeared dead and users reported being unable to go
+    back in our bots. Without it the keyboard still shows on every menu message and can be reopened
+    from the keyboard icon — and back behaves normally again."""
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
 def _reply_grid(labels: list[str], *, extra: list[str] | None = None) -> ReplyKeyboardMarkup:
     """A 2-column persistent reply keyboard; each label in `extra` gets its own full-width row
     (used for «بیشتر»/«بازگشت»)."""
@@ -118,15 +129,14 @@ def _reply_grid(labels: list[str], *, extra: list[str] | None = None) -> ReplyKe
         rows.append(row)
     for e in extra or []:
         rows.append([KeyboardButton(text=e)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+    return _reply_kb(rows)
 
 
 def flow_cancel_kb() -> ReplyKeyboardMarkup:
     """Docked on EVERY flow entry — its ONLY button is «✖️ انصراف», so the main menu is hidden and the
     user can't fire another command mid-operation. Combined with the state-aware label/text routers,
     only cancel (or /start) exits a flow."""
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=CANCEL_LABEL)]], resize_keyboard=True, is_persistent=True)
+    return _reply_kb([[KeyboardButton(text=CANCEL_LABEL)]])
 
 
 def first_timer_reply_kb() -> ReplyKeyboardMarkup:

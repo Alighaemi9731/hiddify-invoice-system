@@ -62,6 +62,17 @@ ALL_LABELS = (set(ADMIN_LABEL_TO_ACTION) | set(CUSTOMER_LABEL_TO_ACTION)
               | {BACK_TO_ADMIN, MORE_LABEL, BACK_LABEL})
 
 
+def _reply_kb(rows: list[list[KeyboardButton]]) -> ReplyKeyboardMarkup:
+    """Build a docked reply keyboard.
+
+    NOTE — deliberately NOT `is_persistent=True`. That flag asks clients to always show the custom
+    keyboard and never let it be collapsed; on Android the system BACK button's normal job is to
+    collapse the keyboard, so with it set, back appeared dead — shop CUSTOMERS reported exactly
+    that. Without it the keyboard still shows on every menu message and can be reopened from the
+    keyboard icon."""
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
 def _grid(labels: list[str], *, extra: list[str] | None = None) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = []
     row: list[KeyboardButton] = []
@@ -74,13 +85,12 @@ def _grid(labels: list[str], *, extra: list[str] | None = None) -> ReplyKeyboard
         rows.append(row)
     for e in extra or []:
         rows.append([KeyboardButton(text=e)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+    return _reply_kb(rows)
 
 
 def flow_cancel_kb() -> ReplyKeyboardMarkup:
     """Docked on a flow entry: cancel-only, so the admin/customer can't fire another command mid-flow."""
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=CANCEL_LABEL)]], resize_keyboard=True, is_persistent=True)
+    return _reply_kb([[KeyboardButton(text=CANCEL_LABEL)]])
 
 
 def admin_reply_kb() -> ReplyKeyboardMarkup:
