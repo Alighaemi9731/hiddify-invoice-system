@@ -325,16 +325,20 @@ async def _run_user_chunks(
     }
 
     # Resolve UUID → Hiddify numeric id for ONLY the target users (NEVER the whole panel list,
-    # which 503s on large panels). Order: in-memory resume cache → durable per-user cache
-    # (panel_user_id) → a per-user API lookup for whatever's left, cached for next time.
+    # which 503s on large panels).
+    #
+    # CRITICAL — the numeric id is VOLATILE; only the uuid is a stable identity. Hiddify renumbers
+    # its user table whenever the panel is restored/re-imported, so a numeric id captured on an
+    # earlier run can later belong to a COMPLETELY DIFFERENT user (possibly another reseller's).
+    # A durable cross-run cache once caused a suspension to disable 305 innocent users of ~20 other
+    # resellers while leaving the target's own users enabled — and the panel still answered 200, so
+    # it was recorded as success. Therefore we resolve every id FRESH from the panel each run and
+    # NEVER seed from the durable `EndUserSnapshot.panel_user_id` (kept only as a forensic
+    # last-resolved value). The only cache we trust is `snapshot["panel_user_ids"]`, written by THIS
+    # run so a crash/restart resumes without re-looking-up.
     panel_user_ids: dict[str, int] = {
         str(uuid): int(uid) for uuid, uid in (snapshot.get("panel_user_ids") or {}).items()
     }
-    for uuid in remaining:
-        if uuid not in panel_user_ids:
-            row = snapshot_rows.get(uuid)
-            if row is not None and row.panel_user_id is not None:
-                panel_user_ids[uuid] = int(row.panel_user_id)
 
     to_lookup = [u for u in remaining if u not in panel_user_ids]
     lookup_failed = False
@@ -442,6 +446,60 @@ async def _run_user_chunks(
     # `lookup_failed` (a transient per-user id lookup error, not yet retry-exhausted) keeps the
     # action partial so the unresolved users are retried next tick.
     return total_patched, lookup_failed
+
+
+async def _verify_user_states(
+    client: AdminApiClient, panel, uuids: list[str], *, expect_enabled: bool,  # noqa: ANN001
+    sample: int = 20,
+) -> tuple[int, int]:
+    """Read a spread-out sample of the users we just wrote back from the panel.
+
+    Hiddify's bulk action answers 200 even when it changed nothing we intended — if the rowids we
+    sent no longer belong to our users, the write "succeeds" while missing every target (and hitting
+    somebody else). Reading back by UUID is the only way to turn that silent failure into a loud
+    one. Returns (in_expected_state, wrong). Users absent from the panel are ignored.
+    """
+    if not uuids:
+        return 0, 0
+    step = max(1, len(uuids) // sample)
+    ok = wrong = 0
+    for uu in uuids[::step][:sample]:
+        try:
+            data = await client.get_user(panel, uu)
+        except Exception:  # noqa: BLE001 — a flaky read must not fail the action by itself
+            continue
+        if data is None:
+            continue
+        if bool(data.get("enable")) == expect_enabled:
+            ok += 1
+        else:
+            wrong += 1
+    return ok, wrong
+
+
+async def _fail_if_writes_missed(
+    session: AsyncSession, action: EnforcementAction, client: AdminApiClient, panel,  # noqa: ANN001
+    written_uuids: list[str], *, expect_enabled: bool,
+) -> bool:
+    """Verify a sample actually reached the intended state; fail the action loudly if it didn't.
+
+    Guards the catastrophic silent-miss mode (stale panel ids → the bulk write lands on the wrong
+    users). A MAJORITY-wrong sample means a systemic miss, not a one-off drift, so we refuse to
+    record success. Returns True when the action was failed."""
+    ok, wrong = await _verify_user_states(
+        client, panel, written_uuids, expect_enabled=expect_enabled)
+    if not wrong or wrong < ok:
+        return False
+    verb = "enabled" if expect_enabled else "disabled"
+    action.status = EnforcementActionStatus.failed
+    action.error = (
+        f"verification failed: {wrong} of {wrong + ok} sampled users are NOT {verb} after the bulk "
+        "write. The panel's user ids may have been renumbered (restore/re-import). Refusing to "
+        "report success — re-run after a fresh sync."
+    )
+    log.error("enforcement action %s verification failed: %s", action.id, action.error)
+    await session.commit()
+    return True
 
 
 async def _run_admin_limits(
@@ -983,6 +1041,15 @@ async def _process_enforcement_action(
             result["failed"] = int(action.status == EnforcementActionStatus.failed)
             return result
 
+        # The bulk write reported success — prove it actually landed on OUR users before we zero
+        # any admin limits or call this action done.
+        if patched_u and await _fail_if_writes_missed(
+            session, action, client, panel,
+            sorted(done_users - missing_users), expect_enabled=False,
+        ):
+            result["failed"] = 1
+            return result
+
         progress["phase"] = "limits"
         action.snapshot = snapshot
         flag_modified(action, "snapshot")
@@ -1180,6 +1247,15 @@ async def _process_restore_action(
     if had_error:
         result["partial"] = int(action.status == EnforcementActionStatus.partial)
         result["failed"] = int(action.status == EnforcementActionStatus.failed)
+        return result
+
+    # Prove the re-enable actually landed on OUR users before declaring the reseller active —
+    # a silent miss here would leave a paying customer's users offline while we report success.
+    if patched_u and await _fail_if_writes_missed(
+        session, action, client, panel,
+        sorted(done_users - missing_users), expect_enabled=True,
+    ):
+        result["failed"] = 1
         return result
 
     # ── Finalize ─────────────────────────────────────────────────────────────
@@ -1409,8 +1485,10 @@ async def _process_delete_action(
                 break
 
             async def _resolve(row):  # noqa: ANN001, ANN202
-                if row.panel_user_id is not None:
-                    return row, int(row.panel_user_id), None
+                # ALWAYS resolve fresh — never reuse the durable `panel_user_id`. Hiddify renumbers
+                # user ids on a panel restore/re-import, so a stale id can point at another
+                # reseller's user. Here that would DELETE the wrong user (unrecoverable), so this
+                # path must never trade correctness for a saved lookup. See _run_user_chunks.
                 async with sem:
                     try:
                         return row, await client.get_user_id(panel, row.user_uuid), None

@@ -11,7 +11,9 @@ cancellable polling loop (`bot.get_updates` → `dp.feed_update`). This is delib
 
 A reconcile loop (~30s) + a direct call from the setup wizard keep the running set in sync INCREMENTALLY:
 only added / removed / token-changed (or crashed) bots are touched; the rest keep polling undisturbed.
-An invalid/revoked token is marked errored and skipped. The handler resolves the tenant from `bot.id`.
+A token that is invalid/revoked (401) or duplicated across tenants is marked errored and skipped;
+every OTHER startup failure is treated as transient and retried on the next reconcile, so a passing
+network blip can never permanently disable a healthy bot. The handler resolves the tenant from `bot.id`.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from dataclasses import dataclass
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
+from sqlalchemy.exc import IntegrityError
 
 from app.bot import rtl_middleware
 from app.core.db import SessionLocal
@@ -166,11 +169,21 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
         rtl_middleware.install(bot)  # storefront replies are Persian+Latin mixes too
         try:
             me = await asyncio.wait_for(bot.get_me(), timeout=20)
-        except Exception as exc:  # noqa: BLE001 — invalid/revoked token → mark errored, don't poll
+        except TelegramUnauthorizedError as exc:  # revoked/invalid token → permanent, stop retrying
             await _safe_close(bot)
             async with SessionLocal() as s:
                 await storefront.mark_errored(s, row_id, f"getMe failed: {exc}")
             log.warning("storefront bot row %s token invalid: %s", row_id, exc)
+            return
+        except Exception as exc:  # noqa: BLE001
+            # TRANSIENT (DNS/TCP/TLS blip, timeout, Telegram 5xx). This must NOT mark the row
+            # errored: errored rows are excluded from `active_bots`, so a momentary outage during
+            # startup would silently disable a perfectly healthy bot until someone re-ran the setup
+            # wizard by hand. Leave the row active and let the next reconcile (~30s) retry — the
+            # same policy `_poll_one` already applies to a mid-run getUpdates failure.
+            await _safe_close(bot)
+            log.warning(
+                "storefront bot row %s start failed (transient, will retry): %s", row_id, exc)
             return
         try:  # persist id/username; a duplicate-token unique clash must NOT abort the fleet
             async with SessionLocal() as s:
@@ -181,11 +194,16 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
                     row.bot_telegram_id = me.id
                     row.bot_username = me.username
                     await s.commit()
-        except Exception as exc:  # noqa: BLE001 — e.g. two rows share one token → same me.id
+        except IntegrityError as exc:  # two rows share one token → same me.id; permanent
             await _safe_close(bot)
             async with SessionLocal() as s:
                 await storefront.mark_errored(s, row_id, f"id clash: {exc}")
             log.warning("storefront bot row %s id persist failed: %s", row_id, exc)
+            return
+        except Exception as exc:  # noqa: BLE001 — a DB blip here is transient; retry next reconcile
+            await _safe_close(bot)
+            log.warning(
+                "storefront bot row %s id persist failed (transient, will retry): %s", row_id, exc)
             return
     sem = asyncio.Semaphore(_HANDLER_CONCURRENCY)
     handler_tasks: set[asyncio.Task[None]] = set()

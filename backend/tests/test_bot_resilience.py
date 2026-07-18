@@ -242,3 +242,65 @@ def test_start_runner_marks_malformed_stored_token_errored(monkeypatch):
     assert "malformed" in recorded[0][1]
     assert 1 not in manager._active
 
+
+def _start_runner_with_getme(monkeypatch, exc: Exception) -> list[tuple[int, str]]:
+    """Drive `_start_runner` against a fake Bot whose get_me() raises `exc`; return mark_errored calls."""
+    from app.bot.storefront import manager
+
+    class _FakeBot:
+        session = SimpleNamespace(close=_noop_close)
+
+        def __init__(self, **_kw) -> None:
+            pass
+
+        async def get_me(self):
+            raise exc
+
+    class _S:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return None
+
+    recorded: list[tuple[int, str]] = []
+
+    async def fake_mark_errored(_s, row_id, error):
+        recorded.append((row_id, error))
+
+    monkeypatch.setattr(manager, "Bot", _FakeBot)
+    monkeypatch.setattr(manager.rtl_middleware, "install", lambda _b: None)
+    monkeypatch.setattr(manager, "SessionLocal", lambda: _S())
+    monkeypatch.setattr(manager.storefront, "mark_errored", fake_mark_errored)
+
+    asyncio.run(manager._start_runner(1, 9, "123456:AAquiteplausiblelookingtokenvalue", asyncio.Semaphore(1)))
+    assert 1 not in manager._active
+    return recorded
+
+
+async def _noop_close():
+    return None
+
+
+def test_start_runner_does_not_error_a_bot_on_a_transient_network_failure(monkeypatch):
+    """PROD REGRESSION: on 2026-07-14 a momentary DNS/TCP blip reaching api.telegram.org made
+    `_start_runner`'s getMe fail for three healthy storefront bots. Because ANY exception marked the
+    row errored — and `active_bots` excludes errored rows — those bots were permanently taken offline
+    and never retried; @Ir90_2bot stayed dead for four days with a perfectly valid token. A transient
+    failure must leave the row active so the next reconcile brings the bot back by itself."""
+    recorded = _start_runner_with_getme(
+        monkeypatch, ConnectionError("Cannot connect to host api.telegram.org:443"))
+    assert recorded == []
+
+
+def test_start_runner_does_not_error_a_bot_on_a_getme_timeout(monkeypatch):
+    """`asyncio.wait_for` raises a bare TimeoutError (empty str) — also transient, also must not stick."""
+    assert _start_runner_with_getme(monkeypatch, TimeoutError()) == []
+
+
+def test_start_runner_marks_revoked_token_errored(monkeypatch):
+    """The one case that IS permanent: a 401 must still stop the fleet re-validating a dead token."""
+    recorded = _start_runner_with_getme(monkeypatch, TelegramUnauthorizedError(
+        method=SendMessage(chat_id=1, text="x"), message="Unauthorized"))
+    assert recorded and recorded[0][0] == 9 and "getMe failed" in recorded[0][1]
+

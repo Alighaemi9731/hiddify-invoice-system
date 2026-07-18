@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.89.1 - 2026-07-18
+
+Two production bug fixes. No database migration (Alembic head stays `497cb88cf774`); no manual steps.
+
+### Fixed
+
+- **Suspending a reseller could disable OTHER resellers' customers.** The system cached each user's
+  internal panel number and reused it on later runs. Hiddify re-numbers its users whenever a panel is
+  restored or re-imported, so those saved numbers came to point at completely different people. On
+  2026-07-18 a suspension on panel-04 therefore disabled **305 customers belonging to ~20 other
+  resellers** while leaving the suspended reseller's own users online — and, because the panel still
+  answered "OK", it was recorded as a success. Every user's panel number is now looked up **fresh from
+  the panel on every run** and the saved value is never trusted again. The affected 305 customers were
+  restored and the intended suspension re-applied correctly. **The same flaw also affected reseller
+  deletion, where it could have deleted the wrong customers** — that path is fixed too.
+- **A suspend/restore that quietly did nothing is no longer reported as successful.** After writing to
+  the panel the system now reads a sample of the affected users back; if they are not actually in the
+  intended state the action fails visibly (and can be retried) instead of finishing silently.
+- **A brief network glitch could permanently switch off a healthy storefront bot.** Any error while
+  starting a shop bot (a momentary DNS/connection blip) was treated as "invalid token" and the bot was
+  marked failed and excluded from polling — staying off until the setup wizard was re-run by hand. Four
+  shop bots had been silently offline for days. Only a genuinely revoked token or a duplicate token now
+  disables a bot; every other failure is retried automatically within ~30 seconds.
+
 ## 1.89.0 - 2026-07-18
 
 Both Telegram bots (the main reseller/owner bot and every storefront-admin bot) get leaner, prettier

@@ -52,7 +52,10 @@ class _FakeClient:
         pass
 
     async def get_user_id(self, panel, user_uuid, *, api_key=None):
-        return None  # ids come from cached panel_user_id in these tests
+        # The panel is the ONLY source of truth for numeric ids — the cascade delete deliberately
+        # re-resolves every uuid instead of trusting the cached panel_user_id (a stale id here
+        # would DELETE another reseller's user). See test_enforcement_stale_ids.py.
+        return {"u1": 101, "u2": 102}.get(user_uuid)
 
     async def bulk_delete_users(self, panel, user_ids):
         _FakeClient.bulk_deleted.extend(int(i) for i in user_ids)
