@@ -149,10 +149,10 @@ async def _send_admin_menu(  # noqa: ANN001
     browser); a CO-ADMIN (not a portal principal) gets the same reply keyboard WITHOUT the portal button.
     All 14 labels stay routable via `sf_menu` (top-level or under «بیشتر»)."""
     if _is_shop_owner(reseller, user_id):
-        from app.bot.handlers.common import portal_login_url
+        from app.bot.handlers.common import portal_stable_url
 
-        url = await portal_login_url(
-            session, reseller.bot_chat_id, next_path=f"/portal/storefront/{sf.id}")
+        url = await portal_stable_url(
+            session, reseller.bot_chat_id, with_login_token=True, next_path=f"/portal/storefront/{sf.id}")
         if url:
             await message.answer(rtl("🌐 برای مدیریتِ کاملِ فروشگاه در مرورگر، دکمهٔ زیر را بزنید:"),
                                  reply_markup=kb.owner_portal_inline_kb(url))
@@ -1727,11 +1727,11 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
                + (f"\nمتن/TXID: {txid}" if txid else ""))
         # Send the proof + decide buttons to the owner AND every co-admin (whoever acts first
         # settles it; the confirm/reject is idempotent so a second tap can't double-credit).
-        from app.bot.handlers.common import portal_login_url
+        from app.bot.handlers.common import portal_stable_url
 
         owner_id = reseller.bot_chat_id if reseller is not None else None
-        owner_url = (await portal_login_url(
-            s, owner_id, next_path=f"/portal/storefront/{sf.id}/topups") if owner_id else None)
+        owner_url = (await portal_stable_url(
+            s, owner_id, with_login_token=True, next_path=f"/portal/storefront/{sf.id}/topups") if owner_id else None)
         for admin_id in _admin_chat_ids(reseller, sf):
             # Only the OWNER gets the portal deep-link (co-admins aren't portal principals).
             decide_kb = kb.topup_decide_kb(
@@ -3106,11 +3106,13 @@ async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
       • MID-FLOW (a state is active but this message didn't match the flow's own handler, e.g. a wrong
         type) → the flow is LOCKED: re-prompt «✖️ انصراف» and keep the state, so nothing but cancel exits.
       • ADMIN (idle) → re-show the admin menu.
-      • CUSTOMER who is IDLE (no half-open flow) and sends free text/photo → treat it as a message to
-        shop support: relay it to the admin(s) with a «پاسخ» button and give a light ack (NOT the full
-        welcome banner, which would clutter a back-and-forth).
-      • Otherwise → gently re-show the customer menu.
-    A banned customer was already short-circuited by the middleware."""
+      • CUSTOMER (idle) → gently re-show the customer menu.
+
+    NOTE — stray text is deliberately NOT relayed to the shop owner. It used to be: anything a
+    customer typed (a typo, a stray "سلام", a tapped-then-abandoned thought) was forwarded to the
+    reseller as a support ticket, which buried them in noise. Reaching support is what the explicit
+    «💬 پشتیبانی» button is for — that flow sets `SF.support` and relays deliberately. A banned
+    customer was already short-circuited by the middleware."""
     if await state.get_state() is not None:
         # Locked flow: don't clear, don't navigate — only «✖️ انصراف» (or /cancel) leaves.
         await message.answer(
@@ -3126,24 +3128,5 @@ async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
             await _send_admin_menu(
                 message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
             return
-        cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-        admin_ids = _admin_chat_ids(reseller, sf)
-        cust_name, cust_id = (cust.name or str(cust.telegram_id)), cust.id
-        from app.bot.handlers.common import portal_login_url
-
-        owner_id = reseller.bot_chat_id if reseller is not None else None
-        owner_url = (await portal_login_url(
-            s, owner_id, next_path=f"/portal/storefront/{sf.id}/customers/{cust.id}")
-            if owner_id else None)
-    # We only reach here when NO flow is active (mid-flow returned above), so any free text (not a
-    # slash command) or a photo from an idle customer is a genuine support message → relay it.
-    txt = (message.text or "").strip()
-    relayable = bool(message.photo) or bool(txt and not txt.startswith("/"))
-    if relayable and await _relay_to_admins(
-            bot, admin_ids, cust_name, cust_id, message, owner_id=owner_id, portal_url=owner_url):
-        await message.answer(rtl("📨 پیامِ شما برای پشتیبانیِ فروشگاه ارسال شد؛ به‌زودی پاسخ می‌گیرید."))
-        return
-    async with SessionLocal() as s:
-        sf = await storefront.get_bot_by_telegram_id(s, bot.id)
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
         await _send_customer_menu(message.answer, sf, cust)

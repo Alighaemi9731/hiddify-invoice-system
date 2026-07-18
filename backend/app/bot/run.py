@@ -59,6 +59,21 @@ async def _main_bot_loop() -> None:
                 await apply_command_menus(bot, session)
         except Exception:  # noqa: BLE001
             log.warning("set_my_commands failed", exc_info=True)
+        try:
+            # Cache our @username: the portal's stable-link page renders Telegram's official login
+            # button, which needs the bot username. Cheap (once per bot start) and self-healing if
+            # the token is ever swapped for a different bot.
+            me = await bot.get_me()
+            if me.username:
+                async with SessionLocal() as session:
+                    from app.services import settings_service
+
+                    if (await settings_service.get(
+                            session, "telegram_bot_username", "")) != me.username:
+                        await settings_service.set_value(
+                            session, "telegram_bot_username", me.username)
+        except Exception:  # noqa: BLE001 — a transient getMe must never block polling
+            log.warning("caching bot username failed", exc_info=True)
         log.info("Bot polling started.")
         try:
             await dp.start_polling(bot)

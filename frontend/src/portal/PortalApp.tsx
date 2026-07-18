@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { Box, CircularProgress } from "@mui/material";
 import { PortalAuthProvider, usePortalAuth } from "./PortalAuthContext";
 import PortalLogin from "./PortalLogin";
+import PortalEntry from "./PortalEntry";
 import PortalLayout from "./PortalLayout";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -45,6 +46,8 @@ export default function PortalApp() {
     <PortalAuthProvider>
       <Routes>
         <Route path="/portal/login" element={<PortalLogin />} />
+        {/* Permanent per-reseller address — never expires (see PortalEntry). */}
+        <Route path="/portal/u/:uuid" element={<PortalEntry />} />
         <Route
           element={
             <RequirePortalAuth>

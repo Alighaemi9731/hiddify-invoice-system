@@ -23,6 +23,7 @@ from app.bot.handlers.views import (
     _send_invoices,
     _send_panels,
     _send_pay,
+    _send_portal_link,
     _send_removelink,
     _send_self_interim,
     _send_sub_panels,
@@ -97,6 +98,8 @@ async def _do_reseller_menu(action: str, message: Message, state: FSMContext, bo
         await _send_sub_panels(ans, cid, s)
     elif action == "storefront":
         await _begin_storefront_setup(ans, cid, s, state)
+    elif action == "portal":
+        await _send_portal_link(ans, cid, s)
     elif action == "removelink":
         await _send_removelink(ans, cid, s)
     elif action == "support":

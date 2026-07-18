@@ -54,10 +54,18 @@ export default function PortalLogin() {
         await goToDestination();
       })
       .catch((e) => {
+        // The one-time token is dead (expired or already used) — but that must not be a dead end.
+        // These links are frequently tapped hours later (an old menu message, a support
+        // notification), and the reseller usually still holds a valid 30-day session, so just carry
+        // on to where they were going instead of showing "منقضی شده".
+        if (authed) {
+          void goToDestination();
+          return;
+        }
         sessionStorage.removeItem(NEXT_KEY);
         setError(
           e?.response?.data?.detail ||
-            "لینکِ ورود نامعتبر یا منقضی شده است؛ از ربات تلگرام یک لینکِ تازه بگیرید (دستور /start)."
+            "لینکِ ورود منقضی شده است؛ از دکمهٔ «🌐 پنل تحت وب» در ربات تلگرام وارد شوید."
         );
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps

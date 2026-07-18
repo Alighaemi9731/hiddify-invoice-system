@@ -295,11 +295,54 @@ async def portal_login_url(session, chat_id: int, *, next_path: str | None = Non
     return url
 
 
-async def _portal_menu_url(session, chat_id: int) -> str | None:
-    """Build a short-lived portal URL only for a registered reseller and configured domain."""
-    if not await _resellers_for_chat(session, chat_id):
+async def portal_stable_url(
+    session, chat_id: int, *, next_path: str | None = None, with_login_token: bool = False
+) -> str | None:
+    """The PERMANENT portal address for this reseller: `https://<domain>/portal/u/<admin_uuid>`.
+
+    Unlike `portal_login_url` this never expires and is never consumed, so a link sent hours ago (a
+    menu message, a support notification) still works — the old 15-minute one-time links were the
+    "منقضی شده" complaint. It is safe to be permanent because the uuid is only an ADDRESS: opening it
+    grants nothing by itself. The page lets you in only if the browser already holds a valid session
+    for that reseller, otherwise it requires proving the owning Telegram account (see
+    `POST /api/portal/auth/telegram`). Returns None if the domain isn't configured or the chat has
+    no reseller row.
+
+    `with_login_token=True` additionally attaches a fresh one-time `t=` — used for links WE send
+    from the bot, where the recipient's identity is already proven. It makes the link sign them in
+    instantly even in a browser that has never seen the portal, and if it later goes stale the page
+    simply falls back to the session / Telegram button instead of failing. Without it (the address we
+    tell them to bookmark) the URL carries no credential at all.
+    """
+    from urllib.parse import quote
+
+    from app.core.portal_auth import create_portal_login_token
+    from app.core.portal_deeplink import validate_next
+
+    resellers = await _resellers_for_chat(session, chat_id)
+    if not resellers:
         return None
-    return await portal_login_url(session, chat_id)
+    uid = next((r.admin_uuid for r in resellers if r.admin_uuid), None)
+    if not uid:
+        return None
+    domain = (await settings_service.get(session, "server_domain", "") or "").strip()
+    domain = domain.replace("https://", "").replace("http://", "").strip("/")
+    if not domain:
+        return None
+    url = f"https://{domain}/portal/u/{quote(str(uid), safe='')}"
+    query: list[str] = []
+    if with_login_token:
+        query.append("t=" + create_portal_login_token(chat_id))
+    if next_path is not None:
+        validated = validate_next(next_path)
+        if validated is not None:
+            query.append("next=" + quote(validated, safe=""))
+    return url + ("?" + "&".join(query) if query else "")
+
+
+async def _portal_menu_url(session, chat_id: int) -> str | None:
+    """The reseller's permanent portal link (registered resellers + configured domain only)."""
+    return await portal_stable_url(session, chat_id)
 
 
 def _iso(value) -> str:
@@ -506,11 +549,8 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
         )
         return
     can_create = await _can_create_users(session, user.id)
-    portal_url = await portal_login_url(session, user.id)
-    # One-tap inline portal button (when a URL is mintable) rides its own message; then dock the menu.
-    if portal_url:
-        await answer("🌐 برای ورود به پنلِ تحتِ وب روی دکمهٔ زیر بزنید:",
-                     reply_markup=keyboards.portal_inline_kb(portal_url))
+    # The portal is a normal «🌐 پنل تحت وب» menu button now (it used to ride its own inline message
+    # above the menu, which looked bolted-on). Tapping it replies with the permanent link.
     await answer(welcome + "\n\nیک گزینه را انتخاب کنید:",
                  reply_markup=keyboards.reseller_main_reply_kb(show_create_user=can_create))
 

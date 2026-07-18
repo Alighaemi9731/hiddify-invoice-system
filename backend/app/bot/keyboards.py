@@ -52,10 +52,11 @@ def pay_chain_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# ── lean gateway menu: persistent reply keyboard (≤5) + a one-tap INLINE portal button ──────────
+# ── lean gateway menu: one persistent reply keyboard (≤5) ───────────────────────────────────────
 # The everyday menu is a persistent reply keyboard (docked in the typing area) — prettier and always
-# at hand. A Telegram reply-keyboard button CANNOT open a URL, so the one-tap "open portal" button is
-# an INLINE button that rides the greeting message separately. Rare actions live under «⋯ بیشتر».
+# at hand. Rare actions live under «⋯ بیشتر». «🌐 پنل تحت وب» is a NORMAL menu button now: it used to
+# ride its own extra inline message above every menu (a reply button can't carry a URL), which looked
+# bolted-on; tapping it simply replies with the reseller's permanent portal link.
 # Labels MUST match the maps below exactly so a tap routes to the right action.
 CANCEL_LABEL = "✖️ انصراف"
 MORE_LABEL = "⋯ بیشتر"
@@ -64,6 +65,7 @@ REGISTER_LABEL = "🔗 ثبت پنل"
 
 # label → action. `newuser`/`storefront` are conditional (shown only when the feature applies).
 RESELLER_MAIN: list[tuple[str, str]] = [
+    ("🌐 پنل تحت وب", "portal"),
     ("➕ ساخت سرویس", "newuser"),
     ("🧾 فاکتور و پرداخت", "pay"),
     ("💬 پشتیبانی", "support"),
@@ -147,12 +149,6 @@ def owner_main_reply_kb() -> ReplyKeyboardMarkup:
 
 def owner_more_reply_kb() -> ReplyKeyboardMarkup:
     return _reply_grid([lbl for lbl, _ in OWNER_MORE], extra=[BACK_LABEL])
-
-
-def portal_inline_kb(url: str) -> InlineKeyboardMarkup:
-    """One-tap browser portal button. Must be INLINE — a reply-keyboard button can't carry a URL."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", url=url)]])
 
 
 def sub_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:

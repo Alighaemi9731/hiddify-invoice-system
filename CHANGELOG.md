@@ -8,6 +8,38 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.90.0 - 2026-07-18
+
+Portal sign-in becomes permanent and simple, and the shop bots stop forwarding stray customer
+messages. No database migration (Alembic head stays `497cb88cf774`).
+
+### Changed
+
+- **Every reseller now has a permanent web-panel address** — `…/portal/u/<their-panel-uuid>`, like
+  their Hiddify panel link. It never expires, so it can be bookmarked and shared with them once.
+  This replaces the 15-minute one-time link that kept failing: a link opened a few hours later (from
+  the bot menu, or a «مشاهده در پنل» support notification) simply said "منقضی شده".
+- **Old links are no longer a dead end.** An expired sign-in link now just carries on to where the
+  person was heading if their session is still valid, instead of showing an error.
+- **It stays secure.** The address is only an *address* — opening it grants nothing. You get in only
+  if your browser already holds a valid session, or after confirming with the **Telegram account the
+  panel is registered to**. Someone who has another reseller's uuid cannot use it to open that
+  reseller's panel. Sessions remain 30 days and renew themselves while in use.
+- **«🌐 پنل تحت وب» is now a normal menu button** in the bot instead of a separate message that sat
+  above the menu.
+
+### Fixed
+
+- **Shop bots no longer forward every stray message to their owner.** Anything a customer typed (a
+  typo, a stray "سلام") was delivered to the reseller as a support ticket. Support now reaches them
+  only through the explicit «💬 پشتیبانی» button; other messages just return the customer's menu.
+
+### Setup note
+
+To enable the one-tap Telegram sign-in button on the panel page, send `/setdomain` to **@BotFather**
+once, pick your bot, and give it your panel domain. Until then people can still sign in normally
+through the bot's «🌐 پنل تحت وب» button — nothing breaks.
+
 ## 1.89.1 - 2026-07-18
 
 Two production bug fixes. No database migration (Alembic head stays `497cb88cf774`); no manual steps.

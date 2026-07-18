@@ -9,7 +9,10 @@ rejected here, and these reseller tokens are rejected by the owner's `get_curren
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
+import time
 from dataclasses import dataclass
 
 import jwt
@@ -69,6 +72,46 @@ def verify_portal_login_token(token: str) -> tuple[int, str] | None:
     except (TypeError, ValueError):
         return None
     return chat_id, str(payload.get("jti") or "")
+
+
+# Telegram Login Widget payloads older than this are refused (replay protection). The widget is
+# used the moment the person taps it, so a day is generous.
+TELEGRAM_LOGIN_MAX_AGE_S = 24 * 3600
+
+
+def verify_telegram_login(
+    data: dict, bot_token: str, *, max_age_seconds: int = TELEGRAM_LOGIN_MAX_AGE_S
+) -> int | None:
+    """Verify a Telegram Login Widget payload and return the PROVEN Telegram user id, else None.
+
+    Telegram signs the payload with HMAC-SHA256 keyed by SHA256(bot_token), so only someone who
+    actually authenticated with Telegram (and only for OUR bot) can produce a valid `hash`. This is
+    what makes the stable portal URL safe: the uuid in the URL is just an address, and access is
+    granted only after this proves WHICH Telegram account is asking — the caller then checks that
+    account actually owns the requested reseller. Rejects a bad signature, missing/!int fields, and
+    a stale `auth_date` (replay of a captured payload).
+    """
+    if not isinstance(data, dict) or not bot_token:
+        return None
+    received = str(data.get("hash") or "")
+    if not received:
+        return None
+    # Signed string = every field EXCEPT hash, "k=v" sorted by key, newline-joined.
+    check = "\n".join(
+        sorted(f"{k}={v}" for k, v in data.items() if k != "hash" and v is not None)
+    )
+    secret = hashlib.sha256(bot_token.encode()).digest()
+    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, received):   # constant-time
+        return None
+    try:
+        auth_date = int(data.get("auth_date") or 0)
+        user_id = int(data.get("id"))                 # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if auth_date <= 0 or (time.time() - auth_date) > max_age_seconds:
+        return None
+    return user_id
 
 
 @dataclass

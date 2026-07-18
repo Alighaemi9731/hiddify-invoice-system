@@ -75,6 +75,19 @@ export const portalAuthorizeNext = (next: string | null) =>
   portalApi.post("/api/portal/authorize-next", { next: next || null })
     .then((r) => (r.data as { target: string }).target);
 
+// ---- permanent address /portal/u/<uuid> ----
+// Public config for the stable entry page. The response is identical for a real and a made-up
+// uuid, so it can't be used to discover whether a uuid exists or whose it is.
+export const portalEntryConfig = (uuid: string) =>
+  portalApi.get("/api/portal/auth/entry", { params: { uuid } })
+    .then((r) => r.data as { bot_username: string });
+
+// Sign in on the permanent address by proving the Telegram account. The server verifies Telegram's
+// signature AND that the account owns this uuid — pasting somebody else's uuid always fails.
+export const portalTelegramLogin = (uuid: string, auth: Record<string, unknown>) =>
+  portalApi.post("/api/portal/auth/telegram", { uuid, auth })
+    .then((r) => r.data as { access_token: string });
+
 export interface PortalReseller {
   id: number;
   name: string;

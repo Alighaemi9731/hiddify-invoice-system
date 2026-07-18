@@ -114,15 +114,6 @@ def test_reply_menu_keyboards_and_label_maps_are_consistent():
     assert kb.is_persistent and kb.resize_keyboard    # always docked at the bottom
 
 
-def test_portal_button_is_a_one_tap_inline_url_no_mini_app():
-    """The portal opens the browser in ONE tap — an inline URL button (a reply-keyboard button can't
-    carry a URL). Never a web_app / Mini App."""
-    url = "https://example.test/portal/login?t=token"
-    button = keyboards.portal_inline_kb(url).inline_keyboard[0][0]
-    assert button.url == url
-    assert button.web_app is None and button.login_url is None and button.callback_data is None
-
-
 def test_flow_cancel_keyboard_is_cancel_only():
     """A flow docks a cancel-ONLY reply keyboard so the menu is hidden and only «انصراف» is tappable."""
     kb = keyboards.flow_cancel_kb()
@@ -224,7 +215,6 @@ def test_portal_menu_url_normalizes_domain_and_mints_valid_token(tmp_path):
 
     from app.bot.handlers import common
     from app.core.db import Base
-    from app.core.portal_auth import verify_portal_login_token
     from app.models import Panel, Reseller
     from app.services import settings_service
 
@@ -252,18 +242,25 @@ def test_portal_menu_url_normalizes_domain_and_mints_valid_token(tmp_path):
                     "  https://portal.example.test///  ",
                 )
 
+                # The reseller's portal address is now PERMANENT (/portal/u/<admin_uuid>) instead
+                # of a 15-minute one-time /portal/login?t=… link, which constantly expired before
+                # the reseller got round to tapping it. It carries no credential at all.
                 url = await common._portal_menu_url(session, 999)
                 assert url is not None
                 parsed = urlsplit(url)
                 assert parsed.scheme == "https"
                 assert parsed.netloc == "portal.example.test"
-                assert parsed.path == "/portal/login"
-                token = parse_qs(parsed.query)["t"][0]
-                verified = verify_portal_login_token(token)
-                assert verified is not None
-                chat_id, jti = verified
-                assert chat_id == 999
-                assert jti
+                assert parsed.path == "/portal/u/a"          # the reseller's own admin_uuid
+                assert "t=" not in (parsed.query or "")      # no token rides in the URL
+                assert parse_qs(parsed.query) in ({}, {})    # nothing but an optional &next
+
+                # A deep-link destination is appended only when it passes the allowlist.
+                deep = await common.portal_stable_url(
+                    session, 999, next_path="/portal/storefront/3/topups")
+                assert deep is not None and deep.endswith(
+                    "?next=%2Fportal%2Fstorefront%2F3%2Ftopups")
+                bad = await common.portal_stable_url(session, 999, next_path="//evil.com")
+                assert bad is not None and "next=" not in bad
         finally:
             await engine.dispose()
 
@@ -390,7 +387,10 @@ def test_reshow_menu_docks_role_reply_menu(tmp_path):
 
 def test_send_menu_tiers_first_timer_vs_registered_with_inline_portal(tmp_path):
     """`_send_menu`: a first-timer with NO registered panel gets «ثبت پنل» front-and-center; a
-    registered reseller gets a one-tap inline portal button + the reseller reply keyboard."""
+    registered reseller gets the reseller reply keyboard with «🌐 پنل تحت وب» as a normal menu item.
+
+    The portal used to ride its own extra inline message above every menu, which looked bolted-on;
+    it is now just another button in the keyboard like the rest."""
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from app.bot import handlers, keyboards
@@ -418,7 +418,8 @@ def test_send_menu_tiers_first_timer_vs_registered_with_inline_portal(tmp_path):
                 ft_kbs = [_reply_labels(kb) for _t, kb in first if hasattr(kb, "keyboard")]
                 assert any(keyboards.REGISTER_LABEL in labels for labels in ft_kbs)
 
-                # Registered reseller → an inline portal URL button + the reseller reply keyboard.
+                # Registered reseller → the reseller reply keyboard, portal INSIDE it (no extra
+                # inline message).
                 p = Panel(key="p", host="p.invalid", proxy_path_enc="x", owner_uuid="o")
                 s.add(p)
                 await s.flush()
@@ -430,11 +431,12 @@ def test_send_menu_tiers_first_timer_vs_registered_with_inline_portal(tmp_path):
                     async def answer(self, text="", **kw):  # noqa: ANN001, ANN003
                         out.append((text, kw.get("reply_markup")))
                 await handlers._send_menu(M2().answer, s, SimpleNamespace(id=777, first_name="Reg", username=None))
-                inline_urls = [b.url for _t, kb in out if hasattr(kb, "inline_keyboard")
-                               for row in kb.inline_keyboard for b in row if b.url]
-                assert any(u.startswith("https://portal.example.test/portal/login?t=") for u in inline_urls)
-                assert any("🧾 فاکتور و پرداخت" in _reply_labels(kb)
-                           for _t, kb in out if hasattr(kb, "keyboard"))
+                # No extra inline message any more — the menu is a single docked keyboard…
+                assert not [kb for _t, kb in out if hasattr(kb, "inline_keyboard")]
+                docked = [_reply_labels(kb) for _t, kb in out if hasattr(kb, "keyboard")]
+                assert any("🧾 فاکتور و پرداخت" in labels for labels in docked)
+                # …and the portal is one of its normal buttons.
+                assert any("🌐 پنل تحت وب" in labels for labels in docked)
         finally:
             await engine.dispose()
 

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,7 @@ from app.core.portal_auth import (
     create_portal_session_token,
     get_current_reseller,
     verify_portal_login_token,
+    verify_telegram_login,
 )
 from app.core.security import require_secure_transport
 from app.models import Invoice, Panel, Payment, PortalLoginNonce, Reseller
@@ -100,6 +102,71 @@ async def refresh(ctx: ResellerContext = Depends(get_current_reseller)) -> dict:
     or deleting the reseller revokes it immediately, regardless of the token's remaining TTL. The
     one-time login-link mechanics are untouched."""
     return {"access_token": create_portal_session_token(ctx.chat_id), "token_type": "bearer"}
+
+
+class TelegramLoginBody(BaseModel):
+    """A Telegram Login Widget payload plus the stable-link uuid the visitor is trying to open."""
+    uuid: str
+    auth: dict
+
+
+@router.get("/auth/entry")
+async def auth_entry(
+    uuid: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Public config for the STABLE portal link `/portal/u/{uuid}`.
+
+    Deliberately leaks NOTHING about who owns the uuid: the response is identical for a real and a
+    made-up uuid (`{"bot_username": …}`). The uuid is only an ADDRESS — it never grants access, and
+    the visitor still has to prove which Telegram account they are via the login widget below. So an
+    enumerator learns neither whether a uuid exists nor whose it is."""
+    from app.services import settings_service
+
+    return {
+        "bot_username": (await settings_service.get(session, "telegram_bot_username", "") or "").strip(),
+    }
+
+
+@router.post("/auth/telegram")
+async def auth_telegram(
+    body: TelegramLoginBody,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict:
+    """Sign in on the stable link by PROVING the visitor's Telegram account owns that uuid.
+
+    This is what makes a permanent, shareable URL safe. Two independent checks:
+      1. `verify_telegram_login` — Telegram's HMAC signature proves the caller really is that
+         Telegram user (and authenticated for OUR bot); a forged/replayed payload is refused.
+      2. Ownership — the reseller row addressed by `uuid` must be bound to exactly that Telegram id.
+    So pasting somebody else's uuid gets you nowhere: you can only ever open YOUR portal. Both
+    failures return the same 403 text, so this can't be used to probe which uuids exist.
+    """
+    from app.services import settings_service
+
+    if request is not None:
+        require_secure_transport(request)
+    denied = HTTPException(403, "این لینک متعلق به حساب تلگرام شما نیست.")
+
+    token = (await settings_service.get(session, "telegram_bot_token", "") or "").strip()
+    telegram_id = verify_telegram_login(body.auth, token)
+    if telegram_id is None:
+        raise HTTPException(401, "تأیید تلگرام ناموفق بود؛ دوباره تلاش کنید.")
+
+    uid = (body.uuid or "").strip().lower()
+    if not uid:
+        raise denied
+    # The uuid addresses a reseller row; that row must belong to the PROVEN Telegram id.
+    owner_chat_id = (await session.execute(
+        select(Reseller.bot_chat_id).where(
+            sa_func.lower(Reseller.admin_uuid) == uid,
+            Reseller.bot_chat_id.isnot(None),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if owner_chat_id is None or int(owner_chat_id) != int(telegram_id):
+        raise denied
+    return {"access_token": create_portal_session_token(int(owner_chat_id)), "token_type": "bearer"}
 
 
 class AuthorizeNextBody(BaseModel):

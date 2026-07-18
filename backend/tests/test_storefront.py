@@ -665,22 +665,24 @@ def _fake_customer_msg(answered, *, text=None, photo=None):
     return m
 
 
-def test_sf_fallback_relays_idle_customer_with_light_ack(tmp_path, monkeypatch):
-    """An IDLE customer's free text is relayed to the admin (with a «پاسخ» button) and the customer
-    gets ONE light ack — NOT the full welcome/balance menu (which would clutter a back-and-forth)."""
+def test_sf_fallback_does_not_relay_stray_customer_text(tmp_path, monkeypatch):
+    """Inverted on purpose (was: "relays idle customer with a light ack").
+
+    Forwarding ANY stray text buried shop owners in noise — a typo or a stray «سلام» arrived as a
+    support ticket. Reaching support is what the explicit «💬 پشتیبانی» button is for; a stray
+    message now just gets the customer's menu back and the owner is not notified at all."""
     setup, run, relayed, answered, engine = _fallback_harness(tmp_path, monkeypatch, "fb1.db")
 
     async def go():
         await setup()
         try:
-            await run(_FakeState(None), _fake_customer_msg(answered, text="سرویسم قطع شده"))
+            await run(_FakeState(None), _fake_customer_msg(answered, text="سلام"))
         finally:
             await engine.dispose()
 
     asyncio.run(go())
-    assert any(chat == 111 for chat, _t, _m in relayed)            # admin got it
-    assert any(m is not None for _c, _t, m in relayed)             # with a reply button
-    assert len(answered) == 1 and "پشتیبانی" in answered[0]        # light ack, no full menu re-render
+    assert relayed == []                       # the shop owner is NOT bothered
+    assert len(answered) == 1                  # the customer just gets their menu back
 
 
 def test_sf_fallback_does_not_relay_mid_flow_message(tmp_path, monkeypatch):
@@ -1856,7 +1858,10 @@ def test_send_admin_menu_owner_vs_coadmin(tmp_path):
         portal = m.answers[0][1]
         assert isinstance(portal, InlineKeyboardMarkup)
         url = portal.inline_keyboard[0][0].url
-        assert url.startswith("https://portal.example.test/portal/login?t=")
+        # PERMANENT address (/portal/u/<admin_uuid>) — the old 15-minute one-time login link kept
+        # expiring before the owner tapped it (notably from «مشاهده در پنل» notifications).
+        assert url.startswith("https://portal.example.test/portal/u/")
+        assert "t=" not in url.split("?", 1)[0]
         assert f"next=%2Fportal%2Fstorefront%2F{bot.id}" in url
         assert portal.inline_keyboard[0][0].web_app is None            # no Mini App
         rk = m.answers[1][1]

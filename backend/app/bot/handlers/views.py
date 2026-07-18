@@ -485,25 +485,32 @@ async def _send_panels(answer, chat_id: int, session) -> None:
 
 
 async def _send_portal_link(answer, chat_id: int, session) -> None:
-    """Give the reseller a one-time link that opens the standalone web portal already logged in
-    (no password). The link carries a short-lived signed token the site exchanges for a session."""
+    """Give the reseller their PERMANENT portal address.
+
+    This replaced the old 15-minute one-time link, which expired constantly: a link tapped from a
+    menu message (or a support notification) a few hours later just failed. The permanent address is
+    safe to keep and re-use because it grants nothing on its own — the site opens straight away only
+    while their 30-day session is valid, and otherwise asks them to confirm with their own Telegram
+    account."""
     resellers = await _resellers_for_chat(session, chat_id)
     if not resellers:
         await answer(await texts.render(session, "tpl_link_not_found"))
         return
-    from app.bot.handlers.common import portal_login_url
+    from app.bot.handlers.common import portal_stable_url
 
-    url = await portal_login_url(session, chat_id)
-    if not url:
+    # The tappable link carries a fresh sign-in token (works instantly, even on a new device); the
+    # address we tell them to save is the clean permanent one, which carries no credential.
+    url = await portal_stable_url(session, chat_id, with_login_token=True)
+    plain = await portal_stable_url(session, chat_id)
+    if not url or not plain:
         await answer(rtl("🌐 پنلِ تحتِ وب هنوز پیکربندی نشده است؛ لطفاً به پشتیبانی اطلاع دهید."))
         return
     msg = (
-        "🌐 ورود به پنلِ تحتِ وب\n\n"
-        "برای دیدنِ فاکتورها، پرداخت، آمار و مدیریتِ زیرمجموعه‌ها در سایت، روی لینکِ زیر بزنید "
-        "(این لینک تا ۱۵ دقیقه معتبر است):\n\n"
+        "🌐 پنلِ تحتِ وب شما\n\n"
+        "برای دیدنِ فاکتورها، پرداخت، آمار و مدیریتِ زیرمجموعه‌ها روی لینکِ زیر بزنید:\n\n"
         f"<a href=\"{html.escape(url, quote=True)}\">باز کردنِ پنلِ من</a>\n\n"
-        "یا این آدرس را کپی کنید:\n"
-        f"<code>{html.escape(url)}</code>"
+        "آدرسِ همیشگیِ شما (منقضی نمی‌شود، می‌توانید ذخیره‌اش کنید):\n"
+        f"<code>{html.escape(plain)}</code>"
     )
     await answer(rtl(msg), parse_mode="HTML", disable_web_page_preview=True)
 
