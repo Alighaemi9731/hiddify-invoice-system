@@ -2,7 +2,8 @@
 description: Fix one audited remediation batch end-to-end, including tests and docs
 ---
 
-Fix exactly one batch from `docs/REMEDIATION_PLAN.md`, identified by `$ARGUMENTS`.
+Fix exactly one batch from the active plan/roadmap (`plans/PRODUCT_ROADMAP_FA.md` or a
+current `docs/*_PLAN.md`), identified by `$ARGUMENTS`.
 
 Rules:
 

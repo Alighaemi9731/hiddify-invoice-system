@@ -8,17 +8,18 @@ Local production coordinates belong in `.claude/OPS.local.md`, which is gitignor
 Never put host IPs, SSH usernames, tokens, passwords, panel URLs, or private keys in
 tracked documentation.
 
-## 1. Prepare one remediation batch
+## 1. Prepare one batch
 
 - Work on a dedicated branch.
-- Keep the release scoped to one batch from `docs/REMEDIATION_PLAN.md`.
+- Keep the release scoped to one batch (from the active plan/roadmap item).
 - Add focused regression tests for every fixed failure mode.
 - Update behavior documentation and the batch status.
 - Review `git diff` for secrets and unrelated changes.
 
 ## 2. Run the release gate
 
-Run the complete gate from `docs/REMEDIATION_PLAN.md`. Also run any focused
+Run the complete gate (backend `pytest`/`ruff`/`mypy` + Alembic drift, frontend
+type-check + build). Also run any focused
 integration or E2E tests required by the batch. A Vite build alone is not sufficient;
 TypeScript checking must pass independently.
 

@@ -15,65 +15,36 @@ Full background and the resolved business decisions: see `docs/ARCHITECTURE.md`.
 
 ## Current improvement program
 
-Six programs are **complete** and archived: the 2026-06-09 audit
-(`docs/REMEDIATION_PLAN.md`, B00–B10), the 2026-07-02 verified-improvements
-roadmap (`docs/IMPROVEMENT_PLAN.md`, I01–I12), the 2026-07-02 UI/UX review
-(`docs/UIUX_PLAN.md`, U01–U04, through `v1.55.0`), the 2026-07-03 polish
-review (`docs/POLISH_PLAN.md`, P01–P05, through `v1.57.3`), the 2026-07-08
-full-codebase hardening review (`docs/HARDENING_PLAN.md`, H01–H13, through
-`v1.60.4` — payment/enforcement/billing must-fixes, two standalone data
-migrations `b1c3e5a7f9d2`+`c2d4f6b8a1e3`, bot/storefront correctness,
-security/deploy hardening, docs + dead code; two deploy-infra items deferred to
-a maintenance window, see H12), and the 2026-07-11 post-v1.60.4
-feature-hardening batch (`docs/NEXTBATCH_PLAN.md`, N01–N05, through `v1.69.5`
-— storefront notice delivery/transaction reliability, bulk-defer skip
-semantics, broadcast threshold fail-safety, storefront broadcast
-flood-control, portal sales-chart lean aggregate; the audit's security stream
-on the v1.61–v1.69 surface came back clean, no migrations; deferred candidates
-are recorded in that file). Seven programs are **complete** and archived; the most recent is
-the **2026-07-15 external-review remediation** (`docs/SECURITY_REVIEW_PLAN.md`, 16 verified findings
-F1–F16 in six batches, all shipped + deployed): `v1.75.0` Batch 0+1 — owner money-path row locking F6,
-payment-method policy F7, `pg_contract` Postgres concurrency-test foundation F16; `v1.76.0` Batch 2 —
-storefront tenant isolation F3, crypto-txid replay F14, renewal double-charge F4/charge-ordering F11,
-one-refund-per-order F5 (migration `f5b8d1a3c6e9`); `v1.77.0` Batch 3 — reaper race F5/F4-purchase,
-bot backpressure F13, lock-registry eviction F15; `v1.78.0` Batch 4 — stale-snapshot age gate F9,
-metering-baseline preservation F10, per-panel sync advisory-lock F12; `v1.79.0` Batch 5 — setup
-bootstrap token F1, HTTPS-only credentials F2, passkey throttle F8.
+**Eight whole-codebase programs are complete and deployed** (through `v1.82.2`): the
+2026-06-09 audit (B00–B10), the 2026-07-02 improvement roadmap (I01–I12), the 2026-07-02
+UI/UX review (U01–U04), the 2026-07-03 polish review (P01–P05), the 2026-07-08 hardening
+review (H01–H13), the 2026-07-11 feature-hardening batch (N01–N05), and the two 2026-07-15
+external security re-reviews (F1–F16 round 1, then a round-2 re-verification). Their
+step-by-step plan documents were removed once shipped; the detailed history lives in Git
+(commit/tag messages) and the milestone log below. Migration head is `a6c9e2f4b7d1` at the
+end of that work; the security round 2 fixed a Critical setup-takeover plus atomic setup
+token, Strict HTTPS/loopback transport gating, the storefront durable-operation + lease
+model, atomic metering, and per-panel sync locking.
 
-**Round 2 COMPLETE (2026-07-15):** a second external re-review (`docs/SECURITY_REVIEW_PLAN2.md`)
-found 8 of the 16 round-1 findings only *partially* fixed — including a reproducible **Critical
-setup-takeover** — all re-verified real against `v1.79.1`. Fixed in three batches plus a final
-verification follow-up, all released AND deployed, run `v1.80.0`→`v1.82.2`, with migration head
-`a6c9e2f4b7d1`: Batch A
-`v1.80.0` = atomic setup token F1 + **Strict** transport gate F2 (public plaintext refused for all
-credential + bearer requests, loopback/HTTPS only — no `https_enabled` escape hatch); Batch B `v1.81.0`
-= storefront durable-operation + lease model (idempotent op_id F4, crash-safe renewal F11 via
-reverse-on-uncertainty reconciler, provision lease F5, table `storefront_operations`); Batch C `v1.82.0`
-= ordered failed-sync bookkeeping F12 (re-take lock + recency guard) + atomic metering F10 (pure
-`metering.compute`/`write`) + storefront polling backpressure F13. A final verification follow-up
-`v1.82.1` closes five edge gaps: reseller-portal strict transport, principal-bound/pre-reserved operation
-tokens, a five-minute lease floor, atomic `start_date` baseline, and verify/reapply renewal recovery
-(migration head `a6c9e2f4b7d1`). F3/F6/F7/F8/F9/F14/F15/F16 were confirmed genuinely fixed in round 1.
-**Product roadmap active (2026-07-16), item 3 COMPLETE:** the owner-selected roadmap is tracked in
-`plans/PRODUCT_ROADMAP_FA.md`. Item 1 shipped in `v1.82.3` (the reseller Telegram menu opens the
-one-time authenticated portal URL directly in a normal browser); item 2 was rejected by the owner.
-**Roadmap item 3 — the reseller storefront management portal — is DONE, all six releases (A–F)
-shipped and deployed** (`plans/002`–`007`): B `v1.84.0` plans/settings, C `v1.85.0`
-customers/subscriptions, D `v1.86.0` wallet/top-ups, E `v1.87.0` credit codes + durable
-communications, **F `v1.88.0`** — bot/portal parity (a machine-readable parity inventory
-`backend/tests/fixtures/storefront_admin_parity.json` + `tests/test_storefront_parity.py` prove every
-admin-bot capability maps to a shared audited command and no portal mutation bypasses it), safe portal
-deep links (a strict default-deny `next` allowlist `app/core/portal_deeplink.py` + server-side
-`POST /api/portal/authorize-next` tenant authorization; owner notifications deep-link to their owned
-resource), and a compact inline storefront-admin OWNER home (a plain HTTPS «مدیریت فروشگاه در مرورگر»
-button + urgent shortcuts; co-admins keep the full legacy bot keyboard; no Mini App; legacy owner
-callbacks stay routable, removal not before `v1.90.0`). Remaining boundaries: co-admin portal RBAC
-(item 15), CRM (item 14), accounting (item 12).
+**Product roadmap (owner-selected) — `plans/PRODUCT_ROADMAP_FA.md` is the single active
+plan.** Shipped: item 1 (`v1.82.3`, reseller Telegram menu opens the one-time portal URL in
+a normal browser); **item 3 — the reseller storefront management portal — DONE, six releases
+`v1.83.0`→`v1.88.0`** (portal shell, plans/settings, customers/subscriptions, wallet/top-ups,
+credit codes + durable communications, and bot/portal parity + safe deep links: a
+machine-readable parity inventory `backend/tests/fixtures/storefront_admin_parity.json` +
+`tests/test_storefront_parity.py` prove every admin-bot capability maps to a shared audited
+command with no portal mutation bypass; `app/core/portal_deeplink.py` default-deny `next`
+allowlist + `POST /api/portal/authorize-next`); **item 5 — both bots' menu redesign — DONE
+(`v1.89.0`)**: docked reply-keyboard menus (≤5 top-level + «⋯ بیشتر»), first-timer
+register-first tier, one-tap inline portal button, and FSM-locked flows (a per-router
+re-dock middleware restores the menu on exit; only «✖️ انصراف»/`start` leaves a flow).
+Item 2 was rejected by the owner. Remaining boundaries: co-admin portal RBAC (item 15), CRM
+(item 14), accounting (item 12); legacy owner bot callbacks stay routable, removal not before
+`v1.90.0`.
 
-Concurrency invariants are asserted by
-`pg_contract`-marked tests run against a real Postgres 16 in the CI `backend-postgres`
-job (SQLite can't). For the next program, create a new `docs/*_PLAN.md`, fix exactly
-one batch per release in the documented order, and use `docs/RELEASE_PROCESS.md` for
+Concurrency invariants are asserted by `pg_contract`-marked tests run against a real
+Postgres 16 in the CI `backend-postgres` job (SQLite can't). For the next program, fix
+exactly one batch per release in a documented order, and use `docs/RELEASE_PROCESS.md` for
 versioning, GitHub publication, production deployment, smoke checks, and rollback.
 Record user-visible release notes in `CHANGELOG.md`; the long milestone history
 below remains the archive for releases before this process was introduced.

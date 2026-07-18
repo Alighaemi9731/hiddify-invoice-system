@@ -8,7 +8,8 @@ reminders & suspension for non-payers. Owner web panel is **Persian / RTL**.
 - Architecture & diagrams: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Working guidance & conventions: [`CLAUDE.md`](CLAUDE.md)
 - Changes and releases: [`CHANGELOG.md`](CHANGELOG.md)
-- Audit remediation tracker: [`docs/REMEDIATION_PLAN.md`](docs/REMEDIATION_PLAN.md)
+- Product roadmap (Persian): [`plans/PRODUCT_ROADMAP_FA.md`](plans/PRODUCT_ROADMAP_FA.md)
+- Release & deploy process: [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)
 
 ## Verified install (fresh Ubuntu server)
 
