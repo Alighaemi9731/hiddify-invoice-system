@@ -25,6 +25,17 @@ No database migration (Alembic head stays `497cb88cf774`).
   shows only what they can act on — ربات، باز/بسته بودن فروشگاه، سرویس‌دهی، و سفارش‌های ناموفق — in
   one consistent Persian wording, with provider trouble rolled up into a single plain line.
 
+- **The same panel can no longer be registered twice.** Only the short key had to be unique, so
+  adding one panel again under a different key was silently accepted — and it was quietly
+  destructive: each row rebuilt its own copy of every reseller and user, so one real reseller
+  received **two full invoices for the same traffic**, sales reports doubled, and the bot then
+  refused to register that reseller at all (it saw two possible panels and, by design, never
+  guesses) while blaming their link. Both adding and editing a panel now refuse an address that
+  belongs to an already-registered panel and name the existing one. Your live server was checked:
+  no duplicate exists.
+- **Panel keys are normalized** (trimmed + lowercased), blank keys are rejected, and the duplicate
+  check is case-insensitive, so `FA1`, ` fa1 ` and `fa1` are one panel rather than three.
+
 ### Security / reliability
 
 Follow-up to the 2026-07-18 cross-tenant incident, from auditing every remaining Hiddify code path:

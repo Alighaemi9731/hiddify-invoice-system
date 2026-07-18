@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.matching import normalize_host, normalize_path
 from app.core import crypto
 from app.core.db import SessionLocal, get_session
 from app.core.security import get_current_subject
@@ -86,6 +87,38 @@ async def list_panels(session: AsyncSession = Depends(get_session)) -> list[Pane
     return [await _to_out(session, p) for p in panels]
 
 
+async def _same_physical_panel(
+    session: AsyncSession, *, host: str | None, proxy_path: str | None,
+    exclude_id: int | None = None
+) -> Panel | None:
+    """The existing row that points at the SAME physical Hiddify panel, if any.
+
+    Identity is (host, secret proxy path) — two rows with both equal are the same box; there is no
+    legitimate reason to register one panel twice. Registering it twice used to be silently accepted
+    (only `key` was unique) and was quietly catastrophic: resellers are keyed by
+    `(panel_id, admin_uuid)`, so the second row rebuilt every reseller and user from scratch — one
+    real person then received TWO full invoices for the same traffic (the invoice unique constraint
+    is per reseller_id, so both are "valid"), sales reports doubled, the per-panel sync lock no
+    longer serialized the two rows against one box, enforcement could fight itself, and the bot's
+    fail-closed link matching saw two candidates and refused to register the reseller at all — with
+    an error blaming THEIR link. `proxy_path` is encrypted at rest, so this compares in Python over
+    the panel rows (a handful) rather than in SQL.
+    """
+    want_host, want_path = normalize_host(host), normalize_path(proxy_path)
+    if not want_host or not want_path:
+        return None
+    rows = (await session.execute(select(Panel))).scalars().all()
+    for row in rows:
+        if exclude_id is not None and row.id == exclude_id:
+            continue
+        try:
+            if normalize_host(row.host) == want_host and normalize_path(row.proxy_path) == want_path:
+                return row
+        except Exception:  # noqa: BLE001 — an undecryptable legacy row must not block admin work
+            continue
+    return None
+
+
 @router.post("", response_model=PanelOut, status_code=201)
 async def create_panel(
     body: PanelCreate, background: BackgroundTasks, session: AsyncSession = Depends(get_session)
@@ -97,6 +130,13 @@ async def create_panel(
     ).scalar_one_or_none()
     if exists:
         raise HTTPException(409, f"پنلی با کلید «{body.key}» از قبل وجود دارد.")
+    dup = await _same_physical_panel(session, host=body.host, proxy_path=body.proxy_path)
+    if dup is not None:
+        raise HTTPException(
+            409,
+            f"این پنل قبلاً با کلید «{dup.key}» ثبت شده است. ثبت دوبارهٔ یک پنل باعث می‌شود "
+            "نماینده‌ها و کاربرها دو بار شمرده شوند و برای هر نماینده دو فاکتور صادر شود.",
+        )
     panel = Panel(
         key=body.key,
         name=body.name or body.key,
@@ -130,6 +170,22 @@ async def update_panel(
     session: AsyncSession = Depends(get_session),
 ) -> PanelOut:
     panel = await _get_or_404(session, panel_id)
+    # Editing host/path can ALSO collide this row onto another row's physical panel — the same
+    # double-counting/double-invoicing trap as creating a duplicate, just by the back door. Check
+    # the post-edit identity before applying anything.
+    if body.host is not None or body.proxy_path is not None:
+        dup = await _same_physical_panel(
+            session,
+            host=body.host if body.host is not None else panel.host,
+            proxy_path=body.proxy_path if body.proxy_path is not None else panel.proxy_path,
+            exclude_id=panel.id,
+        )
+        if dup is not None:
+            raise HTTPException(
+                409,
+                f"این آدرس متعلق به پنلی است که با کلید «{dup.key}» ثبت شده است. "
+                "دو ردیف برای یک پنل باعث دوباره‌شماری نماینده‌ها و صدور فاکتور تکراری می‌شود.",
+            )
     if body.name is not None:
         panel.name = body.name
     # Connection-relevant edits (host / proxy path / api key / owner uuid) change what the
