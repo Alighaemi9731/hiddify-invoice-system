@@ -83,51 +83,84 @@ class _Msg:
         self.sent.append((text, kw))
 
 
+def _labels(kb):
+    return [b.text for row in kb.keyboard for b in row]
+
+
 def test_reply_menu_keyboards_and_label_maps_are_consistent():
-    """The docked main menu (reply keyboard) labels must each map to an action, and «ساخت کاربر»
-    appears only when enabled."""
-    def labels(kb):
-        return [b.text for row in kb.keyboard for b in row]
+    """The lean reply-keyboard menus (≤5) map every label to an action; «ساخت سرویس» appears only
+    when enabled; a «⋯ بیشتر» / «« بازگشت» pair drives the drill-down; the first-timer menu leads with
+    «ثبت پنل»."""
+    with_cu = _labels(keyboards.reseller_main_reply_kb(show_create_user=True))
+    without_cu = _labels(keyboards.reseller_main_reply_kb(show_create_user=False))
+    assert "➕ ساخت سرویس" in with_cu and "➕ ساخت سرویس" not in without_cu
+    assert keyboards.MORE_LABEL in with_cu           # «بیشتر» is always present
+    assert len(with_cu) <= 5                          # lean: ≤5 top-level options
 
-    with_cu = labels(keyboards.reseller_reply_keyboard(show_create_user=True))
-    without_cu = labels(keyboards.reseller_reply_keyboard(show_create_user=False))
-    assert "➕ ساخت کاربر" in with_cu and "➕ ساخت کاربر" not in without_cu
     for label in with_cu:
-        assert label in keyboards.RESELLER_LABEL_TO_ACTION
-    for label in labels(keyboards.owner_reply_keyboard()):
-        assert label in keyboards.OWNER_LABEL_TO_ACTION
-    assert keyboards.ALL_MENU_LABELS == (
-        set(keyboards.RESELLER_LABEL_TO_ACTION) | set(keyboards.OWNER_LABEL_TO_ACTION)
-    )
-    kb = keyboards.owner_reply_keyboard()
-    assert kb.is_persistent and kb.resize_keyboard  # always docked at the bottom
+        assert label in keyboards.RESELLER_LABEL_TO_ACTION or label in keyboards._NAV_LABELS
+    for label in _labels(keyboards.owner_main_reply_kb()):
+        assert label in keyboards.OWNER_LABEL_TO_ACTION or label in keyboards._NAV_LABELS
+
+    # «بیشتر» drill-downs carry the back button; the first-timer menu leads with «ثبت پنل».
+    assert keyboards.BACK_LABEL in _labels(keyboards.reseller_more_reply_kb())
+    assert keyboards.BACK_LABEL in _labels(keyboards.owner_more_reply_kb())
+    first = _labels(keyboards.first_timer_reply_kb())
+    assert first[0] == keyboards.REGISTER_LABEL and "💬 پشتیبانی" in first
+
+    # ALL_MENU_LABELS (what the label router listens for) includes the nav labels.
+    assert keyboards._NAV_LABELS <= keyboards.ALL_MENU_LABELS
+    kb = keyboards.owner_main_reply_kb()
+    assert kb.is_persistent and kb.resize_keyboard    # always docked at the bottom
 
 
-def _portal_button(kb):
-    return next(
-        button
-        for row in kb.inline_keyboard
-        for button in row
-        if button.text == "🌐 ورود به پنلِ تحتِ وب"
-    )
-
-
-def test_reseller_menu_portal_button_uses_normal_url_without_mini_app():
+def test_portal_button_is_a_one_tap_inline_url_no_mini_app():
+    """The portal opens the browser in ONE tap — an inline URL button (a reply-keyboard button can't
+    carry a URL). Never a web_app / Mini App."""
     url = "https://example.test/portal/login?t=token"
-    button = _portal_button(keyboards.reseller_menu_keyboard(portal_url=url))
-
+    button = keyboards.portal_inline_kb(url).inline_keyboard[0][0]
     assert button.url == url
-    assert button.callback_data is None
-    assert button.web_app is None
-    assert button.login_url is None
+    assert button.web_app is None and button.login_url is None and button.callback_data is None
 
 
-def test_reseller_menu_portal_button_preserves_callback_fallback():
-    button = _portal_button(keyboards.reseller_menu_keyboard())
+def test_flow_cancel_keyboard_is_cancel_only():
+    """A flow docks a cancel-ONLY reply keyboard so the menu is hidden and only «انصراف» is tappable."""
+    kb = keyboards.flow_cancel_kb()
+    assert _labels(kb) == [keyboards.CANCEL_LABEL]
+    assert kb.is_persistent and kb.resize_keyboard
 
-    assert button.callback_data == "menu:portal"
-    assert button.url is None
-    assert button.web_app is None
+
+def test_menu_label_during_a_flow_is_locked_not_a_universal_escape():
+    """FSM-LOCK: tapping a menu label while a flow is active must NOT cancel/navigate — it re-prompts
+    the docked cancel. (The old behavior cleared the flow; now only «انصراف»/start exits.)"""
+    from app.bot.handlers import menus
+
+    class FakeState:
+        def __init__(self):
+            self.cleared = False
+            self._st = "PayState:waiting"
+
+        async def get_state(self):
+            return self._st
+
+        async def clear(self):
+            self.cleared = True
+            self._st = None
+
+    sent: list = []
+
+    class FakeMsg:
+        text = "🧾 فاکتور و پرداخت"
+        from_user = SimpleNamespace(id=1, first_name="A", username=None)
+
+        async def answer(self, t="", **kw):  # noqa: ANN001, ANN003
+            sent.append((t, kw.get("reply_markup")))
+
+    st = FakeState()
+    asyncio.run(menus.on_menu_label(FakeMsg(), st, bot=None))
+    assert not st.cleared                              # the flow is NOT canceled by a menu tap
+    assert sent and "در حال یک عملیات" in sent[0][0]   # re-prompted to cancel first
+    assert isinstance(sent[0][1], type(keyboards.flow_cancel_kb()))  # docked cancel keyboard
 
 
 def test_portal_menu_url_requires_a_registered_reseller(tmp_path):
@@ -311,14 +344,17 @@ def test_owner_payment_decided_keyboard_drops_action_buttons():
     assert "opok:5" in live and "opno:5" in live
 
 
-def test_reshow_menu_sends_role_aware_menu(tmp_path):
-    """`_reshow_menu` re-sends the inline main menu as a fresh message so it's always at hand."""
+def _reply_labels(kb):
+    return [b.text for row in getattr(kb, "keyboard", []) for b in row]
+
+
+def test_reshow_menu_docks_role_reply_menu(tmp_path):
+    """`_reshow_menu` re-docks the role reply keyboard (a registered reseller sees the reseller menu)."""
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from app.bot import handlers
+    from app.bot import handlers, keyboards
     from app.core.db import Base
     from app.models import Panel, Reseller
-    from app.services import settings_service
 
     sent: list = []
 
@@ -339,21 +375,66 @@ def test_reshow_menu_sends_role_aware_menu(tmp_path):
                 s.add(p)
                 await s.flush()
                 s.add(Reseller(panel_id=p.id, admin_uuid="a", name="Ali", bot_chat_id=999))
-                await settings_service.set_value(
-                    s,
-                    "server_domain",
-                    "https://portal.example.test/",
-                )
+                await s.commit()
                 await handlers._reshow_menu(FakeMsg(), s, user)
             assert len(sent) == 1
-            text, kb = sent[0]
-            assert "منوی اصلی" in text
-            assert kb is not None and hasattr(kb, "inline_keyboard")
-            portal = _portal_button(kb)
-            assert portal.url is not None
-            assert portal.url.startswith("https://portal.example.test/portal/login?t=")
-            assert portal.callback_data is None
-            assert portal.web_app is None
+            _text, kb = sent[0]
+            labels = _reply_labels(kb)
+            assert keyboards.MORE_LABEL in labels and "🧾 فاکتور و پرداخت" in labels
+            assert kb.is_persistent
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_send_menu_tiers_first_timer_vs_registered_with_inline_portal(tmp_path):
+    """`_send_menu`: a first-timer with NO registered panel gets «ثبت پنل» front-and-center; a
+    registered reseller gets a one-tap inline portal button + the reseller reply keyboard."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.bot import handlers, keyboards
+    from app.core.db import Base
+    from app.models import Panel, Reseller
+    from app.services import settings_service
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'tiers.db'}")
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as s:
+                await settings_service.set_value(s, "server_domain", "portal.example.test")
+                await s.commit()
+
+                # First-timer (no reseller row) → «ثبت پنل» docked, no portal button.
+                first: list = []
+
+                class M1:
+                    async def answer(self, text="", **kw):  # noqa: ANN001, ANN003
+                        first.append((text, kw.get("reply_markup")))
+                await handlers._send_menu(M1().answer, s, SimpleNamespace(id=555, first_name="New", username=None))
+                ft_kbs = [_reply_labels(kb) for _t, kb in first if hasattr(kb, "keyboard")]
+                assert any(keyboards.REGISTER_LABEL in labels for labels in ft_kbs)
+
+                # Registered reseller → an inline portal URL button + the reseller reply keyboard.
+                p = Panel(key="p", host="p.invalid", proxy_path_enc="x", owner_uuid="o")
+                s.add(p)
+                await s.flush()
+                s.add(Reseller(panel_id=p.id, admin_uuid="a", name="Reg", bot_chat_id=777))
+                await s.commit()
+                out: list = []
+
+                class M2:
+                    async def answer(self, text="", **kw):  # noqa: ANN001, ANN003
+                        out.append((text, kw.get("reply_markup")))
+                await handlers._send_menu(M2().answer, s, SimpleNamespace(id=777, first_name="Reg", username=None))
+                inline_urls = [b.url for _t, kb in out if hasattr(kb, "inline_keyboard")
+                               for row in kb.inline_keyboard for b in row if b.url]
+                assert any(u.startswith("https://portal.example.test/portal/login?t=") for u in inline_urls)
+                assert any("🧾 فاکتور و پرداخت" in _reply_labels(kb)
+                           for _t, kb in out if hasattr(kb, "keyboard"))
         finally:
             await engine.dispose()
 

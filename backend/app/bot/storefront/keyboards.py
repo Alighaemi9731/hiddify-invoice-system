@@ -49,10 +49,20 @@ ADMIN_LABEL_TO_ACTION = dict(ADMIN_MENU)
 CUSTOMER_LABEL_TO_ACTION = {**dict(CUSTOMER_MENU), FREE_TRIAL_LABEL: "trial"}
 # The admin can jump back from the customer preview.
 BACK_TO_ADMIN = "« بازگشت به مدیریت"
-ALL_LABELS = set(ADMIN_LABEL_TO_ACTION) | set(CUSTOMER_LABEL_TO_ACTION) | {BACK_TO_ADMIN}
+# Lean-menu nav + flow-lock cancel (mirrors the main bot). All labels stay routable; only which are
+# DOCKED (top-level vs «بیشتر») changes — so the plan-007 parity contract (ADMIN_LABEL_TO_ACTION) holds.
+CANCEL_LABEL = "✖️ انصراف"
+MORE_LABEL = "⋯ بیشتر"
+BACK_LABEL = "« بازگشت به منو"
+_ACTION_TO_LABEL = {act: lbl for lbl, act in ADMIN_MENU}
+# The ≤5 docked top-level admin actions; everything else lives under «بیشتر». «admins» is owner-only.
+ADMIN_MAIN_ACTIONS = ["topups", "customers", "broadcast"]
+ADMIN_MORE_ACTIONS = [act for _, act in ADMIN_MENU if act not in ADMIN_MAIN_ACTIONS]
+ALL_LABELS = (set(ADMIN_LABEL_TO_ACTION) | set(CUSTOMER_LABEL_TO_ACTION)
+              | {BACK_TO_ADMIN, MORE_LABEL, BACK_LABEL})
 
 
-def _grid(labels: list[str]) -> ReplyKeyboardMarkup:
+def _grid(labels: list[str], *, extra: list[str] | None = None) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = []
     row: list[KeyboardButton] = []
     for label in labels:
@@ -62,28 +72,37 @@ def _grid(labels: list[str]) -> ReplyKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
+    for e in extra or []:
+        rows.append([KeyboardButton(text=e)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
+def flow_cancel_kb() -> ReplyKeyboardMarkup:
+    """Docked on a flow entry: cancel-only, so the admin/customer can't fire another command mid-flow."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=CANCEL_LABEL)]], resize_keyboard=True, is_persistent=True)
+
+
 def admin_reply_kb() -> ReplyKeyboardMarkup:
+    """Legacy full 14-label admin keyboard (kept for compatibility / tests)."""
     return _grid([label for label, _ in ADMIN_MENU])
 
 
-# Compact INLINE home for the primary storefront OWNER (plan 007): a plain HTTPS button that opens
-# the web portal directly + the few urgent Telegram shortcuts. The 14 legacy labels stay routable but
-# are no longer docked for the owner (co-admins keep `admin_reply_kb`). NEVER a web_app / Mini App —
-# a plain `url` InlineKeyboardButton so the browser link is directly clickable.
-def owner_home_kb(url: str | None) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    if url:
-        rows.append([InlineKeyboardButton(text="🌐 مدیریت فروشگاه در مرورگر", url=url)])
-    rows.extend([
-        [InlineKeyboardButton(text="🧾 شارژهای در انتظار", callback_data="sfhome:topups")],
-        [InlineKeyboardButton(text="📊 آمار سریع", callback_data="sfhome:stats")],
-        [InlineKeyboardButton(text="👤 نمای مشتری", callback_data="sfhome:preview")],
-        [InlineKeyboardButton(text="❓ راهنما", callback_data="sfhome:help")],
-    ])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def admin_main_reply_kb() -> ReplyKeyboardMarkup:
+    """Lean ≤5 top-level admin menu (urgent actions) + «بیشتر»."""
+    return _grid([_ACTION_TO_LABEL[a] for a in ADMIN_MAIN_ACTIONS], extra=[MORE_LABEL])
+
+
+def admin_more_reply_kb(*, owner: bool = False) -> ReplyKeyboardMarkup:
+    """The rest of the admin actions under «بیشتر». «مدیرانِ ربات» (admins) is owner-only."""
+    labels = [_ACTION_TO_LABEL[a] for a in ADMIN_MORE_ACTIONS if owner or a != "admins"]
+    return _grid(labels, extra=[BACK_LABEL])
+
+
+def owner_portal_inline_kb(url: str) -> InlineKeyboardMarkup:
+    """One-tap browser button for the shop OWNER (must be inline — a reply button can't carry a URL)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🌐 مدیریت فروشگاه در مرورگر", url=url)]])
 
 
 def customer_reply_kb(*, is_admin_preview: bool = False, show_free_trial: bool = False) -> ReplyKeyboardMarkup:

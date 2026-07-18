@@ -8,6 +8,30 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.89.0 - 2026-07-18
+
+Both Telegram bots (the main reseller/owner bot and every storefront-admin bot) get leaner, prettier
+**docked reply-keyboard menus** with locked step-by-step flows. Bot UX only — no database migration
+(Alembic head stays `497cb88cf774`); no manual steps.
+
+### Changed
+
+- **The menu now lives in the keyboard area** (the docked buttons above the text box) instead of inline
+  in the chat — cleaner and easier to reach. Each role sees only a handful of everyday buttons plus a
+  «⋯ بیشتر» button that opens the rest, so nothing is buried and nothing is lost.
+- **First-time users are guided to register first.** A reseller who hasn't linked a panel yet sees just
+  «🔗 ثبت پنل» and «💬 پشتیبانی» — register is front-and-center, not hidden under «بیشتر». After they link a
+  panel, the full menu (plus a one-tap «🌐 ورود به پنلِ تحتِ وب» browser button) appears automatically.
+- **One-tap portal button.** Registered resellers and shop owners get a button that opens the web panel
+  directly in a normal browser (one-time, password-less) — right next to their menu.
+- **Locked flows (no more accidental wrong commands).** Once you start a step-by-step action (paying an
+  invoice, composing a message, entering an amount, etc.) the menu is hidden and only «✖️ انصراف» is
+  shown; nothing else runs until you finish or cancel. Sending `/start` always escapes safely.
+- **Storefront-admin bot** follows the same design: the shop owner gets the lean menu + the one-tap
+  «🌐 مدیریت فروشگاه در مرورگر» button; co-admins get the same lean menu (no portal button); customers
+  keep their familiar buy / wallet / my-services / support buttons. Every previous capability stays
+  reachable via the top-level buttons or «⋯ بیشتر».
+
 ## 1.88.0 - 2026-07-18
 
 Storefront management portal Release F (final) — bot/portal parity + a simplified storefront-admin

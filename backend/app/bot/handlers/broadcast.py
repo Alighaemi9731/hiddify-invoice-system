@@ -90,13 +90,14 @@ async def cb_broadcast_audience(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"📢 گیرنده: «{label}»\n"
         f"اکنون متن پیام را ارسال کنید:",
-        reply_markup=keyboards.cancel_keyboard(),
+        reply_markup=keyboards.flow_cancel_kb(),
     )
     await cb.answer()
 
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    # Clearing an active flow makes the re-dock middleware restore the role menu automatically.
     await state.clear()
     await message.answer("لغو شد.")
 

@@ -15,7 +15,7 @@ import re
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -173,6 +173,30 @@ async def _membership_gate_message_mw(handler, event, data):
         await event.answer("بررسی عضویت موقتاً ممکن نیست؛ لطفاً کمی بعد دوباره تلاش کنید.")
         return
     return await handler(event, data)
+
+
+@router.message.outer_middleware
+async def _redock_menu_after_flow(handler, event, data):
+    """Every flow entry docks the cancel-only `flow_cancel_kb` (hiding the menu). This wraps every
+    message handler and, when a flow just ENDED (state went active → None during this message),
+    re-docks the role menu — so ANY exit (success or the many early-return paths) restores the menu
+    uniformly, without each handler having to remember to. A flow that stays active (invalid input
+    kept in-flow) is untouched. Callback-based exits (the inline «انصراف») re-dock themselves."""
+    state = data.get("state")
+    before = await state.get_state() if state is not None else None
+    result = await handler(event, data)
+    try:
+        # `/start` and `/menu` rebuild the menu themselves → skip re-dock to avoid a double menu.
+        first = ((getattr(event, "text", "") or "").strip().split(maxsplit=1) or [""])[0].lower()
+        if (first not in ("/start", "/menu") and before is not None and state is not None
+                and await state.get_state() is None):
+            user = getattr(event, "from_user", None)
+            if user is not None:
+                async with SessionLocal() as s:
+                    await _reshow_menu(event, s, user)
+    except Exception:  # noqa: BLE001 — a menu re-show must never break the handler it follows
+        log.warning("re-dock after flow failed", exc_info=True)
+    return result
 
 
 _TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")          # BEP-20 (BSC) / Avalanche C-Chain tx hash
@@ -454,18 +478,15 @@ async def _gate_or_menu(answer, bot: Bot, session, user) -> None:
 
 
 async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
+    """Show the role-and-state-aware lean menu: a persistent reply keyboard (≤5) + a one-tap inline
+    portal button. Owner → owner menu; a registered reseller → the reseller menu; a first-time user
+    with NO registered panel → «ثبت پنل» front-and-center."""
     if await _is_owner_user(session, user):
-        # Menu is inline again; clear any lingering docked reply keyboard (from the brief reply-menu
-        # era), then show the inline menu.
-        await answer("👑 پنل مدیریت", reply_markup=ReplyKeyboardRemove())
-        await answer(
-            "یک گزینه را انتخاب کنید:",
-            reply_markup=keyboards.owner_menu_keyboard(),
-        )
+        await answer("👑 پنل مدیریت — یک گزینه را انتخاب کنید:",
+                     reply_markup=keyboards.owner_main_reply_kb())
         return
-    # A non-owner must pass the membership gate to see the menu. If `bot` is available we
-    # re-check here too, so a stray message from a non-member shows the JOIN prompt (with a
-    # clickable /start) instead of leaking the reseller menu.
+    # A non-owner must pass the membership gate. If `bot` is available we re-check here too, so a
+    # stray message from a non-member shows the JOIN prompt instead of leaking the reseller menu.
     if bot is not None:
         missing = await _missing_gates(bot, session, user.id)
         if missing:
@@ -477,42 +498,36 @@ async def _send_menu(answer, session, user, *, bot: Bot | None = None) -> None:
             return
     name = user.first_name or user.username or ""
     welcome = await texts.render(session, "tpl_welcome", name=name)
-    menu = await texts.render(session, "tpl_menu")
+    # First-timer with no registered panel → register-first menu (not buried in «بیشتر»).
+    if not await _resellers_for_chat(session, user.id):
+        await answer(
+            welcome + "\n\nبرای شروع، لینکِ پنلِ خود را همین‌جا بفرستید (یا دکمهٔ «🔗 ثبت پنل»).",
+            reply_markup=keyboards.first_timer_reply_kb(),
+        )
+        return
     can_create = await _can_create_users(session, user.id)
-    can_storefront = await _can_setup_storefront(session, user.id)
-    portal_url = await _portal_menu_url(session, user.id)
-    # Clear any lingering docked reply keyboard, then show the inline menu (the docked menu didn't fit).
-    await answer(welcome, reply_markup=ReplyKeyboardRemove())
-    await answer(
-        menu,
-        reply_markup=keyboards.reseller_menu_keyboard(
-            show_create_user=can_create,
-            show_storefront=can_storefront,
-            portal_url=portal_url,
-        ),
-    )
+    portal_url = await portal_login_url(session, user.id)
+    # One-tap inline portal button (when a URL is mintable) rides its own message; then dock the menu.
+    if portal_url:
+        await answer("🌐 برای ورود به پنلِ تحتِ وب روی دکمهٔ زیر بزنید:",
+                     reply_markup=keyboards.portal_inline_kb(portal_url))
+    await answer(welcome + "\n\nیک گزینه را انتخاب کنید:",
+                 reply_markup=keyboards.reseller_main_reply_kb(show_create_user=can_create))
 
 
 async def _reshow_menu(message: Message, session, user) -> None:  # noqa: ANN001
-    """Re-send the role-aware main menu as the LAST message so it's always at hand after a completed
-    action (the menu is inline, so it scrolls up as the chat fills with messages). Compact — just the
-    menu keyboard, no welcome text. Call this only at the END of an action/flow, never when entering
-    an FSM prompt (that would put the menu below the prompt mid-flow)."""
+    """Re-dock the role-aware main reply keyboard after a completed action. Compact (no portal
+    button — that was shown at /start). Call only at the END of an action/flow, never mid-flow."""
     try:
         if await _is_owner_user(session, user):
-            await message.answer("📋 منوی مدیریت:", reply_markup=keyboards.owner_menu_keyboard())
+            await message.answer("📋 منوی مدیریت:", reply_markup=keyboards.owner_main_reply_kb())
+            return
+        if not await _resellers_for_chat(session, user.id):
+            await message.answer("📋 منو:", reply_markup=keyboards.first_timer_reply_kb())
             return
         can_create = await _can_create_users(session, user.id)
-        can_storefront = await _can_setup_storefront(session, user.id)
-        portal_url = await _portal_menu_url(session, user.id)
-        await message.answer(
-            "📋 منوی اصلی:",
-            reply_markup=keyboards.reseller_menu_keyboard(
-                show_create_user=can_create,
-                show_storefront=can_storefront,
-                portal_url=portal_url,
-            ),
-        )
+        await message.answer("📋 منوی اصلی:",
+                             reply_markup=keyboards.reseller_main_reply_kb(show_create_user=can_create))
     except Exception:  # noqa: BLE001 — a menu re-show must never break the action it follows
         pass
 

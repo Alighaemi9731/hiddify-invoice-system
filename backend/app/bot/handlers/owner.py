@@ -38,7 +38,7 @@ async def cb_owner(cb: CallbackQuery, state: FSMContext) -> None:
             await state.set_state(OwnerSearchState.waiting)
             await cb.message.answer(
                 "🔎 نام یا شناسهٔ نماینده را بفرستید.",
-                reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+                reply_markup=keyboards.flow_cancel_kb(),
             )
             await cb.answer()
             return
@@ -456,7 +456,7 @@ async def cb_bump_type(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(cap_rid=rid)
     await cb.message.answer(
         "مقدارِ افزایش را به‌صورتِ عدد بفرستید (۱ تا ۵۰۰۰).",
-        reply_markup=keyboards.cancel_keyboard(),
+        reply_markup=keyboards.flow_cancel_kb(),
     )
     await cb.answer()
 
@@ -521,5 +521,5 @@ async def cmd_search(message: Message, state: FSMContext) -> None:
     await state.set_state(OwnerSearchState.waiting)
     await message.answer(
         "🔎 نام یا شناسهٔ نماینده را بفرستید.",
-        reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
+        reply_markup=keyboards.flow_cancel_kb(),
     )

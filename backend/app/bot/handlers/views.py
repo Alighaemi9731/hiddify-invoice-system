@@ -105,7 +105,7 @@ async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMConte
         await state.set_state(StorefrontSetupState.token)
         await state.update_data(sf_reseller_id=r.id)
         await answer(rtl(target + _BOTFATHER_GUIDE), parse_mode="HTML",
-                     reply_markup=keyboards.cancel_keyboard("« انصراف"))
+                     reply_markup=keyboards.flow_cancel_kb())
         return
     items = []
     for r in roots:

@@ -15,6 +15,7 @@
       "cmd_storefront",
       "cmd_register",
       "cmd_cancel",
+      "on_cancel_label",
       "on_menu_label",
       "on_support_text",
       "on_owner_reply",
@@ -37,7 +38,8 @@
       "on_text"
     ],
     "outer_middleware": [
-      "_membership_gate_message_mw"
+      "_membership_gate_message_mw",
+      "_redock_menu_after_flow"
     ],
     "middleware": []
   },

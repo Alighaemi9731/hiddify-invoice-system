@@ -6,8 +6,10 @@ message handler must out-rank.
 from __future__ import annotations
 
 from aiogram import Bot, F
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from app.bot import keyboards
 from app.bot.handlers import common
 from app.bot.handlers.common import _SETCHAT_RE, _parse_txid, _track_user, router
 from app.bot.handlers.intake import _handle_link
@@ -15,10 +17,25 @@ from app.bot.matching import parse_link
 from app.services import settings_service
 
 
+async def _reprompt_if_in_flow(message: Message, state: FSMContext) -> bool:
+    """Flows are LOCKED: a stray message (photo/file/text not matched by the flow's own handler)
+    while a flow is active must NOT do its cold-path thing — re-prompt the docked cancel instead.
+    Returns True if handled (caller should return)."""
+    if await state.get_state() is not None:
+        await message.answer(
+            "شما در حال یک عملیات هستید؛ ورودیِ خواسته‌شده را بفرستید یا «✖️ انصراف» را بزنید.",
+            reply_markup=keyboards.flow_cancel_kb(),
+        )
+        return True
+    return False
+
+
 # --------------------------- free text (link / txid) ---------------------------
 @router.message(F.document)
-async def on_document(message: Message) -> None:
+async def on_document(message: Message, state: FSMContext) -> None:
     """Owner sends a backup .zip → restore the system from it."""
+    if await _reprompt_if_in_flow(message, state):
+        return
     async with common.SessionLocal() as session:
         if not await common._is_owner_user(session, message.from_user):
             # A reseller who sent a screenshot as an uncompressed FILE → nudge them to send
@@ -62,19 +79,23 @@ async def on_document(message: Message) -> None:
 
 
 @router.message(F.photo)
-async def on_photo(message: Message) -> None:
+async def on_photo(message: Message, state: FSMContext) -> None:
     """A cold photo (NOT inside the pay flow) is NOT a payment — it would create stray,
-    unattributed payments. Guide the customer to the «پرداخت فاکتور» menu option instead. (Inside
+    unattributed payments. Guide the customer to the «فاکتور و پرداخت» menu option instead. (Inside
     PayState, the receipt is handled by pay_state_photo.)"""
+    if await _reprompt_if_in_flow(message, state):
+        return
     async with common.SessionLocal() as session:
         await _track_user(session, message.from_user)
     await message.answer(
-        "📸 برای ثبتِ پرداخت، اول از منو روی «💳 پرداخت فاکتور» بزنید و فاکتور(ها) را انتخاب کنید، "
+        "📸 برای ثبتِ پرداخت، اول از منو روی «🧾 فاکتور و پرداخت» بزنید و فاکتور(ها) را انتخاب کنید، "
         "سپس تصویرِ رسید را بفرستید."
     )
 
 @router.message(F.text)
-async def on_text(message: Message, bot: Bot) -> None:
+async def on_text(message: Message, state: FSMContext, bot: Bot) -> None:
+    if await _reprompt_if_in_flow(message, state):
+        return
     text = (message.text or "").strip()
     async with common.SessionLocal() as session:
         await _track_user(session, message.from_user)
@@ -102,7 +123,7 @@ async def on_text(message: Message, bot: Bot) -> None:
         # instead of silently recording a stray payment. (Inside PayState, pay_state_text handles it.)
         if _parse_txid(text, usdt=opts.usdt, ton=opts.ton, avax=opts.avax):
             await message.answer(
-                "برای ثبتِ پرداخت، اول از منو روی «💳 پرداخت فاکتور» بزنید و فاکتور(ها) را انتخاب کنید، "
+                "برای ثبتِ پرداخت، اول از منو روی «🧾 فاکتور و پرداخت» بزنید و فاکتور(ها) را انتخاب کنید، "
                 "سپس شناسهٔ تراکنش را بفرستید."
             )
             return

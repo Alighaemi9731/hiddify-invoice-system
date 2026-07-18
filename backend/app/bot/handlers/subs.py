@@ -222,7 +222,7 @@ async def cb_cap_custom(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(sub_id=sub_id)
     await cb.message.answer(
         "عدد سقف را به گیگابایت بفرستید (مثلاً 500). برای حذف سقف، عدد 0 را بفرستید.",
-        reply_markup=keyboards.cancel_keyboard(),
+        reply_markup=keyboards.flow_cancel_kb(),
     )
     await cb.answer()
 

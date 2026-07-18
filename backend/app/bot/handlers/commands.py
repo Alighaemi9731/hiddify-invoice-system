@@ -130,7 +130,7 @@ async def cmd_interim(message: Message, bot: Bot, state: FSMContext) -> None:
 async def cmd_support(message: Message, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
     await message.answer(
-        "پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.cancel_keyboard()
+        "پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.flow_cancel_kb()
     )
 
 

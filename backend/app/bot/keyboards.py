@@ -52,72 +52,59 @@ def pay_chain_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def reseller_menu_keyboard(
-    *,
-    show_create_user: bool = False,
-    show_storefront: bool = False,
-    portal_url: str | None = None,
-) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="🧾 فاکتورهای پرداخت‌نشده", callback_data="menu:invoices"),
-         InlineKeyboardButton(text="💳 پرداخت فاکتور", callback_data="menu:pay")],
-        [InlineKeyboardButton(text="📄 فاکتور علی‌الحساب (ماه جاری)", callback_data="menu:interim")],
-    ]
-    # «ساخت کاربر» is offered only to top-level resellers (and only when the feature is enabled).
-    if show_create_user:
-        rows.append([InlineKeyboardButton(text="➕ ساخت کاربر", callback_data="menu:newuser")])
-    if show_storefront:
-        rows.append([InlineKeyboardButton(
-            text="🏪 راه‌اندازی ربات فروشگاهی", callback_data="menu:storefront")])
-    portal_button = (
-        InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", url=portal_url)
-        if portal_url
-        else InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", callback_data="menu:portal")
-    )
-    rows += [
-        [InlineKeyboardButton(text="🖥 پنل‌های من", callback_data="menu:panels"),
-         InlineKeyboardButton(text="👥 زیرمجموعه‌ها", callback_data="menu:subs")],
-        [portal_button],
-        [InlineKeyboardButton(text="🔗 ثبت لینک پنل من", callback_data="menu:register")],
-        [InlineKeyboardButton(text="💬 پیام به پشتیبانی", callback_data="menu:support"),
-         InlineKeyboardButton(text="🗑 حذف لینک‌ها", callback_data="menu:removelink")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+# ── lean gateway menu: persistent reply keyboard (≤5) + a one-tap INLINE portal button ──────────
+# The everyday menu is a persistent reply keyboard (docked in the typing area) — prettier and always
+# at hand. A Telegram reply-keyboard button CANNOT open a URL, so the one-tap "open portal" button is
+# an INLINE button that rides the greeting message separately. Rare actions live under «⋯ بیشتر».
+# Labels MUST match the maps below exactly so a tap routes to the right action.
+CANCEL_LABEL = "✖️ انصراف"
+MORE_LABEL = "⋯ بیشتر"
+BACK_LABEL = "« بازگشت به منو"
+REGISTER_LABEL = "🔗 ثبت پنل"
 
-
-# ── persistent docked main menu (ReplyKeyboardMarkup) ────────────────────────
-# The main menu is a persistent reply keyboard so the top-level actions are ALWAYS visible at the
-# bottom and a tap on any of them works from anywhere (the handler treats it as a universal escape).
-# Sub-screens stay inline. Labels MUST match the maps below exactly so taps route correctly.
-RESELLER_MENU: list[tuple[str, str]] = [
-    ("🧾 فاکتورهای پرداخت‌نشده", "invoices"),
-    ("💳 پرداخت فاکتور", "pay"),
-    ("📄 فاکتور علی‌الحساب (ماه جاری)", "interim"),
-    ("➕ ساخت کاربر", "newuser"),
-    ("🏪 راه‌اندازی ربات فروشگاهی", "storefront"),
+# label → action. `newuser`/`storefront` are conditional (shown only when the feature applies).
+RESELLER_MAIN: list[tuple[str, str]] = [
+    ("➕ ساخت سرویس", "newuser"),
+    ("🧾 فاکتور و پرداخت", "pay"),
+    ("💬 پشتیبانی", "support"),
+]
+RESELLER_MORE: list[tuple[str, str]] = [
+    ("🧾 فاکتورهای من", "invoices"),
+    ("📄 فاکتور علی‌الحساب", "interim"),
     ("🖥 پنل‌های من", "panels"),
     ("👥 زیرمجموعه‌ها", "subs"),
-    ("🌐 ورود به پنلِ تحتِ وب", "portal"),
-    ("🔗 ثبت لینک پنل من", "register"),
-    ("💬 پیام به پشتیبانی", "support"),
+    ("🏪 راه‌اندازی ربات فروشگاهی", "storefront"),
+    ("🔗 ثبت/تغییر لینک پنل", "register"),
     ("🗑 حذف لینک‌ها", "removelink"),
 ]
-OWNER_MENU: list[tuple[str, str]] = [
+OWNER_MAIN: list[tuple[str, str]] = [
     ("📊 آمار", "stats"),
-    ("🩺 سلامت سامانه", "health"),
-    ("💳 پرداخت‌های در انتظار", "payments"),
+    ("💳 پرداخت‌ها", "payments"),
     ("💰 بدهکاران", "debtors"),
+]
+OWNER_MORE: list[tuple[str, str]] = [
+    ("🩺 سلامت سامانه", "health"),
     ("🔎 جستجوی نماینده", "search"),
     ("📢 پیام همگانی", "broadcast"),
     ("🔄 همگام‌سازی پنل‌ها", "sync"),
     ("🗄 پشتیبان‌گیری اکنون", "backup"),
 ]
-RESELLER_LABEL_TO_ACTION = dict(RESELLER_MENU)
-OWNER_LABEL_TO_ACTION = dict(OWNER_MENU)
-ALL_MENU_LABELS = set(RESELLER_LABEL_TO_ACTION) | set(OWNER_LABEL_TO_ACTION)
+# First-timer (no registered panel): «ثبت پنل» is front-and-center, not buried in «بیشتر».
+FIRST_TIMER: list[tuple[str, str]] = [
+    (REGISTER_LABEL, "register"),
+    ("💬 پشتیبانی", "support"),
+]
+
+RESELLER_LABEL_TO_ACTION = {lbl: act for lbl, act in [*RESELLER_MAIN, *RESELLER_MORE, *FIRST_TIMER]}
+OWNER_LABEL_TO_ACTION = dict([*OWNER_MAIN, *OWNER_MORE])
+_NAV_LABELS = {MORE_LABEL, BACK_LABEL}
+# All labels the label-router listens for (nav labels included so «بیشتر»/«بازگشت» route too).
+ALL_MENU_LABELS = set(RESELLER_LABEL_TO_ACTION) | set(OWNER_LABEL_TO_ACTION) | _NAV_LABELS
 
 
-def _reply_grid(labels: list[str]) -> ReplyKeyboardMarkup:
+def _reply_grid(labels: list[str], *, extra: list[str] | None = None) -> ReplyKeyboardMarkup:
+    """A 2-column persistent reply keyboard; each label in `extra` gets its own full-width row
+    (used for «بیشتر»/«بازگشت»)."""
     rows: list[list[KeyboardButton]] = []
     row: list[KeyboardButton] = []
     for label in labels:
@@ -127,23 +114,45 @@ def _reply_grid(labels: list[str]) -> ReplyKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
+    for e in extra or []:
+        rows.append([KeyboardButton(text=e)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
-def reseller_reply_keyboard(
-    *, show_create_user: bool = False, show_storefront: bool = False
-) -> ReplyKeyboardMarkup:
-    hidden = set()
-    if not show_create_user:
-        hidden.add("newuser")
-    if not show_storefront:
-        hidden.add("storefront")
-    labels = [label for label, action in RESELLER_MENU if action not in hidden]
-    return _reply_grid(labels)
+def flow_cancel_kb() -> ReplyKeyboardMarkup:
+    """Docked on EVERY flow entry — its ONLY button is «✖️ انصراف», so the main menu is hidden and the
+    user can't fire another command mid-operation. Combined with the state-aware label/text routers,
+    only cancel (or /start) exits a flow."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=CANCEL_LABEL)]], resize_keyboard=True, is_persistent=True)
 
 
-def owner_reply_keyboard() -> ReplyKeyboardMarkup:
-    return _reply_grid([label for label, _ in OWNER_MENU])
+def first_timer_reply_kb() -> ReplyKeyboardMarkup:
+    return _reply_grid([lbl for lbl, _ in FIRST_TIMER])
+
+
+def reseller_main_reply_kb(*, show_create_user: bool = False) -> ReplyKeyboardMarkup:
+    labels = [lbl for lbl, act in RESELLER_MAIN if not (act == "newuser" and not show_create_user)]
+    return _reply_grid(labels, extra=[MORE_LABEL])
+
+
+def reseller_more_reply_kb(*, show_storefront: bool = False) -> ReplyKeyboardMarkup:
+    labels = [lbl for lbl, act in RESELLER_MORE if not (act == "storefront" and not show_storefront)]
+    return _reply_grid(labels, extra=[BACK_LABEL])
+
+
+def owner_main_reply_kb() -> ReplyKeyboardMarkup:
+    return _reply_grid([lbl for lbl, _ in OWNER_MAIN], extra=[MORE_LABEL])
+
+
+def owner_more_reply_kb() -> ReplyKeyboardMarkup:
+    return _reply_grid([lbl for lbl, _ in OWNER_MORE], extra=[BACK_LABEL])
+
+
+def portal_inline_kb(url: str) -> InlineKeyboardMarkup:
+    """One-tap browser portal button. Must be INLINE — a reply-keyboard button can't carry a URL."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🌐 ورود به پنلِ تحتِ وب", url=url)]])
 
 
 def sub_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
@@ -331,23 +340,6 @@ def support_reply_keyboard(user_id: int, message_id: int) -> InlineKeyboardMarku
     # Carry the user's original message id so the owner's reply quotes (replies to) it.
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="✏️ پاسخ", callback_data=f"sup:{user_id}:{message_id}")]]
-    )
-
-
-def owner_menu_keyboard() -> InlineKeyboardMarkup:
-    # A compact 2-column grid. Heavy/irreversible actions (monthly invoice issue+send) stay in
-    # the web panel to avoid accidental taps.
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📊 آمار", callback_data="owner:stats"),
-             InlineKeyboardButton(text="🩺 سلامت سامانه", callback_data="owner:health")],
-            [InlineKeyboardButton(text="💳 پرداخت‌های در انتظار", callback_data="owner:payments"),
-             InlineKeyboardButton(text="💰 بدهکاران", callback_data="owner:debtors")],
-            [InlineKeyboardButton(text="🔎 جستجوی نماینده", callback_data="owner:search"),
-             InlineKeyboardButton(text="📢 پیام همگانی", callback_data="owner:broadcast")],
-            [InlineKeyboardButton(text="🔄 همگام‌سازی پنل‌ها", callback_data="owner:sync"),
-             InlineKeyboardButton(text="🗄 پشتیبان‌گیری اکنون", callback_data="owner:backup")],
-        ]
     )
 
 

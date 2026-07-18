@@ -29,7 +29,7 @@ from app.services import settings_service
 
 log = logging.getLogger("bot.commands")
 
-# Mirrors the reseller inline menu (reseller_menu_keyboard) so the `/` list and the menu match.
+# Mirrors the reseller reply-keyboard menu (main + «بیشتر») so the `/` list and the docked menu match.
 RESELLER_COMMANDS = [
     BotCommand(command="menu", description="🏠 منوی اصلی"),
     BotCommand(command="invoices", description="🧾 فاکتورهای پرداخت‌نشده"),
@@ -47,7 +47,7 @@ RESELLER_COMMANDS = [
     BotCommand(command="help", description="❓ راهنما"),
 ]
 
-# Mirrors the owner inline menu (owner_menu_keyboard).
+# Mirrors the owner reply-keyboard menu (main + «بیشتر»).
 OWNER_COMMANDS = [
     BotCommand(command="menu", description="🏠 منوی مدیریت"),
     BotCommand(command="stats", description="📊 آمار دوره"),

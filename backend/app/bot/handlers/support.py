@@ -16,7 +16,6 @@ from app.bot.handlers.common import (
     BroadcastState,
     OwnerReplyState,
     SupportState,
-    _reshow_menu,
     router,
 )
 from app.services import settings_service
@@ -46,7 +45,6 @@ async def on_support_text(message: Message, state: FSMContext) -> None:
             parse_mode="HTML",
         )
         await message.answer("✅ پیام شما برای پشتیبانی ارسال شد. به‌زودی پاسخ می‌گیرید.")
-        await _reshow_menu(message, s, message.from_user)
 
 
 def _support_message_html(user, text: str) -> str:
@@ -74,7 +72,7 @@ async def cb_support_reply(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OwnerReplyState.waiting)
     await state.update_data(target=target, reply_to=reply_to)
     await cb.message.answer(f"پاسخ خود را برای کاربر <code>{target}</code> بنویسید:",
-                            parse_mode="HTML", reply_markup=keyboards.cancel_keyboard())
+                            parse_mode="HTML", reply_markup=keyboards.flow_cancel_kb())
     await cb.answer()
 
 
@@ -140,4 +138,3 @@ async def on_broadcast_text(message: Message, state: FSMContext) -> None:
             await message.answer("متن خالی بود؛ لغو شد.")
             return
         await _do_broadcast(message, s, message.text, audience, panel_id)
-        await _reshow_menu(message, s, message.from_user)

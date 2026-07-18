@@ -68,7 +68,7 @@ async def cb_sf_setup_panel(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(StorefrontSetupState.token)
     await state.update_data(sf_reseller_id=rid)
     await cb.message.answer(rtl(target + _BOTFATHER_GUIDE), parse_mode="HTML",
-                            reply_markup=keyboards.cancel_keyboard("« انصراف"))
+                            reply_markup=keyboards.flow_cancel_kb())
     await cb.answer()
 
 
@@ -230,7 +230,7 @@ async def cb_cu_days(cb: CallbackQuery, state: FSMContext) -> None:
         if is_bulk else "یک نام برای کاربر بفرستید:"
     )
     await cb.message.answer(
-        prompt, reply_markup=keyboards.cancel_keyboard("« انصراف", "cucancel")
+        prompt, reply_markup=keyboards.flow_cancel_kb()
     )
     await cb.answer()
 
@@ -354,7 +354,7 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict, *, use
 async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SupportState.waiting)
     await cb.message.answer(
-        "پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.cancel_keyboard()
+        "پیام خود را برای پشتیبانی بنویسید:", reply_markup=keyboards.flow_cancel_kb()
     )
     await cb.answer()
 
@@ -474,7 +474,7 @@ async def _start_pay_flow(cb: CallbackQuery, state: FSMContext, invoices: list[I
     await state.update_data(pay_invoice_ids=[i.id for i in invoices])
     await cb.message.answer(
         rtl(text), parse_mode="HTML",
-        reply_markup=keyboards.cancel_keyboard("✖️ انصراف از پرداخت"),
+        reply_markup=keyboards.flow_cancel_kb(),
     )
 
 
@@ -578,7 +578,6 @@ async def pay_state_photo(message: Message, state: FSMContext) -> None:
         await state.clear()
         await _track_user(s, message.from_user)
         await _handle_payment_proof(message, s, invoices=invs)
-        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(PayState.waiting, F.text)
@@ -622,7 +621,6 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
         invs = await _load_pay_invoices(s, data)
         await state.clear()
         await _handle_txid(message, s, txid, invoices=invs, chain=chain)
-        await _reshow_menu(message, s, message.from_user)
 
 
 @router.message(PayState.waiting)

@@ -21,7 +21,7 @@ from aiogram.exceptions import (
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import select
 
 # Reuse the main bot's generic membership primitives: `_is_member` (restricted-safe, fail-closed) and
@@ -144,41 +144,44 @@ async def _resolve(session, bot: Bot, user) -> tuple[StorefrontBot | None, Resel
 async def _send_admin_menu(  # noqa: ANN001
     message, sf: StorefrontBot, *, session, reseller, user_id: int,
 ) -> None:
-    """Show the shop-admin home. The PRIMARY OWNER gets a COMPACT inline home whose HTTPS button opens
-    the web portal directly (daily management lives in the browser); we first send `ReplyKeyboardRemove`
-    to undock any stale legacy keyboard. A CO-ADMIN (not a portal principal — no reseller JWT) keeps the
-    full 14-label reply keyboard. The 14 legacy labels stay routable via `sf_menu` for everyone."""
+    """Show the lean shop-admin home: a ≤5 reply keyboard (urgent actions + «بیشتر»). The PRIMARY OWNER
+    additionally gets a one-tap INLINE «مدیریت فروشگاه در مرورگر» button (full management lives in the
+    browser); a CO-ADMIN (not a portal principal) gets the same reply keyboard WITHOUT the portal button.
+    All 14 labels stay routable via `sf_menu` (top-level or under «بیشتر»)."""
     if _is_shop_owner(reseller, user_id):
         from app.bot.handlers.common import portal_login_url
 
         url = await portal_login_url(
             session, reseller.bot_chat_id, next_path=f"/portal/storefront/{sf.id}")
-        # ReplyKeyboardRemove and an inline keyboard can't ride the same message → send two.
-        await message.answer(rtl("🛠 پنلِ مدیریتِ فروشگاه"), reply_markup=ReplyKeyboardRemove())
-        home = ("مدیریتِ کاملِ فروشگاه (پلن‌ها، مشتری‌ها، شارژها، کدها، پیام همگانی و تنظیمات) در "
-                "مرورگر انجام می‌شود. کارهای فوری هم همین‌جا در دسترس‌اند:")
-        if not url:
-            home += "\n\n⚠️ آدرسِ وب هنوز پیکربندی نشده است؛ فعلاً از همین دکمه‌ها استفاده کنید."
-        await message.answer(rtl(home), reply_markup=kb.owner_home_kb(url))
-        return
+        if url:
+            await message.answer(rtl("🌐 برای مدیریتِ کاملِ فروشگاه در مرورگر، دکمهٔ زیر را بزنید:"),
+                                 reply_markup=kb.owner_portal_inline_kb(url))
     await message.answer(
         rtl(f"🛠 پنلِ مدیریتِ فروشگاه\nربات: @{sf.bot_username or '—'}\nیک گزینه را انتخاب کنید:"),
-        reply_markup=kb.admin_reply_kb(),
+        reply_markup=kb.admin_main_reply_kb(),
     )
 
 
-async def _reshow_admin_menu(message, note: str, *, bot: Bot) -> None:  # noqa: ANN001
-    """Send a flow-completion `note` (with NO reply keyboard), then re-show the admin home in a FRESH
-    session — a co-admin re-docks the legacy 14-label keyboard; the OWNER gets the compact inline home
-    instead of re-docking the retired keyboard (plan 007 «hidden from the owner»). Opens its own
-    session so it works at every FSM-completion site, including those whose request session already
-    closed. `message`/`bot` are in scope at every storefront handler."""
+async def _reshow_admin_menu(message, note: str, *, bot: Bot) -> None:  # noqa: ANN001, ARG001
+    """Send a flow-completion `note`. Re-docking the menu is handled uniformly by the
+    `_sf_redock_after_flow` middleware (which fires whenever a flow's state goes active → None), so
+    every exit — success or early-return — restores the right menu without each site remembering to."""
     await message.answer(rtl(note))
+
+
+async def _redock_sf_menu(message, bot: Bot) -> None:  # noqa: ANN001
+    """Re-dock the correct menu after a flow ends: the admin home (owner reply+inline / co-admin reply)
+    or the customer menu."""
     async with SessionLocal() as s:
         sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
-        if sf is not None and is_admin:
+        if sf is None:
+            return
+        if is_admin:
             await _send_admin_menu(
                 message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
+        else:
+            cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+            await _send_customer_menu(message.answer, sf, cust)
 
 
 def _trial_available(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
@@ -506,36 +509,64 @@ async def sf_start(message: Message, state: FSMContext, bot: Bot) -> None:
         await _send_customer_menu(message.answer, sf, customer)
 
 
+@storefront_router.message.outer_middleware
+async def _sf_redock_after_flow(handler, event, data):  # noqa: ANN001, ANN202
+    """Every flow entry docks the cancel-only `flow_cancel_kb`. This re-docks the right menu whenever a
+    flow's state goes active → None during a message (any exit — success or early-return), mirroring the
+    main bot. Registered after the ban/join gates so it wraps the actual handler."""
+    state = data.get("state")
+    before = await state.get_state() if state is not None else None
+    result = await handler(event, data)
+    try:
+        # `/start` rebuilds the menu itself → skip re-dock to avoid a double menu.
+        first = ((getattr(event, "text", "") or "").strip().split(maxsplit=1) or [""])[0].lower()
+        if (first != "/start" and before is not None and state is not None
+                and await state.get_state() is None):
+            bot = data.get("bot")
+            if bot is not None and getattr(event, "from_user", None) is not None:
+                await _redock_sf_menu(event, bot)
+    except Exception:  # noqa: BLE001 — a menu re-show must never break the handler
+        log.warning("storefront re-dock after flow failed", exc_info=True)
+    return result
+
+
 @storefront_router.message(Command("cancel"))
-async def sf_cmd_cancel(message: Message, state: FSMContext, bot: Bot) -> None:
-    """A real global cancel: clear any in-progress flow and re-show the right menu. Registered before
-    every FSM-state text handler so `/cancel` aborts a compose instead of being consumed/relayed by
-    it — and the ban/join middlewares already exempt `/cancel`, so it's reachable mid-flow."""
+async def sf_cmd_cancel(message: Message, state: FSMContext) -> None:
+    """Global cancel: clear the flow (the re-dock middleware re-shows the right menu). Registered
+    before every FSM-state text handler, and the ban/join middlewares exempt `/cancel`."""
     await state.clear()
-    async with SessionLocal() as s:
-        sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
-        if sf is None:
-            return
-        if is_admin:
-            await _send_admin_menu(
-                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
-        else:
-            cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-            await _send_customer_menu(message.answer, sf, cust)
+    await message.answer(rtl("لغو شد."))
+
+
+@storefront_router.message(F.text == kb.CANCEL_LABEL)
+async def sf_cancel_label(message: Message, state: FSMContext) -> None:
+    """The docked «✖️ انصراف» reply button: clear the flow; the re-dock middleware restores the menu."""
+    await state.clear()
+    await message.answer(rtl("لغو شد."))
 
 
 @storefront_router.message(F.text.in_(kb.ALL_LABELS))
 async def sf_menu(message: Message, state: FSMContext, bot: Bot) -> None:
     text = (message.text or "").strip()
+    # FSM-LOCK: while a flow is active, a menu label must NOT navigate/clear — re-prompt cancel.
+    if text != kb.CANCEL_LABEL and await state.get_state() is not None:
+        await message.answer(
+            rtl("شما در حال یک عملیات هستید؛ برای خروج «✖️ انصراف» را بزنید."),
+            reply_markup=kb.flow_cancel_kb())
+        return
     trial_ids: tuple[int, int] | None = None
     async with SessionLocal() as s:
         sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None:
             return
         await state.clear()
-        if text == kb.BACK_TO_ADMIN and is_admin:
+        if text in (kb.BACK_TO_ADMIN, kb.BACK_LABEL) and is_admin:
             await _send_admin_menu(
                 message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
+            return
+        if is_admin and text == kb.MORE_LABEL:
+            is_owner = _is_shop_owner(reseller, message.from_user.id)
+            await message.answer(rtl("گزینه‌های بیشتر:"), reply_markup=kb.admin_more_reply_kb(owner=is_owner))
             return
         if is_admin and text in kb.ADMIN_LABEL_TO_ACTION:
             await _admin_action(kb.ADMIN_LABEL_TO_ACTION[text], message, state, s, sf, reseller)
@@ -615,14 +646,14 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await state.set_state(SF.support)
         await ans(rtl(
             f"شناسهٔ پشتیبانی (مثلاً @yourID) را بفرستید.\nفعلی: {sf.support_contact or '—'}"),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
     elif action == "welcome":
         await _start_admin_fsm(state, sf)
         await state.set_state(SF.welcome)
         await ans(rtl(
             "متنِ خوش‌آمدگوییِ فروشگاه را بفرستید (به مشتری در شروع نشان داده می‌شود).\n"
             f"فعلی: {sf.welcome_text or '🛍 به فروشگاه خوش آمدید!'}"),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
     elif action == "joincfg":
         cur = sf.channel_id or "—"
         await ans(rtl(
@@ -690,7 +721,7 @@ async def sf_add_admin_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> 
         "👤 آیدیِ عددیِ تلگرامِ فرد را بفرستید،\n"
         "یا یک پیام از او را برای همین ربات فوروارد کنید.\n\n"
         "نکته: آن فرد باید حداقل یک‌بار ربات را /start کرده باشد تا بتواند وارد پنلِ مدیریت شود."),
-        reply_markup=kb.cancel_kb())
+        reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -713,7 +744,7 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             "نشد. یک آیدیِ عددیِ معتبر بفرستید، یا پیامی از آن فرد را فوروارد کنید.\n"
             "(اگر فوروارد اثری نداشت، آن فرد در تنظیماتِ حریمِ خصوصیِ تلگرام فوروارد را بسته است؛ "
             "آیدیِ عددی‌اش را دستی بفرستید.)"),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     async with SessionLocal() as s:
@@ -918,7 +949,7 @@ async def sf_buy(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.message.answer(rtl(
         f"🛒 {plan_text}\n\n"
         "یک نام برای این سرویس بفرستید (مثلاً: گوشی) تا بعداً آن را از هم تشخیص دهید:"),
-        reply_markup=kb.cancel_kb())
+        reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -928,7 +959,7 @@ async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
     name = " ".join((message.text or "").split())
     if not name or len(name) > 40:
         await message.answer(rtl("نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید."),
-                             reply_markup=kb.cancel_kb())
+                             reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     plan_id = int(data.get("buy_plan_id") or 0)
@@ -1334,7 +1365,7 @@ async def sf_dm_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.message.answer(
         rtl(f"✍️ پیامی که می‌خواهید برای «{name}» فرستاده شود را بنویسید (متن یا عکس).\n"
             "پیام از طرفِ «پشتیبانیِ فروشگاه» برای مشتری ارسال می‌شود."),
-        reply_markup=kb.cancel_kb())
+        reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1370,7 +1401,7 @@ async def sf_customers_search_start(cb: CallbackQuery, state: FSMContext, bot: B
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.cust_search)
-    await cb.message.answer(rtl("نام یا آیدیِ عددیِ مشتری را بفرستید:"), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl("نام یا آیدیِ عددیِ مشتری را بفرستید:"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1527,7 +1558,7 @@ async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None
         return
     await state.set_state(SF.topup_amount)
     await cb.message.answer(rtl("مبلغی که می‌خواهید شارژ کنید (تومان) را بفرستید:"),
-                            reply_markup=kb.cancel_kb())
+                            reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1535,7 +1566,7 @@ async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None
 async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("یک مبلغِ معتبر (تومان) بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("یک مبلغِ معتبر (تومان) بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     async with SessionLocal() as s:
         sf, _r, _a = await _resolve(s, bot, message.from_user)
@@ -1557,7 +1588,7 @@ async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None
 @storefront_router.callback_query(F.data == "sftopcode")
 async def sf_topup_code_prompt(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await state.set_state(SF.topup_code)
-    await cb.message.answer(rtl("کدِ شارژ را بفرستید:"), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl("کدِ شارژ را بفرستید:"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1602,7 +1633,7 @@ async def sf_topup_code_entered(message: Message, state: FSMContext, bot: Bot) -
 @storefront_router.callback_query(F.data == "sfgift")
 async def sf_gift_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await state.set_state(SF.gift_code)
-    await cb.message.answer(rtl("کدِ هدیه را بفرستید:"), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl("کدِ هدیه را بفرستید:"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1651,7 +1682,7 @@ async def sf_topup_method(cb: CallbackQuery, state: FSMContext, bot: Bot) -> Non
     await cb.message.answer(rtl(
         f"💳 مبلغِ {_toman(amount)} تومان را به آدرسِ زیر واریز کنید:{bonus_line}\n\n{detail}\n\n"
         "سپس رسید (عکس) یا شناسهٔ تراکنش/متنِ واریز را همین‌جا بفرستید."),
-        parse_mode="HTML", reply_markup=kb.cancel_kb())
+        parse_mode="HTML", reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1813,7 +1844,7 @@ async def sf_topup_ok_amount(cb: CallbackQuery, state: FSMContext, bot: Bot) -> 
     await state.set_state(SF.confirm_amount)
     await state.update_data(confirm_txn=txn_id, sf_topup_key=f"sf-topup-amt:{cb.id}")
     await cb.message.answer(rtl("مبلغی که باید به کیفِ پولِ مشتری اضافه شود (تومان) را بفرستید:"),
-                            reply_markup=kb.cancel_kb())
+                            reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1826,7 +1857,7 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
     data = await state.get_data()
     txn_id = int(data.get("confirm_txn") or 0)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     key = str(data.get("sf_topup_key") or f"sf-topup-amt:{message.message_id}")
     await state.clear()
@@ -1875,7 +1906,7 @@ async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     # No title (owner: «عنوان نمی‌خواهیم») — collect volume → days → price only.
     await _start_admin_fsm(state, sf)
     await state.set_state(SF.plan_gb)
-    await cb.message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1883,29 +1914,29 @@ async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_plan_gb(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(p_gb=int(raw))
     await state.set_state(SF.plan_days)
-    await message.answer(rtl("مدت به روز (عدد):"), reply_markup=kb.cancel_kb())
+    await message.answer(rtl("مدت به روز (عدد):"), reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.plan_days, F.text)
 async def sf_plan_days(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(p_days=int(raw))
     await state.set_state(SF.plan_price)
-    await message.answer(rtl("قیمت به تومان (عدد):"), reply_markup=kb.cancel_kb())
+    await message.answer(rtl("قیمت به تومان (عدد):"), reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.plan_price, F.text)
 async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     async with SessionLocal() as s:
@@ -2010,7 +2041,7 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await _start_admin_fsm(state, sf)
     await state.update_data(edit_plan_id=plan_id)
     await cb.message.answer(
-        rtl(f"ویرایش پلن ({cur})\n\nحجمِ جدید به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+        rtl(f"ویرایش پلن ({cur})\n\nحجمِ جدید به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2018,29 +2049,29 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_edit_gb(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(e_gb=int(raw))
     await state.set_state(SF.edit_days)
-    await message.answer(rtl("مدتِ جدید به روز (عدد):"), reply_markup=kb.cancel_kb())
+    await message.answer(rtl("مدتِ جدید به روز (عدد):"), reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.edit_days, F.text)
 async def sf_edit_days(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(e_days=int(raw))
     await state.set_state(SF.edit_price)
-    await message.answer(rtl("قیمتِ جدید به تومان (عدد):"), reply_markup=kb.cancel_kb())
+    await message.answer(rtl("قیمتِ جدید به تومان (عدد):"), reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.edit_price, F.text)
 async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     plan_id = int(data.get("edit_plan_id", 0))
@@ -2080,7 +2111,7 @@ async def sf_credit_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         return
     await state.set_state(SF.credit_code)
     await cb.message.answer(
-        rtl("کدِ تخفیف را بفرستید (فقط حروف/عدد، مثلاً NOWRUZ):"), reply_markup=kb.cancel_kb())
+        rtl("کدِ تخفیف را بفرستید (فقط حروف/عدد، مثلاً NOWRUZ):"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2089,7 +2120,7 @@ async def sf_credit_code(message: Message, state: FSMContext, bot: Bot) -> None:
     code = storefront_credit.normalize_code(message.text)
     if not code or len(code) > 32 or not code.replace("_", "").isalnum():
         await message.answer(rtl("کدِ نامعتبر. فقط حروف/عدد (۱ تا ۳۲ نویسه)."),
-                             reply_markup=kb.cancel_kb())
+                             reply_markup=kb.flow_cancel_kb())
         return
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
@@ -2098,7 +2129,7 @@ async def sf_credit_code(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         if await storefront_credit.code_exists(s, sf.id, code):
             await message.answer(rtl("این کد قبلاً وجود دارد؛ کدِ دیگری بفرستید."),
-                                 reply_markup=kb.cancel_kb())
+                                 reply_markup=kb.flow_cancel_kb())
             return
     await state.update_data(c_code=code)
     await state.set_state(None)
@@ -2111,11 +2142,11 @@ async def sf_credit_type(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(c_kind=("percent" if t == "percent" else "fixed"), c_is_gift=(t == "gift"))
     await state.set_state(SF.credit_value)
     if t == "percent":
-        await cb.message.answer(rtl("درصدِ تخفیف (عددِ ۱ تا ۱۰۰):"), reply_markup=kb.cancel_kb())
+        await cb.message.answer(rtl("درصدِ تخفیف (عددِ ۱ تا ۱۰۰):"), reply_markup=kb.flow_cancel_kb())
     else:
         await cb.message.answer(
             rtl("مبلغِ هدیه به تومان:" if t == "gift" else "مبلغِ بونوس به تومان:"),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2124,12 +2155,12 @@ async def sf_credit_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     val = int(raw)
     if data.get("c_kind") == "percent":
         if val > 100:
-            await message.answer(rtl("درصد باید بین ۱ تا ۱۰۰ باشد."), reply_markup=kb.cancel_kb())
+            await message.answer(rtl("درصد باید بین ۱ تا ۱۰۰ باشد."), reply_markup=kb.flow_cancel_kb())
             return
         await state.update_data(c_percent=val)
         await state.set_state(SF.credit_maxbonus)
@@ -2391,7 +2422,7 @@ async def sf_pay_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         "usdt": "آدرسِ کیفِ USDT (BEP-20) را بفرستید:",
         "ton": "آدرسِ کیفِ گرام/تون را بفرستید:",
     }[method]
-    await cb.message.answer(rtl(prompt), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl(prompt), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2408,7 +2439,7 @@ async def sf_pay_value(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         if method == "card" and step == "card_number":
             await state.update_data(pay_step="card_holder", pending_card_number=val)
-            await message.answer(rtl("نامِ صاحبِ کارت را بفرستید:"), reply_markup=kb.cancel_kb())
+            await message.answer(rtl("نامِ صاحبِ کارت را بفرستید:"), reply_markup=kb.flow_cancel_kb())
             return
         changes = (
             {"card_number": data.get("pending_card_number"), "card_holder": val}
@@ -2462,7 +2493,7 @@ async def sf_trial_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         return
     await state.set_state(SF.trial_gb)
     await _start_admin_fsm(state, sf)
-    await cb.message.answer(rtl("حجمِ تستِ رایگان به گیگابایت (عدد):"), reply_markup=kb.cancel_kb())
+    await cb.message.answer(rtl("حجمِ تستِ رایگان به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2470,18 +2501,18 @@ async def sf_trial_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_trial_gb(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(t_gb=int(raw))
     await state.set_state(SF.trial_days)
-    await message.answer(rtl("مدتِ تستِ رایگان به روز (عدد):"), reply_markup=kb.cancel_kb())
+    await message.answer(rtl("مدتِ تستِ رایگان به روز (عدد):"), reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.trial_days, F.text)
 async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     async with SessionLocal() as s:
@@ -2516,7 +2547,7 @@ async def sf_adjust_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> Non
     await state.set_state(SF.adjust_amount)
     await state.update_data(adj_customer=int(cid), adj_sign=sign, adj_key=f"sf-adj:{cb.id}")
     await cb.message.answer(rtl(f"مبلغِ {'افزایش' if sign == '+' else 'کاهش'} (تومان) را بفرستید:"),
-                            reply_markup=kb.cancel_kb())
+                            reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2528,7 +2559,7 @@ async def sf_adjust_amount(message: Message, state: FSMContext, bot: Bot) -> Non
     raw = _digits(message.text)
     data = await state.get_data()
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.cancel_kb())
+        await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.clear()
     signed = int(raw) * (1 if data.get("adj_sign") == "+" else -1)
@@ -2621,7 +2652,7 @@ async def sf_join_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.message.answer(rtl(
         f"یک پیام از کانالِ خود را همین‌جا فوروارد کنید (یا @username یا آیدیِ -100… را بفرستید).\n"
         f"توجه: ربات (@{sf.bot_username or '—'}) باید در آن کانال ادمین باشد."),
-        reply_markup=kb.cancel_kb())
+        reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2642,7 +2673,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
     if not channel_id:
         await message.answer(rtl(
             "نشد. یک پیام از کانال را فوروارد کنید یا @username / آیدیِ -100… را بفرستید."),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     async with SessionLocal() as s:
@@ -2661,7 +2692,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
                     sf_config_version=exc.current_version or sf.config_version,
                     sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
                 )
-            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.cancel_kb())
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.flow_cancel_kb())
             return
     if isinstance(claim, storefront_admin.CommandResult):
         if claim.response_status >= 400:
@@ -2671,7 +2702,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
             )
             await message.answer(rtl(
                 "بررسیِ قبلیِ کانال ناموفق بود؛ وضعیت ادمین‌بودن ربات را اصلاح کنید و دوباره بفرستید."),
-                reply_markup=kb.cancel_kb())
+                reply_markup=kb.flow_cancel_kb())
             return
         await state.clear()
         async with SessionLocal() as s:
@@ -2694,7 +2725,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
         )
         await message.answer(rtl(
             "نتیجه بررسی تلگرام نامشخص ماند؛ چند لحظه بعد دوباره تلاش کنید."),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
         return
     if not is_channel_admin:
         async with SessionLocal() as s:
@@ -2706,7 +2737,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
         )
         await message.answer(rtl(
             "ابتدا ربات را در کانالِ خود ادمین کنید، سپس دوباره پیام را فوروارد کنید."),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
         return  # stay in the state so they can retry after granting admin
     # Bot is admin → resolve a join link best-effort and save (enable by default).
     link: str | None = None
@@ -2726,7 +2757,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
             sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
         )
         await message.answer(rtl(_admin_error(storefront_admin.AdminCommandError(
-            "external_unknown", str(exc)))), reply_markup=kb.cancel_kb())
+            "external_unknown", str(exc)))), reply_markup=kb.flow_cancel_kb())
         return
     except Exception:  # noqa: BLE001 — link is optional; the gate still works via the check button
         link = None
@@ -2887,7 +2918,7 @@ async def sf_shop_msg(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await _start_admin_fsm(state, sf)
     await cb.message.answer(rtl(
         "متنِ پیامی که هنگامِ بسته‌بودنِ فروشگاه به مشتری نشان داده می‌شود را بفرستید.\n"
-        f"فعلی: {sf.closed_text or _SHOP_CLOSED_DEFAULT}"), reply_markup=kb.cancel_kb())
+        f"فعلی: {sf.closed_text or _SHOP_CLOSED_DEFAULT}"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -2972,7 +3003,7 @@ async def sf_broadcast_segment(cb: CallbackQuery, state: FSMContext, bot: Bot) -
         await state.update_data(bc_segment=segment)
         await cb.message.answer(rtl(
             f"📢 گیرنده: {_SEGMENT_FA[segment]} ({n} نفر)\nاکنون متنِ پیام را بفرستید:"),
-            reply_markup=kb.cancel_kb())
+            reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -3072,16 +3103,21 @@ async def sf_noop(cb: CallbackQuery) -> None:
 @storefront_router.message()
 async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
     """A stray message that matched no command/label/FSM state.
-      • ADMIN → re-show the admin menu.
+      • MID-FLOW (a state is active but this message didn't match the flow's own handler, e.g. a wrong
+        type) → the flow is LOCKED: re-prompt «✖️ انصراف» and keep the state, so nothing but cancel exits.
+      • ADMIN (idle) → re-show the admin menu.
       • CUSTOMER who is IDLE (no half-open flow) and sends free text/photo → treat it as a message to
         shop support: relay it to the admin(s) with a «پاسخ» button and give a light ack (NOT the full
         welcome banner, which would clutter a back-and-forth).
       • Otherwise → gently re-show the customer menu.
-    Clearing `state` first means a message that fell through mid-flow (e.g. an unsupported type sent
-    during a compose) aborts that flow instead of leaving it half-open. A banned customer was already
-    short-circuited by the middleware."""
-    was_mid_flow = await state.get_state() is not None
-    await state.clear()
+    A banned customer was already short-circuited by the middleware."""
+    if await state.get_state() is not None:
+        # Locked flow: don't clear, don't navigate — only «✖️ انصراف» (or /cancel) leaves.
+        await message.answer(
+            rtl("شما در حال یک عملیات هستید؛ برای خروج «✖️ انصراف» را بزنید."),
+            reply_markup=kb.flow_cancel_kb(),
+        )
+        return
     async with SessionLocal() as s:
         sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None:
@@ -3099,10 +3135,10 @@ async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
         owner_url = (await portal_login_url(
             s, owner_id, next_path=f"/portal/storefront/{sf.id}/customers/{cust.id}")
             if owner_id else None)
-    # Relay only a genuine idle support message: free text (not a slash command) or a photo, and NOT a
-    # stray message that fell out of a flow (that just aborts to the menu).
+    # We only reach here when NO flow is active (mid-flow returned above), so any free text (not a
+    # slash command) or a photo from an idle customer is a genuine support message → relay it.
     txt = (message.text or "").strip()
-    relayable = (not was_mid_flow) and (bool(message.photo) or bool(txt and not txt.startswith("/")))
+    relayable = bool(message.photo) or bool(txt and not txt.startswith("/"))
     if relayable and await _relay_to_admins(
             bot, admin_ids, cust_name, cust_id, message, owner_id=owner_id, portal_url=owner_url):
         await message.answer(rtl("📨 پیامِ شما برای پشتیبانیِ فروشگاه ارسال شد؛ به‌زودی پاسخ می‌گیرید."))

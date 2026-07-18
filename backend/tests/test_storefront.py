@@ -397,12 +397,15 @@ def test_customer_with_id_above_int32_roundtrips(tmp_path):
 
 
 def test_reseller_menu_keyboard_storefront_button():
-    on = keyboards.reseller_menu_keyboard(show_storefront=True)
-    cbs = [b.callback_data for row in on.inline_keyboard for b in row]
-    assert "menu:storefront" in cbs
-    off = keyboards.reseller_menu_keyboard(show_storefront=False)
-    cbs_off = [b.callback_data for row in off.inline_keyboard for b in row]
-    assert "menu:storefront" not in cbs_off
+    # The storefront-setup entry lives in the reseller «بیشتر» reply keyboard, shown only when the
+    # reseller is eligible to run a shop bot.
+    def _labels(kb):
+        return [b.text for row in kb.keyboard for b in row]
+
+    on = keyboards.reseller_more_reply_kb(show_storefront=True)
+    assert "🏪 راه‌اندازی ربات فروشگاهی" in _labels(on)
+    off = keyboards.reseller_more_reply_kb(show_storefront=False)
+    assert "🏪 راه‌اندازی ربات فروشگاهی" not in _labels(off)
 
 
 def test_plan_label_is_gb_days_price_never_title():
@@ -682,7 +685,8 @@ def test_sf_fallback_relays_idle_customer_with_light_ack(tmp_path, monkeypatch):
 
 def test_sf_fallback_does_not_relay_mid_flow_message(tmp_path, monkeypatch):
     """A message that fell through mid-flow (a wrong-type message during a compose/FSM state) must NOT
-    be relayed as support — it aborts to the menu, and the leaked state is cleared."""
+    be relayed as support. The flow is LOCKED: the state is kept and the user is re-prompted to cancel,
+    so nothing but «✖️ انصراف» (or /start) exits."""
     setup, run, relayed, answered, engine = _fallback_harness(tmp_path, monkeypatch, "fb2.db")
 
     async def go():
@@ -690,27 +694,21 @@ def test_sf_fallback_does_not_relay_mid_flow_message(tmp_path, monkeypatch):
         try:
             st = _FakeState("SF:buy_name")                        # a half-open flow
             await run(st, _fake_customer_msg(answered, text="یک عکس فرستادم"))
-            assert await st.get_state() is None                   # state was cleared (no leak)
+            assert await st.get_state() == "SF:buy_name"          # state PRESERVED (locked, not cleared)
         finally:
             await engine.dispose()
 
     asyncio.run(go())
     assert relayed == []                                          # nothing relayed to the admin
-    assert len(answered) >= 1                                     # the menu WAS re-shown instead
+    assert any("انصراف" in a for a in answered)                   # re-prompted to cancel
 
 
 def test_sf_cmd_cancel_clears_state_and_shows_menu(tmp_path, monkeypatch):
-    """/cancel is a real global cancel: it clears any in-progress compose and re-shows the menu,
-    instead of being relayed to the customer as literal text."""
+    """/cancel is a real global cancel: it clears any in-progress compose (the re-dock middleware then
+    re-shows the right menu), instead of being relayed to the customer as literal text."""
     from app.bot.storefront import handlers as H
 
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
-    from app.core.db import Base
-
     answered: list = []
-
-    class FakeBot:
-        id = 991
 
     class FakeMsg:
         from_user = SimpleNamespace(id=555, first_name="Cust", username="c")
@@ -720,23 +718,12 @@ def test_sf_cmd_cancel_clears_state_and_shows_menu(tmp_path, monkeypatch):
             answered.append(t)
 
     async def go():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        Session = async_sessionmaker(engine, expire_on_commit=False)
-        async with Session() as s:
-            r, _bot, _c = await _seed(s)
-            r.bot_chat_id = 111
-            await s.commit()
-        monkeypatch.setattr(H, "SessionLocal", Session)
         st = _FakeState("SF:dm_compose")
-        try:
-            await H.sf_cmd_cancel(FakeMsg(), st, FakeBot())
-            assert await st.get_state() is None                   # compose cleared
-        finally:
-            await engine.dispose()
+        await H.sf_cmd_cancel(FakeMsg(), st)
+        assert await st.get_state() is None                       # compose cleared
 
     asyncio.run(go())
-    assert len(answered) == 1                                     # menu shown (not a relay)
+    assert any("لغو" in a for a in answered)                      # a cancel note (not a relay)
 
 
 def test_customer_detail_kb_ban_toggle():
@@ -1786,28 +1773,73 @@ class _FakeMsg:
         self.answers.append((text, reply_markup))
 
 
-def test_owner_home_kb_shape_and_no_webapp():
+def test_owner_portal_inline_kb_is_one_tap_url_no_webapp():
+    # The shop OWNER's one-tap portal button is a plain inline URL (opens in a normal browser — no
+    # Mini App / web_app), sent alongside the docked reply keyboard.
     url = "https://portal.example.test/portal/login?t=abc&next=%2Fportal%2Fstorefront%2F1"
-    home = sfkb.owner_home_kb(url)
+    home = sfkb.owner_portal_inline_kb(url)
     buttons = [b for row in home.inline_keyboard for b in row]
-    assert len(buttons) == 5
+    assert len(buttons) == 1
     assert buttons[0].url == url and buttons[0].web_app is None
-    callbacks = {b.callback_data for b in buttons if b.callback_data}
-    assert callbacks == {"sfhome:topups", "sfhome:stats", "sfhome:preview", "sfhome:help"}
-    # No web_app / Mini App anywhere.
-    assert all(b.web_app is None for b in buttons)
-    # url=None → 4 buttons (no url row), never crashes.
-    nourl = sfkb.owner_home_kb(None)
-    assert len([b for row in nourl.inline_keyboard for b in row]) == 4
+
+
+def _reply_labels(kb):
+    return [b.text for row in kb.keyboard for b in row]
+
+
+def test_admin_reply_menu_tiers_lose_no_action_and_flow_cancel_is_cancel_only():
+    """The lean admin menu is ≤5 top-level (urgent + «بیشتر»); «بیشتر» holds the rest. Crucially the
+    union of both tiers routes to EVERY admin action, so nothing is lost — the plan-007 parity contract
+    (ADMIN_LABEL_TO_ACTION) still covers all of them. «مدیرانِ ربات» is owner-only."""
+    main = _reply_labels(sfkb.admin_main_reply_kb())
+    assert sfkb.MORE_LABEL in main
+    assert len(main) <= 5                                       # ≤5 top-level (incl. «بیشتر»)
+
+    owner_more = _reply_labels(sfkb.admin_more_reply_kb(owner=True))
+    assert sfkb.BACK_LABEL in owner_more
+    # every admin action reachable across the two tiers (minus the nav labels)
+    reachable = (set(main) | set(owner_more)) - {sfkb.MORE_LABEL, sfkb.BACK_LABEL}
+    assert reachable == {lbl for lbl, _ in sfkb.ADMIN_MENU}
+
+    coadmin_more = _reply_labels(sfkb.admin_more_reply_kb(owner=False))
+    admins_label = sfkb._ACTION_TO_LABEL["admins"]
+    assert admins_label in owner_more and admins_label not in coadmin_more
+
+    fc = sfkb.flow_cancel_kb()
+    assert _reply_labels(fc) == [sfkb.CANCEL_LABEL]             # ONLY cancel (menu hidden mid-flow)
+    assert fc.is_persistent is True
+
+
+def test_sf_menu_label_during_a_flow_is_locked_not_navigation():
+    """The FSM-lock: while a flow's state is active, a menu-label tap must NOT run the action or clear
+    the flow — it re-prompts «✖️ انصراف» and re-docks the cancel-only keyboard. Only cancel/start exits.
+    The lock check short-circuits before any DB access, so no session is needed here."""
+    from aiogram.types import ReplyKeyboardMarkup
+
+    from app.bot.storefront import handlers as H
+
+    answered: list = []
+
+    class FakeMsg:
+        from_user = SimpleNamespace(id=111)
+        text = sfkb._ACTION_TO_LABEL["customers"]              # a real admin action label
+
+        async def answer(self, t, reply_markup=None, **kw):    # noqa: ANN001, ANN003
+            answered.append((t, reply_markup))
+
+    async def go():
+        st = _FakeState("SF:dm_compose")                       # a locked flow
+        await H.sf_menu(FakeMsg(), st, SimpleNamespace(id=991))
+        assert await st.get_state() == "SF:dm_compose"         # NOT cleared, action NOT run
+
+    asyncio.run(go())
+    assert len(answered) == 1 and "انصراف" in answered[0][0]
+    assert isinstance(answered[0][1], ReplyKeyboardMarkup)     # docked cancel-only
 
 
 def test_send_admin_menu_owner_vs_coadmin(tmp_path):
     async def body(s):
-        from aiogram.types import (
-            InlineKeyboardMarkup,
-            ReplyKeyboardMarkup,
-            ReplyKeyboardRemove,
-        )
+        from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
         from app.bot.storefront import handlers as H
         from app.services import settings_service
@@ -1817,31 +1849,35 @@ def test_send_admin_menu_owner_vs_coadmin(tmp_path):
         await settings_service.set_value(s, "server_domain", "portal.example.test")
         await s.commit()
 
-        # OWNER: ReplyKeyboardRemove first (undock legacy), then the compact inline home with a
-        # portal URL carrying an allow-listed &next.
+        # OWNER: a one-tap INLINE portal button (URL with allow-listed &next), THEN the docked lean
+        # ≤5 reply keyboard.
         m = _FakeMsg(111)
         await H._send_admin_menu(m, bot, session=s, reseller=r, user_id=111)
-        assert isinstance(m.answers[0][1], ReplyKeyboardRemove)
-        home = m.answers[1][1]
-        assert isinstance(home, InlineKeyboardMarkup)
-        url = home.inline_keyboard[0][0].url
+        portal = m.answers[0][1]
+        assert isinstance(portal, InlineKeyboardMarkup)
+        url = portal.inline_keyboard[0][0].url
         assert url.startswith("https://portal.example.test/portal/login?t=")
         assert f"next=%2Fportal%2Fstorefront%2F{bot.id}" in url
-        assert home.inline_keyboard[0][0].web_app is None
+        assert portal.inline_keyboard[0][0].web_app is None            # no Mini App
+        rk = m.answers[1][1]
+        assert isinstance(rk, ReplyKeyboardMarkup)
+        owner_labels = {b.text for row in rk.keyboard for b in row}
+        assert owner_labels == (
+            {sfkb._ACTION_TO_LABEL[a] for a in sfkb.ADMIN_MAIN_ACTIONS} | {sfkb.MORE_LABEL})
 
-        # CO-ADMIN: the full 14-label legacy reply keyboard (no portal principal).
+        # CO-ADMIN: the SAME lean reply keyboard, but NO portal button (not a portal principal).
         m2 = _FakeMsg(222)
         await H._send_admin_menu(m2, bot, session=s, reseller=r, user_id=222)
-        rk = m2.answers[0][1]
-        assert isinstance(rk, ReplyKeyboardMarkup)
-        labels = {b.text for row in rk.keyboard for b in row}
-        assert labels == {lbl for lbl, _ in sfkb.ADMIN_MENU}
+        assert len(m2.answers) == 1
+        rk2 = m2.answers[0][1]
+        assert isinstance(rk2, ReplyKeyboardMarkup)
+        assert {b.text for row in rk2.keyboard for b in row} == owner_labels
     _run(body, tmp_path, "sf_owner_menu.db")
 
 
 def test_send_admin_menu_owner_domain_missing(tmp_path):
     async def body(s):
-        from aiogram.types import InlineKeyboardMarkup
+        from aiogram.types import ReplyKeyboardMarkup
 
         from app.bot.storefront import handlers as H
         r, bot, _ = await _seed(s)
@@ -1849,11 +1885,9 @@ def test_send_admin_menu_owner_domain_missing(tmp_path):
         await s.commit()  # no server_domain configured
         m = _FakeMsg(111)
         await H._send_admin_menu(m, bot, session=s, reseller=r, user_id=111)
-        home = m.answers[1][1]
-        assert isinstance(home, InlineKeyboardMarkup)
-        # No URL row → 4 callback buttons, and a configuration note in the text.
-        buttons = [b for row in home.inline_keyboard for b in row]
-        assert len(buttons) == 4 and all(b.url is None for b in buttons)
+        # No portal URL mintable → no inline message, just the docked reply keyboard (never crashes).
+        assert len(m.answers) == 1
+        assert isinstance(m.answers[0][1], ReplyKeyboardMarkup)
     _run(body, tmp_path, "sf_owner_nodomain.db")
 
 
