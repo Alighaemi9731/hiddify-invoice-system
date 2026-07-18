@@ -21,12 +21,14 @@ from app.models import (
     StorefrontCustomer,
     StorefrontOperation,
     StorefrontOrder,
+    StorefrontPlan,
     StorefrontWalletTxn,
 )
 from app.schemas.portal_storefront import (
     BotHealthOut,
     CreditMetricsOut,
     CustomerMetricsOut,
+    DailySalesPointOut,
     DashboardRangeOut,
     PanelHealthOut,
     PendingTopupsOut,
@@ -37,6 +39,7 @@ from app.schemas.portal_storefront import (
     StorefrontPanelOut,
     StorefrontResellerOut,
     StorefrontSummaryOut,
+    TopPlanOut,
     TrialConversionOut,
 )
 from app.services.storefront_expiry import _days_left
@@ -99,6 +102,111 @@ def tehran_bounds(day_from: dt.date, day_to: dt.date) -> tuple[dt.datetime, dt.d
 
 def _period_condition(start: dt.datetime, end: dt.datetime):
     return and_(StorefrontWalletTxn.created_at >= start, StorefrontWalletTxn.created_at < end)
+
+
+async def _daily_sales(
+    session: AsyncSession, storefront_id: int, day_from: dt.date, day_to: dt.date
+) -> list[DailySalesPointOut]:
+    """Net sales per Tehran day across the range, zero-filled so the chart has no gaps.
+
+    Bucketed in Python from a `created_at`-ordered scan (the codebase's precedent) because the day
+    boundary is Tehran-local and SQLite/Postgres truncate differently. Purchases are stored as
+    NEGATIVE ledger rows and are written already-`done`, so `created_at` is the moment money was
+    taken; refunds/reversals are separate positive rows and are subtracted on the day they happen,
+    matching how the period totals are computed.
+    """
+    start, end = tehran_bounds(day_from, day_to)
+    rows = (await session.execute(
+        select(StorefrontWalletTxn.created_at, StorefrontWalletTxn.kind,
+               StorefrontWalletTxn.amount_toman)
+        .where(
+            StorefrontWalletTxn.storefront_bot_id == storefront_id,
+            StorefrontWalletTxn.status == "done",
+            StorefrontWalletTxn.kind.in_(("purchase", "refund", "renew_reversal")),
+            StorefrontWalletTxn.created_at >= start,
+            StorefrontWalletTxn.created_at < end,
+        )
+    )).all()
+
+    amounts: dict[dt.date, int] = {}
+    orders: dict[dt.date, int] = {}
+    for created_at, kind, amount in rows:
+        when = created_at
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=dt.timezone.utc)
+        day = when.astimezone(TEHRAN).date()
+        value = int(amount or 0)
+        if kind == "purchase" and value < 0:
+            amounts[day] = amounts.get(day, 0) + (-value)
+            orders[day] = orders.get(day, 0) + 1
+        elif kind in ("refund", "renew_reversal") and value > 0:
+            amounts[day] = amounts.get(day, 0) - value
+
+    out: list[DailySalesPointOut] = []
+    cursor = day_from
+    while cursor <= day_to:
+        out.append(DailySalesPointOut(
+            day=cursor.day, date=cursor,
+            amount_toman=amounts.get(cursor, 0), orders=orders.get(cursor, 0),
+        ))
+        cursor += dt.timedelta(days=1)
+    return out
+
+
+async def _top_plans(
+    session: AsyncSession, storefront_id: int, day_from: dt.date, day_to: dt.date, limit: int = 8
+) -> list[TopPlanOut]:
+    """Which plans actually sold in the range — revenue and count, best-seller first.
+
+    Money comes from the OPERATION (`price_toman` charged at the time), never from the plan's
+    current price: plans are edited in place, so joining today's price to historic sales would
+    quietly restate past revenue. A plan deleted since the sale keeps its rows (`plan_id` is
+    SET NULL) and is grouped under a single «حذف‌شده» bucket rather than vanishing.
+    """
+    start, end = tehran_bounds(day_from, day_to)
+    rows = (await session.execute(
+        select(
+            StorefrontOperation.plan_id,
+            func.count(StorefrontOperation.id),
+            func.coalesce(func.sum(StorefrontOperation.price_toman), 0),
+        )
+        .where(
+            StorefrontOperation.storefront_bot_id == storefront_id,
+            StorefrontOperation.status == "done",
+            StorefrontOperation.op_type.in_(("purchase", "renewal")),
+            StorefrontOperation.created_at >= start,
+            StorefrontOperation.created_at < end,
+        )
+        .group_by(StorefrontOperation.plan_id)
+    )).all()
+    if not rows:
+        return []
+
+    plan_ids = [pid for pid, _c, _a in rows if pid is not None]
+    plans: dict[int, StorefrontPlan] = {}
+    if plan_ids:
+        plans = {
+            p.id: p for p in (await session.execute(
+                select(StorefrontPlan).where(StorefrontPlan.id.in_(plan_ids))
+            )).scalars().all()
+        }
+
+    out: list[TopPlanOut] = []
+    for plan_id, count, amount in rows:
+        plan = plans.get(plan_id) if plan_id is not None else None
+        if plan is not None:
+            title = f"{plan.gb} گیگ · {plan.days} روزه"
+        elif plan_id is None:
+            title = "بدون پلن (تمدید/قدیمی)"
+        else:
+            title = "پلن حذف‌شده"
+        out.append(TopPlanOut(
+            plan_id=plan_id, title=title,
+            gb=plan.gb if plan else None, days=plan.days if plan else None,
+            orders=int(count or 0), amount_toman=int(amount or 0),
+        ))
+    out.sort(key=lambda p: (p.amount_toman, p.orders), reverse=True)
+    return out[:limit]
 
 
 async def _sales_periods(
@@ -241,10 +349,15 @@ async def dashboard(
     current = (now or dt.datetime.now(dt.timezone.utc)).astimezone(TEHRAN)
     today = current.date()
     month_start = today.replace(day=1)
+    # Previous month rides along as an extra CASE column in the SAME scan — no extra round-trip —
+    # so the dashboard can show a month-over-month comparison instead of a number with no context.
+    prev_month_end = month_start - dt.timedelta(days=1)
+    prev_month_start = prev_month_end.replace(day=1)
     periods = {
         "today": tehran_bounds(today, today),
         "month": tehran_bounds(month_start, today),
         "range": tehran_bounds(day_from, day_to),
+        "prev_month": tehran_bounds(prev_month_start, prev_month_end),
     }
     sales = await _sales_periods(session, access.shop.id, periods)
     active_cutoff = current.astimezone(dt.timezone.utc) - dt.timedelta(days=30)
@@ -419,6 +532,17 @@ async def dashboard(
         rate=round(converted_count / trial_count, 4) if trial_count else None,
     )
 
+    daily_sales = await _daily_sales(session, access.shop.id, day_from, day_to)
+    top_plans = await _top_plans(session, access.shop.id, day_from, day_to)
+    range_start, range_end = tehran_bounds(day_from, day_to)
+    new_customers_range = int((await session.execute(
+        select(func.count(StorefrontCustomer.id)).where(
+            StorefrontCustomer.storefront_bot_id == access.shop.id,
+            StorefrontCustomer.created_at >= range_start,
+            StorefrontCustomer.created_at < range_end,
+        )
+    )).scalar_one() or 0)
+
     return StorefrontDashboardOut(
         storefront_id=access.shop.id,
         range=DashboardRangeOut(from_date=day_from, to_date=day_to),
@@ -432,6 +556,10 @@ async def dashboard(
         credits=credits,
         operation_states=operation_states,
         trial_conversion=trial_conversion,
+        sales_prev_month=sales.get("prev_month"),
+        daily_sales=daily_sales,
+        top_plans=top_plans,
+        new_customers_range=new_customers_range,
     )
 
 

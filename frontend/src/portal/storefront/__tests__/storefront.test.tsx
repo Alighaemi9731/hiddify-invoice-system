@@ -102,8 +102,14 @@ describe("storefront portal", () => {
     expect(await screen.findByText("۲۱۰٬۰۰۰ تومان")).toBeInTheDocument();
     expect(screen.getByText("۳۷٫۵٪")).toBeInTheDocument();
     expect(screen.getByText(/۳ تبدیل از ۸ مشتری آزمایشی/)).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "نمودار مبلغ خرید، تمدید و فروش قدیمی دوره" })).toBeInTheDocument();
     expect(screen.getByText("در حال تمدید: ۲")).toBeInTheDocument();
+    // The old chart merely re-drew the three numbers printed beneath it; the dashboard now leads
+    // with a real daily sales trend and a best-selling-plans ranking.
+    expect(screen.getByText("روند فروش روزانه")).toBeInTheDocument();
+    expect(screen.getByText(/پرفروش‌ترین پلن‌ها/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("img", { name: "نمودار مبلغ خرید، تمدید و فروش قدیمی دوره" })
+    ).not.toBeInTheDocument();
   });
 
   it("lets an owner switch between multiple shops while retaining selection in the route", async () => {

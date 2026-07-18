@@ -246,6 +246,7 @@ DEFS: list[SettingDef] = [
     # Near-expiry reminder for storefront customers: alert when a provisioned config is this
     # many days (or fewer) from expiring, once per service period, with a renew button. 0 = off.
     SettingDef("storefront_expiry_notify_days", 3, False, "schedule"),
+    SettingDef("storefront_expired_notify_days", 7, False, "schedule"),
     # Max simultaneous PENDING top-ups one customer may have (anti-spam on the admin review queue).
     SettingDef("storefront_max_pending_topups", 3, False, "schedule"),
     # Daily owner digest to the owner's Telegram PV (KPIs + health). On by default at 09:00.
@@ -350,6 +351,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "storefront_stale_customer_days": (0, 3650),
     "owner_data_retention_days": (0, 3650),
     "storefront_expiry_notify_days": (0, 60),
+    "storefront_expired_notify_days": (0, 60),
     "storefront_max_pending_topups": (1, 50),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),

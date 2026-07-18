@@ -269,6 +269,10 @@ class StorefrontOrder(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True)
     # When the «~80% of your volume used» warning was sent. Re-armed by a renewal (fresh quota) the
     # same way `expiry_alerted_at` is. NULL = never.
+    # Win-back after a PAID service actually lapsed. Re-armed by a renewal, like the others.
+    expired_alerted_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     usage_alerted_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
 

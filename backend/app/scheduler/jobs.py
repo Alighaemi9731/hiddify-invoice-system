@@ -323,14 +323,15 @@ async def storefront_reaper_job() -> None:
 
 async def storefront_expiry_job() -> None:
     """Daily proactive storefront notices: near-expiry reminders, «free trial ended → buy» nudges,
-    and «~80% volume used → renew» warnings. Each runs independently so one failing never blocks
-    the others."""
+    «~80% volume used → renew» warnings, and win-back notices for services that already lapsed.
+    Each runs independently so one failing never blocks the others."""
     from app.services import storefront_expiry
 
     for name, fn in (
         ("notify_expiring", storefront_expiry.notify_expiring),
         ("notify_trial_ended", storefront_expiry.notify_trial_ended),
         ("notify_usage_high", storefront_expiry.notify_usage_high),
+        ("notify_expired", storefront_expiry.notify_expired),
     ):
         try:
             async with SessionLocal() as session:

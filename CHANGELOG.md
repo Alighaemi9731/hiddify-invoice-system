@@ -8,6 +8,29 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.91.0 - 2026-07-18
+
+A useful storefront dashboard, and customers are no longer forgotten the moment their service
+expires. **Includes a database migration** (`d4f7a2b9c1e8`); it applies automatically on update.
+
+### Added
+
+- **Win-back notice when a paid service actually expires.** Until now the reminders stopped 3 days
+  *before* expiry, so at the exact moment a customer is most likely to renew — their service just
+  died — the shop said nothing. They now get one message with a «🔄 تمدید سرویس» button. It is sent
+  once per service period (a renewal re-arms it), and only for services that lapsed within the last
+  7 days, so switching this on does **not** message years of old customers at once. Configurable via
+  `storefront_expired_notify_days` (0 turns it off).
+
+### Changed
+
+- **The storefront dashboard was rebuilt around questions a shop owner actually asks.** Its only
+  chart used to redraw the same three numbers printed directly beneath it. It now leads with a real
+  **daily sales trend**, a **best-selling plans** ranking, and this month's sales **compared with
+  last month**, plus active services, services near expiry, and new customers this month. Plan
+  revenue is counted at the price that was actually charged, so editing a plan's price never
+  restates past sales.
+
 ## 1.90.2 - 2026-07-18
 
 The last and most important safeguard from the cross-tenant incident. No database migration.

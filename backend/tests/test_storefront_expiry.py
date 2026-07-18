@@ -283,6 +283,62 @@ def test_already_expired_not_spammed(tmp_path):
     _run(body, tmp_path, "e7.db")
 
 
+# ── win-back: a PAID service that already lapsed ─────────────────────────────
+# The near-expiry reminder deliberately stops at days_left < 0, so until now a customer heard
+# NOTHING once their service actually died — the moment they are most likely to renew.
+
+def test_winback_sent_after_a_paid_service_lapses_and_deduped(tmp_path):
+    async def body(s):
+        order, cust = await _seed(s, days_left_via_snapshot=-2)   # lapsed 2 days ago
+        fake = _FakeBot()
+        c1 = await storefront_expiry.notify_expired(s, bot_factory=_factory_for(fake))
+        assert c1["sent"] == 1
+        assert fake.sent[0][0] == cust.telegram_id
+        assert "منقضی شد" in fake.sent[0][1]
+        await s.refresh(order)
+        assert order.expired_alerted_at is not None
+        # Once per service period — a second sweep must not nag.
+        c2 = await storefront_expiry.notify_expired(s, bot_factory=_factory_for(fake))
+        assert c2["sent"] == 0 and c2["due"] == 0
+
+    _run(body, tmp_path, "wb1.db")
+
+
+def test_winback_never_mass_messages_ancient_history(tmp_path):
+    """The dangerous first-run case: without a lookback bound, the very first sweep after deploy
+    would message EVERY customer who ever let a service lapse — years of them, at once."""
+    async def body(s):
+        await _seed(s, days_left_via_snapshot=-400)   # lapsed over a year ago
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_expired(s, bot_factory=_factory_for(fake))
+        assert c["due"] == 0 and fake.sent == []
+
+    _run(body, tmp_path, "wb2.db")
+
+
+def test_winback_can_be_switched_off(tmp_path):
+    async def body(s):
+        from app.services import settings_service
+
+        await settings_service.set_value(s, "storefront_expired_notify_days", 0)
+        await _seed(s, days_left_via_snapshot=-1)
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_expired(s, bot_factory=_factory_for(fake))
+        assert c["sent"] == 0 and fake.sent == []
+
+    _run(body, tmp_path, "wb3.db")
+
+
+def test_winback_ignores_a_still_active_service(tmp_path):
+    async def body(s):
+        await _seed(s, days_left_via_snapshot=3)      # still running → the reminder's job
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_expired(s, bot_factory=_factory_for(fake))
+        assert c["due"] == 0 and fake.sent == []
+
+    _run(body, tmp_path, "wb4.db")
+
+
 # ── I11: admin stats aggregates ───────────────────────────────────────────────
 
 def test_stats_for_bot_aggregates(tmp_path):

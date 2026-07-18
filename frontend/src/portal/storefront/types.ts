@@ -68,6 +68,17 @@ export interface StorefrontDashboard {
     converted_customers: number;
     rate: number | null;
   };
+  sales_prev_month: StorefrontSalesPeriod | null;
+  daily_sales: { day: number; date: string; amount_toman: number; orders: number }[];
+  top_plans: {
+    plan_id: number | null;
+    title: string;
+    gb: number | null;
+    days: number | null;
+    orders: number;
+    amount_toman: number;
+  }[];
+  new_customers_range: number;
 }
 
 export interface StorefrontHealth {

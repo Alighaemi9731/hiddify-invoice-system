@@ -41,6 +41,7 @@ _POST_BASELINE_COLUMNS = {
     "storefront_bots.co_admin_ids",
     "storefront_bots.shop_closed", "storefront_bots.closed_text",
     "storefront_orders.trial_ended_alerted_at", "storefront_orders.usage_alerted_at",
+    "storefront_orders.expired_alerted_at",
     "storefront_wallet_txns.credit_code_id",
     "storefront_orders.lease_expires_at", "storefront_wallet_txns.operation_id",
     "storefront_bots.config_version",

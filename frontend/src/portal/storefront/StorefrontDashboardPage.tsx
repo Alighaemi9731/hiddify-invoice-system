@@ -1,28 +1,32 @@
-import { Box, Chip, Grid, Stack, Typography } from "@mui/material";
+import { Box, Chip, Grid, LinearProgress, Stack, Typography } from "@mui/material";
 import ShoppingCartIcon from "@mui/icons-material/esm/ShoppingCart";
-import AccountBalanceWalletIcon from "@mui/icons-material/esm/AccountBalanceWallet";
 import GroupIcon from "@mui/icons-material/esm/Group";
 import AutorenewIcon from "@mui/icons-material/esm/Autorenew";
 import { useQuery } from "@tanstack/react-query";
-import { alpha, useTheme } from "@mui/material/styles";
+import { useTheme } from "@mui/material/styles";
 import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
 import StatCard from "../../components/StatCard";
 import EChart from "../../components/EChart";
+import { dailyTrendOption } from "../dailyTrend";
 import { fmtNum, fmtToman } from "../../format";
 import { SectionCard } from "../ui";
 import { currentTehranMonthRange, getStorefrontDashboard, storefrontQueryKeys } from "./api";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 
 const SERVICE_LABELS: Record<string, string> = {
-  pending: "در انتظار",
-  renewing: "در حال تمدید",
   provisioned: "فعال",
+  renewing: "در حال تمدید",
+  pending: "در انتظار",
   disabled: "غیرفعال",
   failed: "ناموفق",
   deleted: "حذف‌شده",
 };
 
+// Rebuilt around questions a shop owner actually asks: how much did I sell (and is that better or
+// worse than last month), which days sell, which plans sell, and how many services are about to
+// lapse. The old page's only chart re-drew the same three numbers printed directly beneath it
+// («تفکیک فروش دوره»), which told nobody anything.
 export default function StorefrontDashboardPage() {
   const { shop } = useOutletContext<StorefrontOutletContext>();
   const theme = useTheme();
@@ -31,133 +35,153 @@ export default function StorefrontDashboardPage() {
     queryKey: storefrontQueryKeys.dashboard(shop.id, from, to),
     queryFn: () => getStorefrontDashboard(shop.id, from, to),
   });
-  const breakdown = query.data ? [
-    { label: "خرید جدید", value: query.data.sales_range.purchase.amount_toman, color: "#10b981" },
-    { label: "تمدید", value: query.data.sales_range.renewal.amount_toman, color: "#0071e3" },
-    { label: "قدیمی / نامشخص", value: query.data.sales_range.unknown.amount_toman, color: "#f59e0b" },
-  ] : [];
-  const breakdownChart = {
-    textStyle: { fontFamily: "Vazirmatn, sans-serif" },
-    grid: { left: 8, right: 12, top: 12, bottom: 8, containLabel: true },
-    tooltip: {
-      trigger: "axis",
-      axisPointer: { type: "shadow" },
-      formatter: (params: Array<{ dataIndex: number }>) => {
-        const row = breakdown[params[0]?.dataIndex];
-        return row ? `${row.label}<br/><b>${fmtToman(row.value)}</b>` : "";
-      },
-    },
-    xAxis: {
-      type: "value",
-      axisLabel: { color: theme.palette.text.secondary, formatter: (value: number) => fmtNum(value) },
-      splitLine: { lineStyle: { color: theme.palette.divider } },
-    },
-    yAxis: {
-      type: "category",
-      data: breakdown.map((row) => row.label),
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: alpha(theme.palette.text.secondary, 0.25) } },
-      axisLabel: { color: theme.palette.text.secondary, fontFamily: "Vazirmatn, sans-serif" },
-    },
-    series: [{
-      type: "bar",
-      data: breakdown.map((row) => ({ value: row.value, itemStyle: { color: row.color, borderRadius: [0, 6, 6, 0] } })),
-      barMaxWidth: 30,
-    }],
-  };
+  const d = query.data;
+
+  const month = d?.sales_month.net_sales_toman ?? 0;
+  const prev = d?.sales_prev_month?.net_sales_toman ?? null;
+  // Month-over-month, so the headline number has context instead of standing alone.
+  const delta = prev && prev > 0 ? Math.round(((month - prev) / prev) * 100) : null;
+  const monthSub = prev === null
+    ? undefined
+    : delta === null
+      ? `ماه گذشته: ${fmtToman(prev)}`
+      : `${delta >= 0 ? "▲" : "▼"} ${fmtNum(Math.abs(delta))}٪ نسبت به ماه گذشته`;
+
+  const trend = (d?.daily_sales ?? []).map((r) => ({
+    day: r.day, date: r.date, amount_toman: r.amount_toman,
+  }));
+  const hasSales = trend.some((r) => r.amount_toman !== 0);
+  const topPlans = d?.top_plans ?? [];
+  const bestRevenue = topPlans[0]?.amount_toman || 1;
+  const active = (d?.service_states?.provisioned ?? 0) + (d?.service_states?.renewing ?? 0);
 
   return (
-    <DataState
-      isLoading={query.isLoading}
-      isError={query.isError}
-      rows={7}
-      onRetry={() => query.refetch()}
-    >
-      {query.data && (
-        <Box>
+    <DataState isLoading={query.isLoading} isError={query.isError} rows={6} onRetry={() => query.refetch()}>
+      {d && (
+        <Stack spacing={2}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} lg={3}>
-              <StatCard label="فروش امروز" value={fmtToman(query.data.sales_today.net_sales_toman)} color="#10b981" icon={<ShoppingCartIcon />} />
+            <Grid item xs={12} sm={6} md={3}>
+              <StatCard label="فروش امروز" value={fmtToman(d.sales_today.net_sales_toman)}
+                        icon={<ShoppingCartIcon />} color="#10b981" />
             </Grid>
-            <Grid item xs={12} sm={6} lg={3}>
-              <StatCard label="فروش خالص ماه" value={fmtToman(query.data.sales_month.net_sales_toman)} sub={`فروش دوره: ${fmtToman(query.data.sales_range.net_sales_toman)}`} color="#0071e3" icon={<AutorenewIcon />} />
+            <Grid item xs={12} sm={6} md={3}>
+              <StatCard label="فروش این ماه" value={fmtToman(month)} sub={monthSub}
+                        icon={<ShoppingCartIcon />} color="#7c5cff" />
             </Grid>
-            <Grid item xs={12} sm={6} lg={3}>
-              <StatCard label="مشتریان" value={fmtNum(query.data.customers.total)} sub={`${fmtNum(query.data.customers.active_30d)} فعال در ۳۰ روز`} color="#a855f7" icon={<GroupIcon />} />
+            <Grid item xs={12} sm={6} md={3}>
+              <StatCard label="سرویس‌های فعال" value={fmtNum(active)}
+                        sub={d.near_expiry ? `${fmtNum(d.near_expiry)} سرویس نزدیک انقضا` : undefined}
+                        icon={<AutorenewIcon />} color="#0071e3" />
             </Grid>
-            <Grid item xs={12} sm={6} lg={3}>
-              <StatCard label="تعهد کیف پول" value={fmtToman(query.data.customers.wallet_liability_toman)} sub={`${fmtNum(query.data.pending_topups.count)} شارژ در انتظار`} color="#f59e0b" icon={<AccountBalanceWalletIcon />} />
+            <Grid item xs={12} sm={6} md={3}>
+              <StatCard label="مشتریان" value={fmtNum(d.customers.total)}
+                        sub={`${fmtNum(d.new_customers_range)} مشتری جدید این ماه`}
+                        icon={<GroupIcon />} color="#f43f5e" />
             </Grid>
           </Grid>
 
-          <Grid container spacing={2} sx={{ mt: 0.5 }}>
-            <Grid item xs={12}>
-              <SectionCard title="نمودار تفکیک فروش دوره">
-                <EChart option={breakdownChart} height={260} ariaLabel="نمودار مبلغ خرید، تمدید و فروش قدیمی دوره" />
-              </SectionCard>
-            </Grid>
-            <Grid item xs={12} lg={6}>
-              <SectionCard title="تفکیک فروش دوره">
-                <Stack spacing={1.5}>
-                  <MetricRow label="خرید جدید" count={query.data.sales_range.purchase.count} amount={query.data.sales_range.purchase.amount_toman} />
-                  <MetricRow label="تمدید" count={query.data.sales_range.renewal.count} amount={query.data.sales_range.renewal.amount_toman} />
-                  <MetricRow label="قدیمی / نامشخص" count={query.data.sales_range.unknown.count} amount={query.data.sales_range.unknown.amount_toman} />
-                  <MetricRow label="برگشت وجه" count={null} amount={query.data.sales_range.reversals_toman} />
-                </Stack>
-              </SectionCard>
-            </Grid>
-            <Grid item xs={12} lg={6}>
-              <SectionCard title="وضعیت سرویس‌ها">
-                <Stack direction="row" gap={1} flexWrap="wrap">
-                  {Object.entries(query.data.service_states).map(([state, count]) => (
-                    <Chip
-                      key={state}
-                      color={state === "failed" ? "error" : state === "provisioned" ? "success" : "default"}
-                      variant="outlined"
-                      label={`${SERVICE_LABELS[state] || state}: ${fmtNum(count)}`}
-                    />
-                  ))}
-                  <Chip color="warning" variant="outlined" label={`نزدیک انقضا: ${fmtNum(query.data.near_expiry)}`} />
-                </Stack>
-              </SectionCard>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <SectionCard title="شارژ و اعتبار">
-                <Stack spacing={1.5}>
-                  <MetricRow label="مبلغ شارژهای در انتظار" count={query.data.pending_topups.count} amount={query.data.pending_topups.amount_toman} />
-                  <MetricRow label="استفاده از کد اعتبار" count={query.data.credits.redemptions} amount={query.data.credits.bonus_toman} />
-                </Stack>
-              </SectionCard>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <SectionCard title="تبدیل دورهٔ آزمایشی">
-                <Stack spacing={1}>
-                  <Typography variant="h4" sx={{ fontWeight: 850 }}>
-                    {query.data.trial_conversion.rate == null
-                      ? "—"
-                      : `${fmtNum(query.data.trial_conversion.rate * 100)}٪`}
+          <SectionCard title="روند فروش روزانه">
+            {hasSales ? (
+              <EChart option={dailyTrendOption(theme, trend)} height={260} />
+            ) : (
+              <Typography color="text.secondary" sx={{ py: 4, textAlign: "center", fontSize: 14 }}>
+                در این ماه هنوز فروشی ثبت نشده است.
+              </Typography>
+            )}
+          </SectionCard>
+
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={7}>
+              <SectionCard title="پرفروش‌ترین پلن‌ها (این ماه)">
+                {topPlans.length ? (
+                  <Stack spacing={1.6}>
+                    {topPlans.map((p) => (
+                      <Box key={`${p.plan_id}-${p.title}`}>
+                        <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{p.title}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {fmtNum(p.orders)} فروش · {fmtToman(p.amount_toman)}
+                          </Typography>
+                        </Stack>
+                        <LinearProgress
+                          variant="determinate"
+                          value={Math.max(3, Math.round((p.amount_toman / bestRevenue) * 100))}
+                          sx={{ height: 8, borderRadius: 4, mt: 0.6 }}
+                        />
+                      </Box>
+                    ))}
+                  </Stack>
+                ) : (
+                  <Typography color="text.secondary" sx={{ py: 3, textAlign: "center", fontSize: 14 }}>
+                    هنوز فروشی برای این ماه ثبت نشده است.
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {fmtNum(query.data.trial_conversion.converted_customers)} تبدیل از {fmtNum(query.data.trial_conversion.trial_customers)} مشتری آزمایشی
-                  </Typography>
-                </Stack>
+                )}
               </SectionCard>
+            </Grid>
+
+            <Grid item xs={12} md={5}>
+              <Stack spacing={2}>
+                <SectionCard title="وضعیت سرویس‌ها">
+                  <Stack direction="row" gap={1} flexWrap="wrap">
+                    {Object.entries(d.service_states)
+                      .filter(([, n]) => Number(n) > 0)
+                      .map(([state, n]) => (
+                        <Chip key={state} size="small" variant="outlined"
+                              color={state === "provisioned" ? "success" : state === "failed" ? "error" : "default"}
+                              label={`${SERVICE_LABELS[state] || state}: ${fmtNum(Number(n))}`} />
+                      ))}
+                  </Stack>
+                </SectionCard>
+
+                <SectionCard title="خرید جدید در برابر تمدید (این ماه)">
+                  <Stack spacing={1}>
+                    <Row label="خرید جدید" value={d.sales_range.purchase.amount_toman} />
+                    <Row label="تمدید" value={d.sales_range.renewal.amount_toman} />
+                    {d.sales_range.reversals_toman > 0 && (
+                      <Row label="برگشت وجه" value={-d.sales_range.reversals_toman} />
+                    )}
+                  </Stack>
+                </SectionCard>
+
+                <SectionCard title="تبدیل تستِ رایگان به خرید">
+                  <Stack direction="row" alignItems="baseline" spacing={1}>
+                    <Typography variant="h5" sx={{ fontWeight: 800 }}>
+                      {d.trial_conversion.rate === null
+                        ? "—"
+                        : `${fmtNum(Math.round(d.trial_conversion.rate * 1000) / 10)}٪`}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {fmtNum(d.trial_conversion.converted_customers)} تبدیل از{" "}
+                      {fmtNum(d.trial_conversion.trial_customers)} مشتری آزمایشی
+                    </Typography>
+                  </Stack>
+                </SectionCard>
+
+                <SectionCard title="کیف پول و شارژ">
+                  <Stack spacing={1}>
+                    <Row label="موجودی کیف پول مشتریان" value={d.customers.wallet_liability_toman} />
+                    {d.pending_topups.count > 0 && (
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography variant="body2" color="text.secondary">شارژ در انتظار تأیید</Typography>
+                        <Chip size="small" color="warning" label={fmtNum(d.pending_topups.count)} />
+                      </Stack>
+                    )}
+                  </Stack>
+                </SectionCard>
+              </Stack>
             </Grid>
           </Grid>
-        </Box>
+        </Stack>
       )}
     </DataState>
   );
 }
 
-function MetricRow({ label, count, amount }: { label: string; count: number | null; amount: number }) {
+function Row({ label, value }: { label: string; value: number }) {
   return (
-    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
-      <Box>
-        <Typography variant="body2" sx={{ fontWeight: 700 }}>{label}</Typography>
-        {count != null && <Typography variant="caption" color="text.secondary">{fmtNum(count)} مورد</Typography>}
-      </Box>
-      <Typography variant="body2" sx={{ fontWeight: 800, whiteSpace: "nowrap" }}>{fmtToman(amount)}</Typography>
+    <Stack direction="row" justifyContent="space-between" spacing={1}>
+      <Typography variant="body2" color="text.secondary">{label}</Typography>
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmtToman(value)}</Typography>
     </Stack>
   );
 }

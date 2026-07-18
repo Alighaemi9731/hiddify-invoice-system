@@ -244,7 +244,11 @@ def test_dashboard_accounting_conversion_health_and_query_budget():
         finally:
             event.remove(engine.sync_engine, "before_cursor_execute", record)
 
-        assert len(statements) <= 12
+        # Budget raised 12 → 15 for the three aggregates the redesigned dashboard needs: the daily
+        # sales trend, best-selling plans, and new customers in range. Previous-month sales cost
+        # NOTHING extra — it rides the existing ledger scan as another CASE column. The cap still
+        # exists so a future widget can't quietly turn this page into an N+1.
+        assert len(statements) <= 15
         assert not any(stmt.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
                        for stmt in statements)
         sales = result.sales_range

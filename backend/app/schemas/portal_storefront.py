@@ -81,6 +81,24 @@ class TrialConversionOut(BaseModel):
     rate: float | None = None
 
 
+class DailySalesPointOut(BaseModel):
+    """One Tehran calendar day of the sales trend (the shape `dailyTrendOption` already renders)."""
+    day: int
+    date: dt.date
+    amount_toman: int
+    orders: int
+
+
+class TopPlanOut(BaseModel):
+    """A plan's contribution over the selected range, best-seller first."""
+    plan_id: int | None
+    title: str
+    gb: int | None
+    days: int | None
+    orders: int
+    amount_toman: int
+
+
 class StorefrontDashboardOut(BaseModel):
     storefront_id: int
     range: DashboardRangeOut
@@ -94,6 +112,10 @@ class StorefrontDashboardOut(BaseModel):
     credits: CreditMetricsOut
     operation_states: dict[str, int]
     trial_conversion: TrialConversionOut
+    sales_prev_month: SalesPeriodOut | None = None
+    daily_sales: list[DailySalesPointOut] = Field(default_factory=list)
+    top_plans: list[TopPlanOut] = Field(default_factory=list)
+    new_customers_range: int = 0
 
 
 class BotHealthOut(BaseModel):

@@ -108,6 +108,23 @@ def _message_fa(label: str | None, days_left: int) -> str:
     )
 
 
+def _expired_msg(label: str | None, days_ago: int) -> str:
+    name = f"«{label}» " if label else ""
+    when = "امروز" if days_ago <= 0 else ("دیروز" if days_ago == 1 else f"{days_ago} روز پیش")
+    return (
+        f"⛔️ سرویس {name}شما {when} منقضی شد و اتصال شما قطع است.\n"
+        "برای برگشتن به سرویس، از دکمهٔ زیر تمدید کنید."
+    )
+
+
+def _needs_expired_alert(order: StorefrontOrder) -> bool:
+    """Never win-backed, or renewed since the last one (re-armed for the next service period)."""
+    if order.expired_alerted_at is None:
+        return True
+    lr, ea = _aware(order.last_renewed_at), _aware(order.expired_alerted_at)
+    return lr is not None and ea is not None and lr > ea
+
+
 def _renew_keyboard(order_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔄 تمدید سرویس", callback_data=f"sfrenew:{order_id}")
@@ -323,6 +340,66 @@ async def notify_trial_ended(
         session, rows, snaps, due=due, render=render, stamp_attr="trial_ended_alerted_at",
         bot_factory=bot_factory or _default_bot_factory, counts=counts,
         log_label="storefront trial-ended nudges",
+    )
+
+
+async def notify_expired(
+    session: AsyncSession, *, bot_factory: BotFactory | None = None
+) -> dict:
+    """Win-back a PAID service that has ALREADY lapsed — the moment a customer is most likely to
+    renew, and until now the one moment we said nothing (the near-expiry reminder deliberately
+    stops at days_left < 0, so once a service actually died the customer never heard from us).
+
+    Bounded by a LOOKBACK window on purpose: without it the first run after deploy would message
+    every customer whose service ever expired — years of them, all at once. Only services that
+    lapsed within `storefront_expired_notify_days` (default 7, 0 = off) are contacted, once per
+    service period (re-armed by a renewal).
+    """
+    counts = _new_counts()
+    try:
+        lookback = int(await settings_service.get(session, "storefront_expired_notify_days", 7))
+    except (TypeError, ValueError):
+        lookback = 7
+    if lookback <= 0:
+        return counts
+
+    rows = (
+        await session.execute(
+            select(StorefrontOrder, StorefrontCustomer, StorefrontBot)
+            .join(StorefrontCustomer, StorefrontCustomer.id == StorefrontOrder.customer_id)
+            .join(StorefrontBot, StorefrontBot.id == StorefrontCustomer.storefront_bot_id)
+            .where(
+                StorefrontOrder.status == "provisioned",
+                StorefrontOrder.is_trial.is_(False),   # trials get the «trial ended» nudge instead
+                StorefrontCustomer.banned.is_(False),
+                StorefrontBot.enabled.is_(True),
+                StorefrontBot.status != "errored",
+            )
+        )
+    ).all()
+    if not rows:
+        return counts
+    snaps = await _load_snaps(session, rows)
+    today = tehran_today()
+
+    def due(order: StorefrontOrder, snap: EndUserSnapshot | None) -> Any:
+        days_left = _days_left(order, snap, today)
+        if days_left is None or days_left >= 0:      # not expired yet → the reminder handles it
+            return None
+        days_ago = -days_left
+        if days_ago > lookback:                      # too old — never bulk-message ancient history
+            return None
+        if not _needs_expired_alert(order):
+            return None
+        return days_ago
+
+    def render(order: StorefrontOrder, days_ago: Any) -> tuple[str, InlineKeyboardMarkup]:
+        return _expired_msg(order.label, int(days_ago)), _renew_keyboard(order.id)
+
+    return await _run_sweep(
+        session, rows, snaps, due=due, render=render, stamp_attr="expired_alerted_at",
+        bot_factory=bot_factory or _default_bot_factory, counts=counts,
+        log_label="storefront win-back notices",
     )
 
 
