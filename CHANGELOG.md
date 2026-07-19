@@ -8,6 +8,43 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.95.0 - 2026-07-19
+
+Adds **one-shot auto-renew** for shop customers and makes it the single renewal model. Database
+migration `b7d2f9a3c1e5` (down-revision `e8b3d5c7a2f1`) — additive only (three nullable columns on
+`storefront_orders` + one partial-unique wallet index); it logs nobody out and touches no live
+service.
+
+### Added
+
+- **«تمدید خودکار» (auto-renew) in the shop bots.** A customer turns it on for a service and the plan
+  price is *reserved* from their wallet right away. The service then renews itself **once, only when
+  it's about to run out** (less than ~1 GB or ~1 day left, both configurable), so they don't get cut
+  off and don't lose the volume they still have. It's deliberately **one-shot** — after each
+  automatic renewal the customer turns it on again for the next round — and the bot explains this in
+  plain language. Turning it off returns the reserved amount to the wallet immediately.
+- Near-expiry / low-volume reminders now offer **turn on auto-renew** instead of a manual renew, and
+  a service that already has auto-renew on is not nagged. When it fires, the customer gets a clear
+  «renewed automatically so you weren't cut off» message.
+- New settings (فروشگاه → auto-renew): volume threshold (default 1 GB), days threshold (default 1),
+  and the check interval (default every 15 minutes).
+
+### Changed
+
+- **The old immediate «🔄 تمدید» button is gone from the customer side** — everyone renews via
+  auto-renew, and a customer who wants *more* volume simply buys a new service. Old renew buttons
+  still in a chat now open the auto-renew toggle instead. Shop admins keep their manual renew for
+  support.
+
+### Notes
+
+- Money-safe by construction: the reservation is a real wallet hold, and when auto-renew fires it is
+  *settled* as the renewal payment — never charged a second time. Arming, firing, disarming, and
+  deleting a service can't double-spend or strand a reservation (verified with real-Postgres
+  concurrency tests). Deleting a service returns any reserved amount.
+- Builds on the v1.94.2 billing fix: a renewed service is still billed to the reseller at the plan
+  actually sold, not the panel's cumulative number.
+
 ## 1.94.2 - 2026-07-19
 
 Fixes a real over-billing: resellers were charged too much for services renewed through their shop

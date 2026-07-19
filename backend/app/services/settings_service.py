@@ -252,6 +252,12 @@ DEFS: list[SettingDef] = [
     SettingDef("storefront_trial_ended_notify_days", 7, False, "schedule"),
     # Warn a paid customer at this percentage of their volume. Was hardcoded at 80.
     SettingDef("storefront_usage_alert_percent", 80, False, "schedule"),
+    # Deferred one-shot auto-renew: FIRE margins + sweep cadence. A config armed by its customer is
+    # auto-renewed once it has less than `fire_gb` GB left OR fewer than `fire_days` days left. The
+    # sweep that checks this runs every `interval_minutes`.
+    SettingDef("storefront_autorenew_fire_gb", 1, False, "schedule"),
+    SettingDef("storefront_autorenew_fire_days", 1, False, "schedule"),
+    SettingDef("storefront_autorenew_interval_minutes", 15, False, "schedule"),
     # Max simultaneous PENDING top-ups one customer may have (anti-spam on the admin review queue).
     SettingDef("storefront_max_pending_topups", 3, False, "schedule"),
     # Daily owner digest to the owner's Telegram PV (KPIs + health). On by default at 09:00.
@@ -361,6 +367,9 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     # Lower bound 1, NOT 0: `_INT_RANGES.get(key, (0, None))` would silently admit 0, and a 0%
     # threshold would warn every customer on every sweep.
     "storefront_usage_alert_percent": (1, 100),
+    "storefront_autorenew_fire_gb": (0, 100),
+    "storefront_autorenew_fire_days": (0, 60),
+    "storefront_autorenew_interval_minutes": (1, 1440),
     "storefront_max_pending_topups": (1, 50),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),

@@ -57,11 +57,12 @@ def test_register_defaults_when_no_config():
     assert t["rate_refresh"] == "interval[1:00:00]"
     assert t["storefront_reaper"] == "interval[0:15:00]"
     assert t["storefront_delivery"] == "interval[0:01:00]"
+    assert t["storefront_autorenew"] == "interval[0:15:00]"
     assert "hour='4'" in t["daily_maintenance"] and "minute='30'" in t["daily_maintenance"]
     assert "hour='9'" in t["daily_digest"]
     assert t["scheduler_heartbeat"] == "interval[0:02:00]"
     assert "hour='11'" in t["storefront_expiry"] and "minute='15'" in t["storefront_expiry"]
-    assert len(t) == 13
+    assert len(t) == 14
 
 
 def test_non_divisor_interval_keeps_true_spacing_across_boundaries():

@@ -76,8 +76,15 @@ async def renew(
     by_admin: bool = False,
     op_id: str | None = None,
     expected_sf_id: int | None = None,
+    prepaid_hold_txn_id: int | None = None,
+    locked_price_toman: int | None = None,
 ) -> SubResult:
     """Renew a subscription in place at the CURRENT plan price (admin renews are free grants).
+
+    Deferred auto-renew (`prepaid_hold_txn_id` + `locked_price_toman`): when the customer armed
+    auto-renew the plan price was already reserved as a wallet `hold` at THAT time. The fire job passes
+    the hold id and the locked price, so instead of charging again this SETTLES the hold (the money is
+    already out) and bills the locked price, then clears the order's armed columns on success (one-shot).
 
     F4 (idempotency): the renewal is a durable StorefrontOperation keyed by `op_id` (minted before the
     confirm button). A repeat call with the SAME `op_id` — a double-tap, a re-delivered callback, a
@@ -108,6 +115,8 @@ async def renew(
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
         price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        if locked_price_toman is not None:   # auto-renew bills the price locked at arm time, not the
+            price = int(locked_price_toman)   # current plan price (which may have changed since arming).
         sf_id, customer_id = sf.id, customer.id
         uuid, api_key = order.panel_user_uuid, reseller.admin_uuid
         panel_id = panel.id
@@ -176,16 +185,28 @@ async def renew(
         # 3. Debit FIRST (linked to the operation), committed with the debit_txn link.
         if not by_admin and price > 0:
             async with session_factory() as s:
-                ok, txn = await storefront_wallet.charge_purchase(
-                    s, customer_id, price, order_id=order_id, operation_id=op_pk)
-                if not ok:
-                    await s.rollback()
-                    await _restore_and_finalize("failed")
-                    async with session_factory() as s2:
-                        c = await s2.get(StorefrontCustomer, customer_id)
-                        bal = int(storefront_wallet.balance(c)) if c else 0
-                    return SubResult(False, "insufficient", price=price,
-                                     short_toman=max(0, price - bal))
+                if prepaid_hold_txn_id is not None:
+                    # Auto-renew: the money was already debited at arm time (a wallet hold). SETTLE that
+                    # hold into the renewal purchase instead of charging again. `settle_hold` returns
+                    # None only if the hold is no longer `held` (a concurrent disarm released it), in
+                    # which case there's no reserved money — fail cleanly rather than grant free service.
+                    txn = await storefront_wallet.settle_hold(
+                        s, prepaid_hold_txn_id, operation_id=op_pk)
+                    if txn is None:
+                        await s.rollback()
+                        await _restore_and_finalize("failed")
+                        return SubResult(False, "error", message="hold missing")
+                else:
+                    ok, txn = await storefront_wallet.charge_purchase(
+                        s, customer_id, price, order_id=order_id, operation_id=op_pk)
+                    if not ok:
+                        await s.rollback()
+                        await _restore_and_finalize("failed")
+                        async with session_factory() as s2:
+                            c = await s2.get(StorefrontCustomer, customer_id)
+                            bal = int(storefront_wallet.balance(c)) if c else 0
+                        return SubResult(False, "insufficient", price=price,
+                                         short_toman=max(0, price - bal))
                 op2 = await s.get(StorefrontOperation, op_pk)
                 if op2 is not None and txn is not None:
                     op2.debit_txn_id = txn.id
@@ -237,6 +258,12 @@ async def renew(
             o.gb, o.days = gb, days
             o.last_renewed_at = dt.datetime.now(dt.timezone.utc)
             o.lease_expires_at = None
+            if prepaid_hold_txn_id is not None:
+                # One-shot: the arm is spent. Clear it ATOMICALLY with the renewal so the order never
+                # lingers "armed" with an already-settled hold (must be re-armed for the next cycle).
+                o.autorenew_armed_at = None
+                o.autorenew_price_toman = None
+                o.autorenew_hold_txn_id = None
             op2 = await s.get(StorefrontOperation, op_pk)
             if op2 is not None:
                 await storefront_ops.finalize(s, op2, "done", result_order_id=order_id)
@@ -294,6 +321,16 @@ async def delete_subscription(
             uuid = order.panel_user_uuid
             api_key = reseller.admin_uuid if reseller else None
             panel_id = panel.id if panel else None
+            # Auto-renew hold: this config is being destroyed, so return any reserved renewal funds to
+            # the wallet (under the same lock + row lock, committed before the panel delete). Without
+            # this the customer's money would stay reserved on a config that no longer exists.
+            if order.autorenew_armed_at is not None:
+                if order.autorenew_hold_txn_id is not None:
+                    await storefront_wallet.release_hold(s, order.autorenew_hold_txn_id)
+                order.autorenew_armed_at = None
+                order.autorenew_price_toman = None
+                order.autorenew_hold_txn_id = None
+                await s.commit()
         return await _delete_panel_user_and_mark(
             session_factory, order_id=order_id, uuid=uuid, api_key=api_key, panel_id=panel_id
         )

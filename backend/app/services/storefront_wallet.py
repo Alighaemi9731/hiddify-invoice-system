@@ -343,6 +343,84 @@ async def reverse_charge(
     return txn
 
 
+async def place_hold(
+    session: AsyncSession, customer_id: int, price_toman: int, *, order_id: int,
+) -> tuple[bool, StorefrontWalletTxn | None]:
+    """Reserve the plan price for a deferred auto-renew: debit the wallet NOW and record a
+    `kind='hold'`, `status='held'` txn. Because every balance reader treats `wallet_balance_toman` as
+    spendable, the held funds are automatically unavailable for other buys — no reader changes.
+    Mirrors `charge_purchase` (locked read → balance check → debit) and does NOT commit; the caller
+    commits it together with the order's armed-state stamp.
+
+    Returns (ok, hold_txn). ok=False if the balance is short. The partial-unique
+    `uq_sfwallet_active_hold_per_order` (WHERE kind='hold' AND status='held') is the durable backstop
+    against two live holds on one order; the caller (arm, under the order row lock + armed-state guard)
+    is the primary guard, so a collision here is a should-never-happen that surfaces at commit."""
+    price = Decimal(str(int(price_toman)))
+    stmt = select(StorefrontCustomer).where(
+        StorefrontCustomer.id == customer_id).execution_options(populate_existing=True)
+    try:
+        stmt = stmt.with_for_update()
+    except Exception:  # noqa: BLE001 — sqlite has no row locks; the test path is single-threaded
+        pass
+    customer = (await session.execute(stmt)).scalar_one_or_none()
+    if customer is None or balance(customer) < price:
+        return False, None
+    customer.wallet_balance_toman = float(balance(customer) - price)
+    txn = StorefrontWalletTxn(
+        customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
+        kind="hold", amount_toman=-price, status="held",
+        order_id=order_id, note="رزروِ تمدیدِ خودکار", decided_at=None,
+    )
+    session.add(txn)
+    await session.flush()
+    return True, txn
+
+
+async def release_hold(
+    session: AsyncSession, hold_txn_id: int,
+) -> StorefrontWalletTxn | None:
+    """Return a still-held auto-renew reservation to the wallet (disarm, config-deleted, or a
+    definitive fire failure). Credits back the held amount and flips the hold's status to `released`
+    (which also frees the active-hold index slot so the order can be armed again next cycle). Locks
+    the customer + the hold row. IDEMPOTENT: returns None if the hold isn't `held` any more (already
+    released or settled) — so a disarm racing a fire can't double-credit. Does NOT commit."""
+    hold = await _get_for_update(session, StorefrontWalletTxn, hold_txn_id)
+    if hold is None or hold.kind != "hold" or hold.status != "held":
+        return None
+    customer = await _get_for_update(session, StorefrontCustomer, hold.customer_id)
+    if customer is None:
+        return None
+    credit = -Decimal(str(hold.amount_toman or 0))  # hold.amount is negative → credit the positive
+    customer.wallet_balance_toman = float(balance(customer) + credit)
+    hold.status = "released"
+    hold.decided_at = _now()
+    await session.flush()
+    return hold
+
+
+async def settle_hold(
+    session: AsyncSession, hold_txn_id: int, *, operation_id: int | None = None,
+) -> StorefrontWalletTxn | None:
+    """Consume a still-held reservation AS the renewal payment when auto-renew fires. The money was
+    already debited at arm time, so this does NOT touch the balance — it relabels the hold into a
+    `purchase` (`status='done'`, linked to the renewal's operation), which both records the renewal in
+    the ledger and frees the active-hold index slot. IDEMPOTENT: returns None if the hold isn't `held`
+    (a replayed fire finds it already settled). Does NOT commit.
+
+    Linking `operation_id` makes `operation_has_charge` true for the fire's operation, so the durable
+    reconciler treats the settled hold exactly like a normal renewal charge."""
+    hold = await _get_for_update(session, StorefrontWalletTxn, hold_txn_id)
+    if hold is None or hold.kind != "hold" or hold.status != "held":
+        return None
+    hold.kind = "purchase"   # the reserved funds ARE the renewal payment now (debited at arm time)
+    hold.status = "done"
+    hold.operation_id = operation_id
+    hold.decided_at = _now()
+    await session.flush()
+    return hold
+
+
 async def operation_has_charge(session: AsyncSession, operation_id: int) -> bool:
     """True if this operation's wallet was debited (a `purchase` row carries its operation_id) — so the
     reconciler knows a crashed renewal actually charged and must be reversed."""

@@ -175,6 +175,13 @@ class StorefrontWalletTxn(Base, TimestampMixin):
         Index("uq_sfwallet_reversal_per_operation", "operation_id", unique=True,
               sqlite_where=text("kind = 'renew_reversal'"),
               postgresql_where=text("kind = 'renew_reversal'")),
+        # Auto-renew: at most ONE ACTIVE hold per order at a time (a partial unique on the still-held
+        # rows). Disarm/settle flips a hold's status off `held`, so re-arming next cycle is allowed —
+        # only two concurrent live holds on one order are refused. Arm/disarm/fire all take the order
+        # row lock too, so this is a durable backstop, not the primary guard.
+        Index("uq_sfwallet_active_hold_per_order", "order_id", unique=True,
+              sqlite_where=text("kind = 'hold' AND status = 'held'"),
+              postgresql_where=text("kind = 'hold' AND status = 'held'")),
         # Plan 005: the top-up operations queue/history (per shop, by kind+status, newest first).
         Index("ix_sfwallet_shop_kind_status_created",
               "storefront_bot_id", "kind", "status", "created_at", "id"),
@@ -275,6 +282,16 @@ class StorefrontOrder(Base, TimestampMixin):
     )
     usage_alerted_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # Deferred ONE-SHOT auto-renew: the customer armed it, so the plan price is LOCKED (a wallet
+    # `hold` txn) and the near-exhaustion fire job renews ONCE when the config is nearly out of
+    # volume/days, then clears these (one-shot — must be re-armed each cycle). `armed_at` set on arm,
+    # cleared on disarm/fire. `price_toman` is the price locked AT ARM TIME (so a later plan-price
+    # change doesn't affect it). `hold_txn_id` links the reserved funds so a disarm/failed-fire can
+    # release exactly that hold. NULL across all three = not armed.
+    autorenew_armed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    autorenew_price_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    autorenew_hold_txn_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class StorefrontOperation(Base, TimestampMixin):

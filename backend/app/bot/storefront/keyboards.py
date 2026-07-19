@@ -199,15 +199,20 @@ def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
 
 
 def order_actions_kb(
-    order_id: int, renew_price: int, *, paused: bool, is_trial: bool = False
+    order_id: int, renew_price: int, *, paused: bool, is_trial: bool = False, armed: bool = False
 ) -> InlineKeyboardMarkup:
-    """Customer controls for one provisioned service: renew (at the current price), pause/resume,
-    delete. Free trials get NO renew button — they're one-time (non-renewable)."""
+    """Customer controls for one provisioned service: the ONE-SHOT auto-renew toggle (arm reserves the
+    plan price; it fires once near exhaustion), pause/resume, delete. There is no immediate "renew now"
+    any more — everyone renews via auto-renew; a customer who wants MORE volume buys a new config. Free
+    trials get NO auto-renew — they're one-time (non-renewable)."""
     toggle = ("▶️ فعال‌سازی", "sftgl") if paused else ("⏸ توقف", "sftgl")
     rows = []
     if not is_trial:
-        rows.append([InlineKeyboardButton(text=rtl(f"🔄 تمدید ({renew_price:,} تومان)"),
-                                          callback_data=f"sfrenew:{order_id}")])
+        if armed:
+            label = "🔁 تمدید خودکار: روشن ✅ — لغو"
+        else:
+            label = f"🔁 تمدید خودکار: خاموش ({renew_price:,} تومان)"
+        rows.append([InlineKeyboardButton(text=rtl(label), callback_data=f"sfauto:{order_id}")])
     rows.append([InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
                  InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfdel:{order_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

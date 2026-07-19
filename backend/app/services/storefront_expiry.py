@@ -104,7 +104,8 @@ def _message_fa(label: str | None, days_left: int) -> str:
         "فردا" if days_left == 1 else f"تا {days_left} روز دیگر")
     return (
         f"⏳ سرویس {name}شما {when} منقضی می‌شود.\n"
-        "برای ادامهٔ استفاده، از دکمهٔ زیر تمدید کنید."
+        "برای اینکه قطع نشوید، «تمدید خودکار» را روشن کنید تا درست پیش از اتمام، یک‌بار خودکار "
+        "تمدید شود (مبلغِ یک تمدید از کیف پول رزرو می‌شود)."
     )
 
 
@@ -113,7 +114,8 @@ def _expired_msg(label: str | None, days_ago: int) -> str:
     when = "امروز" if days_ago <= 0 else ("دیروز" if days_ago == 1 else f"{days_ago} روز پیش")
     return (
         f"⛔️ سرویس {name}شما {when} منقضی شد و اتصال شما قطع است.\n"
-        "برای برگشتن به سرویس، از دکمهٔ زیر تمدید کنید."
+        "برای برگشتن به سرویس، «تمدید خودکار» را روشن کنید تا بلافاصله تمدید شود و دفعهٔ بعد هم "
+        "پیش از قطعی خودکار تمدید شوید."
     )
 
 
@@ -126,8 +128,10 @@ def _needs_expired_alert(order: StorefrontOrder) -> bool:
 
 
 def _renew_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    # CTA is now ARM (one-shot auto-renew), not an immediate renew — the customer reserves one plan's
+    # price and the config renews itself right before it runs out, so they don't get cut off.
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 تمدید سرویس", callback_data=f"sfrenew:{order_id}")
+        InlineKeyboardButton(text="🔁 روشن‌کردنِ تمدید خودکار", callback_data=f"sfauto:{order_id}")
     ]])
 
 
@@ -269,6 +273,8 @@ async def notify_expiring(
     today = tehran_today()
 
     def due(order: StorefrontOrder, snap: EndUserSnapshot | None) -> Any:
+        if order.autorenew_armed_at is not None:
+            return None   # armed → it auto-renews near exhaustion; don't nag to renew
         days_left = _days_left(order, snap, today)
         if days_left is None or days_left < 0 or days_left > threshold:
             return None
@@ -399,6 +405,8 @@ async def notify_expired(
     today = tehran_today()
 
     def due(order: StorefrontOrder, snap: EndUserSnapshot | None) -> Any:
+        if order.autorenew_armed_at is not None:
+            return None   # armed → auto-renew will bring it back; no win-back nag
         days_left = _days_left(order, snap, today)
         if days_left is None or days_left >= 0:      # not expired yet → the reminder handles it
             return None
@@ -432,7 +440,8 @@ def _usage_high_msg(label: str | None, used_gb: float, limit_gb: float) -> str:
     pct = int(round(used_gb / limit_gb * 100)) if limit_gb else 0
     return (
         f"⚠️ حجمِ سرویسِ {name}شما رو به پایان است (حدود {pct}٪ مصرف شده).\n"
-        "برای جلوگیری از قطعی، از دکمهٔ زیر تمدید کنید."
+        "برای جلوگیری از قطعی، «تمدید خودکار» را روشن کنید تا درست پیش از اتمامِ حجم، یک‌بار خودکار "
+        "تمدید شود."
     )
 
 
@@ -477,6 +486,8 @@ async def notify_usage_high(
     def due(order: StorefrontOrder, snap: EndUserSnapshot | None) -> Any:
         if snap is None:
             return None
+        if order.autorenew_armed_at is not None:
+            return None   # armed → it auto-renews near exhaustion; don't nag about high usage
         days_left = _days_left(order, snap, today)
         # `is not None and < 0` on purpose: `_days_left` returns None when there is neither a
         # snapshot date nor `order.days`, and treating "unknown" as "expired" would silently drop

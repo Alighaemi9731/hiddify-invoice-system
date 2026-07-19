@@ -43,6 +43,7 @@ from app.services import (
     settings_service,
     storefront,
     storefront_admin,
+    storefront_autorenew,
     storefront_credit,
     storefront_ops,
     storefront_provision,
@@ -1102,6 +1103,7 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
             order.label or "سرویس", order.gb, order.days, order.sub_link, order.status == "disabled")
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        armed = storefront_autorenew.is_armed(order)
         status = await storefront_provision.live_status(s, sf, order)
     lines = [f"📦 {name}", f"پلن: {gb} گیگ · {days} روز"]
     if paused:
@@ -1112,10 +1114,13 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
             lines.append(f"روزهای باقی‌مانده: {status.remaining_days}")
     else:
         lines.append("اطلاعاتِ مصرف فعلاً در دسترس نیست.")
+    if not order.is_trial:
+        lines.append("🔁 تمدید خودکار: فعال (یک‌بار) ✅" if armed else "🔁 تمدید خودکار: خاموش")
     if sub_link:
         lines += ["", "🔗 لینکِ اشتراک:", f"<code>{sub_link}</code>"]
     caption = rtl("\n".join(lines))
-    markup = kb.order_actions_kb(order_id, renew_price, paused=paused, is_trial=order.is_trial)
+    markup = kb.order_actions_kb(order_id, renew_price, paused=paused, is_trial=order.is_trial,
+                                 armed=armed)
     # ONE message: the QR photo carries the status + link + action buttons (no separate "آماده شد" send).
     sent = False
     if sub_link:
@@ -1132,9 +1137,31 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
-@storefront_router.callback_query(F.data.startswith("sfrenew:"))
-async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
-    order_id = int(cb.data.split(":")[1])
+async def _report_arm(cb: CallbackQuery, res: storefront_autorenew.ArmResult, price_hint: int) -> None:
+    """Tell the customer the result of ARMING one-shot auto-renew."""
+    if res.ok:
+        await cb.message.answer(rtl(
+            "✅ «تمدید خودکار» روشن شد.\n"
+            f"مبلغِ یک تمدید ({_toman(res.price or price_hint)} تومان) در کیف پول شما رزرو شد و "
+            "درست پیش از اتمامِ حجم یا زمانِ سرویس، یک‌بار به‌صورت خودکار تمدید می‌شوید تا قطع نشوید.\n"
+            "🔁 این حالت «یک‌باره» است؛ بعد از هر تمدیدِ خودکار، برای دورهٔ بعد دوباره روشنش کنید.\n"
+            "برای لغو، همان دکمه را دوباره بزنید تا مبلغِ رزروشده به کیف پول برگردد."))
+    elif res.reason == "insufficient":
+        await cb.message.answer(rtl(
+            "برای روشن‌کردنِ «تمدید خودکار» باید مبلغِ یک تمدید در کیف پول رزرو شود.\n"
+            f"{_toman(res.short_toman)} تومان کم دارید؛ ابتدا کیف پول را شارژ کنید."),
+            reply_markup=kb.wallet_kb())
+    elif res.reason == "trial":
+        await cb.message.answer(rtl(_TRIAL_NO_RENEW))
+    else:
+        await cb.message.answer(rtl("❌ انجام نشد. لطفاً بعداً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."))
+
+
+@storefront_router.callback_query(F.data.startswith("sfauto:"))
+async def sf_autorenew_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    """Toggle ONE-SHOT auto-renew for a config: arm (reserve the plan price) if off, disarm (return
+    the reservation) if on. This is the ONLY customer renew path now."""
+    order_id = int((cb.data or "").split(":")[1])
     async with SessionLocal() as s:
         sf, _r, _ = await _resolve(s, bot, cb.from_user)
         if sf is None:
@@ -1144,68 +1171,78 @@ async def sf_renew(cb: CallbackQuery, bot: Bot) -> None:
         if order is None or order.status not in ("provisioned", "disabled"):
             await cb.answer("یافت نشد.", show_alert=True)
             return
+        if order.is_trial:
+            await cb.answer()
+            await cb.message.answer(rtl(_TRIAL_NO_RENEW))
+            return
         if sf.shop_closed:
             await cb.answer()
             await cb.message.answer(rtl(_shop_closed_text(sf)))
+            return
+        sf_id = sf.id
+        paused = order.status == "disabled"
+        plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
+        renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        was_armed = storefront_autorenew.is_armed(order)
+    await cb.answer()
+    if was_armed:
+        async with SessionLocal() as s:
+            await storefront_autorenew.disarm(s, order_id, expected_sf_id=sf_id)
+        new_armed = False
+        await cb.message.answer(rtl("🔁 «تمدید خودکار» خاموش شد و مبلغِ رزروشده به کیف پول برگشت."))
+    else:
+        async with SessionLocal() as s:
+            res = await storefront_autorenew.arm(s, order_id, expected_sf_id=sf_id)
+        new_armed = res.ok
+        await _report_arm(cb, res, renew_price)
+    # Flip the toggle label in place on the card the button lives on (best-effort — a photo/old
+    # message may reject the edit; the confirmation text above already tells the customer the state).
+    try:
+        await cb.message.edit_reply_markup(
+            reply_markup=kb.order_actions_kb(order_id, renew_price, paused=paused,
+                                             is_trial=False, armed=new_armed))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@storefront_router.callback_query(F.data.startswith("sfrenewok:"))
+@storefront_router.callback_query(F.data.startswith("sfrenew:"))
+async def sf_renew_legacy(cb: CallbackQuery, bot: Bot) -> None:
+    """Legacy immediate-renew buttons (cards/notices sent before auto-renew shipped). Immediate renew
+    is gone — a customer who wants more volume buys a new config, and continuity is handled by
+    auto-renew — so route an old «🔄 تمدید» tap into ARMING one-shot auto-renew, with a short note."""
+    order_id = int((cb.data or "").split(":")[1])
+    async with SessionLocal() as s:
+        sf, _r, _ = await _resolve(s, bot, cb.from_user)
+        if sf is None:
+            await cb.answer()
+            return
+        order = await _owned_order(s, sf, cb.from_user, order_id)
+        if order is None or order.status not in ("provisioned", "disabled"):
+            await cb.answer("یافت نشد.", show_alert=True)
             return
         if order.is_trial:
             await cb.answer()
             await cb.message.answer(rtl(_TRIAL_NO_RENEW))
             return
-        plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
-        price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
-        gb = int(plan.gb) if plan else int(order.gb)
-        days = int(plan.days) if plan else int(order.days)
-        op_id = secrets.token_urlsafe(12)
-        await storefront_ops.reserve(
-            s, op_id, op_type="renewal", storefront_bot_id=sf.id,
-            customer_id=order.customer_id, order_id=order.id,
-            plan_id=(plan.id if plan else None), price_toman=price, gb=gb, days=days,
-            prior_status=order.status,
-        )
-        await s.commit()  # bind the token BEFORE it is exposed in the confirmation callback
-    await cb.message.answer(
-        rtl(f"🔄 تمدیدِ «{order.label or 'سرویس'}» — {gb} گیگ · {days} روز\n"
-            f"مبلغ: {_toman(price)} تومان از کیفِ پول کسر می‌شود."),
-        reply_markup=kb.confirm_kb(rtl("✅ تمدید"), f"sfrenewok:{order_id}:{op_id}"))
-    await cb.answer()
-
-
-@storefront_router.callback_query(F.data.startswith("sfrenewok:"))
-async def sf_renew_ok(cb: CallbackQuery, bot: Bot) -> None:
-    parts = (cb.data or "").split(":")
-    order_id = int(parts[1])
-    op_id = parts[2] if len(parts) > 2 else None   # legacy cards (2 parts) → renew() mints one
-    async with SessionLocal() as s:
-        sf, _r, _ = await _resolve(s, bot, cb.from_user)
-        if sf is None or await _owned_order(s, sf, cb.from_user, order_id) is None:
-            await cb.answer("دسترسی ندارید.", show_alert=True)
-            return
-        sf_id = sf.id
         if sf.shop_closed:
             await cb.answer()
             await cb.message.answer(rtl(_shop_closed_text(sf)))
             return
-    # F4: strip the «تمدید» button immediately; the durable `op_id` makes a re-tap/replay exactly-once
-    # (renew() returns the cached result rather than charging again).
-    await _strip_buttons(cb)
+        sf_id = sf.id
+        plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
+        renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        already = storefront_autorenew.is_armed(order)
     await cb.answer()
-    await cb.message.answer(rtl("⏳ در حال تمدید…"))
-    res = await storefront_subscription.renew(
-        SessionLocal, order_id=order_id, by_admin=False, op_id=op_id, expected_sf_id=sf_id)
-    if res.ok:
-        await cb.message.answer(rtl(
-            f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز. لینکِ شما تغییری نکرده است."))
-    elif res.reason == "processing":
-        await cb.message.answer(rtl("⏳ تمدیدِ شما در حال پردازش است؛ چند لحظه صبر کنید."))
-    elif res.reason == "insufficient":
-        await cb.message.answer(
-            rtl(f"موجودی کافی نیست. {_toman(res.short_toman)} تومان کم دارید."),
-            reply_markup=kb.wallet_kb())
-    elif res.reason == "trial":
-        await cb.message.answer(rtl(_TRIAL_NO_RENEW))
-    else:
-        await cb.message.answer(rtl("❌ تمدید ناموفق بود. با پشتیبانی تماس بگیرید."))
+    if already:
+        await cb.message.answer(rtl("🔁 «تمدید خودکار» از قبل برای این سرویس روشن است."))
+        return
+    await cb.message.answer(rtl(
+        "ℹ️ تمدید اکنون «خودکار» است: به‌جای تمدیدِ زودهنگام (که حجمِ باقی‌ماندهٔ شما را از بین می‌برد)، "
+        "با روشن‌کردنِ آن، سرویس درست پیش از اتمام یک‌بار خودکار تمدید می‌شود."))
+    async with SessionLocal() as s:
+        res = await storefront_autorenew.arm(s, order_id, expected_sf_id=sf_id)
+    await _report_arm(cb, res, renew_price)
 
 
 @storefront_router.callback_query(F.data.startswith("sftgl:"))

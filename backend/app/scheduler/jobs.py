@@ -51,6 +51,7 @@ class ScheduleConfig:
     digest_hour: int = 9       # daily owner digest: hour (0–23)
     storefront_reaper_minutes: int = 15  # storefront pending-order reaper cadence (1–1440)
     storefront_delivery_minutes: int = 1  # storefront broadcast/direct delivery worker cadence (1–60)
+    storefront_autorenew_minutes: int = 15  # deferred auto-renew fire-sweep cadence (1–1440)
 
 
 def _clamp(value, lo: int, hi: int, default: int) -> int:
@@ -69,6 +70,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
         "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
         "storefront_pending_order_reaper_minutes", "storefront_delivery_worker_interval_minutes",
+        "storefront_autorenew_interval_minutes",
     ])
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
@@ -84,6 +86,8 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
             s.get("storefront_pending_order_reaper_minutes"), 1, 1440, 15),
         storefront_delivery_minutes=_clamp(
             s.get("storefront_delivery_worker_interval_minutes"), 1, 60, 1),
+        storefront_autorenew_minutes=_clamp(
+            s.get("storefront_autorenew_interval_minutes"), 1, 1440, 15),
     )
 
 
@@ -332,6 +336,18 @@ async def storefront_reaper_job() -> None:
         log.exception("storefront_reaper_job failed")
 
 
+async def storefront_autorenew_job() -> None:
+    """Fire deferred one-shot auto-renewals for armed configs that are near exhaustion, and clean up
+    dangling arms. Money-moving + panel I/O, but fully crash-safe (deterministic op_id + the durable
+    renewal reconciler). Never crashes the scheduler loop."""
+    try:
+        from app.services import storefront_autorenew
+
+        await storefront_autorenew.sweep()
+    except Exception:  # noqa: BLE001
+        log.exception("storefront_autorenew_job failed")
+
+
 async def storefront_expiry_job() -> None:
     """Daily proactive storefront notices: near-expiry reminders, «free trial ended → buy» nudges,
     «~80% volume used → renew» warnings, and win-back notices for services that already lapsed.
@@ -425,6 +441,10 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         # Storefront durable delivery worker: send queued broadcasts + direct messages.
         ("storefront_delivery", storefront_delivery_worker_job,
          IntervalTrigger(minutes=cfg.storefront_delivery_minutes, start_date=interval_anchor,
+                         timezone=tz), 300),
+        # Deferred one-shot auto-renew: fire armed configs that are near exhaustion.
+        ("storefront_autorenew", storefront_autorenew_job,
+         IntervalTrigger(minutes=cfg.storefront_autorenew_minutes, start_date=interval_anchor,
                          timezone=tz), 300),
         # Liveness stamp read by /health; fixed cadence on purpose (not a setting).
         ("scheduler_heartbeat", scheduler_heartbeat_job,
