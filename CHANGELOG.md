@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.94.2 - 2026-07-19
+
+Fixes a real over-billing: resellers were charged too much for services renewed through their shop
+bots. No database migration.
+
+### Fixed
+
+- **A service renewed through a customer's shop bot was billed to the reseller at up to double the
+  amount actually sold — and it grew with every renewal.** When a customer renews, the panel sets
+  the config's volume to *current usage + the new plan* (so they get a fresh allowance without
+  resetting their usage counter). But the reseller's invoice read that inflated number, so the
+  customer's already-used (and already-paid-for) volume got counted again the next month, compounding
+  each renewal. Checked against the live database, this was over-charging **40 configs across ~22
+  resellers by ~750 GB this month alone**. Renewed shop services are now billed at the plan actually
+  sold, in both the monthly invoice and the «فاکتور علی‌الحساب» preview. Services created directly on
+  the panel (outside the shop bots) are unaffected, and the fix can only ever *lower* an inflated
+  bill, never raise one. This also corrects the already-inflated configs on this month's invoice —
+  no change to any live customer service.
+
 ## 1.94.1 - 2026-07-19
 
 A safety confirmation before deleting a panel that has been billed. No database migration.

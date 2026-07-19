@@ -137,6 +137,7 @@ def billable_gb_for_user(
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
     exclude_user_uuids: set[str] | None = None,
+    cap_gb_by_uuid: dict[str, float] | None = None,
 ) -> tuple[float, bool] | None:
     """The single source of truth for one user's billable GB in a period.
 
@@ -157,6 +158,17 @@ def billable_gb_for_user(
     if not period.contains(u.start_date):
         return None
     gb_sold = float(u.usage_limit_gb or 0)
+    # A storefront config's panel quota inflates on every renewal (usage_limit_GB = used + plan_gb),
+    # so billing it verbatim double-counts the previous cycle's consumption. `cap_gb_by_uuid` maps
+    # such a config's uuid to the plan it was actually SOLD (StorefrontOrder.gb); cap the sold quota
+    # at that so the reseller is billed the real sale, not the inflated ceiling. A cap never RAISES
+    # a bill (it's a min), and native (non-storefront) configs aren't in the map, so they're
+    # untouched. Applied before the test-config exclusion so the exclusion also sees the true size.
+    if cap_gb_by_uuid is not None:
+        _uuid = getattr(u, "user_uuid", None)
+        cap = cap_gb_by_uuid.get(_uuid) if _uuid is not None else None
+        if cap is not None:
+            gb_sold = min(gb_sold, float(cap))
     if _excluded(gb_sold, excluded_usage_gb, free_threshold_gb):
         return None
     user_synced_at = getattr(u, "last_synced_at", None)
@@ -199,9 +211,11 @@ def compute_invoices(
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
     exclude_user_uuids: set[str] | None = None,
+    cap_gb_by_uuid: dict[str, float] | None = None,
 ) -> list[BundleResult]:
     """Return one BundleResult per billable top-level reseller (including zero ones).
-    `exclude_user_uuids` = storefront free-trial config uuids to never bill."""
+    `exclude_user_uuids` = storefront free-trial config uuids to never bill.
+    `cap_gb_by_uuid` = storefront config uuid → the plan it was sold (caps the inflated panel quota)."""
     children_map = build_children_map(resellers)
     roots = select_billable_roots(resellers)
 
@@ -221,7 +235,7 @@ def compute_invoices(
             for u in users_by_adder.get(uuid, []):
                 res = billable_gb_for_user(
                     u, period, excluded_usage_gb, free_threshold_gb, panel_synced_at,
-                    deleted_full_quota_over_gb, exclude_user_uuids,
+                    deleted_full_quota_over_gb, exclude_user_uuids, cap_gb_by_uuid,
                 )
                 if res is None:
                     continue

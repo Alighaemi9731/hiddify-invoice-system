@@ -186,6 +186,9 @@ async def generate_invoices(
         ).scalars().all()
         # Free-trial configs are a giveaway — excluded from the reseller's invoice (base + metering).
         trial_uuids = await storefront.trial_user_uuids(session, panel.id)
+        # Storefront config uuid → plan sold — caps the inflated renewal quota (used+plan_gb) so a
+        # renewed config is billed the real sale, not the previous cycle's consumption re-counted.
+        caps = await storefront.billing_caps(session, panel.id)
 
         bundles = compute_invoices(
             resellers, users, period,
@@ -194,6 +197,7 @@ async def generate_invoices(
             panel_synced_at=panel.last_synced_at,
             deleted_full_quota_over_gb=deleted_over,
             exclude_user_uuids=trial_uuids,
+            cap_gb_by_uuid=caps,
         )
         for bundle in bundles:
             # A reseller removed from the panel (gone in the latest sync) must not be billed
@@ -292,6 +296,7 @@ async def preview_bundles(
             )
         ).scalars().all()
         trial_uuids = await storefront.trial_user_uuids(session, panel.id)
+        caps = await storefront.billing_caps(session, panel.id)
         for b in compute_invoices(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
@@ -299,6 +304,7 @@ async def preview_bundles(
             panel_synced_at=panel.last_synced_at,
             deleted_full_quota_over_gb=deleted_over,
             exclude_user_uuids=trial_uuids,
+            cap_gb_by_uuid=caps,
         ):
             if not _reseller_present(b.root, panel):
                 continue
@@ -373,6 +379,7 @@ async def recompute_invoice(
         await session.execute(select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id))
     ).scalars().all()
     trial_uuids = await storefront.trial_user_uuids(session, panel.id)
+    caps = await storefront.billing_caps(session, panel.id)
     bundles = compute_invoices(
         resellers, users, period,
         default_price_per_gb=default_price, excluded_usage_gb=excluded,
@@ -380,6 +387,7 @@ async def recompute_invoice(
         panel_synced_at=panel.last_synced_at,
         deleted_full_quota_over_gb=deleted_over,
         exclude_user_uuids=trial_uuids,
+        cap_gb_by_uuid=caps,
     )
     bundle = next((b for b in bundles if b.root.id == invoice.reseller_id), None)
 

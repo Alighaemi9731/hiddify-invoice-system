@@ -62,6 +62,38 @@ async def trial_user_uuids(session: AsyncSession, panel_id: int) -> set[str]:
     return {u for u in rows if u}
 
 
+async def billing_caps(session: AsyncSession, panel_id: int) -> dict[str, float]:
+    """Panel-scoped map `panel_user_uuid → plan GB sold`, for capping the reseller's invoice.
+
+    A storefront renewal sets the panel quota to `current_usage + plan_gb` (cumulative), so the
+    config's `usage_limit_GB` inflates every cycle and the reseller invoice — which reads that
+    quota — double-counts the previous cycle's consumption. Billing the config at the plan it was
+    actually sold (`StorefrontOrder.gb`) instead is the true sale. Passed to the invoice engine as
+    `cap_gb_by_uuid` (see `invoice_engine.billable_gb_for_user`), keyed on `panel_user_uuid` which
+    joins to `end_user_snapshots.user_uuid`.
+
+    Trials are omitted — they're never billed at all (see `trial_user_uuids`). If two orders somehow
+    share a uuid, the largest plan wins (can only ever RAISE the cap, never over-trim a real sale).
+    """
+    from app.models import StorefrontOrder
+
+    rows = (
+        await session.execute(
+            select(StorefrontOrder.panel_user_uuid, StorefrontOrder.gb).where(
+                StorefrontOrder.panel_id == panel_id,
+                StorefrontOrder.is_trial.is_(False),
+                StorefrontOrder.panel_user_uuid.is_not(None),
+            )
+        )
+    ).all()
+    caps: dict[str, float] = {}
+    for uuid, gb in rows:
+        if not uuid or gb is None:
+            continue
+        caps[uuid] = max(caps.get(uuid, 0.0), float(gb))
+    return caps
+
+
 async def active_bots(session: AsyncSession) -> list[StorefrontBot]:
     """Enabled storefront bots the manager should be polling. Errored rows (invalid/revoked
     token) are EXCLUDED — otherwise reconcile re-validates the dead token every ~30s forever.

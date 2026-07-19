@@ -81,6 +81,7 @@ async def node_invoice(
         panel_synced_at=await _panel_synced_at(session, node.panel_id),
         deleted_full_quota_over_gb=await pricing.get_deleted_full_quota_over_gb(session),
         exclude_user_uuids=await storefront.trial_user_uuids(session, node.panel_id),
+        cap_gb_by_uuid=await storefront.billing_caps(session, node.panel_id),
     )
     return next((b for b in bundles if b.root.id == node.id), None)
 
@@ -111,6 +112,7 @@ async def node_invoice_own(
         panel_synced_at=await _panel_synced_at(session, node.panel_id),
         deleted_full_quota_over_gb=await pricing.get_deleted_full_quota_over_gb(session),
         exclude_user_uuids=await storefront.trial_user_uuids(session, node.panel_id),
+        cap_gb_by_uuid=await storefront.billing_caps(session, node.panel_id),
     )
     return next((b for b in bundles if b.root.id == node.id), None)
 
@@ -241,12 +243,14 @@ def _billable_gb_for_period(
     panel_synced_at: dt.datetime | None = None,
     deleted_full_quota_over_gb: float = 0.0,
     exclude_user_uuids: set[str] | None = None,
+    cap_gb_by_uuid: dict[str, float] | None = None,
 ) -> tuple[float, int]:
     """Sum of billable GB (and count) of services created in `period`, using the invoice
     engine's EXACT per-user rule via `billable_gb_for_user` — free threshold, excluded sizes,
     AND the deleted-user rule (consumption, or full sold quota over the cutoff) — so this
     report/interim/cap math matches the real invoice. Pass `panel_synced_at` to enable the
-    deleted-user rule. `exclude_user_uuids` = free-trial config uuids (never billed)."""
+    deleted-user rule. `exclude_user_uuids` = free-trial config uuids (never billed);
+    `cap_gb_by_uuid` = storefront config uuid → plan sold (caps the inflated renewal quota)."""
     from app.services.invoice_engine import billable_gb_for_user
 
     excluded = excluded or set()
@@ -255,7 +259,7 @@ def _billable_gb_for_period(
     for u in users:
         res = billable_gb_for_user(
             u, period, excluded, free_threshold, panel_synced_at, deleted_full_quota_over_gb,
-            exclude_user_uuids,
+            exclude_user_uuids, cap_gb_by_uuid,
         )
         if res is None:
             continue
@@ -275,15 +279,17 @@ async def _billable_gb_with_metering(
     panel_synced_at: dt.datetime | None,
     deleted_full_quota_over_gb: float = 0.0,
     exclude_user_uuids: set[str] | None = None,
+    cap_gb_by_uuid: dict[str, float] | None = None,
 ) -> tuple[float, int]:
     """Base billable GB (snapshot rule) PLUS the abuse-metered extra (overage + renew-by-edit)
     for `uuids` in `period`. This is EXACTLY what `generate_invoices` bills for that subtree, so
     the bot's interim («علی‌الحساب»), sub-reseller report, and GB-cap numbers match the
     end-of-month invoice instead of under-reporting whenever there is metered abuse.
-    `exclude_user_uuids` = free-trial config uuids (never billed, base + metering)."""
+    `exclude_user_uuids` = free-trial config uuids (never billed, base + metering);
+    `cap_gb_by_uuid` = storefront config uuid → plan sold (caps the inflated renewal quota)."""
     base_gb, cnt = _billable_gb_for_period(
         users, period, free_threshold, excluded, panel_synced_at, deleted_full_quota_over_gb,
-        exclude_user_uuids,
+        exclude_user_uuids, cap_gb_by_uuid,
     )
     extra = await metering.bundle_extra(
         session, panel_id, uuids, period.label, free_threshold,
@@ -305,6 +311,7 @@ class _NodeCtx:
     psa: dt.datetime | None
     deleted_over: float
     trial_uuids: set[str]
+    caps: dict[str, float]
 
 
 async def _node_ctx(session: AsyncSession, reseller: Reseller) -> _NodeCtx:
@@ -329,6 +336,7 @@ async def _node_ctx(session: AsyncSession, reseller: Reseller) -> _NodeCtx:
         psa=await _panel_synced_at(session, reseller.panel_id),
         deleted_over=await pricing.get_deleted_full_quota_over_gb(session),
         trial_uuids=await storefront.trial_user_uuids(session, reseller.panel_id),
+        caps=await storefront.billing_caps(session, reseller.panel_id),
     )
 
 
@@ -352,7 +360,7 @@ async def node_months(
     for p in periods:
         base_gb, cnt = _billable_gb_for_period(
             ctx.users, p, ctx.free_threshold, ctx.excluded, ctx.psa, ctx.deleted_over,
-            ctx.trial_uuids,
+            ctx.trial_uuids, ctx.caps,
         )
         extra = extras.get(p.label) or {"gb": 0.0, "lines": []}
         gb = round(base_gb + float(extra.get("gb", 0) or 0), 3)
@@ -432,6 +440,8 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
 
     # Free-trial config uuids on this panel — never billed (a giveaway).
     trial_uuids = await storefront.trial_user_uuids(session, reseller.panel_id)
+    # Storefront config uuid → plan sold — caps the inflated renewal quota (matches the invoice).
+    caps = await storefront.billing_caps(session, reseller.panel_id)
 
     # Own users: exactly this reseller's admin_uuid (NOT descendants). Includes the metered
     # abuse extra so the interim matches the real invoice.
@@ -439,6 +449,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
     own_gb, own_cnt = await _billable_gb_with_metering(
         session, reseller.panel_id, {reseller.admin_uuid}, own_users,
         period, free_threshold, excluded, psa, deleted_over, exclude_user_uuids=trial_uuids,
+        cap_gb_by_uuid=caps,
     )
 
     # Each direct sub-reseller, counted as its whole subtree (so no user is double-counted).
@@ -450,7 +461,7 @@ async def interim_breakdown(session: AsyncSession, reseller: Reseller, period: P
         sgb, scnt = await _billable_gb_with_metering(
             session, reseller.panel_id, sub_uuids, sub_users,
             period, free_threshold, excluded, psa, deleted_over,
-            exclude_user_uuids=trial_uuids,
+            exclude_user_uuids=trial_uuids, cap_gb_by_uuid=caps,
         )
         if scnt == 0 and sgb == 0:
             continue  # skip sub-resellers with no sales this period (keeps the report tidy)
@@ -496,5 +507,6 @@ async def current_billable_gb(session: AsyncSession, reseller: Reseller) -> floa
     gb, _ = await _billable_gb_with_metering(
         session, reseller.panel_id, uuids, users, current_month(), free_threshold, excluded, psa,
         deleted_over, exclude_user_uuids=await storefront.trial_user_uuids(session, reseller.panel_id),
+        cap_gb_by_uuid=await storefront.billing_caps(session, reseller.panel_id),
     )
     return gb
