@@ -8,6 +8,19 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.95.1 - 2026-07-19
+
+Trims the auto-renew messages. No database migration.
+
+### Changed
+
+- When a customer turns on «تمدید خودکار», the confirmation message no longer repeats the "this is
+  one-shot, turn it on again next time" and "tap again to cancel" lines — it just confirms it's on
+  and that one plan's price was reserved.
+- The after-renewal message no longer repeats the "the reserved amount was charged, turn it on again
+  for next time" line — it just says the service was renewed and stayed connected. The one-shot
+  behaviour and the toggle are unchanged.
+
 ## 1.95.0 - 2026-07-19
 
 Adds **one-shot auto-renew** for shop customers and makes it the single renewal model. Database
