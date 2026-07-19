@@ -119,9 +119,9 @@ export default function Panels() {
     onSuccess: () => [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms)),
     invalidate: ["panels"],
   });
-  // Deleting a panel can destroy a payment that ALSO settles a reseller's invoice on another
-  // panel (one transfer, several panels), leaving that invoice "paid" with no evidence behind it.
-  // The API refuses with 409 and explains exactly what would be lost; re-ask, then force.
+  // Deleting a billed panel permanently removes hundreds of invoice rows (and can strand a
+  // cross-panel payment). The financial ledger survives, but a delete that large should state its
+  // scope: the API answers 409 with the exact counts, we re-ask, then retry with force.
   const doDelete = useToastMutation({
     show,
     mutationFn: async (id: number) => {

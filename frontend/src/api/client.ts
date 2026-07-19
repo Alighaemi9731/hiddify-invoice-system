@@ -93,8 +93,9 @@ export const totpDisable = (current_password: string) =>
 export const listPanels = () => api.get("/api/panels").then((r) => r.data);
 export const createPanel = (b: any) => api.post("/api/panels", b).then((r) => r.data);
 export const updatePanel = (id: number, b: any) => api.patch(`/api/panels/${id}`, b).then((r) => r.data);
-// `force` is required only when the delete would destroy a payment that also settles ANOTHER
-// reseller's invoice; the API answers 409 with an explanation first (see services/payment_guard).
+// `force` is required when the delete would remove real (non-draft) invoices, or a payment that
+// also settles another reseller's invoice; the API answers 409 with the blast radius first, and
+// the caller re-asks before retrying with force. A drafts-only or empty panel deletes directly.
 export const deletePanel = (id: number, force = false) =>
   api.delete(`/api/panels/${id}`, { params: force ? { force: true } : {} });
 export const syncPanel = (id: number) => api.post(`/api/panels/${id}/sync`).then((r) => r.data);

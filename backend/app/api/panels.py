@@ -12,8 +12,8 @@ from app.bot.matching import normalize_host, normalize_path
 from app.core import crypto
 from app.core.db import SessionLocal, get_session
 from app.core.security import get_current_subject
-from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
-from app.models.enums import PanelStatus
+from app.models import EndUserSnapshot, Invoice, Panel, Reseller, SyncRun
+from app.models.enums import InvoiceStatus, PanelStatus
 from app.schemas.panel import (
     PanelCreate,
     PanelOut,
@@ -223,25 +223,82 @@ async def update_panel(
 async def delete_panel(
     panel_id: int, force: bool = False, session: AsyncSession = Depends(get_session)
 ) -> None:
-    """Delete a panel and everything cascading from it.
+    """Delete a panel and everything below it (resellers, users, invoices, payments).
 
-    Guarded against silently destroying cross-panel payment evidence: a customer who owns resellers
-    on several panels can settle all their invoices with ONE transfer, and that payment is owned by
-    just one of those resellers. Deleting this panel cascades the payment away (Postgres FK) while
-    the other panel's invoice stays `paid` with nothing behind it — no txid, no receipt. This path
-    was completely unguarded, and it is the easiest of the three to reach by accident.
+    Two independent guards, both of which answer 409 and are cleared by `force=true`:
+
+      1. Cross-panel payment evidence (added in v1.93.0). A customer who owns resellers on several
+         panels can settle all their invoices with ONE transfer, and that payment is owned by just
+         one of those resellers. Deleting THIS panel would take the payment with it while another
+         panel's invoice stays `paid` with nothing behind it — no txid, no receipt. The money facts
+         for the survivor are archived to the FK-free ledger before the delete goes through.
+
+      2. Blast radius (added in v1.94.1). Deleting a panel that has been billed permanently removes
+         hundreds of invoice rows on a single click. The durable financial ledger
+         (`financial_records`) survives — so this is not data LOSS in the accounting sense — but a
+         destructive action of that size should state its scope and be confirmed, not slip past a
+         generic «delete?» prompt. DRAFT invoices are throwaway (never sent, no money, discarded
+         routinely) and never trigger the prompt, so a panel that was only ever calculated against
+         still deletes freely.
+
+    The deletion itself is left to SQLAlchemy's `all, delete-orphan` cascade on `Panel.resellers`
+    (which unwinds resellers → invoices → lines in Python) plus the database FK cascades on
+    snapshots/meters/payments/storefront bots — verified against PostgreSQL 16. It is NOT
+    hand-rolled: the cascade already does exactly the right thing on the production engine.
     """
     panel = await _get_or_404(session, panel_id)
     reseller_ids = set((await session.execute(
         select(Reseller.id).where(Reseller.panel_id == panel_id)
     )).scalars().all())
+
     blocking = await payment_guard.blocking_payments(session, reseller_ids)
-    if blocking and not force:
-        raise HTTPException(409, payment_guard.refusal_message(blocking))
+    real_invoices = (await session.execute(
+        select(func.count(Invoice.id)).where(
+            Invoice.panel_id == panel_id, Invoice.status != InvoiceStatus.draft)
+    )).scalar_one()
+
+    if not force and (blocking or real_invoices):
+        raise HTTPException(
+            409, await _delete_confirmation(session, panel, real_invoices, blocking))
+
+    # Cross-panel case only: preserve the surviving invoices' money facts before the cascade runs.
     if blocking:
         await payment_guard.archive_before_delete(session, blocking)
+
     await session.delete(panel)
     await session.commit()
+
+
+async def _delete_confirmation(
+    session: AsyncSession, panel: Panel, real_invoices: int, blocking: list
+) -> str:
+    """State the blast radius so a large panel delete is a deliberate choice, not a slip."""
+    parts: list[str] = []
+    if real_invoices:
+        breakdown: dict[InvoiceStatus, int] = {
+            st: n for st, n in (await session.execute(
+                select(Invoice.status, func.count(Invoice.id))
+                .where(Invoice.panel_id == panel.id, Invoice.status != InvoiceStatus.draft)
+                .group_by(Invoice.status)
+            )).all()
+        }
+        paid = breakdown.get(InvoiceStatus.paid, 0)
+        owed = sum(breakdown.get(s, 0) for s in
+                   (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced))
+        parts.append(
+            f"حذفِ پنل «{panel.key}» {real_invoices} فاکتورِ واقعی را برای همیشه پاک می‌کند "
+            f"({paid} پرداخت‌شده، {owed} پرداخت‌نشده). سوابقِ مالی در «تاریخچهٔ مالی» باقی می‌ماند، "
+            "ولی خودِ فاکتورها و ریزِ کاربران حذف می‌شوند."
+        )
+    if blocking:
+        foreign = sorted({i for b in blocking for i in b.foreign_invoice_ids})
+        parts.append(
+            f"همچنین {len(blocking)} پرداخت به فاکتورهای نماینده‌های پنل‌های دیگر هم مربوط است "
+            f"(فاکتورهای {'، '.join(str(i) for i in foreign[:6])})؛ با حذف، سندِ آن پرداخت‌ها از "
+            "بین می‌رود."
+        )
+    parts.append("اگر مطمئن هستید، «حذف اجباری» را بزنید.")
+    return " ".join(parts)
 
 
 async def _sync_one_bg(panel_id: int) -> None:

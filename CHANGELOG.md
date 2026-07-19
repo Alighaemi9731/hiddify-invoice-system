@@ -8,6 +8,27 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.94.1 - 2026-07-19
+
+A safety confirmation before deleting a panel that has been billed. No database migration.
+
+### Changed
+
+- **Deleting a panel that has real invoices now shows what will be removed and asks you to
+  confirm**, instead of wiping it on a single click. It states the count and the paid/unpaid split
+  («۱۲۶ فاکتورِ واقعی: ۸۹ پرداخت‌شده، ۳۷ پرداخت‌نشده») and reminds you that the financial history in
+  «تاریخچهٔ مالی» is preserved regardless. A panel with only draft invoices, or no invoices, still
+  deletes directly — drafts are throwaway. This complements the existing cross-panel-payment guard,
+  which already warned when a delete would strand another panel's payment record.
+
+### Note
+
+- Panel deletion itself was **not** broken — it always worked, and it never lost the durable
+  financial ledger. This release only adds friction proportional to the blast radius of a large,
+  billed-panel delete; nothing about how the data is removed changed. (An earlier diagnosis that
+  billed panels could not be deleted was incorrect and has been verified against the production
+  database engine.)
+
 ## 1.94.0 - 2026-07-19
 
 Portal sign-in security, safer customer notifications, and the storefront settings finally get a
