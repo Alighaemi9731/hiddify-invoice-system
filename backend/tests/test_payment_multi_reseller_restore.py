@@ -250,3 +250,148 @@ def test_one_resellers_restore_failure_does_not_skip_the_others(tmp_path, monkey
         assert rb.id in await _restore_targets(s)
 
     _run(body, tmp_path, "flaky.db")
+
+
+# ── deleting one reseller must not silently destroy another's payment evidence ────────────────
+async def _seed_cross_reseller_payment(s):
+    """One customer, two panels, ONE transfer settling both panels' invoices — then confirmed."""
+    from app.services import settings_service
+
+    await settings_service.set_value(s, "auto_restore_on_payment", False)
+    out = []
+    for key in ("cx-a", "cx-b"):
+        panel = Panel(key=key, host=f"{key}.invalid", proxy_path_enc="x", owner_uuid="o")
+        s.add(panel)
+        await s.flush()
+        r = Reseller(panel_id=panel.id, admin_uuid=f"adm-{key}", name=f"R-{key}",
+                     bot_chat_id=CHAT_ID)
+        s.add(r)
+        await s.flush()
+        inv = Invoice(
+            reseller_id=r.id, panel_id=panel.id,
+            period_start=dt.date(2026, 3, 1), period_end=dt.date(2026, 3, 31),
+            period_label="2026-03", usage_gb=10, amount_toman=100_000, amount_usdt=1,
+            status=InvoiceStatus.sent,
+            sent_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=6),
+        )
+        s.add(inv)
+        await s.flush()
+        out.append((panel, r, inv))
+    await s.commit()
+
+    (pa, ra, ia), (pb, rb, ib) = out
+    res = await payments.submit_reseller_payment(
+        s, reseller_ids={ra.id, rb.id}, invoice_ids=[ia.id, ib.id], txid=HASH)
+    assert res.status == "ok", res.user_message
+    await payments.confirm_manually(s, res.payment.id)
+    return (pa, ra, ia), (pb, rb, ib), res.payment.id
+
+
+def test_cross_reseller_payment_is_detected_before_a_delete(tmp_path):
+    async def body(s):
+        from app.services import payment_guard
+
+        (_pa, ra, ia), (_pb, rb, ib), pay_id = await _seed_cross_reseller_payment(s)
+
+        blocking = await payment_guard.blocking_payments(s, {ra.id})
+        assert len(blocking) == 1, "the cross-reseller payment was not detected"
+        assert blocking[0].payment_id == pay_id
+        assert ib.id in blocking[0].foreign_invoice_ids
+        assert rb.id in blocking[0].foreign_reseller_ids
+        # …and the message names the invoice that would be stranded.
+        assert str(ib.id) in payment_guard.refusal_message(blocking)
+
+        # Deleting BOTH resellers together is fine — nothing is left stranded.
+        assert await payment_guard.blocking_payments(s, {ra.id, rb.id}) == []
+        # A reseller with no cross-payment is unaffected.
+        assert await payment_guard.blocking_payments(s, set()) == []
+
+    _run(body, tmp_path, "guard_detect.db")
+
+
+def test_deleting_a_panel_with_a_cross_reseller_payment_is_refused(tmp_path):
+    """The panel delete path was completely unguarded and destroyed payments via FK cascade."""
+    from fastapi import HTTPException
+
+    async def body(s):
+        from app.api import panels as panels_api
+
+        (pa, _ra, _ia), (_pb, _rb, ib), _pay = await _seed_cross_reseller_payment(s)
+
+        try:
+            await panels_api.delete_panel(pa.id, force=False, session=s)
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            assert str(ib.id) in exc.detail
+        else:
+            raise AssertionError("panel delete destroyed cross-panel payment evidence silently")
+
+        assert await s.get(Panel, pa.id) is not None, "the panel was deleted despite the refusal"
+
+    _run(body, tmp_path, "guard_panel.db")
+
+
+def test_a_forced_panel_delete_archives_the_ledger_first(tmp_path):
+    """Forcing is allowed — but the money facts must be preserved in the FK-free ledger before the
+    evidence goes, so «تاریخچهٔ مالی» can still account for the surviving invoice."""
+    async def body(s):
+        from sqlalchemy import select as _select
+
+        from app.api import panels as panels_api
+        from app.models import FinancialRecord
+
+        (pa, _ra, _ia), (_pb, _rb, ib), _pay = await _seed_cross_reseller_payment(s)
+
+        await panels_api.delete_panel(pa.id, force=True, session=s)
+        assert await s.get(Panel, pa.id) is None
+
+        row = (await s.execute(
+            _select(FinancialRecord).where(FinancialRecord.invoice_id == ib.id)
+        )).scalar_one_or_none()
+        assert row is not None, "the surviving invoice has no ledger row after a forced delete"
+        assert row.txid == HASH, "the ledger did not capture the transaction hash"
+
+    _run(body, tmp_path, "guard_force.db")
+
+
+def test_deleting_an_invoice_prunes_it_from_settled_invoice_ids(tmp_path):
+    """`payment_settlements` cascades on invoice_id but the comma column does not, so the two
+    representations of one set silently diverged and `_settled_ids` kept returning a dead id."""
+    async def body(s):
+        from app.services import payment_guard
+
+        (_pa, _ra, ia), (_pb, _rb, ib), pay_id = await _seed_cross_reseller_payment(s)
+
+        before = await s.get(Payment, pay_id)
+        assert str(ib.id) in (before.settled_invoice_ids or "")
+
+        changed = await payment_guard.prune_deleted_invoice_ids(s, {ib.id})
+        await s.commit()
+        assert changed == 1
+
+        after = await s.get(Payment, pay_id)
+        await s.refresh(after)
+        assert str(ib.id) not in (after.settled_invoice_ids or "")
+        assert str(ia.id) in (after.settled_invoice_ids or "")
+        assert after.invoice_id == ia.id, "the primary id still points at the deleted invoice"
+
+    _run(body, tmp_path, "guard_prune.db")
+
+
+def test_pruning_the_primary_invoice_repoints_it_at_a_survivor(tmp_path):
+    async def body(s):
+        from app.services import payment_guard
+
+        (_pa, _ra, ia), (_pb, _rb, ib), pay_id = await _seed_cross_reseller_payment(s)
+        payment = await s.get(Payment, pay_id)
+        assert payment.invoice_id == ia.id          # the first invoice is the primary
+
+        await payment_guard.prune_deleted_invoice_ids(s, {ia.id})
+        await s.commit()
+
+        after = await s.get(Payment, pay_id)
+        await s.refresh(after)
+        assert after.invoice_id == ib.id, "primary id was left dangling at a deleted invoice"
+        assert (after.settled_invoice_ids or "") == str(ib.id)
+
+    _run(body, tmp_path, "guard_prune_primary.db")

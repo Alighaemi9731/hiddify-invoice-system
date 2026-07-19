@@ -30,7 +30,7 @@ from app.schemas.reseller import (
     ResellerOut,
     ResellerUpdate,
 )
-from app.services import admin_capacity, enforcement, pricing
+from app.services import admin_capacity, enforcement, payment_guard, pricing
 from app.services.invoice_engine import build_children_map
 from app.services.presence import snapshot_present_filter
 
@@ -317,7 +317,7 @@ async def list_absent_resellers(
 
 @router.delete("/{reseller_id}/absent")
 async def delete_absent_reseller(
-    reseller_id: int, session: AsyncSession = Depends(get_session)
+    reseller_id: int, force: bool = False, session: AsyncSession = Depends(get_session)
 ) -> dict:
     """Permanently delete an ABSENT reseller, the ABSENT sub-resellers beneath it, and the end-user
     snapshots (+ usage meters) those removed admins created — full cleanup of a branch that's gone
@@ -360,6 +360,15 @@ async def delete_absent_reseller(
     del_ids = [r.id for r in to_delete]
     del_uuids = [(r.admin_uuid or "").lower() for r in to_delete]
 
+    # A payment can settle invoices belonging to SEVERAL resellers (one transfer, several panels).
+    # Deleting one of them would destroy that payment and leave the others' invoices `paid` with no
+    # evidence. Refuse unless the owner explicitly forces it, and archive the ledger first if so.
+    blocking = await payment_guard.blocking_payments(session, set(del_ids))
+    if blocking and not force:
+        raise HTTPException(409, payment_guard.refusal_message(blocking))
+    if blocking:
+        await payment_guard.archive_before_delete(session, blocking)
+
     # End-users created by any of the deleted admins on this panel (their "users").
     user_uuids = list((await session.execute(
         select(EndUserSnapshot.user_uuid).where(
@@ -380,6 +389,9 @@ async def delete_absent_reseller(
         select(Invoice.id).where(Invoice.reseller_id.in_(del_ids))
     )).scalars().all())
     if inv_ids:
+        # Keep `settled_invoice_ids` in step with the cascading `payment_settlements` mirror, so a
+        # surviving payment never names an invoice that no longer exists.
+        await payment_guard.prune_deleted_invoice_ids(session, set(inv_ids))
         await session.execute(sa_delete(InvoiceLine).where(InvoiceLine.invoice_id.in_(inv_ids)))
         await session.execute(sa_delete(Invoice).where(Invoice.id.in_(inv_ids)))
     await session.execute(sa_delete(Reseller).where(Reseller.id.in_(del_ids)))

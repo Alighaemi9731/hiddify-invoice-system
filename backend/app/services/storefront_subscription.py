@@ -24,7 +24,7 @@ from app.models import (
 )
 from app.services import storefront_ops, storefront_wallet
 from app.services.panel_client.admin_api import AdminApiClient
-from app.services.storefront_provision import _customer_lock
+from app.services.storefront_provision import _customer_lock, _lease_active
 
 log = logging.getLogger("bot.storefront")
 
@@ -204,14 +204,39 @@ async def renew(
             log.warning("renew target apply uncertain for order %s", order_id, exc_info=True)
             return SubResult(False, "processing", message=str(exc)[:200])
 
-        # 5. Success — finalize the order + operation.
+        # 5. Success — finalize the order + operation, but ONLY if the order is still ours.
+        #    This write used to be unconditional, so a delete that landed mid-renewal was undone:
+        #    the order flipped back to `provisioned` and looked live in «سرویس‌های من» while its
+        #    panel config no longer existed. `_restore_and_finalize` above already guards its own
+        #    write this way; the success path was the one that did not.
         async with session_factory() as s:
-            o = await s.get(StorefrontOrder, order_id)
-            if o is not None:
-                o.status = "provisioned"
-                o.gb, o.days = gb, days
-                o.last_renewed_at = dt.datetime.now(dt.timezone.utc)
-                o.lease_expires_at = None
+            o = await _order_for_update(s, order_id)
+            if o is None or o.status != "renewing":
+                # Somebody terminal-ised the order while the panel call was in flight. The quota was
+                # granted to a config that has since been removed, so the charge must come back —
+                # `renew_reversal` is exactly-once, so this cannot double-refund a reconciler.
+                log.warning(
+                    "renew finished but order %s left `renewing` (now %s) — reversing the charge",
+                    order_id, getattr(o, "status", "gone"),
+                )
+                op2 = await s.get(StorefrontOperation, op_pk)
+                if op2 is not None:
+                    await storefront_ops.finalize(s, op2, "reversed", result_order_id=order_id)
+                await s.commit()
+                if not by_admin and price > 0:
+                    async with session_factory() as s2:
+                        # Keyed on the OPERATION, so the reconciler and this path cannot both
+                        # credit — `uq_sfwallet_reversal_per_operation` is the durable backstop.
+                        await storefront_wallet.reverse_charge(
+                            s2, customer_id, price, order_id=order_id, operation_id=op_pk,
+                            note="تمدید در میانهٔ کار لغو شد",
+                        )
+                        await s2.commit()
+                return SubResult(False, "cancelled", price=price, gb=gb, days=days)
+            o.status = "provisioned"
+            o.gb, o.days = gb, days
+            o.last_renewed_at = dt.datetime.now(dt.timezone.utc)
+            o.lease_expires_at = None
             op2 = await s.get(StorefrontOperation, op_pk)
             if op2 is not None:
                 await storefront_ops.finalize(s, op2, "done", result_order_id=order_id)
@@ -225,16 +250,64 @@ async def delete_subscription(
     order_id: int,
     expected_sf_id: int | None = None,
 ) -> SubResult:
-    """Remove the panel config and mark the order deleted (no refund). Idempotent."""
+    """Remove the panel config and mark the order deleted (no refund). Idempotent.
+
+    Refuses to touch an order that a purchase or renewal is still working on. The old guard only
+    excluded `deleted`/`failed`, so `pending` and `renewing` sailed through — and deleting one of
+    those cost the customer real money:
+
+      * mid-PURCHASE the debit is already committed, and `purchase` interprets any non-`pending`
+        status as "the reaper got here first, which means it refunded" — so nothing refunded, while
+        the customer was told their money had been returned;
+      * mid-RENEWAL the panel config is destroyed and `renew`'s final write then flips the order
+        back to `provisioned`, resurrecting a service that no longer exists on the panel.
+
+    So: take the same per-customer lock those flows hold, re-read the row under a write lock, and
+    refuse while a provisioning lease is live. The tenant check stays FIRST, so a cross-tenant
+    caller still gets `not_found` and never learns whether an order is mid-purchase.
+    """
     async with session_factory() as s:
         order = await s.get(StorefrontOrder, order_id)
-        if order is None or order.status in ("deleted", "failed"):
+        if order is None:
             return SubResult(False, "not_found")
         sf, customer, reseller, panel = await _panel_ctx(s, order)
         if expected_sf_id is not None and (sf is None or sf.id != expected_sf_id):
             return SubResult(False, "not_found")
-        uuid, api_key = order.panel_user_uuid, (reseller.admin_uuid if reseller else None)
-        panel_id = panel.id if panel else None
+        if sf is None or customer is None:
+            return SubResult(False, "not_found")
+        sf_id, customer_id = sf.id, customer.id
+
+    async with _customer_lock(sf_id, customer_id):
+        async with session_factory() as s:
+            order = await _order_for_update(s, order_id)
+            if order is None or order.status in ("deleted", "failed"):
+                return SubResult(False, "not_found")
+            if order.status not in _ACTIVE or _lease_active(
+                order.lease_expires_at, dt.datetime.now(dt.timezone.utc)
+            ):
+                # A live purchase/renewal owns this row. Let it finish; the customer can delete
+                # afterwards. Refusing is the only answer that cannot lose money.
+                return SubResult(
+                    False, "busy",
+                    message="این سرویس در حال حاضر در حال پردازش است؛ چند لحظه بعد دوباره تلاش کنید.",
+                )
+            uuid = order.panel_user_uuid
+            api_key = reseller.admin_uuid if reseller else None
+            panel_id = panel.id if panel else None
+        return await _delete_panel_user_and_mark(
+            session_factory, order_id=order_id, uuid=uuid, api_key=api_key, panel_id=panel_id
+        )
+
+
+async def _delete_panel_user_and_mark(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    order_id: int,
+    uuid: str | None,
+    api_key: str | None,
+    panel_id: int | None,
+) -> SubResult:
+    """Panel delete (network I/O, no DB transaction held) then mark the order deleted."""
     if panel_id and uuid:
         try:
             async with session_factory() as s:

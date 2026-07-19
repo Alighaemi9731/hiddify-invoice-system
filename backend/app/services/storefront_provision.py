@@ -325,9 +325,20 @@ async def purchase(
                         await s.commit()
                     return PurchaseResult(True, order_id=order_id, sub_link=o.sub_link,
                                           gb=gb, days=days, label=label)
+                # Some OTHER writer terminal-ised this order while we were talking to the panel.
+                # This assumed that writer was always the reaper, which refunds — but a customer
+                # or admin delete lands here too, and that path deliberately does not refund. The
+                # debit was already committed before the panel call, so the customer paid for a
+                # service that will never exist. Refund here as well; `order_has_refund` keeps it
+                # exactly-once, so the reaper having already refunded is a no-op.
+                if o.price_toman and not await storefront_wallet.order_has_refund(s, order_id):
+                    await storefront_wallet.refund(
+                        s, customer_id, price, order_id=order_id,
+                        note="order finalized elsewhere mid-provision",
+                    )
                 if op is not None:
                     await storefront_ops.finalize(s, op, "failed", result_order_id=order_id)
-                    await s.commit()
+                await s.commit()
                 return PurchaseResult(False, order_id=order_id, reason="reaped",
                                       message="سفارش توسط سیستم نهایی شد", gb=gb, days=days,
                                       label=label)

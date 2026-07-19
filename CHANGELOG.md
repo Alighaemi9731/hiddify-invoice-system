@@ -8,6 +8,36 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.93.0 - 2026-07-19
+
+Two ways the system could quietly lose track of customers' money. No database migration.
+
+### Fixed
+
+- **Deleting a service while it was still being bought or renewed charged the customer for
+  nothing.** The money is taken before the config is created on the panel, so a deletion arriving
+  in that gap left the customer paid-up with no service — and the bot told them «مبلغ به کیفِ پولِ
+  شما بازگردانده شد» when in fact nothing had been refunded. During a *renewal* it was worse: the
+  service was removed from the panel, then the renewal finished and marked it active again, so it
+  appeared in «سرویس‌های من», looked healthy, and would be charged again next time — while not
+  existing at all. Deletion now waits for the purchase or renewal to finish instead of cutting
+  across it, and any charge for a service that ended up not existing is returned automatically
+  (exactly once — it cannot double-refund).
+- **Deleting a panel could destroy the record of a payment belonging to a different panel.** A
+  customer with resellers on several panels can settle everything with one transfer, and that
+  payment is filed under just one of them. Deleting that panel — or that reseller — took the
+  payment with it, leaving the other panel's invoice marked «پرداخت‌شده» with no transaction hash
+  and no receipt image to show for it. Silently. Deleting now stops and tells you exactly which
+  invoices would be left without evidence; you can still go ahead, and if you do, the financial
+  history is written to «تاریخچهٔ مالی» first so the record survives. Panel deletion in particular
+  had no protection at all before this.
+
+### Also
+
+- A payment's list of covered invoices no longer keeps naming an invoice that has been deleted.
+- Corrected a comment claiming payments only ever cover a single invoice — they routinely cover
+  several, which is precisely what made the bug above possible.
+
 ## 1.92.3 - 2026-07-18
 
 Three recoverability fixes — the things you only discover when something has already gone wrong.

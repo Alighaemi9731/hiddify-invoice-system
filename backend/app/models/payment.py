@@ -64,8 +64,10 @@ class Payment(Base, TimestampMixin):
     # Path to a deposit screenshot the reseller sent (method=screenshot), served to the
     # owner in the panel for manual confirmation. Relative to the backend working dir.
     proof_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Invoice ids settled by this payment. Kept comma-separated for compatibility with older
-    # multi-invoice rows; current workflows store exactly one id.
+    # Invoice ids settled by this payment, comma-separated. A payment routinely covers SEVERAL
+    # invoices — «پرداخت همهٔ بدهی» settles a customer's debts across every panel they hold in one
+    # transfer — so this is not a legacy single-id column. `payment_settlements` is the indexed
+    # mirror of the same set; keep the two in step (see `prune_deleted_invoice_ids`).
     settled_invoice_ids: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 

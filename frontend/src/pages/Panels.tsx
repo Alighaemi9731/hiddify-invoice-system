@@ -119,9 +119,22 @@ export default function Panels() {
     onSuccess: () => [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms)),
     invalidate: ["panels"],
   });
+  // Deleting a panel can destroy a payment that ALSO settles a reseller's invoice on another
+  // panel (one transfer, several panels), leaving that invoice "paid" with no evidence behind it.
+  // The API refuses with 409 and explains exactly what would be lost; re-ask, then force.
   const doDelete = useToastMutation({
     show,
-    mutationFn: (id: number) => deletePanel(id),
+    mutationFn: async (id: number) => {
+      try {
+        return await deletePanel(id);
+      } catch (e: any) {
+        const detail = e?.response?.data?.detail;
+        if (e?.response?.status === 409 && detail && confirm(`${detail}\n\nحذف اجباری انجام شود؟`)) {
+          return await deletePanel(id, true);
+        }
+        throw e;
+      }
+    },
     success: "حذف شد",
     invalidate: ["panels"],
   });

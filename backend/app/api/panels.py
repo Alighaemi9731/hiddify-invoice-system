@@ -21,6 +21,7 @@ from app.schemas.panel import (
     SyncRunOut,
     SyncTestResult,
 )
+from app.services import payment_guard
 from app.services import sync as sync_service
 from app.services.panel_client import BackupJsonClient
 
@@ -219,8 +220,26 @@ async def update_panel(
 
 
 @router.delete("/{panel_id}", status_code=204)
-async def delete_panel(panel_id: int, session: AsyncSession = Depends(get_session)) -> None:
+async def delete_panel(
+    panel_id: int, force: bool = False, session: AsyncSession = Depends(get_session)
+) -> None:
+    """Delete a panel and everything cascading from it.
+
+    Guarded against silently destroying cross-panel payment evidence: a customer who owns resellers
+    on several panels can settle all their invoices with ONE transfer, and that payment is owned by
+    just one of those resellers. Deleting this panel cascades the payment away (Postgres FK) while
+    the other panel's invoice stays `paid` with nothing behind it — no txid, no receipt. This path
+    was completely unguarded, and it is the easiest of the three to reach by accident.
+    """
     panel = await _get_or_404(session, panel_id)
+    reseller_ids = set((await session.execute(
+        select(Reseller.id).where(Reseller.panel_id == panel_id)
+    )).scalars().all())
+    blocking = await payment_guard.blocking_payments(session, reseller_ids)
+    if blocking and not force:
+        raise HTTPException(409, payment_guard.refusal_message(blocking))
+    if blocking:
+        await payment_guard.archive_before_delete(session, blocking)
     await session.delete(panel)
     await session.commit()
 

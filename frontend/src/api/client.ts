@@ -93,7 +93,10 @@ export const totpDisable = (current_password: string) =>
 export const listPanels = () => api.get("/api/panels").then((r) => r.data);
 export const createPanel = (b: any) => api.post("/api/panels", b).then((r) => r.data);
 export const updatePanel = (id: number, b: any) => api.patch(`/api/panels/${id}`, b).then((r) => r.data);
-export const deletePanel = (id: number) => api.delete(`/api/panels/${id}`);
+// `force` is required only when the delete would destroy a payment that also settles ANOTHER
+// reseller's invoice; the API answers 409 with an explanation first (see services/payment_guard).
+export const deletePanel = (id: number, force = false) =>
+  api.delete(`/api/panels/${id}`, { params: force ? { force: true } : {} });
 export const syncPanel = (id: number) => api.post(`/api/panels/${id}/sync`).then((r) => r.data);
 export const syncAllPanels = () => api.post("/api/panels/sync-all").then((r) => r.data);
 export const testPanel = (id: number) => api.post(`/api/panels/${id}/test`).then((r) => r.data);
@@ -155,8 +158,10 @@ export interface AbsentReseller {
 }
 export const listAbsentResellers = (params: { panel_id?: number } = {}) =>
   api.get("/api/resellers/absent", { params }).then((r) => r.data as AbsentReseller[]);
-export const deleteAbsentReseller = (id: number) =>
-  api.delete(`/api/resellers/${id}/absent`).then((r) => r.data);
+export const deleteAbsentReseller = (id: number, force = false) =>
+  api
+    .delete(`/api/resellers/${id}/absent`, { params: force ? { force: true } : {} })
+    .then((r) => r.data);
 export const updateReseller = (id: number, b: any) =>
   api.patch(`/api/resellers/${id}`, b).then((r) => r.data);
 export const enforceReseller = (id: number, dry_run?: boolean) =>

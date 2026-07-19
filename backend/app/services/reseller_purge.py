@@ -5,6 +5,8 @@ end-users / usage-meters / invoices / payments tied to them; the durable financi
 has no FK enforcement, so children are deleted before parents."""
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,8 @@ from app.models import (
     Reseller,
     UsageMeter,
 )
+
+log = logging.getLogger("reseller_purge")
 
 
 async def purge_subtree(
@@ -59,6 +63,24 @@ async def purge_subtree(
         )
 
     if del_ids:
+        # This runs AFTER the panel-side admin deletion, so refusing here would strand the DB out
+        # of step with the panel. Instead, preserve what a cross-reseller payment would otherwise
+        # take with it: mirror the affected invoices into the FK-free ledger (which no cascade can
+        # reach) and say plainly in the log which evidence is going away.
+        from app.services import payment_guard
+
+        blocking = await payment_guard.blocking_payments(session, set(del_ids))
+        if blocking:
+            archived = await payment_guard.archive_before_delete(session, blocking)
+            log.warning(
+                "purge of resellers %s destroys %d payment(s) that also settled invoices %s "
+                "belonging to resellers %s — archived %d ledger row(s) first",
+                del_ids,
+                len(blocking),
+                sorted({i for b in blocking for i in b.foreign_invoice_ids}),
+                sorted({r for b in blocking for r in b.foreign_reseller_ids}),
+                archived,
+            )
         await session.execute(sa_delete(Payment).where(Payment.reseller_id.in_(del_ids)))
         inv_ids = list(
             (
@@ -66,6 +88,9 @@ async def purge_subtree(
             ).scalars().all()
         )
         if inv_ids:
+            # Keep `settled_invoice_ids` in step with the cascading `payment_settlements` mirror,
+            # so a surviving payment never names an invoice that no longer exists.
+            await payment_guard.prune_deleted_invoice_ids(session, set(inv_ids))
             await session.execute(sa_delete(InvoiceLine).where(InvoiceLine.invoice_id.in_(inv_ids)))
             await session.execute(sa_delete(Invoice).where(Invoice.id.in_(inv_ids)))
         await session.execute(sa_delete(Reseller).where(Reseller.id.in_(del_ids)))
