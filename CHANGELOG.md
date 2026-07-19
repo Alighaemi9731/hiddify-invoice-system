@@ -8,6 +8,42 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.94.0 - 2026-07-19
+
+Portal sign-in security, safer customer notifications, and the storefront settings finally get a
+proper place in the panel.
+
+**Database migration:** `e8b3d5c7a2f1` (adds `portal_session_epoch`). Rollback target:
+`d4f7a2b9c1e8` — use `sudo ALLOW_DOWNGRADE=1 deploy/rollback.sh v1.93.0`.
+
+### Fixed
+
+- **There was no way to sign a reseller out of the web portal.** A portal session lasted 30 days
+  and quietly renewed itself for as long as it was used, and the only check was whether the person
+  still had *any* panel linked to their Telegram account. So disconnecting one panel from someone
+  who has several left them fully signed in — including to the panel you had just disconnected.
+  Sessions can now be ended: disconnecting a Telegram account signs it out everywhere immediately,
+  and a renewing session cannot outlive that. Everyone currently signed in stays signed in — this
+  does not log anybody out.
+- **A captured Telegram sign-in could be reused.** The signed data Telegram sends when someone taps
+  «ورود با تلگرام» was accepted repeatedly for up to a full day, and each use handed out a fresh
+  30-day session — so one captured sign-in could become permanent access. It is now single-use, and
+  the window it is accepted in dropped from 24 hours to 15 minutes.
+- **Two customer notices could message years of history at once.** The «تست رایگان تمام شد» nudge
+  had no time limit, so a single hiccup in its bookkeeping could have sent it to every trial the
+  shop had ever issued. The «حجمت رو به پایان است» warning never checked whether the service was
+  still alive, so a config that expired long ago and sat at 100% used was told to renew before
+  being cut off. Both are now bounded. (Checked against live data before shipping: neither changes
+  who gets messaged today — this closes the risk, it does not alter current behaviour.)
+
+### Added
+
+- A **«ربات فروشگاهی»** section in Settings. Twelve storefront settings previously appeared under
+  «متفرقه» labelled with their raw English key names; they now have proper Persian labels,
+  explanations, and sensible groupings.
+- The volume-warning threshold (previously fixed at 80%) and the trial-ended reminder window are
+  now editable there.
+
 ## 1.93.0 - 2026-07-19
 
 Two ways the system could quietly lose track of customers' money. No database migration.

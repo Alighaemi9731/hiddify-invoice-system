@@ -305,8 +305,22 @@ async def notify_trial_ended(
 ) -> dict:
     """Nudge customers whose FREE TRIAL just expired to buy a plan — once per trial
     (`trial_ended_alerted_at`, dedup lives in the query). No discount, just a friendly
-    «trial ended → buy» with a buy button."""
+    «trial ended → buy» with a buy button.
+
+    Bounded by a LOOKBACK, for the same reason as `notify_expired`: trials are never moved out of
+    `provisioned` when they lapse, and the migration that added the dedup stamp did no backfill —
+    so without a bound the first sweep after a deploy would message every trial the shop has ever
+    issued, at once, to real customers. Only trials that ended within
+    `storefront_trial_ended_notify_days` (default 7, 0 = off) are contacted.
+    """
     counts = _new_counts()
+    try:
+        lookback = int(
+            await settings_service.get(session, "storefront_trial_ended_notify_days", 7))
+    except (TypeError, ValueError):
+        lookback = 7
+    if lookback <= 0:
+        return counts
     rows = (
         await session.execute(
             select(StorefrontOrder, StorefrontCustomer, StorefrontBot)
@@ -330,6 +344,8 @@ async def notify_trial_ended(
     def due(order: StorefrontOrder, snap: EndUserSnapshot | None) -> Any:
         days_left = _days_left(order, snap, today)
         if days_left is None or days_left >= 0:  # trial not expired yet
+            return None
+        if -days_left > lookback:                # too old — never bulk-message ancient history
             return None
         return days_left
 
@@ -403,9 +419,6 @@ async def notify_expired(
     )
 
 
-_USAGE_THRESHOLD = 0.8
-
-
 def _usage_needs_alert(order: StorefrontOrder) -> bool:
     """Never alerted, or renewed since the last alert (fresh quota re-arms it)."""
     if order.usage_alerted_at is None:
@@ -426,10 +439,22 @@ def _usage_high_msg(label: str | None, used_gb: float, limit_gb: float) -> str:
 async def notify_usage_high(
     session: AsyncSession, *, bot_factory: BotFactory | None = None
 ) -> dict:
-    """Warn customers whose PAID config has used ≥80% of its volume, with a renew button — once per
+    """Warn customers whose PAID config has used most of its volume, with a renew button — once per
     quota cycle (`usage_alerted_at`, re-armed by a renewal). Trials are excluded (they get the
-    trial-ended nudge). Volume comes from the synced snapshot (no per-user panel call)."""
+    trial-ended nudge). Volume comes from the synced snapshot (no per-user panel call).
+
+    The threshold is `storefront_usage_alert_percent` (default 80), and the sweep now SKIPS an
+    already-expired service. It never computed `_days_left` at all, and an expired config keeps
+    both `status="provisioned"` and its last exhausted snapshot — so a service that lapsed a year
+    ago, at 100% used, was told to "renew before you're cut off". That is a filter, not a lookback:
+    an expired service should get no quota warning at ANY age.
+    """
     counts = _new_counts()
+    try:
+        percent = int(await settings_service.get(session, "storefront_usage_alert_percent", 80))
+    except (TypeError, ValueError):
+        percent = 80
+    threshold = min(max(percent, 1), 100) / 100.0
     rows = (
         await session.execute(
             select(StorefrontOrder, StorefrontCustomer, StorefrontBot)
@@ -447,13 +472,20 @@ async def notify_usage_high(
     if not rows:
         return counts
     snaps = await _load_snaps(session, rows)
+    today = tehran_today()
 
     def due(order: StorefrontOrder, snap: EndUserSnapshot | None) -> Any:
         if snap is None:
             return None
+        days_left = _days_left(order, snap, today)
+        # `is not None and < 0` on purpose: `_days_left` returns None when there is neither a
+        # snapshot date nor `order.days`, and treating "unknown" as "expired" would silently drop
+        # a legitimate cohort from the warning entirely.
+        if days_left is not None and days_left < 0:
+            return None                      # already expired → the win-back notice handles it
         limit_gb = float(snap.usage_limit_gb or 0)
         used_gb = float(snap.current_usage_gb or 0)
-        if limit_gb <= 0 or used_gb / limit_gb < _USAGE_THRESHOLD:
+        if limit_gb <= 0 or used_gb / limit_gb < threshold:
             return None
         if not _usage_needs_alert(order):
             return None

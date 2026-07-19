@@ -166,7 +166,8 @@ def test_refresh_slides_the_session():
     async def body(s):
         a, _b, _ia, _ib = await _seed(s)
         ctx = await get_current_reseller(create_portal_session_token(111), s)
-        out = await portal.refresh(ctx)
+        # `refresh` re-mints at the caller's CURRENT session epoch, so it needs the session.
+        out = await portal.refresh(ctx, s)
         assert out["token_type"] == "bearer"
         payload = decode_token(out["access_token"])
         assert payload["role"] == "reseller" and int(payload["sub"]) == 111

@@ -14,6 +14,7 @@ import PersonIcon from "@mui/icons-material/esm/Person";
 import DnsIcon from "@mui/icons-material/esm/Dns";
 import ChatBubbleOutlineIcon from "@mui/icons-material/esm/ChatBubbleOutline";
 import TuneRoundedIcon from "@mui/icons-material/esm/TuneRounded";
+import StorefrontIcon from "@mui/icons-material/esm/Storefront";
 import ExpandMoreIcon from "@mui/icons-material/esm/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/esm/CheckCircle";
 import InfoOutlinedIcon from "@mui/icons-material/esm/InfoOutlined";
@@ -307,6 +308,48 @@ const SECTIONS: Section[] = [
           { key: "user_create_gb_options", label: "حجم‌های مجاز (گیگ، با کاما)", help: "مثلاً: 20, 30, 50, 100", type: "csv", dir: "ltr" },
           { key: "user_create_day_options", label: "مدت‌های مجاز (روز، با کاما)", help: "مثلاً: 30, 60", type: "csv", dir: "ltr" },
           { key: "user_create_bulk_counts", label: "تعدادهای گروهی مجاز (با کاما)", help: "مثلاً: 5, 10, 20", type: "csv", dir: "ltr" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "storefront",
+    title: "ربات فروشگاهی",
+    icon: <StorefrontIcon fontSize="small" />,
+    note:
+      "این تنظیم‌ها روی ربات‌های فروشگاهیِ نماینده‌ها اثر می‌گذارند — همان ربات‌هایی که مشتریانِ نماینده با آن‌ها سرویس می‌خرند. اعلان‌ها یک بار در روز و با فاصله فرستاده می‌شوند.",
+    subs: [
+      {
+        title: "اطلاع‌رسانی به مشتریان",
+        fields: [
+          { key: "storefront_expiry_notify_days", label: "یادآوری پیش از انقضا (روز)", type: "number", min: 0, max: 60,
+            help: "چند روز مانده به پایان سرویس به مشتری یادآوری شود. ۰ = خاموش." },
+          { key: "storefront_expired_notify_days", label: "پیام بازگشت پس از انقضا (روز)", type: "number", min: 0, max: 60,
+            help: "فقط سرویس‌هایی که در این بازه منقضی شده‌اند پیام می‌گیرند — تا هرگز به سالها مشتریِ قدیمی یکجا پیام نرود. ۰ = خاموش." },
+          { key: "storefront_trial_ended_notify_days", label: "پیام پس از پایان تست رایگان (روز)", type: "number", min: 0, max: 60,
+            help: "فقط تست‌هایی که در این بازه تمام شده‌اند پیام «تست تمام شد، پلن بخرید» می‌گیرند. ۰ = خاموش." },
+          { key: "storefront_usage_alert_percent", label: "هشدار مصرف حجم (درصد)", type: "number", min: 1, max: 100,
+            help: "وقتی مصرف سرویس به این درصد رسید، هشدار «حجمت رو به پایان است» فرستاده می‌شود. پیش‌فرض ۸۰. سرویسِ منقضی‌شده هرگز این هشدار را نمی‌گیرد." },
+        ],
+      },
+      {
+        title: "نگهداری و پاک‌سازی",
+        fields: [
+          { key: "storefront_stale_customer_days", label: "پاک‌سازی مشتریانِ بی‌اثر (روز)", type: "number", min: 0, max: 3650, advanced: true,
+            help: "مشتری‌ای که هیچ خرید/شارژی نداشته و این مدت غیرفعال بوده حذف می‌شود. سوابق مالی هرگز پاک نمی‌شوند. ۰ = خاموش." },
+          { key: "storefront_delivery_retention_days", label: "نگهداری سوابق ارسال پیام (روز)", type: "number", min: 0, max: 3650, advanced: true },
+          { key: "storefront_max_pending_topups", label: "حداکثر شارژِ در انتظارِ هر مشتری", type: "number", min: 1, max: 50, advanced: true,
+            help: "جلوی انبوهِ درخواستِ شارژِ بی‌پاسخ از یک مشتری را می‌گیرد." },
+        ],
+      },
+      {
+        title: "کارکرد داخلی",
+        fields: [
+          { key: "storefront_pending_order_reaper_minutes", label: "بازهٔ بررسیِ سفارش‌های نیمه‌کاره (دقیقه)", type: "number", min: 1, max: 1440, advanced: true,
+            help: "هر چند دقیقه سفارش‌هایی که وسطِ کار مانده‌اند تعیین‌تکلیف (تکمیل یا بازگشتِ وجه) شوند." },
+          { key: "storefront_operation_lease_seconds", label: "مهلتِ هر عملیاتِ خرید/تمدید (ثانیه)", type: "number", min: 300, max: 3600, advanced: true },
+          { key: "storefront_live_refresh_seconds", label: "بازهٔ به‌روزرسانیِ وضعیتِ زنده (ثانیه)", type: "number", min: 5, max: 3600, advanced: true },
+          { key: "storefront_delivery_worker_interval_minutes", label: "بازهٔ ارسالِ پیام‌های صف‌شده (دقیقه)", type: "number", min: 1, max: 60, advanced: true },
         ],
       },
     ],

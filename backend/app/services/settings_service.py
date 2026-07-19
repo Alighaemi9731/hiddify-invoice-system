@@ -247,6 +247,11 @@ DEFS: list[SettingDef] = [
     # many days (or fewer) from expiring, once per service period, with a renew button. 0 = off.
     SettingDef("storefront_expiry_notify_days", 3, False, "schedule"),
     SettingDef("storefront_expired_notify_days", 7, False, "schedule"),
+    # «تستت تمام شد» nudge: only trials that ended within this many days are contacted, so the
+    # first sweep after a deploy can't message every trial the shop has ever issued. 0 = off.
+    SettingDef("storefront_trial_ended_notify_days", 7, False, "schedule"),
+    # Warn a paid customer at this percentage of their volume. Was hardcoded at 80.
+    SettingDef("storefront_usage_alert_percent", 80, False, "schedule"),
     # Max simultaneous PENDING top-ups one customer may have (anti-spam on the admin review queue).
     SettingDef("storefront_max_pending_topups", 3, False, "schedule"),
     # Daily owner digest to the owner's Telegram PV (KPIs + health). On by default at 09:00.
@@ -352,6 +357,10 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "owner_data_retention_days": (0, 3650),
     "storefront_expiry_notify_days": (0, 60),
     "storefront_expired_notify_days": (0, 60),
+    "storefront_trial_ended_notify_days": (0, 60),
+    # Lower bound 1, NOT 0: `_INT_RANGES.get(key, (0, None))` would silently admit 0, and a 0%
+    # threshold would warn every customer on every sweep.
+    "storefront_usage_alert_percent": (1, 100),
     "storefront_max_pending_topups": (1, 50),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),

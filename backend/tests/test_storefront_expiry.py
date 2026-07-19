@@ -381,3 +381,140 @@ def test_stats_for_bot_aggregates(tmp_path):
         assert st.wallet_liability_toman == 50_000
 
     _run(body, tmp_path, "e8.db")
+
+
+# ── the two sweeps that had no bound at all ───────────────────────────────────────────────────
+async def _seed_trial(s, *, days_left_via_snapshot: int):
+    order, cust = await _seed(s, days_left_via_snapshot=days_left_via_snapshot)
+    order.is_trial = True
+    await s.commit()
+    return order, cust
+
+
+def test_trial_ended_nudge_is_sent_for_a_recent_trial(tmp_path):
+    async def body(s):
+        _order, cust = await _seed_trial(s, days_left_via_snapshot=-1)
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_trial_ended(s, bot_factory=_factory_for(fake))
+        assert c["sent"] == 1 and fake.sent[0][0] == cust.telegram_id
+
+    _run(body, tmp_path, "tr1.db")
+
+
+def test_trial_ended_never_messages_ancient_trials(tmp_path):
+    """The same first-run hazard the win-back notice was already protected from.
+
+    Trials are never moved out of `provisioned` when they lapse, and the migration that added
+    `trial_ended_alerted_at` did no backfill — so an unbounded sweep would message every trial the
+    shop has EVER issued, all at once, to real customers.
+    """
+    async def body(s):
+        await _seed_trial(s, days_left_via_snapshot=-400)     # ended over a year ago
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_trial_ended(s, bot_factory=_factory_for(fake))
+        assert c["due"] == 0 and fake.sent == [], "an ancient trial was messaged"
+
+    _run(body, tmp_path, "tr2.db")
+
+
+def test_trial_ended_lookback_is_configurable_and_can_be_switched_off(tmp_path):
+    async def body(s):
+        from app.services import settings_service
+
+        await _seed_trial(s, days_left_via_snapshot=-20)
+        fake = _FakeBot()
+        # Default 7 days → a 20-day-old trial is out of range.
+        assert (await storefront_expiry.notify_trial_ended(
+            s, bot_factory=_factory_for(fake)))["due"] == 0
+
+        await settings_service.set_value(s, "storefront_trial_ended_notify_days", 30)
+        assert (await storefront_expiry.notify_trial_ended(
+            s, bot_factory=_factory_for(fake)))["sent"] == 1
+
+    _run(body, tmp_path, "tr3.db")
+
+
+def test_trial_ended_can_be_switched_off_entirely(tmp_path):
+    async def body(s):
+        from app.services import settings_service
+
+        await settings_service.set_value(s, "storefront_trial_ended_notify_days", 0)
+        await _seed_trial(s, days_left_via_snapshot=-1)
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_trial_ended(s, bot_factory=_factory_for(fake))
+        assert c["sent"] == 0 and fake.sent == []
+
+    _run(body, tmp_path, "tr4.db")
+
+
+async def _seed_usage(s, *, days_left: int, used_gb: float, limit_gb: float = 20):
+    from sqlalchemy import select as _select
+
+    order, cust = await _seed(s, days_left_via_snapshot=days_left)
+    snap = (await s.execute(
+        _select(EndUserSnapshot).where(EndUserSnapshot.user_uuid == "uu-1"))).scalar_one()
+    snap.usage_limit_gb = limit_gb
+    snap.current_usage_gb = used_gb
+    await s.commit()
+    return order, cust
+
+
+def test_usage_high_warns_an_active_service_near_its_limit(tmp_path):
+    async def body(s):
+        _order, cust = await _seed_usage(s, days_left=5, used_gb=17)   # 85%
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_usage_high(s, bot_factory=_factory_for(fake))
+        assert c["sent"] == 1 and fake.sent[0][0] == cust.telegram_id
+
+    _run(body, tmp_path, "uh1.db")
+
+
+def test_usage_high_skips_an_already_expired_service(tmp_path):
+    """This sweep never computed days-left at all, and an expired config keeps both
+    `status="provisioned"` and its last exhausted snapshot — so a service that lapsed long ago, at
+    100% used, was told to «renew before you're cut off»."""
+    async def body(s):
+        await _seed_usage(s, days_left=-300, used_gb=20)      # long expired, fully used
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_usage_high(s, bot_factory=_factory_for(fake))
+        assert c["due"] == 0 and fake.sent == [], "an expired service got a quota warning"
+
+    _run(body, tmp_path, "uh2.db")
+
+
+def test_usage_high_threshold_is_configurable(tmp_path):
+    async def body(s):
+        from app.services import settings_service
+
+        await _seed_usage(s, days_left=5, used_gb=13)          # 65%
+        fake = _FakeBot()
+        assert (await storefront_expiry.notify_usage_high(
+            s, bot_factory=_factory_for(fake)))["due"] == 0    # below the default 80%
+
+        await settings_service.set_value(s, "storefront_usage_alert_percent", 60)
+        assert (await storefront_expiry.notify_usage_high(
+            s, bot_factory=_factory_for(fake)))["sent"] == 1
+
+    _run(body, tmp_path, "uh3.db")
+
+
+def test_usage_high_ignores_a_service_with_no_expiry_information(tmp_path):
+    """`_days_left` returns None when there is neither a snapshot date nor order.days. That means
+    UNKNOWN, not expired — treating it as expired would silently drop a whole cohort."""
+    async def body(s):
+        from sqlalchemy import select as _select
+
+        order, _cust = await _seed(s, days_left_via_snapshot=None, order_days=0)
+        s.add(EndUserSnapshot(panel_id=order.panel_id, user_uuid="uu-1", name="u",
+                              added_by_uuid="a", usage_limit_gb=20, current_usage_gb=18,
+                              enable=True))
+        await s.commit()
+        snap = (await s.execute(
+            _select(EndUserSnapshot).where(EndUserSnapshot.user_uuid == "uu-1"))).scalar_one()
+        assert snap.start_date is None and snap.package_days is None
+
+        fake = _FakeBot()
+        c = await storefront_expiry.notify_usage_high(s, bot_factory=_factory_for(fake))
+        assert c["sent"] == 1, "a service with unknown expiry was wrongly treated as expired"
+
+    _run(body, tmp_path, "uh4.db")

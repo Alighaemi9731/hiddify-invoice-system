@@ -10,6 +10,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import portal_auth
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
@@ -653,6 +654,11 @@ async def unbind_telegram(
     r = await session.get(Reseller, reseller_id)
     if not r:
         raise HTTPException(404, "Reseller not found")
+    # Read the chat id BEFORE nulling it, then invalidate that account's portal sessions. Without
+    # this, unbinding one row of a MULTI-PANEL account revoked nothing at all: the session check
+    # only requires that *some* reseller row still carries the chat id, so the person kept full
+    # portal access — including to the panel they were just unbound from, via their other rows.
+    await portal_auth.bump_session_epoch(session, r.bot_chat_id)
     r.bot_chat_id = None
     r.link_tag = None
     r.registered_at = None

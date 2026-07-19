@@ -24,8 +24,10 @@ from app.core.codes import invoice_code, payment_code
 from app.core.db import get_session
 from app.core.portal_auth import (
     PORTAL_LOGIN_TTL_MIN,
+    TELEGRAM_LOGIN_MAX_AGE_S,
     ResellerContext,
     create_portal_session_token,
+    current_session_epoch,
     get_current_reseller,
     verify_portal_login_token,
     verify_telegram_login,
@@ -94,18 +96,25 @@ async def exchange(
                 401, "این لینکِ ورود قبلاً استفاده شده است؛ از ربات یک لینکِ تازه بگیرید."
             ) from None
         await session.commit()
-    return {"access_token": create_portal_session_token(chat_id), "token_type": "bearer"}
+    epoch = await current_session_epoch(session, chat_id)
+    return {"access_token": create_portal_session_token(chat_id, epoch), "token_type": "bearer"}
 
 
 @router.post("/auth/refresh")
-async def refresh(ctx: ResellerContext = Depends(get_current_reseller)) -> dict:
+async def refresh(
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     """Sliding renewal: trade a still-VALID reseller session for a fresh 30-day one, so an active
-    reseller never has to re-tap the bot's login link. Stateless (no DB writes). Guarded by
-    `get_current_reseller`, so it rejects an expired/invalid token, an owner token, a one-time
-    LOGIN token (no `role` claim), or a Telegram id whose reseller rows are gone — i.e. unbinding
-    or deleting the reseller revokes it immediately, regardless of the token's remaining TTL. The
+    reseller never has to re-tap the bot's login link. Guarded by `get_current_reseller`, so it
+    rejects an expired/invalid token, an owner token, a one-time LOGIN token (no `role` claim), a
+    Telegram id whose reseller rows are gone, or a session whose epoch has been bumped. The
     one-time login-link mechanics are untouched."""
-    return {"access_token": create_portal_session_token(ctx.chat_id), "token_type": "bearer"}
+    # Re-mint at the CURRENT epoch: a bump therefore breaks the sliding chain rather than
+    # letting it renew a revoked session forever.
+    epoch = await current_session_epoch(session, ctx.chat_id)
+    return {"access_token": create_portal_session_token(ctx.chat_id, epoch),
+            "token_type": "bearer"}
 
 
 class TelegramLoginBody(BaseModel):
@@ -176,7 +185,34 @@ async def auth_telegram(
     )).scalar_one_or_none()
     if owner_chat_id is None:
         raise denied  # same 403 whether the uuid is unknown or simply not theirs (no enumeration)
-    return {"access_token": create_portal_session_token(int(owner_chat_id)), "token_type": "bearer"}
+
+    # Make the signed payload strictly ONE-TIME, exactly like the login link's jti above.
+    # `verify_telegram_login` is pure — it checks the HMAC and the auth_date age but consumes
+    # nothing — so a single captured request body could be replayed for the whole freshness window,
+    # each replay minting a fresh 30-day sliding session. One capture therefore converted into
+    # effectively permanent access. Telegram's `hash` is 64 hex chars and the nonce PK is
+    # String(64), so it fits the existing table with no schema change.
+    auth_hash = str(body.auth.get("hash") or "").lower()
+    if len(auth_hash) != 64:
+        raise HTTPException(401, "تأیید تلگرام ناموفق بود؛ دوباره تلاش کنید.")
+    now = dt.datetime.now(dt.timezone.utc)
+    await session.execute(sa_delete(PortalLoginNonce).where(PortalLoginNonce.expires_at < now))
+    session.add(PortalLoginNonce(
+        jti=auth_hash,
+        expires_at=now + dt.timedelta(seconds=TELEGRAM_LOGIN_MAX_AGE_S),
+    ))
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            401, "این تأییدِ تلگرام قبلاً استفاده شده است؛ دوباره وارد شوید."
+        ) from None
+    await session.commit()
+
+    epoch = await current_session_epoch(session, int(owner_chat_id))
+    return {"access_token": create_portal_session_token(int(owner_chat_id), epoch),
+            "token_type": "bearer"}
 
 
 class AuthorizeNextBody(BaseModel):

@@ -52,6 +52,7 @@ _POST_BASELINE_COLUMNS = {
 # the adoption validator must not treat them as "missing".
 _POST_BASELINE_TABLES = {
     "portal_login_nonce",
+    "portal_session_epoch",
     "storefront_bots", "storefront_plans", "storefront_customers",
     "storefront_wallet_txns", "storefront_orders",
     "storefront_credit_codes", "storefront_credit_redemptions",

@@ -52,10 +52,44 @@ def create_portal_login_token(chat_id: int) -> str:
     )
 
 
-def create_portal_session_token(chat_id: int) -> str:
-    """Longer-lived reseller session token issued after a valid login-token exchange."""
-    return create_access_token(str(chat_id), extra={"role": PORTAL_ROLE},
-                               expires_minutes=PORTAL_SESSION_TTL_MIN)
+async def current_session_epoch(session: AsyncSession, chat_id: int) -> int:
+    """This account's session generation. Absent row = 1, so accounts that predate the table (and
+    tokens minted before it existed) authenticate normally."""
+    from app.models import PortalSessionEpoch
+
+    row = await session.get(PortalSessionEpoch, chat_id)
+    return int(row.epoch) if row is not None else 1
+
+
+async def bump_session_epoch(session: AsyncSession, chat_id: int | None) -> None:
+    """Invalidate every existing portal session for this Telegram account. Does NOT commit.
+
+    Call whenever the account's right to the portal changes — unbinding a Telegram link, deleting
+    or purging a reseller. Because refresh re-mints at the CURRENT epoch, one bump also breaks the
+    sliding chain, which is the only thing that made a 30-day token bounded in practice.
+    """
+    from app.models import PortalSessionEpoch
+
+    if chat_id is None:
+        return
+    row = await session.get(PortalSessionEpoch, chat_id)
+    if row is None:
+        # First bump for this account: it was implicitly at 1, so land on 2.
+        session.add(PortalSessionEpoch(chat_id=int(chat_id), epoch=2))
+    else:
+        row.epoch = int(row.epoch) + 1
+
+
+def create_portal_session_token(chat_id: int, epoch: int = 1) -> str:
+    """Longer-lived reseller session token issued after a valid login-token exchange.
+
+    Carries the account's session generation so it can be revoked before its 30-day expiry — the
+    token is stateless and slides indefinitely, so without this there was no way to end a session
+    at all short of deleting the reseller's last row."""
+    return create_access_token(
+        str(chat_id), extra={"role": PORTAL_ROLE, "epoch": int(epoch)},
+        expires_minutes=PORTAL_SESSION_TTL_MIN,
+    )
 
 
 def verify_portal_login_token(token: str) -> tuple[int, str] | None:
@@ -74,9 +108,11 @@ def verify_portal_login_token(token: str) -> tuple[int, str] | None:
     return chat_id, str(payload.get("jti") or "")
 
 
-# Telegram Login Widget payloads older than this are refused (replay protection). The widget is
-# used the moment the person taps it, so a day is generous.
-TELEGRAM_LOGIN_MAX_AGE_S = 24 * 3600
+# Telegram Login Widget payloads older than this are refused. The widget is used the moment the
+# person taps it, so 15 minutes is already generous — this was a full DAY, which is indefensible
+# for a signed credential. The caller ALSO consumes the payload's `hash` (see api/portal.py), so a
+# captured body is one-time regardless; this window just bounds how long it is worth capturing.
+TELEGRAM_LOGIN_MAX_AGE_S = 15 * 60
 
 
 def verify_telegram_login(
@@ -153,5 +189,13 @@ async def get_current_reseller(
         select(Reseller).where(Reseller.bot_chat_id == chat_id)
     )).scalars().all())
     if not resellers:
+        raise err
+    # Session generation: a bump (unbind / delete / purge) invalidates every token already issued
+    # to this account, including the sliding-refresh chain. A token minted before this claim
+    # existed reads as 1, matching the default, so the deploy does not log anyone out.
+    token_epoch = payload.get("epoch", 1)
+    if not isinstance(token_epoch, int) or isinstance(token_epoch, bool):
+        raise err
+    if token_epoch != await current_session_epoch(session, chat_id):
         raise err
     return ResellerContext(chat_id=chat_id, resellers=resellers)

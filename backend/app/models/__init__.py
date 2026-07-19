@@ -21,6 +21,7 @@ from app.models.logs import DeliveryLog, EnforcementAction, SyncRun
 from app.models.panel import Panel
 from app.models.payment import Payment, PaymentSettlement
 from app.models.portal_login_nonce import PortalLoginNonce
+from app.models.portal_session_epoch import PortalSessionEpoch
 from app.models.reseller import Reseller
 from app.models.setting import Setting
 from app.models.storefront import (
@@ -53,6 +54,7 @@ __all__ = [
     "Payment",
     "PaymentSettlement",
     "PortalLoginNonce",
+    "PortalSessionEpoch",
     "Setting",
     "StorefrontBot",
     "StorefrontApiCommand",
