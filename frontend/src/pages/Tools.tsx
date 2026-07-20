@@ -407,6 +407,7 @@ function RecoverUsersTool() {
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
   const [report, setReport] = useState<RecoveryResult | null>(null);
+  const [showChurn, setShowChurn] = useState(false);
 
   const { data: panels = [] } = useQuery<any[]>({ queryKey: ["panels"], queryFn: listPanels });
   const keyOf = (u: { panel_id: number; user_uuid: string }) => `${u.panel_id}|${u.user_uuid}`;
@@ -415,8 +416,9 @@ function RecoverUsersTool() {
     mutationFn: () => recoveryCandidates([...sel], lookback),
     onSuccess: (r) => {
       setResult(r);
+      // Default-select ONLY the likely-rollback clusters — never the scattered everyday deletions.
       const s = new Set<string>();
-      r.forEach((p) => p.clusters.forEach((c) => c.users.forEach((u) => { if (u.has_admin) s.add(keyOf(u)); })));
+      r.forEach((p) => p.clusters.forEach((c) => { if (c.likely_rollback) c.users.forEach((u) => { if (u.has_admin) s.add(keyOf(u)); }); }));
       setChosen(s);
       setReport(null);
     },
@@ -450,6 +452,8 @@ function RecoverUsersTool() {
   const togglePanel = (id: number) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleUser = (k: string) => setChosen((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const totalLost = (result || []).reduce((a, p) => a + p.total_lost, 0);
+  const rollbackLost = (result || []).reduce((a, p) => a + (p.rollback_lost || 0), 0);
+  const churnLost = totalLost - rollbackLost;
 
   return (
     <Card>
@@ -485,16 +489,38 @@ function RecoverUsersTool() {
           <Alert severity="success">هیچ کاربرِ گم‌شده‌ای در بازهٔ انتخابی پیدا نشد. ✅</Alert>
         )}
 
-        {result && totalLost > 0 && result.map((p) => (
+        {result && totalLost > 0 && (
+          <Alert severity={rollbackLost > 0 ? "warning" : "info"} sx={{ mb: 1.5 }}>
+            {rollbackLost > 0
+              ? <><b>{fmtNum(rollbackLost)}</b> کاربر که احتمالاً به‌خاطرِ بازیابی/مهاجرتِ پنل حذف شده‌اند پیدا شد (پیش‌فرض انتخاب شده‌اند).</>
+              : <>هیچ رویدادِ افتِ مشخصی (بازیابیِ پنل) پیدا نشد.</>}
+            {churnLost > 0 && (
+              <> {fmtNum(churnLost)} کاربرِ حذف‌شدهٔ دیگر هم هست که احتمالاً حذف‌های عادیِ ادمین‌اند
+                <Button size="small" onClick={() => setShowChurn((v) => !v)} sx={{ mx: 0.5 }}>
+                  {showChurn ? "پنهان کن" : "نمایش بده"}
+                </Button>
+                (با احتیاط؛ پیش‌فرض انتخاب نمی‌شوند).
+              </>
+            )}
+          </Alert>
+        )}
+
+        {result && totalLost > 0 && result.map((p) => {
+          const visible = p.clusters.filter((c) => showChurn || c.likely_rollback);
+          if (visible.length === 0) return null;
+          return (
           <Box key={p.panel_id} sx={{ mb: 2 }}>
             <Divider sx={{ my: 1 }}><Chip size="small" color="primary" variant="outlined"
-              label={`${p.panel_key} — ${fmtNum(p.total_lost)} کاربرِ گم‌شده`} /></Divider>
-            {p.clusters.map((c) => (
-              <Box key={c.last_seen_at} sx={{ mb: 1.5 }}>
+              label={`${p.panel_key} — ${fmtNum(p.rollback_lost)}${p.total_lost !== p.rollback_lost ? ` از ${fmtNum(p.total_lost)}` : ""} کاربر`} /></Divider>
+            {visible.map((c) => (
+              <Box key={c.key} sx={{ mb: 1.5, opacity: c.likely_rollback ? 1 : 0.7 }}>
                 <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5, flexWrap: "wrap" }}>
-                  <Chip size="small" color={c.count >= 5 ? "warning" : "default"}
+                  <Chip size="small" color={c.likely_rollback ? "warning" : "default"}
                     label={`${fmtNum(c.count)} کاربر · آخرین حضور: ${fmtDateTime(c.last_seen_at)}`} />
-                  {c.count >= 5 && <Typography variant="caption" color="warning.main">خوشهٔ بزرگ — احتمالاً بازیابیِ پنل</Typography>}
+                  {c.likely_rollback
+                    ? <Chip size="small" color="warning" variant="outlined"
+                        label={c.drop_size ? `رویدادِ افت — ${fmtNum(c.drop_size)} کاربر همزمان از پنل رفتند` : "خوشهٔ بزرگ — احتمالاً بازیابیِ پنل"} />
+                    : <Typography variant="caption" color="text.secondary">احتمالاً حذفِ عادیِ ادمین — فقط اگر مطمئنی</Typography>}
                 </Stack>
                 <Box sx={{ overflowX: "auto" }}>
                 <Table size="small">
@@ -533,7 +559,8 @@ function RecoverUsersTool() {
               </Box>
             ))}
           </Box>
-        ))}
+          );
+        })}
 
         {result && totalLost > 0 && (
           <Stack direction="row" alignItems="center" spacing={2} sx={{ mt: 1 }}>

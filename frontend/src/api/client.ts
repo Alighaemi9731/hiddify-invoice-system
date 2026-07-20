@@ -119,8 +119,11 @@ export interface RecoveryUser {
   created_at: string | null;
 }
 export interface RecoveryCluster {
+  key: string;
   last_seen_at: string;
   count: number;
+  drop_size: number;
+  likely_rollback: boolean;
   users: RecoveryUser[];
 }
 export interface RecoveryPanel {
@@ -128,6 +131,7 @@ export interface RecoveryPanel {
   panel_key: string;
   panel_last_synced_at: string | null;
   total_lost: number;
+  rollback_lost: number;
   clusters: RecoveryCluster[];
 }
 export interface RecoveryResult {

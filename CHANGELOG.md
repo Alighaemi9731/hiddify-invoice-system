@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.97.1 - 2026-07-20
+
+Makes the User Recovery tool focus on actual rollback events instead of ordinary deletions. No
+database migration.
+
+### Changed
+
+- **User Recovery now tells a real rollback apart from everyday deletions.** It cross-references each
+  panel's sync history: a cluster of users that all vanished at the same instant, right where the
+  panel's synced user-count dropped, is flagged as a likely rollback and selected by default — while
+  the scattered one-or-two-at-a-time deletions that happen normally are set aside, shown only behind a
+  «نمایش بده» toggle and never pre-selected. The banner shows how many are a likely rollback vs
+  ordinary deletions, so a week-long lookback no longer buries the event you're looking for (or risks
+  resurrecting a user an admin deleted on purpose).
+
 ## 1.97.0 - 2026-07-20
 
 Adds a **User Recovery** tool that restores end-users a panel backup-rollback removed. No database
