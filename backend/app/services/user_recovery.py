@@ -123,12 +123,18 @@ async def _sync_events(
 async def detect(
     session: AsyncSession, panel_ids: list[int], *, lookback_days: int = 7
 ) -> list[dict]:
-    """Lost users for `panel_ids`, grouped per panel then clustered by the drop moment. Only losses
-    within the last `lookback_days` (so weeks-old deletions never surface)."""
+    """Lost users for `panel_ids`, grouped per panel and clustered by the moment they vanished.
+
+    A rollback loses only RECENTLY-CREATED users (an old user was in the restored backup too, so it's
+    still on the panel). So `lookback_days` filters on when the user was ADDED to the system
+    (`created_at`) and requires a recent-or-empty `start_date` (empty = never connected yet) — NOT on
+    when they were last seen. That's the difference that stops a month-old user who merely disappeared
+    today from showing up under a 1-day window."""
     if not panel_ids:
         return []
     now = dt.datetime.now(dt.timezone.utc)
     cutoff = now - dt.timedelta(days=max(1, lookback_days))
+    cutoff_date = cutoff.date()
     panels = {p.id: p for p in (await session.execute(
         select(Panel).where(Panel.id.in_(panel_ids)))).scalars().all()}
     names = await _admin_names(session, panel_ids)
@@ -136,7 +142,7 @@ async def detect(
     rows = (await session.execute(
         select(EndUserSnapshot).where(
             EndUserSnapshot.panel_id.in_(panel_ids),
-            EndUserSnapshot.last_synced_at >= cutoff,
+            EndUserSnapshot.created_at >= cutoff,   # ADDED to the system within the window
         ).order_by(EndUserSnapshot.panel_id, EndUserSnapshot.last_synced_at)
     )).scalars().all()
 
@@ -146,9 +152,14 @@ async def detect(
         p = panels.get(s.panel_id)
         if p is None or p.last_synced_at is None or s.last_synced_at is None:
             continue
+        created = _aware(s.created_at)
+        if created is None or created < cutoff:
+            continue  # not recently added (SQLite-safe backstop for the created_at filter)
+        # A recent user's start_date is recent OR empty (never connected). An OLD start_date means an
+        # old config that was in the backup — not a rollback casualty.
+        if s.start_date is not None and s.start_date < cutoff_date:
+            continue
         s_seen, p_seen = _aware(s.last_synced_at), _aware(p.last_synced_at)
-        if s_seen < cutoff:
-            continue  # older than the lookback window (SQLite-safe recency backstop)
         if s_seen >= p_seen - _GONE_MARGIN:
             continue  # still present in the latest sync — not lost
         key = s_seen.replace(second=0, microsecond=0).isoformat()

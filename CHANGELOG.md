@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.97.3 - 2026-07-20
+
+Fixes the User Recovery look-back window and shows dates in Gregorian. No database migration.
+
+### Fixed
+
+- **The «روزِ اخیر» window now means "users ADDED in the last N days", not "last seen in the last N
+  days".** Before, a month-old user that merely disappeared from the panel today still showed up
+  under a 1-day window (it was last *seen* today). Now the window filters on when the user was added
+  to the system and requires a recent-or-empty start date, so a rollback's actual casualties
+  (recently-created users) are what you see — set the window to roughly how old the backup you
+  restored was.
+
+### Changed
+
+- User Recovery now shows the **start date in Gregorian** (matching the Hiddify panels) instead of
+  Jalali, and adds an **«افزوده‌شده» (added-on) column** so you can see exactly when each user first
+  entered the system.
+
 ## 1.97.2 - 2026-07-20
 
 Reworks how User Recovery presents lost users so it's honest and safe. No database migration.

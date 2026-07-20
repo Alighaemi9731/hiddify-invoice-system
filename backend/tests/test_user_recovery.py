@@ -41,18 +41,25 @@ async def _seed(s):  # noqa: ANN001
     s.add(r)
     await s.flush()
 
-    def snap(uuid, added, lsa, name, gb=10, days=30, sd=None):  # noqa: ANN001, ANN202
+    recent = now - dt.timedelta(hours=2)   # added to the system recently (within lookback)
+    old = now - dt.timedelta(days=30)      # added long ago (before any recent rollback)
+    today = now.date()
+
+    def snap(uuid, added, lsa, name, gb=10, days=30, sd=None, created=None):  # noqa: ANN001, ANN202
         return EndUserSnapshot(
             panel_id=p.id, user_uuid=uuid, name=name, added_by_uuid=added, usage_limit_gb=gb,
             current_usage_gb=1, package_days=days, start_date=sd, enable=True, is_active=True,
-            last_synced_at=lsa, meter_provisioned_gb=0, meter_consumed_gb=0, meter_init=True)
+            last_synced_at=lsa, created_at=(created or recent),
+            meter_provisioned_gb=0, meter_consumed_gb=0, meter_init=True)
 
     s.add_all([
-        snap("u-present", "ADMIN-A", latest, "Present"),                    # seen in latest → not lost
-        snap("u-lost1", "ADMIN-A", drop, "Lost1", sd=dt.date(2026, 7, 20)),  # lost, admin resolves
-        snap("u-lost2", "ADMIN-A", drop, "Lost2"),                          # lost, same cluster
-        snap("u-noadmin", "UNKNOWN-UUID", drop, "NoAdmin"),                 # lost, admin unresolved
-        snap("u-old", "ADMIN-A", latest - dt.timedelta(days=30), "Old"),    # stale but beyond lookback
+        snap("u-present", "ADMIN-A", latest, "Present", sd=today),           # seen in latest → not lost
+        snap("u-lost1", "ADMIN-A", drop, "Lost1", sd=today),                 # lost, admin resolves
+        snap("u-lost2", "ADMIN-A", drop, "Lost2"),                           # lost, no start_date
+        snap("u-noadmin", "UNKNOWN-UUID", drop, "NoAdmin"),                  # lost, admin unresolved
+        # added long ago → NOT a recent casualty (excluded by the created_at window), even though it
+        # too vanished from the panel.
+        snap("u-old", "ADMIN-A", drop, "Old", created=old, sd=old.date()),
     ])
     await s.commit()
     return p, r

@@ -515,7 +515,8 @@ function RecoverUsersTool() {
                         onChange={(e) => setChosen((s) => { const n = new Set(s); c.users.forEach((u) => { if (u.has_admin) { e.target.checked ? n.add(keyOf(u)) : n.delete(keyOf(u)); } }); return n; })} />
                     </TableCell>
                     <TableCell>نام</TableCell><TableCell>ادمین</TableCell><TableCell>حجم</TableCell>
-                    <TableCell>مدت</TableCell><TableCell>تاریخِ شروع</TableCell><TableCell>مصرف</TableCell>
+                    <TableCell>مدت</TableCell><TableCell>تاریخِ شروع (میلادی)</TableCell>
+                    <TableCell>افزوده‌شده</TableCell><TableCell>مصرف</TableCell>
                     <TableCell>UUID</TableCell><TableCell>وضعیت</TableCell>
                   </TableRow></TableHead>
                   <TableBody>
@@ -531,7 +532,8 @@ function RecoverUsersTool() {
                         <TableCell>{u.admin_name || <Chip size="small" color="error" label="؟ ادمین" />}</TableCell>
                         <TableCell>{fmtGb(u.gb)}</TableCell>
                         <TableCell>{fmtNum(u.days)} روز</TableCell>
-                        <TableCell dir="ltr">{u.start_date ? fmtDate(u.start_date) : "—"}</TableCell>
+                        <TableCell dir="ltr">{u.start_date || "—"}</TableCell>
+                        <TableCell dir="ltr">{fmtDateTime(u.created_at)}</TableCell>
                         <TableCell>{fmtGb(u.current_usage_gb)}</TableCell>
                         <TableCell><Box component="code" sx={{ fontSize: 11 }} dir="ltr">{u.user_uuid.slice(0, 13)}</Box></TableCell>
                         <TableCell>{u.enable ? "فعال" : "غیرفعال"}</TableCell>
