@@ -27,8 +27,8 @@ log = logging.getLogger("delivery")
 # menu «💳 پرداخت فاکتور», whose FIRST option settles all outstanding debt in one transfer — so a
 # customer with several invoices doesn't accidentally pay just the one under a single message.
 _PAY_CTA = (
-    "برای پرداخت، از منو روی «💳 پرداخت فاکتور» بزنید؛ "
-    "گزینهٔ نخست، پرداختِ یکجای همهٔ بدهی است (یا می‌توانید هر فاکتور را جداگانه انتخاب و پرداخت کنید)."
+    "برای پرداخت، از منو گزینهٔ «💳 پرداخت فاکتور» را انتخاب کنید؛ "
+    "گزینهٔ نخست، پرداختِ یکجای کلِ بدهی است (یا می‌توانید هر فاکتور را جداگانه انتخاب و پرداخت کنید)."
 )
 
 
@@ -58,11 +58,11 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
             "ℹ️ <b>حداقل فروش ماهانه</b> برای شما فعال است.\n"
             f"• فروش واقعی این دوره: {base:,.0f} تومان\n"
             f"• حداقل مبلغ قابل قبول: {floor:,.0f} تومان\n"
-            f"چون فروش این دوره کمتر از حداقل بود، مبلغِ فاکتور برابرِ حداقل "
-            f"({final:,.0f} تومان) برای شما صادر شد. مصرفِ واقعیِ شما دقیق و در فایلِ PDF آمده است."
+            f"از آنجا که فروش این دوره کمتر از حداقل بود، مبلغِ فاکتور برابرِ حداقل "
+            f"({final:,.0f} تومان) برای شما صادر شد. جزئیاتِ دقیقِ مصرفِ واقعیِ شما در فایلِ PDF آمده است."
         )
     # Prepend the public 8-digit invoice number (tap-to-copy) at the top.
-    return f"🔢 شماره فاکتور: <code>{invoice_code(inv.id)}</code>\n{text}"
+    return f"🔢 شمارهٔ فاکتور: <code>{invoice_code(inv.id)}</code>\n{text}"
 
 
 # Unicode First-Strong Isolate (U+2068 … U+2069): wraps a possibly-English value so it keeps
@@ -78,14 +78,14 @@ def _breakdown_lines(bd: dict) -> list[str]:
     lines = [
         "➖➖➖➖➖➖➖➖",
         "🧾 ریز مصرف این دوره:",
-        f"🟦 مصرف خودتان: حجم {bd['own']['gb']:g} گیگ ({bd['own']['users']} سرویس)",
+        f"🟦 مصرف خودتان: حجم {bd['own']['gb']:g} گیگابایت ({bd['own']['users']} سرویس)",
     ]
     if bd["subs"]:
         lines.append("🟨 زیرمجموعه‌های شما:")
         for s in bd["subs"]:
             # message is sent as HTML → escape the name (then isolate it for RTL).
             nm = _iso(_html_escape(s["name"]))
-            lines.append(f"• نماینده {nm}: حجم {s['gb']:g} گیگ ({s['users']} سرویس)")
+            lines.append(f"• نماینده {nm}: حجم {s['gb']:g} گیگابایت ({s['users']} سرویس)")
     return lines
 
 
@@ -96,7 +96,7 @@ async def _render_invoice_pdfs(
     ONE per sub-reseller — straight from the invoice's PERSISTED lines (so they always match the
     locked invoice total; a user deleted from the panel after issue no longer shrinks the PDF).
     Falls back to a single whole-bundle PDF if the split yields nothing. Returns [(path, caption)]."""
-    title = f"فاکتور دوره {inv.period_label}"
+    title = f"فاکتور دورهٔ {inv.period_label}"
     docs: list[tuple[str, str]] = []
     try:
         docs = await invoice_pdf.render_invoice_node_pdfs(session, inv, reseller)

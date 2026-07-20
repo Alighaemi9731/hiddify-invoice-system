@@ -62,8 +62,8 @@ def ensure_can_mark_paid(status: S) -> None:
         if status == S.paid:
             raise InvoiceStateError("این فاکتور قبلاً پرداخت‌شده است.")
         if status == S.draft:
-            raise InvoiceStateError("فاکتور پیش‌نویس را نمی‌توان پرداخت‌شده کرد؛ ابتدا آن را صادر/ارسال کنید.")
-        raise InvoiceStateError("فاکتور لغوشده را نمی‌توان پرداخت‌شده کرد.")
+            raise InvoiceStateError("فاکتور پیش‌نویس را نمی‌توان به‌عنوان پرداخت‌شده ثبت کرد؛ لطفاً ابتدا آن را صادر/ارسال کنید.")
+        raise InvoiceStateError("فاکتور لغوشده را نمی‌توان به‌عنوان پرداخت‌شده ثبت کرد.")
 
 
 def ensure_can_cancel(status: S) -> None:

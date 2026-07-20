@@ -58,7 +58,7 @@ export default function NotificationsBell() {
         <Divider />
         {events.length === 0 ? (
           <Box sx={{ p: 3, textAlign: "center", color: "text.secondary" }}>
-            <Typography variant="body2">اعلانی نیست.</Typography>
+            <Typography variant="body2">اعلانی وجود ندارد.</Typography>
           </Box>
         ) : (
           <List dense sx={{ maxHeight: 380, overflowY: "auto", py: 0 }}>

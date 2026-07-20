@@ -174,10 +174,10 @@ def build_invoice_pdf(
                                  alignment=2, leading=26)
     title_html = (
         f"{rtl(invoice_title or 'فاکتور')}"
-        f"<br/><font size='10' color='#cdd7ee'>{rtl('دوره ' + _fa_digits(period_label))}</font>"
+        f"<br/><font size='10' color='#cdd7ee'>{rtl('دورهٔ ' + _fa_digits(period_label))}</font>"
     )
     title = Paragraph(title_html, title_style)
-    brand = Paragraph(rtl(owner_name or "سامانه مدیریت نمایندگان"),
+    brand = Paragraph(rtl(owner_name or "سامانهٔ مدیریت نمایندگان"),
                       ParagraphStyle("b", fontName=bold, fontSize=12, textColor=colors.white,
                                      alignment=0, leading=18))
     header = Table([[brand, title]], colWidths=[60 * mm, 122 * mm])
@@ -194,7 +194,7 @@ def build_invoice_pdf(
     if invoice_no:
         no_style = ParagraphStyle("ino", fontName=bold, fontSize=11, alignment=2,
                                   textColor=PRIMARY, leading=16)
-        elems += [Paragraph(rtl(f"شماره فاکتور: {_fa_digits(invoice_no)}"), no_style), Spacer(1, 6)]
+        elems += [Paragraph(rtl(f"شمارهٔ فاکتور: {_fa_digits(invoice_no)}"), no_style), Spacer(1, 6)]
 
     # ---------- meta grid (two columns of label/value) ----------
     # Dates are pure LTR — render them left-aligned WITHOUT bidi reshaping so the
@@ -214,7 +214,7 @@ def build_invoice_pdf(
             kv("نماینده", reseller_name, ParagraphStyle("vn", fontName=bold, fontSize=11, alignment=2, textColor=PRIMARY)) +
             kv("پنل", panel_label),
             kv_ltr("تاریخ صدور", _fa_digits(issued.strftime("%Y-%m-%d"))) +
-            kv_ltr("بازه دوره", date_range),
+            kv_ltr("بازهٔ دوره", date_range),
         ],
         colWidths=[46 * mm, 45 * mm, 46 * mm, 45 * mm],
     )
@@ -242,7 +242,7 @@ def build_invoice_pdf(
         head.append(Paragraph(rtl("زیرمجموعه"), th))
     else:
         widths = [12 * mm, 56 * mm, 32 * mm, 42 * mm, 28 * mm]
-    head += [Paragraph(rtl("تاریخ ساخت"), th), Paragraph(rtl("حجم (گیگ)"), th)]
+    head += [Paragraph(rtl("تاریخ ساخت"), th), Paragraph(rtl("حجم (گیگابایت)"), th)]
 
     def uuid_slice(u: str) -> str:
         # First 8 chars of the uuid — fixed width, enough to disambiguate same-name users.
@@ -284,7 +284,7 @@ def build_invoice_pdf(
     # message, not on the document — so a reseller can hand the PDF to their sub-reseller
     # without exposing the prices configured in the owner's settings.
     grand = Table(
-        [[Paragraph(rtl(f"{gb(total_gb)} گیگ"),
+        [[Paragraph(rtl(f"{gb(total_gb)} گیگابایت"),
                     ParagraphStyle("g", fontName=bold, fontSize=15, alignment=2, textColor=colors.white)),
           Paragraph(rtl("مجموع حجم"),
                     ParagraphStyle("gl", fontName=bold, fontSize=11, alignment=2, textColor=colors.white))],
@@ -350,7 +350,7 @@ def build_receipt_pdf(
     title = Paragraph(rtl("رسید پرداخت"),
                       ParagraphStyle("t", fontName=bold, fontSize=19, textColor=colors.white,
                                      alignment=2, leading=26))
-    brand = Paragraph(rtl(owner_name or "سامانه مدیریت نمایندگان"),
+    brand = Paragraph(rtl(owner_name or "سامانهٔ مدیریت نمایندگان"),
                       ParagraphStyle("b", fontName=bold, fontSize=12, textColor=colors.white,
                                      alignment=0, leading=18))
     header = Table([[brand, title]], colWidths=[60 * mm, 122 * mm])

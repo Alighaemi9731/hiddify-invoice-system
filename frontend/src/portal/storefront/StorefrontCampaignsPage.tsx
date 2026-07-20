@@ -19,7 +19,7 @@ const SEGMENT_FA: Record<AudienceSegment, string> = {
   all: "همهٔ مشتری‌ها",
   expired: "منقضی‌شده‌ها",
   inactive30: "۳۰ روز غیرفعال",
-  trial_no_purchase: "تست‌گرفته‌های نخریده",
+  trial_no_purchase: "تست‌گرفته‌های بدونِ خرید",
 };
 const STATUS_FA: Record<string, string> = {
   queued: "در صف", running: "در حال ارسال", completed: "کامل شد", canceled: "لغو شد",
@@ -119,7 +119,7 @@ export default function StorefrontCampaignsPage() {
               </Button>
             </Box>
             <Alert severity="info" sx={{ mt: 0 }}>
-              ارسال «حداقل یک‌بار» است: در موارد نادر (قطعی وسط ارسال) ممکن است یک پیام برای یک مشتری دوبار برود.
+              ارسال «حداقل یک‌بار» است؛ در موارد نادر (مانندِ قطعیِ ارتباط در میانهٔ ارسال) ممکن است یک پیام دوبار برای یک مشتری ارسال شود.
             </Alert>
           </Stack>
         </CardContent>

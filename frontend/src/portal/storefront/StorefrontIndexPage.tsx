@@ -22,7 +22,7 @@ export default function StorefrontIndexPage() {
       <Stack spacing={0.5} sx={{ mb: 2.5 }}>
         <Typography variant="h5">فروشگاه من</Typography>
         <Typography variant="body2" color="text.secondary">
-          فروشگاهی را که می‌خواهید بررسی کنید انتخاب کنید.
+          فروشگاهِ موردِ نظر را برای مدیریت انتخاب کنید.
         </Typography>
       </Stack>
 

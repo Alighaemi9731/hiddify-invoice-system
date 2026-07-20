@@ -74,7 +74,7 @@ async def get_captcha(request: Request) -> CaptchaOut:
     # Unauthenticated + renders a PNG → throttle per IP so it can't be used as a CPU/memory
     # amplifier (the real login page needs only a handful per minute).
     if not loginsec.captcha_allowed(_client_ip(request)):
-        raise HTTPException(status_code=429, detail="درخواست بیش از حد؛ کمی بعد دوباره تلاش کنید.")
+        raise HTTPException(status_code=429, detail="درخواست‌های شما بیش از حد است؛ لطفاً کمی بعد دوباره تلاش کنید.")
     cid, img = loginsec.new_captcha()
     return CaptchaOut(captcha_id=cid, image=img)
 
@@ -90,7 +90,7 @@ async def login(body: LoginRequest, request: Request,
     if locked:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"تعداد تلاش‌ها بیش از حد مجاز است. {locked // 60 + 1} دقیقه بعد دوباره تلاش کنید.",
+            detail=f"تعداد تلاش‌ها بیش از حد مجاز است؛ لطفاً {locked // 60 + 1} دقیقه بعد دوباره تلاش کنید.",
         )
 
     # 2) captcha (always required) — single-use
@@ -176,7 +176,7 @@ async def totp_enable(body: TotpEnable, subject: str = Depends(get_current_subje
                       session: AsyncSession = Depends(get_session)) -> dict:
     user = await _get_user(session, subject)
     if not user or not user.totp_pending_secret_enc:
-        raise HTTPException(400, "ابتدا راه‌اندازی ۲ مرحله‌ای را شروع کنید.")
+        raise HTTPException(400, "ابتدا راه‌اندازی تأیید دو مرحله‌ای را شروع کنید.")
     secret = crypto.decrypt(user.totp_pending_secret_enc)
     if not secret or not loginsec.verify_totp(secret, body.code):
         raise HTTPException(400, "کد واردشده نادرست است.")

@@ -45,8 +45,8 @@ async def _handle_link(message: Message, session, parsed) -> None:
     if not await _is_top_level_reseller(session, reseller):
         await message.answer(
             "این لینک متعلق به یک زیرمجموعه است.\n"
-            "زیرمجموعه‌ها مستقیماً در ربات ثبت نمی‌شوند؛ مدیریت و صورتحساب شما از طریق "
-            "نمایندهٔ بالادستی‌تان انجام می‌شود. لطفاً با او هماهنگ کنید."
+            "زیرمجموعه‌ها مستقیماً در ربات ثبت نمی‌شوند؛ مدیریت و صدور فاکتورِ شما از طریق "
+            "نمایندهٔ بالادستی‌تان انجام می‌شود. لطفاً با ایشان هماهنگ کنید."
         )
         return
     # Prevent duplicate / takeover: if bound to another account, refuse.

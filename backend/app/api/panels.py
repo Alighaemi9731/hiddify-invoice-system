@@ -288,7 +288,7 @@ async def _delete_confirmation(
         parts.append(
             f"حذفِ پنل «{panel.key}» {real_invoices} فاکتورِ واقعی را برای همیشه پاک می‌کند "
             f"({paid} پرداخت‌شده، {owed} پرداخت‌نشده). سوابقِ مالی در «تاریخچهٔ مالی» باقی می‌ماند، "
-            "ولی خودِ فاکتورها و ریزِ کاربران حذف می‌شوند."
+            "اما خودِ فاکتورها و ریزِ کاربران حذف می‌شوند."
         )
     if blocking:
         foreign = sorted({i for b in blocking for i in b.foreign_invoice_ids})

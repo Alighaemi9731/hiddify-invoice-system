@@ -150,7 +150,7 @@ export function ResellerIdentity({
             {reseller.name || "بدون نام"}
           </Typography>
           {treeRow.cycle_detected && (
-            <Tooltip title="ساختار والد/فرزند این شاخه ناسالم است">
+            <Tooltip title="ساختار والد/فرزند این شاخه نامعتبر است">
               <WarningAmberIcon color="warning" sx={{ fontSize: 17 }} />
             </Tooltip>
           )}

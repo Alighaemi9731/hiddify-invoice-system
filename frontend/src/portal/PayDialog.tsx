@@ -171,7 +171,7 @@ export default function PayDialog({
                 <Chip size="small" color="success" label="USDT — شبکهٔ BEP-20 (BSC)" sx={{ fontWeight: 700 }} />
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
                   مبلغ: {opts.amount_usdt.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT
-                  — ⚠️ فقط شبکهٔ BEP-20؛ واریز از شبکهٔ دیگر = از‌دست‌رفتن وجه.
+                  — ⚠️ فقط شبکهٔ BEP-20؛ واریز از شبکه‌ای دیگر موجبِ از دست رفتنِ وجه می‌شود.
                 </Typography>
                 <CopyRow label="آدرس کیف پول USDT" value={m!.wallet} show={show} />
                 <QrBox value={m!.wallet} />

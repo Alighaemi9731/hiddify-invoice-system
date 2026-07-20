@@ -63,7 +63,7 @@ export default function ResellerMobileCard({
         }}
       >
         <Box>
-          <Typography variant="caption" color="text.secondary">قیمت هر گیگ</Typography>
+          <Typography variant="caption" color="text.secondary">قیمت هر گیگابایت</Typography>
           <Typography variant="body2" sx={{ fontWeight: 750 }}>
             {fmtNum(reseller.effective_price_per_gb)} تومان
           </Typography>

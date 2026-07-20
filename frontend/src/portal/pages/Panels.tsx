@@ -61,7 +61,7 @@ export default function PortalPanels() {
         <SectionCard title="ظرفیتِ من">
           <DataState isLoading={capsLoading} rows={2}>
             {caps.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">داده‌ای نیست.</Typography>
+              <Typography variant="body2" color="text.secondary">داده‌ای برای نمایش وجود ندارد.</Typography>
             ) : (
               <Stack spacing={1.5}>
                 {caps.map((c) => (

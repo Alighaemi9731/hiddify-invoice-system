@@ -341,7 +341,7 @@ export default function Login() {
                   fontWeight: 700,
                 }}
               >
-                {busy ? "در حال ورود..." : "ورود به سامانه"}
+                {busy ? "در حال ورود…" : "ورود به سامانه"}
               </Button>
             </Stack>
 

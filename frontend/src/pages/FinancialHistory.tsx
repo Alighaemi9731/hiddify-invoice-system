@@ -40,7 +40,7 @@ export default function FinancialHistory() {
 
   const exportCsv = () => downloadCsv(
     "financial-history.csv",
-    ["پنل", "نماینده", "UUID", "دوره", "گیگ", "قیمت/گیگ", "تومان", "وضعیت", "تاریخ پرداخت", "TXID"],
+    ["پنل", "نماینده", "UUID", "دوره", "مصرف (گیگابایت)", "قیمت هر گیگابایت", "مبلغ (تومان)", "وضعیت", "تاریخ پرداخت", "TXID"],
     data.map((r: any) => [
       r.panel_key, r.reseller_name, r.reseller_admin_uuid, r.period_label, r.usage_gb,
       r.price_per_gb, r.amount_toman, r.status, r.paid_at || "", r.txid || "",
@@ -50,22 +50,22 @@ export default function FinancialHistory() {
   return (
     <Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        تاریخچهٔ دائمی مالی: هر فاکتور هر نماینده در هر ماه — مبلغ و وضعیت پرداخت.
-        این سوابق حتی پس از «پاک‌سازی داده‌ها» یا حذف پنل/نماینده باقی می‌مانند.
+        تاریخچهٔ دائمی مالی: مبلغ و وضعیت پرداختِ فاکتور هر نماینده در هر ماه.
+        این سوابق حتی پس از «پاک‌سازی داده‌ها» یا حذف پنل یا نماینده حفظ می‌شوند.
       </Typography>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }} alignItems="center">
         <PeriodPicker value={period} onChange={setPeriod} allowEmpty />
-        <TextField size="small" value={q} placeholder="جستجوی نماینده..." onChange={(e) => setQ(e.target.value)}
+        <TextField size="small" value={q} placeholder="جستجوی نماینده…" onChange={(e) => setQ(e.target.value)}
           InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
         <Select
           size="small"
           value={status}
           displayEmpty
           onChange={(e) => setStatus(e.target.value)}
-          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همه وضعیت‌ها"}
+          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همهٔ وضعیت‌ها"}
           sx={{ minWidth: 148, "& .MuiSelect-select": { py: "7px !important" } }}
         >
-          <MenuItem value="">همه وضعیت‌ها</MenuItem>
+          <MenuItem value="">همهٔ وضعیت‌ها</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <Box sx={{ flexGrow: 1 }} />

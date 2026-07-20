@@ -63,7 +63,7 @@ async def cb_sub_enforce(cb: CallbackQuery) -> None:
             EnforcementActionStatus.partial,
         ):
             msg = (
-                f"⏳ مسدودسازی «{sub.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
+                f"⏳ مسدودسازی «{sub.name}» در صف ثبت شد و به‌صورت مرحله‌ای انجام می‌شود."
             )
             await cb.message.answer(msg)
         elif action.status == EnforcementActionStatus.done:
@@ -85,7 +85,7 @@ async def cb_sub_freeze(cb: CallbackQuery) -> None:
         if not sub or not await _owns_sub(s, cb.from_user.id, sub):
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
-        await cb.message.answer(f"⏳ توقف ساخت کاربر برای «{sub.name}» در صف قرار می‌گیرد...")
+        await cb.message.answer(f"⏳ توقف ساخت سرویس برای «{sub.name}» در صف قرار می‌گیرد...")
         from app.services import enforcement
 
         # Reseller-initiated manual action → always a live write.
@@ -97,8 +97,8 @@ async def cb_sub_freeze(cb: CallbackQuery) -> None:
             EnforcementActionStatus.partial,
         ):
             await cb.message.answer(
-                f"⏳ «{sub.name}»: توقف ساخت کاربر در صف ثبت شد. کاربرانِ فعلیِ او قطع نمی‌شوند؛ "
-                "فقط ساخت کاربرِ جدید و افزایش ظرفیت متوقف می‌شود."
+                f"⏳ «{sub.name}»: توقف ساخت سرویس در صف ثبت شد. سرویس‌های فعلیِ او قطع نمی‌شوند؛ "
+                "فقط ساخت سرویس جدید و افزایش ظرفیت متوقف می‌شود."
             )
         elif action.status == EnforcementActionStatus.done:
             await cb.message.answer(f"🚫 «{sub.name}» از قبل محدود است.")
@@ -120,7 +120,7 @@ async def cb_sub_restore(cb: CallbackQuery) -> None:
             return
         # State-aware wording: lifting a freeze vs lifting a full suspension.
         verb = (
-            "رفع توقف ساخت کاربر"
+            "رفع توقف ساخت سرویس"
             if sub.enforcement_state == EnforcementState.frozen
             else "آزادسازی"
         )
@@ -135,7 +135,7 @@ async def cb_sub_restore(cb: CallbackQuery) -> None:
             EnforcementActionStatus.partial,
         ):
             await cb.message.answer(
-                f"⏳ {verb} «{sub.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
+                f"⏳ {verb} «{sub.name}» در صف ثبت شد و به‌صورت مرحله‌ای انجام می‌شود."
             )
         elif action.status == EnforcementActionStatus.done:
             await cb.message.answer(f"✅ «{sub.name}» از قبل آزاد شده است.")
@@ -167,10 +167,10 @@ async def cb_sub_cap(cb: CallbackQuery) -> None:
             return
         cur = int(sub.gb_cap or 0)
         name = sub.name
-    cur_txt = f"سقف فعلی: {cur:g} گیگ" if cur > 0 else "سقف فعلی: تعیین‌نشده"
+    cur_txt = f"سقف فعلی: {cur:g} گیگابایت" if cur > 0 else "سقف فعلی: تعیین‌نشده"
     await cb.message.answer(
         f"🎯 سقف حجم ماهانه برای «{name}»\n{cur_txt}\n\n"
-        "یک مقدار را انتخاب کنید (یا «مقدار دلخواه»). این سقف فقط برای هشدار است و هر ماه ریست می‌شود.",
+        "یک مقدار را انتخاب کنید (یا «مقدار دلخواه»). این سقف فقط برای هشدار است و هر ماه بازنشانی می‌شود.",
         reply_markup=keyboards.sub_cap_keyboard(sub_id),
     )
     await cb.answer()
@@ -191,7 +191,7 @@ async def _apply_sub_cap(answer, session, chat_id: int, sub_id: int | None, gb: 
     sub.gb_cap_alerted_period = None  # re-arm the alert for the new ceiling
     await session.commit()
     if gb > 0:
-        await answer(f"✅ سقف حجم ماهانهٔ «{sub.name}» روی {gb:g} گیگ تنظیم شد.")
+        await answer(f"✅ سقف حجم ماهانهٔ «{sub.name}» روی {gb:g} گیگابایت تنظیم شد.")
     else:
         await answer(f"✅ سقف حجم «{sub.name}» حذف شد (بدون محدودیت).")
 
@@ -202,7 +202,7 @@ async def cb_set_cap(cb: CallbackQuery) -> None:
     sub_id = common._safe_int(cb.data, 1)
     gb = common._safe_int(cb.data, 2)
     if sub_id is None or gb is None:
-        await cb.answer("داده نامعتبر.", show_alert=True)
+        await cb.answer("دادهٔ نامعتبر است.", show_alert=True)
         return
     async with common.SessionLocal() as s:
         await _apply_sub_cap(cb.message.answer, s, cb.from_user.id, sub_id, gb)
@@ -235,7 +235,7 @@ async def on_sub_cap_text(message: Message, state: FSMContext) -> None:
     if not raw.isdigit():
         # Invalid → stay in the state with a tappable exit (never a button-less dead-end).
         await message.answer(
-            "عدد نامعتبر بود. یک عددِ صحیح (گیگابایت) بفرستید.",
+            "عدد واردشده نامعتبر است؛ لطفاً یک عددِ صحیح (به گیگابایت) بفرستید.",
             reply_markup=keyboards.cancel_keyboard(),
         )
         return
@@ -255,7 +255,7 @@ async def on_owner_cap_bump_text(message: Message, state: FSMContext) -> None:
     if not raw.isdigit() or not (0 < int(raw) <= 5000):
         # Invalid → stay in the state with a tappable exit (never a button-less dead-end).
         await message.answer(
-            "عدد نامعتبر بود. یک عددِ صحیح بین ۱ تا ۵۰۰۰ بفرستید.",
+            "عدد واردشده نامعتبر است؛ لطفاً یک عددِ صحیح بین ۱ تا ۵۰۰۰ بفرستید.",
             reply_markup=keyboards.cancel_keyboard(),
         )
         return
@@ -281,4 +281,4 @@ async def on_owner_cap_bump_text(message: Message, state: FSMContext) -> None:
             f"✅ درخواستِ افزایشِ ظرفیتِ شما تأیید شد.\nسقفِ جدیدِ کاربران: {new_mu}",
             bot=message.bot,
         )
-    await message.answer(f"✅ ظرفیت «{rname}» {amount}+ شد (سقف جدید: {new_mu}).")
+    await message.answer(f"✅ ظرفیت «{rname}» به‌اندازهٔ {amount} افزایش یافت (سقف جدید: {new_mu}).")

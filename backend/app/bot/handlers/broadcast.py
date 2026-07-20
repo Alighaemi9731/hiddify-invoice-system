@@ -52,7 +52,7 @@ async def _do_broadcast(
     reachable, unregistered = await bc.resolve_recipients(session, audience, panel_id, None)
     label = await _audience_label(session, audience, panel_id)
     if not text.strip() or not reachable:
-        await message.answer(rtl(f"📢 «{label}»: گیرنده‌ای برای ارسال نبود."))
+        await message.answer(rtl(f"📢 «{label}»: گیرنده‌ای برای ارسال وجود نداشت."))
         return
     # Send in the background (bounded concurrency + rate limit); reply immediately. The summary
     # arrives here when it finishes (notify_owner targets the owner's PV = this chat).

@@ -71,7 +71,7 @@ export default function StorefrontManagersPage() {
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
                   <TextField
                     fullWidth
-                    label="Telegram ID مدیر جدید"
+                    label="شناسهٔ تلگرامِ مدیر جدید"
                     value={telegramId}
                     error={!!telegramId && !valid}
                     helperText={atLimit ? `حداکثر ${fmtNum(query.data.data.max_count)} مدیر ثبت شده است.` : "شناسهٔ عددی مثبت"}

@@ -107,7 +107,7 @@ async def on_photo(message: Message, state: FSMContext) -> None:
     async with common.SessionLocal() as session:
         await _track_user(session, message.from_user)
     await message.answer(
-        "📸 برای ثبتِ پرداخت، اول از منو روی «🧾 فاکتور و پرداخت» بزنید و فاکتور(ها) را انتخاب کنید، "
+        "📸 برای ثبتِ پرداخت، ابتدا از منو روی «🧾 فاکتور و پرداخت» بزنید و فاکتور(ها) را انتخاب کنید، "
         "سپس تصویرِ رسید را بفرستید."
     )
 
@@ -142,7 +142,7 @@ async def on_text(message: Message, state: FSMContext, bot: Bot) -> None:
         # instead of silently recording a stray payment. (Inside PayState, pay_state_text handles it.)
         if _parse_txid(text, usdt=opts.usdt, ton=opts.ton, avax=opts.avax):
             await message.answer(
-                "برای ثبتِ پرداخت، اول از منو روی «🧾 فاکتور و پرداخت» بزنید و فاکتور(ها) را انتخاب کنید، "
+                "برای ثبتِ پرداخت، ابتدا از منو روی «🧾 فاکتور و پرداخت» بزنید و فاکتور(ها) را انتخاب کنید، "
                 "سپس شناسهٔ تراکنش را بفرستید."
             )
             return

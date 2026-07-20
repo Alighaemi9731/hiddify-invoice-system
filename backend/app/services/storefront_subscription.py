@@ -250,7 +250,7 @@ async def renew(
                         # credit — `uq_sfwallet_reversal_per_operation` is the durable backstop.
                         await storefront_wallet.reverse_charge(
                             s2, customer_id, price, order_id=order_id, operation_id=op_pk,
-                            note="تمدید در میانهٔ کار لغو شد",
+                            note="بازگشتِ وجهِ تمدیدِ لغوشده",
                         )
                         await s2.commit()
                 return SubResult(False, "cancelled", price=price, gb=gb, days=days)
@@ -316,7 +316,7 @@ async def delete_subscription(
                 # afterwards. Refusing is the only answer that cannot lose money.
                 return SubResult(
                     False, "busy",
-                    message="این سرویس در حال حاضر در حال پردازش است؛ چند لحظه بعد دوباره تلاش کنید.",
+                    message="این سرویس هم‌اکنون در حالِ پردازش است؛ لطفاً چند لحظه بعد دوباره تلاش کنید.",
                 )
             uuid = order.panel_user_uuid
             api_key = reseller.admin_uuid if reseller else None

@@ -35,9 +35,9 @@ export default function BumpLimitsDialog({
           <DialogTitle>افزایش ظرفیت — {row.name}</DialogTitle>
           <DialogContent>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              این مقدار به هر دو سقف «تعداد کاربران» و «کاربران فعال» این نماینده روی پنل اضافه می‌شود.
+              این مقدار به هر دو سقف «تعداد کاربران» و «کاربران فعال» این نماینده روی پنل افزوده می‌شود.
               {row.panel_max_users != null && (
-                <> سقف فعلی: {fmtNum(row.panel_max_users)} (ساخته: {fmtNum(row.users_count)}).</>
+                <> سقف فعلی: {fmtNum(row.panel_max_users)} (ساخته‌شده: {fmtNum(row.users_count)}).</>
               )}
             </Typography>
             <Stack direction="row" spacing={1} sx={{ mb: 2 }}>

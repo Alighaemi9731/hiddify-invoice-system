@@ -17,7 +17,7 @@ const ENF_STATUS: any = {
   dry_run: ["آزمایشی", "info"],
   planned: ["در صف", "default"],
   running: ["در حال اجرا", "info"],
-  partial: ["نیمه‌کاره", "warning"],
+  partial: ["ناتمام", "warning"],
   done: ["انجام‌شده", "success"],
   failed: ["ناموفق", "error"],
   reverted: ["بازگردانده", "warning"],
@@ -75,7 +75,7 @@ export default function Logs() {
                     </TableRow>
                   );
                 })}
-                {deliveries.length === 0 && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>گزارشی نیست</TableCell></TableRow>}
+                {deliveries.length === 0 && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>گزارشی ثبت نشده است</TableCell></TableRow>}
               </TableBody>
             </Table>
           </TableContainer>
@@ -106,7 +106,7 @@ export default function Logs() {
                     </TableRow>
                   );
                 })}
-                {actions.length === 0 && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>گزارشی نیست</TableCell></TableRow>}
+                {actions.length === 0 && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 4, color: "text.secondary" }}>گزارشی ثبت نشده است</TableCell></TableRow>}
               </TableBody>
             </Table>
           </TableContainer>

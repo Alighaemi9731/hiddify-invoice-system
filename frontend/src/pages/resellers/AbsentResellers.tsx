@@ -55,7 +55,7 @@ export default function AbsentResellers({ panelId }: { panelId: string }) {
   return (
     <Card sx={{ overflow: "hidden" }}>
       <Typography variant="body2" color="text.secondary" sx={{ p: 2, pb: 0 }}>
-        {fmtNum(data.length)} نمایندهٔ حذف‌شده از پنل (ردیفشان هنوز در سامانه مانده).
+        {fmtNum(data.length)} نمایندهٔ حذف‌شده از پنل (ردیف آن‌ها هنوز در سامانه باقی مانده است).
       </Typography>
       {isLoading ? (
         <Stack spacing={1} sx={{ p: 2 }}>
@@ -87,7 +87,7 @@ export default function AbsentResellers({ panelId }: { panelId: string }) {
                       : fmtNum(0)}
                   </TableCell>
                   <TableCell data-label="عملیات" align="left">
-                    <Tooltip title="حذفِ ردیفِ این نمایندهٔ غایب">
+                    <Tooltip title="حذف ردیف این نمایندهٔ غایب">
                       <span><IconButton size="small" color="error" disabled={del.isPending}
                         onClick={() => confirmDlg.openWith(r)}><DeleteOutlineIcon fontSize="small" /></IconButton></span>
                     </Tooltip>
@@ -116,25 +116,25 @@ export default function AbsentResellers({ panelId }: { panelId: string }) {
 
       <Dialog open={confirmDlg.open} onClose={confirmDlg.close} fullWidth maxWidth="xs">
         {confirmRow && (<>
-          <DialogTitle>حذفِ نمایندهٔ غایب — {confirmRow.name}</DialogTitle>
+          <DialogTitle>حذف نمایندهٔ غایب — {confirmRow.name}</DialogTitle>
           <DialogContent>
             <Typography variant="body2" sx={{ mb: 1 }}>
-              این نماینده، زیرمجموعه‌هایِ <b>غایبِ</b> زیرِ آن، و <b>کاربرانِ</b> همهٔ آن‌ها برای همیشه حذف می‌شوند
-              (به‌همراه فاکتورها و پرداخت‌هایشان). <b>تاریخچهٔ مالی (لجر) حفظ می‌شود.</b>
+              این نماینده، زیرمجموعه‌های <b>غایب</b> زیر آن، و <b>کاربران</b> همهٔ آن‌ها برای همیشه حذف می‌شوند
+              (به‌همراه فاکتورها و پرداخت‌های آن‌ها). <b>تاریخچهٔ مالی (لجر) حفظ می‌شود.</b>
             </Typography>
             {confirmRow.has_nondraft_invoices && (
               <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
-                ⚠️ این نماینده فاکتورِ ارسال‌شده/پرداختی دارد؛ آن فاکتورها هم حذف خواهند شد.
+                ⚠️ این نماینده فاکتور ارسال‌شده یا پرداخت‌شده دارد؛ آن فاکتورها نیز حذف خواهند شد.
               </Typography>
             )}
             {confirmRow.has_payments && (
               <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
-                ⚠️ پرداخت‌های ثبت‌شدهٔ این نماینده هم حذف می‌شوند.
+                ⚠️ پرداخت‌های ثبت‌شدهٔ این نماینده نیز حذف می‌شوند.
               </Typography>
             )}
             {confirmRow.sub_resellers > 0 && (
               <Typography variant="body2" color="warning.main" sx={{ fontWeight: 700 }}>
-                ⚠️ این نماینده {fmtNum(confirmRow.sub_resellers)} زیرمجموعه دارد؛ زیرمجموعه‌هایِ غایب پاک می‌شوند، ولی هر زیرمجموعه‌ای که هنوز روی پنل حاضر است دست‌نخورده می‌ماند.
+                ⚠️ این نماینده {fmtNum(confirmRow.sub_resellers)} زیرمجموعه دارد؛ زیرمجموعه‌های غایب حذف می‌شوند، اما هر زیرمجموعه‌ای که هنوز روی پنل حاضر است دست‌نخورده باقی می‌ماند.
               </Typography>
             )}
           </DialogContent>

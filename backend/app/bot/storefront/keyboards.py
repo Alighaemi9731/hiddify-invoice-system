@@ -152,7 +152,7 @@ def admins_manage_kb(co_admin_ids: list[int]) -> InlineKeyboardMarkup:
 # ── inline keyboards ──────────────────────────────────────────────────────────
 def plan_label(p: StorefrontPlan) -> str:
     """Customer-facing plan label — volume · duration · price, no title (owner: «عنوان نمی‌خواهیم»)."""
-    return f"{p.gb} گیگ · {p.days} روزه — {p.price_toman:,} تومان"
+    return f"{p.gb} گیگابایت · {p.days} روزه — {p.price_toman:,} تومان"
 
 
 def buy_plans_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
@@ -189,7 +189,7 @@ def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
     rtl()-wrapped so a mixed Persian/English service name doesn't scramble the order."""
     rows = [
         [InlineKeyboardButton(
-            text=rtl(f"📦 {o.gb}گیگ/{o.days}روز — {o.label or 'سرویس'}"),
+            text=rtl(f"📦 {o.gb}گیگابایت/{o.days}روز — {o.label or 'سرویس'}"),
             callback_data=f"sforder:{o.id}")]
         for o in orders
     ]
@@ -230,7 +230,7 @@ def admin_subs_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
             text=rtl(f"{'⏸ ' if o.status == 'disabled' else ''}{o.label or 'سرویس'} — "
-                     f"{o.gb}گیگ/{o.days}روز"),
+                     f"{o.gb}گیگابایت/{o.days}روز"),
             callback_data=f"sfasub:{o.id}")]
         for o in orders
     ]
@@ -400,8 +400,8 @@ def broadcast_segment_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 همهٔ مشتری‌ها", callback_data="sfbcseg:all")],
         [InlineKeyboardButton(text="⛔️ منقضی‌شده‌ها", callback_data="sfbcseg:expired")],
-        [InlineKeyboardButton(text="😴 ۳۰ روز غیرفعال", callback_data="sfbcseg:inactive30")],
-        [InlineKeyboardButton(text="🎁 تست‌گرفته، نخریده", callback_data="sfbcseg:trial_no_purchase")],
+        [InlineKeyboardButton(text="😴 غیرفعال در ۳۰ روز اخیر", callback_data="sfbcseg:inactive30")],
+        [InlineKeyboardButton(text="🎁 تستِ رایگان، بدونِ خرید", callback_data="sfbcseg:trial_no_purchase")],
     ])
 
 

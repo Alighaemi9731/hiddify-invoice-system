@@ -63,7 +63,7 @@ def _panel_billable(
     if max_age_hours and now is not None:
         synced = _as_utc(panel.last_synced_at)
         if synced is not None and (now - synced).total_seconds() > max_age_hours * 3600:
-            return False, "دادهٔ همگام‌سازی خیلی قدیمی است (پنل را همگام‌سازی کنید)"
+            return False, "دادهٔ همگام‌سازی بسیار قدیمی است (لطفاً پنل را همگام‌سازی کنید)"
     return True, ""
 
 

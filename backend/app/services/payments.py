@@ -189,7 +189,7 @@ async def submit_reseller_payment(
         return SubmitResult(
             "not_payable",
             f"حداکثر {_MAX_INVOICES_PER_PAYMENT} فاکتور را می‌توان یکجا پرداخت کرد؛ "
-            "تعداد کمتری انتخاب کنید.",
+            "لطفاً تعداد کمتری انتخاب کنید.",
         )
 
     # A rejected txid re-submitted WITH a fresh invoice selection updates that row's coverage
@@ -262,7 +262,7 @@ async def submit_reseller_payment(
     if not _method_ok:
         return SubmitResult(
             "not_payable",
-            "این روش پرداخت در حال حاضر فعال نیست؛ از منوی پرداخت یک روشِ فعال را انتخاب کنید.",
+            "این روش پرداخت در حال حاضر فعال نیست؛ لطفاً از منوی پرداخت یک روشِ فعال را انتخاب کنید.",
         )
 
     if not ids:
@@ -910,19 +910,19 @@ async def verify_payment(
         # worthless-token transfer to our wallet pass as USDT) — leave pending for manual review.
         return PaymentResult(
             "pending", False,
-            "✅ شناسه تراکنش دریافت شد و پس از بررسی توسط پشتیبانی تأیید می‌شود.",
+            "✅ شناسهٔ تراکنش دریافت شد و پس از بررسی توسط پشتیبانی تأیید خواهد شد.",
             detail="bscscan api key, wallet, or USDT contract not configured",
         )
 
     try:
         api_url = str(cfg.get("bscscan_api_url") or "")
         if not payment.txid:
-            return PaymentResult("rejected", False, "شناسه تراکنش ثبت نشده است.")
+            return PaymentResult("rejected", False, "شناسهٔ تراکنش ثبت نشده است.")
         check = await _bscscan_tokentx(api_url, api_key, wallet, contract, payment.txid)
     except Exception as exc:  # noqa: BLE001
         log.exception("on-chain lookup failed")
         return PaymentResult("pending", False,
-                             "✅ شناسه تراکنش دریافت شد و در حال بررسی است.",
+                             "✅ شناسهٔ تراکنش دریافت شد و در حال بررسی است.",
                              detail=f"lookup error: {exc}")
 
     payment.raw_json = json.dumps(check.__dict__, default=str)[:4000]
@@ -932,7 +932,7 @@ async def verify_payment(
         payment.note = check.error
         await session.commit()
         return PaymentResult("pending", False,
-                             "تراکنش هنوز روی شبکه پیدا نشد. لطفاً چند دقیقه بعد دوباره تلاش کنید.",
+                             "تراکنش هنوز روی شبکه یافت نشد؛ لطفاً چند دقیقه دیگر دوباره تلاش کنید.",
                              detail=check.error or "")
 
     payment.from_address = check.from_address

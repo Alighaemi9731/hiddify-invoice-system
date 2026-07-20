@@ -202,10 +202,10 @@ def sub_detail_keyboard(
         rows.append([InlineKeyboardButton(text="✅ آزادسازی", callback_data=f"subr:{sub_id}")])
     elif state == "frozen":
         # New-user creation is blocked; offer to lift it, or escalate to a full suspend.
-        rows.append([InlineKeyboardButton(text="✅ رفع توقف ساخت کاربر", callback_data=f"subr:{sub_id}")])
+        rows.append([InlineKeyboardButton(text="✅ رفع توقف ساخت سرویس", callback_data=f"subr:{sub_id}")])
         rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی کامل", callback_data=f"subx:{sub_id}")])
     else:  # active
-        rows.append([InlineKeyboardButton(text="🚫 توقف ساخت کاربر", callback_data=f"subf:{sub_id}")])
+        rows.append([InlineKeyboardButton(text="🚫 توقف ساخت سرویس", callback_data=f"subf:{sub_id}")])
         rows.append([InlineKeyboardButton(text="⛔️ مسدودسازی", callback_data=f"subx:{sub_id}")])
     rows.append([InlineKeyboardButton(text="« بازگشت", callback_data="menu:subs")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -221,7 +221,7 @@ def sub_cap_keyboard(sub_id: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for gb in SUB_CAP_PRESETS:
-        row.append(InlineKeyboardButton(text=f"{gb} گیگ", callback_data=f"setcap:{sub_id}:{gb}"))
+        row.append(InlineKeyboardButton(text=f"{gb} گیگابایت", callback_data=f"setcap:{sub_id}:{gb}"))
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -318,7 +318,7 @@ def create_user_count_keyboard(counts: list[int]) -> InlineKeyboardMarkup:
 
 
 def create_user_gb_keyboard(gbs: list[int]) -> InlineKeyboardMarkup:
-    return _num_grid("cugb", gbs, unit=" گیگ")
+    return _num_grid("cugb", gbs, unit=" گیگابایت")
 
 
 def create_user_days_keyboard(days: list[int]) -> InlineKeyboardMarkup:
@@ -327,7 +327,7 @@ def create_user_days_keyboard(days: list[int]) -> InlineKeyboardMarkup:
 
 def create_user_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ بله، بساز", callback_data="cuok"),
+        InlineKeyboardButton(text="✅ تأیید و ساخت", callback_data="cuok"),
         InlineKeyboardButton(text="❌ لغو", callback_data="cucancel"),
     ]])
 

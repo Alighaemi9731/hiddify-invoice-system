@@ -110,7 +110,7 @@ export default function Resellers() {
     mutationFn: (id: number) => enforceReseller(id),
     success: (result) => [
       result.dry_run
-        ? `حالت آزمایشی: ${result.affected_users} کاربر`
+        ? `حالت آزمایشی: ${result.affected_users} کاربر تحت تأثیر`
         : result.queued
           ? "مسدودسازی در صف ثبت شد"
           : "این نماینده از قبل مسدود است",
@@ -123,7 +123,7 @@ export default function Resellers() {
     mutationFn: (id: number) => restoreReseller(id),
     success: (result) => [
       result.queued
-        ? "آزادسازی در صف ثبت شد"
+        ? "بازگردانی در صف ثبت شد"
         : result.status === "not_enforced"
           ? "این نماینده مسدود نیست"
           : `بازگردانی: ${result.status}`,
@@ -135,7 +135,7 @@ export default function Resellers() {
     show,
     mutationFn: ({ id, amount }: { id: number; amount: number }) =>
       bumpResellerLimits(id, amount),
-    success: (result) => `ظرفیت افزایش یافت → سقف کاربران: ${result.max_users}`,
+    success: (result) => `ظرفیت افزایش یافت؛ سقف کاربران: ${result.max_users}`,
     onSuccess: () => bumpDlg.close(),
     invalidate: INVALIDATE,
   });
@@ -202,7 +202,7 @@ export default function Resellers() {
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2}>
           <TextField
             size="small"
-            placeholder="جستجوی نام یا شناسه..."
+            placeholder="جستجوی نام یا شناسه…"
             value={q}
             onChange={(event) => {
               setQ(event.target.value);
@@ -262,7 +262,7 @@ export default function Resellers() {
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {tab === 2 ? (
             <Typography variant="caption" color="text.secondary">
-              ادمین‌هایی که از پنل حذف شده‌اند ولی ردیفشان در سامانه مانده است.
+              نماینده‌هایی که از پنل حذف شده‌اند اما ردیف آن‌ها همچنان در سامانه باقی مانده است.
             </Typography>
           ) : tab === 0 ? (
             <>

@@ -41,7 +41,7 @@ export default function StorefrontPreviewPage() {
                       <RedeemIcon color="secondary" />
                       <Box>
                         <Typography sx={{ fontWeight: 800 }}>تست رایگان</Typography>
-                        <Typography variant="body2" color="text.secondary">{fmtNum(query.data.free_trial.gb)} گیگ · {fmtNum(query.data.free_trial.days)} روز</Typography>
+                        <Typography variant="body2" color="text.secondary">{fmtNum(query.data.free_trial.gb)} گیگابایت · {fmtNum(query.data.free_trial.days)} روز</Typography>
                       </Box>
                     </Stack>
                   )}
@@ -57,7 +57,7 @@ export default function StorefrontPreviewPage() {
                           <Card variant="outlined" sx={{ height: "100%" }}>
                             <CardContent>
                               <Typography sx={{ fontWeight: 800 }}>{plan.title || "پلن فروشگاه"}</Typography>
-                              <Typography variant="body2" color="text.secondary" sx={{ my: 0.75 }}>{fmtNum(plan.gb)} گیگ · {fmtNum(plan.days)} روز</Typography>
+                              <Typography variant="body2" color="text.secondary" sx={{ my: 0.75 }}>{fmtNum(plan.gb)} گیگابایت · {fmtNum(plan.days)} روز</Typography>
                               <Typography color="primary.main" sx={{ fontWeight: 850 }}>{fmtToman(plan.price_toman)}</Typography>
                             </CardContent>
                           </Card>

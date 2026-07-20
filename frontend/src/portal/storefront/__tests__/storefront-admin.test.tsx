@@ -288,7 +288,7 @@ describe("storefront Release B administration", () => {
 
     renderAdmin("plans", <StorefrontPlansPage />);
     await user.click(await screen.findByRole("button", { name: "ویرایش پلن" }));
-    const gb = await screen.findByLabelText(/حجم \(گیگ\)/);
+    const gb = await screen.findByLabelText(/حجم \(گیگابایت\)/);
     await user.clear(gb);
     await user.type(gb, "11");
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
@@ -427,7 +427,7 @@ describe("storefront Release B administration", () => {
     await user.clear(welcome);
     await user.type(welcome, "پیش‌نویس ذخیره‌نشده");
     const trialSection = screen.getByText("تست رایگان").closest(".MuiCard-root") as HTMLElement;
-    const gb = within(trialSection).getByLabelText("حجم (گیگ)");
+    const gb = within(trialSection).getByLabelText("حجم (گیگابایت)");
     await user.clear(gb);
     await user.type(gb, "2");
     await user.click(within(trialSection).getByRole("button", { name: "ذخیره" }));
@@ -567,7 +567,7 @@ describe("storefront Release B administration", () => {
     renderAdmin("managers", <StorefrontManagersPage />);
     expect(await screen.findByText("مالک اصلی")).toBeInTheDocument();
     expect(screen.getByText(/امکان ورود به پورتال ندارند/)).toBeInTheDocument();
-    await user.type(screen.getByLabelText("Telegram ID مدیر جدید"), "300");
+    await user.type(screen.getByLabelText("شناسهٔ تلگرامِ مدیر جدید"), "300");
     await user.click(screen.getByRole("button", { name: "افزودن مدیر" }));
     await waitFor(() => expect(added).toBe("300"));
   });

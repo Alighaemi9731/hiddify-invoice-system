@@ -126,7 +126,7 @@ async def render_invoice_node_pdfs(
         return []
     panel = await session.get(Panel, inv.panel_id)
     owner_name = await settings_service.get(session, "owner_name", "") or ""
-    title = f"فاکتور دوره {inv.period_label}"
+    title = f"فاکتور دورهٔ {inv.period_label}"
     docs: list[tuple[str, str]] = []
     for idx, g in enumerate(grouped):
         node_name, is_own, gl = g["name"], g["is_own"], g["lines"]

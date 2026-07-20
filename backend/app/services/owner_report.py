@@ -222,8 +222,8 @@ def render_per_panel(label: str, rows: list[PanelLine]) -> str:
         if r.last_synced_at is not None:
             sync = r.last_synced_at.astimezone(_TZ).strftime("%m-%d %H:%M") if _TZ else \
                 r.last_synced_at.strftime("%m-%d %H:%M")
-        stale_note = " (کهنه)" if r.stale else ""
-        lines.append(_rtl(f"{health} {r.key}: {_toman(r.sales)} ت · {r.invoices} فاکتور · سینک {sync}{stale_note}"))
+        stale_note = " (قدیمی)" if r.stale else ""
+        lines.append(_rtl(f"{health} {r.key}: {_toman(r.sales)} ت · {r.invoices} فاکتور · همگام‌سازی {sync}{stale_note}"))
     return "\n".join(lines)
 
 
@@ -283,7 +283,7 @@ async def health(session: AsyncSession) -> Health:
         elif synced is None:
             h.problems.append(f"{p.key}: هرگز همگام نشده")
         elif (now - synced) > dt.timedelta(hours=12):
-            h.problems.append(f"{p.key}: سینکِ کهنه")
+            h.problems.append(f"{p.key}: همگام‌سازیِ قدیمی")
         else:
             h.panels_ok += 1
     h.enforce_pending = int(
@@ -360,7 +360,7 @@ def render_health(h: Health) -> str:
         lines.append(_rtl(f"   🔴 {prob}"))
     lines.append(f"⛔️ صفِ مسدودسازی/بازگردانی در جریان: {h.enforce_pending}")
     if h.enforce_failed:
-        lines.append(f"❌ اکشن‌های ناموفق (نیازمندِ بررسی): {h.enforce_failed}")
+        lines.append(f"❌ اقدامات ناموفق (نیازمندِ بررسی): {h.enforce_failed}")
     if h.pending_payments:
         lines.append(f"💳 پرداخت‌های در انتظارِ تأیید: {h.pending_payments}")
     lines.append(f"🗄 آخرین پشتیبان: {h.last_backup or '—'}")
@@ -394,7 +394,7 @@ async def daily_digest(session: AsyncSession) -> str:
     ]
     warnings = list(h.problems)
     if h.enforce_failed:
-        warnings.append(f"{h.enforce_failed} اکشنِ مسدودسازیِ ناموفق")
+        warnings.append(f"{h.enforce_failed} اقدامِ مسدودسازیِ ناموفق")
     if h.pending_payments:
         warnings.append(f"{h.pending_payments} پرداختِ در انتظارِ تأیید")
     if warnings:

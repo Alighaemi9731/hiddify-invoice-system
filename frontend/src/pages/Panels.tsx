@@ -69,7 +69,7 @@ export default function Panels() {
       const aliases = Array.from(new Set([...(form.host_aliases || []), form.host].filter(Boolean)));
       return updatePanel(form.id, { host: newHost, host_aliases: aliases });
     },
-    success: "دامنه منتقل شد؛ هاستِ قبلی برای تطبیقِ لینک‌ها حفظ شد.",
+    success: "دامنه منتقل شد؛ دامنهٔ قبلی برای تطبیق لینک‌ها حفظ شد.",
     onSuccess: () => setOpen(false),
     invalidate: ["panels"],
   });
@@ -110,7 +110,7 @@ export default function Panels() {
     show,
     mutationFn: (id: number) => testPanel(id),
     success: (r): [string, "success" | "error"] =>
-      [r.ok ? `اتصال موفق — ${r.admin_count} ادمین / ${r.user_count} کاربر` : `ناموفق: ${r.error}`, r.ok ? "success" : "error"],
+      [r.ok ? `اتصال موفق — ${r.admin_count} نماینده / ${r.user_count} کاربر` : `اتصال ناموفق: ${r.error}`, r.ok ? "success" : "error"],
   });
   const doSyncAll = useToastMutation({
     show,
@@ -192,7 +192,7 @@ export default function Panels() {
                   <Tooltip title="همگام‌سازی"><IconButton onClick={() => doSync.mutate(p.id)}><SyncIcon /></IconButton></Tooltip>
                   <Tooltip title="تست اتصال"><IconButton onClick={() => doTest.mutate(p.id)}><WifiTetheringIcon /></IconButton></Tooltip>
                   <Tooltip title="ویرایش"><IconButton onClick={() => edit(p)}><EditIcon /></IconButton></Tooltip>
-                  <Tooltip title="حذف"><IconButton color="error" onClick={() => confirm("حذف این پنل؟") && doDelete.mutate(p.id)}><DeleteIcon /></IconButton></Tooltip>
+                  <Tooltip title="حذف"><IconButton color="error" onClick={() => confirm("این پنل حذف شود؟") && doDelete.mutate(p.id)}><DeleteIcon /></IconButton></Tooltip>
                 </TableCell>
               </TableRow>
             ))}
@@ -208,16 +208,16 @@ export default function Panels() {
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
-              label="لینک پنل را اینجا بچسبانید (پر شدن خودکار)"
+              label="لینک پنل را اینجا بچسبانید (تکمیل خودکار فیلدها)"
               dir="ltr"
               value={link}
               onChange={(e) => applyLink(e.target.value)}
               placeholder="https://host/proxy_path/owner_uuid/admin/adminuser/"
-              helperText="دامنه، مسیر مخفی و UUID به‌صورت خودکار از روی لینک پر می‌شوند؛ بقیه را در صورت نیاز اصلاح کنید."
+              helperText="دامنه، مسیر مخفی و UUID به‌صورت خودکار از روی لینک پر می‌شوند؛ سایر موارد را در صورت نیاز اصلاح کنید."
             />
             {/* Normalized to lowercase as you type so what you see is what gets saved
                 (the backend applies the same rule). Locked after creation. */}
-            <TextField label="کلید (مثل fa1)" inputProps={{ dir: "ltr" }} value={form.key} disabled={!!form.id}
+            <TextField label="کلید پنل" inputProps={{ dir: "ltr" }} value={form.key} disabled={!!form.id}
               onChange={(e) => setForm({ ...form, key: e.target.value.trimStart().toLowerCase() })}
               helperText={form.id
                 ? "کلید پس از ساخت قابل تغییر نیست (در تاریخچهٔ مالی ثبت شده است)."
@@ -229,20 +229,20 @@ export default function Panels() {
             <TextField label="UUID مالک پنل (Owner)" inputProps={{ dir: "ltr" }} value={form.owner_uuid} onChange={(e) => setForm({ ...form, owner_uuid: e.target.value })} />
             <TextField label="کلید API ادمین (برای مسدودسازی)" inputProps={{ dir: "ltr" }} value={form.admin_api_key}
               onChange={(e) => setForm({ ...form, admin_api_key: e.target.value })}
-              helperText="برای اجرای واقعی مسدودسازی لازم است" />
-            <TextField label="هاست‌های قبلی/مستعار (هر خط یک هاست)" inputProps={{ dir: "ltr" }}
+              helperText="برای اجرای واقعی مسدودسازی لازم است." />
+            <TextField label="دامنه‌های قبلی/مستعار (هر خط یک دامنه)" inputProps={{ dir: "ltr" }}
               multiline minRows={2}
               value={(form.host_aliases || []).join("\n")}
               onChange={(e) => setForm({ ...form, host_aliases: e.target.value.split(/[\n,]+/).map((s: string) => s.trim()).filter(Boolean) })}
-              helperText="هاستِ اصلی برای بکاپ/همگام‌سازی استفاده می‌شود؛ هاست‌های قبلی فقط برای اینکه لینک‌های قدیمیِ نماینده‌ها همچنان در ربات ثبت شوند. (تغییرِ این فیلد همگام‌سازیِ مجدد نمی‌زند.)" />
+              helperText="دامنهٔ اصلی برای پشتیبان‌گیری و همگام‌سازی استفاده می‌شود؛ دامنه‌های قبلی فقط برای شناسایی لینک‌های قدیمی نماینده‌ها در ربات به‌کار می‌روند. (تغییر این فیلد همگام‌سازی مجدد را آغاز نمی‌کند.)" />
             <FormControlLabel control={<Switch checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />} label="فعال" />
 
             {form.id && (
               <>
                 <Divider />
-                <Typography variant="subtitle2">مهاجرتِ دامنه</Typography>
+                <Typography variant="subtitle2">انتقال دامنه</Typography>
                 <Typography variant="caption" color="text.secondary">
-                  دامنهٔ جدید را وارد کنید؛ هاستِ فعلی («{form.host}») به فهرستِ «هاست‌های قبلی» منتقل و دامنهٔ جدید جایگزین می‌شود — در یک مرحله.
+                  دامنهٔ جدید را وارد کنید؛ دامنهٔ فعلی («{form.host}») به فهرست «دامنه‌های قبلی» منتقل و دامنهٔ جدید جایگزین می‌شود — همه در یک مرحله.
                 </Typography>
                 <Stack direction="row" spacing={1} alignItems="center">
                   <TextField size="small" fullWidth label="دامنهٔ جدید (بدون https)" inputProps={{ dir: "ltr" }}

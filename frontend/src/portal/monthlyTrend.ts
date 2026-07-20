@@ -31,7 +31,7 @@ export function monthlyTrendOption(theme: Theme, rows: MonthlyRow[]) {
         const row = rows[p.dataIndex];
         if (!row) return "";
         return `${faDigits(row.label)}<br/><b>${fmtToman(row.amount_toman)}</b>`
-          + `<br/>${fmtNum(row.gb)} گیگ · ${fmtNum(row.new_services)} سرویس`;
+          + `<br/>${fmtNum(row.gb)} گیگابایت · ${fmtNum(row.new_services)} سرویس`;
       },
       ...tooltip,
     },

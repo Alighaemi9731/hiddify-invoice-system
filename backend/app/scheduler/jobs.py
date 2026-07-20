@@ -110,16 +110,16 @@ async def monthly_invoicing_job() -> None:
             # this run and need attention (otherwise the shortfall is silent).
             if summary.skipped_panels:
                 msg += (
-                    "\n\n⚠️ پنل‌های زیر به‌دلیل ناموفق‌بودن همگام‌سازی فاکتور نشدند "
-                    "(بررسی و سپس «صدور فاکتورهای دوره» را برای آن‌ها بزنید):\n"
+                    "\n\n⚠️ پنل‌های زیر به‌دلیل ناموفق‌بودنِ همگام‌سازی فاکتور نشدند "
+                    "(لطفاً بررسی کرده و سپس «صدور فاکتورهای دوره» را برای آن‌ها اجرا کنید):\n"
                     + "\n".join(f"• {p}" for p in summary.skipped_panels)
                 )
             # Surface resellers that fell through the hierarchy entirely (parent deleted / a
             # parent cycle) — they were NOT billed and the shortfall is otherwise silent.
             if summary.unbilled_subtrees:
                 msg += (
-                    "\n\n⚠️ نماینده‌های زیر به هیچ باندلی وصل نشدند (نمایندهٔ بالادستی حذف شده "
-                    "یا حلقهٔ والد دارند) و فاکتور نشدند؛ سلسله‌مراتب را در پنل اصلاح کنید:\n"
+                    "\n\n⚠️ نماینده‌های زیر در هیچ فاکتوری لحاظ نشدند (نمایندهٔ بالادستیِ آن‌ها حذف شده "
+                    "یا حلقهٔ والد دارند)؛ لطفاً سلسله‌مراتب را در پنل اصلاح کنید:\n"
                     + "\n".join(f"• {p}" for p in summary.unbilled_subtrees)
                 )
             await owner_notify.notify_owner(session, msg)

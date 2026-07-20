@@ -1202,7 +1202,7 @@ async def customer_preview(
     plans = await storefront.list_plans(session, shop.id, only_enabled=True)
     return {
         "config_version": shop.config_version,
-        "welcome_text": shop.welcome_text or "🛍 به فروشگاه خوش آمدید!",
+        "welcome_text": shop.welcome_text or "🛍 به فروشگاهِ ما خوش آمدید!",
         "support_contact": shop.support_contact,
         "channel_required": bool(shop.channel_required and shop.channel_id),
         "shop_closed": shop.shop_closed,
@@ -1636,12 +1636,13 @@ async def set_topup_decision(
             cust = await session.get(StorefrontCustomer, t.customer_id)
             if cust is not None and cust.telegram_id:
                 if decision == "confirm":
-                    bonus_note = (f" (+{credit_bonus:,} تومان بونوسِ کدِ شارژ)"
+                    bonus_note = (f" (+{credit_bonus:,} تومان پاداشِ کدِ شارژ)"
                                   if code_applied else "")
                     note = (f"✅ شارژِ کیفِ پولِ شما به مبلغِ {int(credited or 0):,} تومان "
                             f"تأیید شد.{bonus_note}")
                 else:
-                    note = "❌ درخواستِ شارژِ کیفِ پولِ شما تأیید نشد."
+                    note = ("❌ درخواستِ شارژِ کیفِ پولِ شما تأیید نشد. "
+                            "در صورتِ نیاز می‌توانید دوباره اقدام کنید یا با پشتیبانی در تماس باشید.")
                 await storefront_delivery.snapshot_job(
                     session, storefront_bot_id=shop.id, kind="direct", segment=None,
                     message_text=note, actor_telegram_id=ctx.actor_telegram_id,
@@ -1938,7 +1939,7 @@ async def set_credit_enabled(
         # Reviving an archived code would make it redeemable again while staying hidden from the
         # normal list — a live code the shop can't see to switch off.
         err = AdminCommandError(
-            "archived_code", "این کد بایگانی شده است و دیگر قابلِ فعال‌سازی نیست؛ یک کدِ تازه بسازید.",
+            "archived_code", "این کد بایگانی شده است و دیگر قابلِ فعال‌سازی نیست؛ یک کدِ جدید بسازید.",
             response_status=422)
         await _cache_known_failure(
             session, shop, ctx, action="credit.enable", command=command, exc=err)

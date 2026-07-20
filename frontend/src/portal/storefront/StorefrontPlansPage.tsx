@@ -166,7 +166,7 @@ export default function StorefrontPlansPage() {
                       <Box sx={{ minWidth: 0 }}>
                         <Typography sx={{ fontWeight: 800 }}>{plan.title || `پلن ${fmtNum(index + 1)}`}</Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {fmtNum(plan.gb)} گیگ · {fmtNum(plan.days)} روز · {fmtToman(plan.price_toman)}
+                          {fmtNum(plan.gb)} گیگابایت · {fmtNum(plan.days)} روز · {fmtToman(plan.price_toman)}
                         </Typography>
                       </Box>
                     </Stack>
@@ -200,7 +200,7 @@ export default function StorefrontPlansPage() {
           <DialogContent>
             <Stack spacing={2} sx={{ pt: 1 }}>
               <TextField label="عنوان (اختیاری)" value={draft.title || ""} inputProps={{ maxLength: 128 }} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
-              <TextField required label="حجم (گیگ)" type="number" value={draft.gb} inputProps={{ min: 1, max: 100000 }} error={draft.gb < 1 || draft.gb > 100000} onChange={(event) => setDraft({ ...draft, gb: Number(event.target.value) })} />
+              <TextField required label="حجم (گیگابایت)" type="number" value={draft.gb} inputProps={{ min: 1, max: 100000 }} error={draft.gb < 1 || draft.gb > 100000} onChange={(event) => setDraft({ ...draft, gb: Number(event.target.value) })} />
               <TextField required label="مدت (روز)" type="number" value={draft.days} inputProps={{ min: 1, max: 3650 }} error={draft.days < 1 || draft.days > 3650} onChange={(event) => setDraft({ ...draft, days: Number(event.target.value) })} />
               <TextField required label="قیمت (تومان)" type="number" value={draft.price_toman} inputProps={{ min: 0, max: 1000000000000 }} error={draft.price_toman < 0 || draft.price_toman > 1_000_000_000_000} onChange={(event) => setDraft({ ...draft, price_toman: Number(event.target.value) })} />
             </Stack>

@@ -244,14 +244,14 @@ export default function Dashboard() {
   };
 
   const salesTrend = salesChange === null ? (
-    <MetricDetail>{data?.period_billed_toman ? "اولین فروش ثبت‌شده" : "بدون فروش در دوره قبل"}</MetricDetail>
+    <MetricDetail>{data?.period_billed_toman ? "اولین فروش ثبت‌شده" : "بدون فروش در دورهٔ قبل"}</MetricDetail>
   ) : salesChange >= 0 ? (
     <MetricDetail color={theme.palette.success.main} icon={<ArrowUpwardIcon sx={{ fontSize: 15 }} />}>
-      {formatPercent(salesChange)}٪ نسبت به دوره قبل
+      {formatPercent(salesChange)}٪ نسبت به دورهٔ قبل
     </MetricDetail>
   ) : (
     <MetricDetail color={theme.palette.error.main} icon={<ArrowDownwardIcon sx={{ fontSize: 15 }} />}>
-      {formatPercent(Math.abs(salesChange))}٪ نسبت به دوره قبل
+      {formatPercent(Math.abs(salesChange))}٪ نسبت به دورهٔ قبل
     </MetricDetail>
   );
 
@@ -267,7 +267,7 @@ export default function Dashboard() {
         <Box>
           <Typography variant="h5">نمای کلی عملکرد</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.4 }}>
-            آمار فروش، وصول و وضعیت نمایندگان در دوره انتخاب‌شده
+            آمار فروش، وصول و وضعیت نمایندگان در دورهٔ انتخاب‌شده
           </Typography>
         </Box>
         <PeriodPicker value={period} onChange={setPeriod} />
@@ -338,7 +338,7 @@ export default function Dashboard() {
               {
                 label: "بدهی معوق",
                 value: <CountUp to={data.outstanding_toman} format={fmtToman} />,
-                sub: <MetricDetail>{fmtNum(data.outstanding_resellers)} نماینده بدهکار</MetricDetail>,
+                sub: <MetricDetail>{fmtNum(data.outstanding_resellers)} نمایندهٔ بدهکار</MetricDetail>,
                 color: "#f43f5e",
                 icon: <WarningAmberIcon />,
               },
@@ -492,7 +492,7 @@ export default function Dashboard() {
 
               <Grid item xs={12}>
                 <SectionCard
-                  title="۱۰ نماینده برتر دوره"
+                  title="۱۰ نمایندهٔ برتر دوره"
                   action={
                     <Typography variant="caption" color="text.secondary">
                       مرتب‌شده بر اساس مبلغ فروش

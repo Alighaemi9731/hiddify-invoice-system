@@ -127,28 +127,28 @@ export default function Invoices() {
     () => generateInvoices({ period }),
     (r: any) => {
       const parts = [`${r.created} فاکتور جدید`];
-      if (r.updated) parts.push(`${r.updated} پیش‌نویس بازمحاسبه`);
-      if (r.skipped_existing) parts.push(`${r.skipped_existing} ارسال/پرداخت‌شده دست‌نخورده`);
+      if (r.updated) parts.push(`${r.updated} پیش‌نویس بازمحاسبه‌شده`);
+      if (r.skipped_existing) parts.push(`${r.skipped_existing} فاکتور ارسال/پرداخت‌شده بدون تغییر`);
       if (r.reconciled_zero) parts.push(`${r.reconciled_zero} پیش‌نویسِ صفرشده حذف شد`);
       let msg = `${parts.join(" • ")} (${fmtToman(r.total_amount_toman)})`;
       if (r.skipped_panels?.length) {
-        msg += ` — ⚠️ ${r.skipped_panels.length} پنل به‌دلیل همگام‌سازی ناموفق فاکتور نشد: ${r.skipped_panels.join("، ")}`;
+        msg += ` — ⚠️ برای ${r.skipped_panels.length} پنل به‌دلیل ناموفق‌بودن همگام‌سازی فاکتوری صادر نشد: ${r.skipped_panels.join("، ")}`;
       }
       return msg;
     },
   );
   const discard = mut(
     () => discardDrafts(period),
-    (r: any) => (r.discarded ? `${r.discarded} پیش‌نویس حذف شد` : "پیش‌نویسی برای حذف نبود"),
+    (r: any) => (r.discarded ? `${r.discarded} پیش‌نویس حذف شد` : "پیش‌نویسی برای حذف وجود نداشت"),
   );
-  const sendAll = mut(() => sendPeriod(period), (r: any) => `ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون ربات، ${r.failed || 0} ناموفق`);
-  const sendOne = mut((id: number) => sendInvoice(id), (r: any) => `ارسال: ${r.delivery_status}`);
+  const sendAll = mut(() => sendPeriod(period), (r: any) => `نتیجهٔ ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون اتصال به ربات، ${r.failed || 0} ناموفق`);
+  const sendOne = mut((id: number) => sendInvoice(id), (r: any) => `وضعیت ارسال: ${r.delivery_status}`);
   const pay = moneyMut((id: number) => markInvoicePaid(id), "به‌عنوان پرداخت‌شده ثبت شد");
   const recompute = moneyMut(
     (id: number) => recomputeInvoice(id),
     (r: any) => `بازمحاسبه شد: ${fmtGb(r.usage_gb)} — ${fmtToman(r.amount_toman)}` + (r.synced ? "" : " (همگام‌سازی پنل ناموفق بود؛ از دادهٔ قبلی محاسبه شد)"),
   );
-  const unpay = moneyMut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت قبل)");
+  const unpay = moneyMut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت پیشین)");
   const toDraft = moneyMut((id: number) => revertInvoiceToDraft(id), "به پیش‌نویس بازگردانده شد");
   // Takes the deadline as an argument so «حذف مهلت» can pass "" directly instead of relying on
   // a setState + setTimeout(0) landing before the mutation reads it (fragile under concurrent
@@ -194,7 +194,7 @@ export default function Invoices() {
     success: (rows: any[]) => `${fmtNum(rows.length)} فاکتور در فایل CSV ذخیره شد`,
     onSuccess: (rows: any[]) => downloadCsv(
       `invoices-${period}.csv`,
-      ["شماره", "نماینده", "پنل", "دوره", "گیگ", "مبلغ (تومان)", "وضعیت", "تاریخ ارسال", "تاریخ پرداخت"],
+      ["شماره", "نماینده", "پنل", "دوره", "مصرف (گیگابایت)", "مبلغ (تومان)", "وضعیت", "تاریخ ارسال", "تاریخ پرداخت"],
       rows.map((i: any) => [
         i.number, i.reseller_name, i.panel_key, i.period_label, i.usage_gb, i.amount_toman,
         INVOICE_STATUS_FA[i.status] || i.status,
@@ -225,7 +225,7 @@ export default function Invoices() {
     acts.push({ key: "pdf", label: "PDF", icon: <PictureAsPdfIcon fontSize="small" />, onClick: () => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error")) });
     if (i.status !== "draft") acts.push({ key: "send", label: "ارسال مجدد", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id) });
     if (i.status !== "draft" && i.status !== "paid")
-      acts.push({ key: "todraft", label: "بازگردانی به پیش‌نویس", tooltip: "بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از دفتر مالی هم حذف می‌شود)", color: "warning", icon: <RestartAltIcon fontSize="small" />, disabled: toDraft.isPending, onClick: () => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id) });
+      acts.push({ key: "todraft", label: "بازگردانی به پیش‌نویس", tooltip: "بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از تاریخچهٔ مالی هم حذف می‌شود)", color: "warning", icon: <RestartAltIcon fontSize="small" />, disabled: toDraft.isPending, onClick: () => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id) });
     if (i.status === "paid")
       acts.push({ key: "unpay", label: "لغو پرداخت", color: "warning", icon: <UndoIcon fontSize="small" />, onClick: () => unpay.mutate(i.id) });
     if (owed)
@@ -254,7 +254,7 @@ export default function Invoices() {
           onChange={(_, v: any) => setResellerFilter(v ? { id: v.id, name: v.name } : null)}
           onInputChange={(_, v) => setRInput(v)}
           loading={rOptions.isFetching}
-          noOptionsText={rInput.trim() ? "نماینده‌ای پیدا نشد" : "نام نماینده را بنویسید"}
+          noOptionsText={rInput.trim() ? "نماینده‌ای یافت نشد" : "نام نماینده را وارد کنید"}
           renderInput={(params) => (
             <TextField {...params} placeholder="فاکتورهای یک نماینده (همهٔ ماه‌ها)" />
           )}
@@ -264,10 +264,10 @@ export default function Invoices() {
           value={status}
           displayEmpty
           onChange={(e) => setStatus(e.target.value)}
-          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همه وضعیت‌ها"}
+          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همهٔ وضعیت‌ها"}
           sx={{ minWidth: 148, "& .MuiSelect-select": { py: "7px !important" } }}
         >
-          <MenuItem value="">همه وضعیت‌ها</MenuItem>
+          <MenuItem value="">همهٔ وضعیت‌ها</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <Button size="small" variant="outlined" startIcon={<DownloadIcon />}
@@ -282,18 +282,18 @@ export default function Invoices() {
             // PREVIOUS (completed) month. Generating the current/future month would invoice only
             // the services created so far — confirm before proceeding.
             if (period >= currentPeriod() && !confirm(
-              `دورهٔ ${period} هنوز تمام نشده؛ فاکتورِ این دوره ناقص می‌شود (فقط سرویس‌های ثبت‌شده تا امروز). معمولاً باید دورهٔ ماهِ گذشته را صادر کنید. ادامه می‌دهید؟`
+              `دورهٔ ${period} هنوز به پایان نرسیده است؛ فاکتورِ این دوره ناقص خواهد بود (فقط سرویس‌های ثبت‌شده تا امروز محاسبه می‌شود). توصیه می‌شود دورهٔ ماه گذشته را صادر کنید. ادامه می‌دهید؟`
             )) return;
             gen.mutate();
           }} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
           <Button variant="outlined" color="warning" onClick={() => {
-            if (confirm(`همهٔ پیش‌نویس‌های دوره ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده می‌مانند)`)) discard.mutate();
+            if (confirm(`همهٔ پیش‌نویس‌های دورهٔ ${period} حذف شوند؟ (فاکتورهای ارسال/پرداخت‌شده دست‌نخورده باقی می‌مانند)`)) discard.mutate();
           }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>
           <Button variant="contained" startIcon={<SendIcon />} disabled={sendAll.isPending}
             onClick={() => {
               if (confirm(`فاکتورهای پیش‌نویسِ دورهٔ ${period} برای همهٔ نماینده‌ها ارسال شوند؟ این عمل به همهٔ نماینده‌ها پیام می‌فرستد و قابلِ بازگشت نیست.`))
                 sendAll.mutate();
-            }}>ارسال همه پیش‌نویس‌ها</Button>
+            }}>ارسال همهٔ پیش‌نویس‌ها</Button>
         </>}
       </Stack>
 
@@ -334,7 +334,7 @@ export default function Invoices() {
       {(!inResellerMode && tab === 1) ? (
         <Card>
           <Typography variant="body2" color="text.secondary" sx={{ p: 2, pb: 0 }}>
-            {fmtNum(zero.length)} نماینده در دوره {period} هیچ فروشی نداشته‌اند.
+            {fmtNum(zero.length)} نماینده در دورهٔ {period} هیچ فروشی نداشته‌اند.
           </Typography>
           <Table size="small" className="resp-table">
             <TableHead>
@@ -359,7 +359,7 @@ export default function Invoices() {
                   </TableCell>
                 </TableRow>
               ))}
-              {zero.length === 0 && <TableRow><TableCell colSpan={4} align="center" sx={{ py: 4, color: "text.secondary" }}>همه نماینده‌ها در این دوره فروش داشته‌اند</TableCell></TableRow>}
+              {zero.length === 0 && <TableRow><TableCell colSpan={4} align="center" sx={{ py: 4, color: "text.secondary" }}>همهٔ نماینده‌ها در این دوره فروش داشته‌اند</TableCell></TableRow>}
             </TableBody>
           </Table>
         </Card>
@@ -376,7 +376,7 @@ export default function Invoices() {
         </Stack>
       ) : (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          {fmtNum(filtered.length)} فاکتور{q ? ` (از ${fmtNum(sorted.length)})` : ""} — جمع: {fmtToman(total)}
+          {fmtNum(filtered.length)} فاکتور{q ? ` (از ${fmtNum(sorted.length)})` : ""} — مجموع: {fmtToman(total)}
         </Typography>
       )}
 
@@ -419,7 +419,7 @@ export default function Invoices() {
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
-            {filtered.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 10 : 9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای جستجو پیدا نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}</TableCell></TableRow>}
+            {filtered.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 10 : 9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای این جستجو یافت نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>
@@ -442,7 +442,7 @@ export default function Invoices() {
               </Stack>
               <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mt: 1 }}>
                 <Chip size="small" variant="outlined" label={i.panel_key} />
-                <Chip size="small" variant="outlined" label={`دوره ${i.period_label}`} />
+                <Chip size="small" variant="outlined" label={`دورهٔ ${i.period_label}`} />
                 <TelegramLink username={i.reseller_username} chatId={i.reseller_chat_id} />
               </Stack>
               <Box sx={{ mt: 1.2, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
@@ -462,7 +462,7 @@ export default function Invoices() {
           ))}
           {filtered.length === 0 && (
             <Typography align="center" color="text.secondary" variant="body2" sx={{ py: 5 }}>
-              {q ? "نتیجه‌ای برای جستجو پیدا نشد" : "فاکتوری برای این دوره نیست — «صدور فاکتورهای دوره» را بزنید"}
+              {q ? "نتیجه‌ای برای این جستجو یافت نشد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}
             </Typography>
           )}
         </Stack>
@@ -487,9 +487,9 @@ export default function Invoices() {
           <DialogTitle>ویرایش فاکتور — {editRow.reseller_name}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <TextField label="مصرف (گیگ)" type="number" value={editRow.usage_gb}
+              <TextField label="مصرف (گیگابایت)" type="number" value={editRow.usage_gb}
                 onChange={(e) => editDlg.setData({ ...editRow, usage_gb: e.target.value })} />
-              <TextField label="قیمت هر گیگ (تومان)" type="number" value={editRow.price_per_gb}
+              <TextField label="قیمت هر گیگابایت (تومان)" type="number" value={editRow.price_per_gb}
                 onChange={(e) => editDlg.setData({ ...editRow, price_per_gb: e.target.value })} />
               <Typography variant="body2" color="text.secondary">
                 مبلغ جدید: {fmtToman(Number(editRow.usage_gb || 0) * Number(editRow.price_per_gb || 0))}
@@ -534,11 +534,11 @@ export default function Invoices() {
       {/* Detail dialog */}
       <Dialog open={detailDlg.open} onClose={detailDlg.close} fullWidth maxWidth="md" fullScreen={xsFull}>
         {detail && (<>
-          <DialogTitle>فاکتور #{detail.number} — {detail.reseller_name} — دوره {detail.period_label}</DialogTitle>
+          <DialogTitle>فاکتور #{detail.number} — {detail.reseller_name} — دورهٔ {detail.period_label}</DialogTitle>
           <DialogContent sx={{ display: "flex", flexDirection: "column" }}>
             <Stack direction="row" spacing={3} sx={{ mb: 2, flexWrap: "wrap", flexShrink: 0 }}>
               <Typography variant="body2">مصرف کل: <b>{fmtGb(detail.usage_gb)}</b></Typography>
-              <Typography variant="body2">قیمت/گیگ: <b>{fmtNum(detail.price_per_gb)}</b></Typography>
+              <Typography variant="body2">قیمت هر گیگابایت: <b>{fmtNum(detail.price_per_gb)}</b></Typography>
               <Typography variant="body2">مبلغ: <b>{fmtToman(detail.amount_toman)}</b></Typography>
             </Stack>
             {detail.floor_applied && (

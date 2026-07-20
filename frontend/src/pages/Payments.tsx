@@ -95,13 +95,13 @@ export default function Payments() {
   const reject = useToastMutation({
     show,
     mutationFn: rejectPayment,
-    success: (r: any) => r?.message || "رد شد",
+    success: (r: any) => r?.message || "پرداخت رد شد",
     invalidate: DEPENDENT_KEYS,
   });
   const confirm_ = useToastMutation({
     show,
     mutationFn: (id: number) => confirmPayment(id),
-    success: (r: any) => r?.message || "تأیید شد",
+    success: (r: any) => r?.message || "پرداخت تأیید شد",
     onSuccess: () => confirmDlg.close(),
     invalidate: DEPENDENT_KEYS,
   });
@@ -109,7 +109,7 @@ export default function Payments() {
   const del = useToastMutation({
     show,
     mutationFn: deletePayment,
-    success: (r: any) => r?.message || "حذف شد",
+    success: (r: any) => r?.message || "پرداخت حذف شد",
     invalidate: DEPENDENT_KEYS,
   });
 
@@ -119,7 +119,7 @@ export default function Payments() {
   };
   const doDelete = (p: any) => {
     const extra = p.status === "confirmed" ? "\n(این پرداخت تأییدشده بود؛ با حذف، فاکتورهای مرتبط دوباره «پرداخت‌نشده» می‌شوند.)" : "";
-    const scope = p.invoice_count > 1 ? `${p.invoice_count} فاکتور` : `دوره ${p.invoice_period || "—"}`;
+    const scope = p.invoice_count > 1 ? `${p.invoice_count} فاکتور` : `دورهٔ ${p.invoice_period || "—"}`;
     if (window.confirm(`پرداختِ «${p.reseller_name || ""}» (${scope}) برای همیشه حذف شود؟${extra}`)) del.mutate(p.id);
   };
 
@@ -155,9 +155,9 @@ export default function Payments() {
   // Click the name → open the customer's Telegram PV (username if known, else by id).
   const nameNode = (p: any) =>
     p.reseller_username
-      ? <Tooltip title="باز کردن گفتگوی تلگرام"><Link href={`https://t.me/${p.reseller_username}`} target="_blank" rel="noopener" underline="hover">{p.reseller_name}</Link></Tooltip>
+      ? <Tooltip title="باز کردن گفت‌وگوی تلگرام"><Link href={`https://t.me/${p.reseller_username}`} target="_blank" rel="noopener" underline="hover">{p.reseller_name}</Link></Tooltip>
       : p.reseller_chat_id
-        ? <Tooltip title="باز کردن گفتگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
+        ? <Tooltip title="باز کردن گفت‌وگوی تلگرام (با شناسهٔ عددی)"><Link href={`tg://user?id=${p.reseller_chat_id}`} underline="hover">{p.reseller_name}</Link></Tooltip>
         : p.reseller_name;
 
   const periodNode = (p: any) =>
@@ -198,7 +198,7 @@ export default function Payments() {
     { key: "confirm", label: p.status === "confirmed" ? "تأییدشده" : "تأیید", color: "success", icon: <CheckIcon fontSize="small" />, disabled: p.status === "confirmed", onClick: () => confirmDlg.openWith(p), primary: true },
     { key: "reject", label: p.status === "rejected" ? "ردشده" : "رد", color: "error", icon: <CloseIcon fontSize="small" />, disabled: p.status === "rejected", onClick: () => doReject(p), primary: true },
     { key: "chain", label: "بررسی واریزی روی زنجیره", icon: <VerifiedIcon fontSize="small" />, disabled: !p.txid || chainCheck.isPending, onClick: () => chainCheck.mutate(p.id) },
-    { key: "delete", label: "حذف", tooltip: "حذف کامل (برای پاک‌سازی داده‌های تستی)", icon: <DeleteOutlineIcon fontSize="small" />, disabled: del.isPending, onClick: () => doDelete(p) },
+    { key: "delete", label: "حذف", tooltip: "حذف کامل (برای پاک‌سازی داده‌های آزمایشی)", icon: <DeleteOutlineIcon fontSize="small" />, disabled: del.isPending, onClick: () => doDelete(p) },
   ];
 
   return (
@@ -209,14 +209,14 @@ export default function Payments() {
           value={status}
           displayEmpty
           onChange={(e) => setStatus(e.target.value)}
-          renderValue={(v) => v ? PAYMENT_STATUS_FA[v] : "همه وضعیت‌ها"}
+          renderValue={(v) => v ? PAYMENT_STATUS_FA[v] : "همهٔ وضعیت‌ها"}
           sx={{ minWidth: 160, "& .MuiSelect-select": { py: "7px !important" } }}
         >
-          <MenuItem value="">همه وضعیت‌ها</MenuItem>
+          <MenuItem value="">همهٔ وضعیت‌ها</MenuItem>
           {Object.entries(PAYMENT_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <TextField size="small" value={search} sx={{ minWidth: { sm: 240 } }}
-          placeholder="جستجوی شماره یا نام نماینده..." onChange={(e) => setSearch(e.target.value)}
+          placeholder="جستجوی شماره یا نام نماینده…" onChange={(e) => setSearch(e.target.value)}
           InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
         <Button size="small" variant="outlined" startIcon={<DownloadIcon />}
           onClick={() => exportCsv.mutate()} disabled={exportCsv.isPending || data.length === 0}>
@@ -342,7 +342,7 @@ export default function Payments() {
               </Box>
             ) : (
               <Typography variant="body2" sx={{ mb: 1 }}>
-                فاکتور دوره: <b>{confirmRow.invoice_period || "—"}</b>
+                دورهٔ فاکتور: <b>{confirmRow.invoice_period || "—"}</b>
                 {confirmRow.invoice_amount_toman ? <> — {fmtToman(confirmRow.invoice_amount_toman)}</> : null}
               </Typography>
             )}

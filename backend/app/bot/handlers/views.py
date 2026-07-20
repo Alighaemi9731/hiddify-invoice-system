@@ -41,19 +41,19 @@ async def _begin_create_user(answer, chat_id: int, session, state: FSMContext) -
     await state.clear()
     opts = await usercreate.load_options(session)
     if not opts.enabled:
-        await answer("ساخت کاربر در حال حاضر غیرفعال است.")
+        await answer("ساخت سرویس در حال حاضر غیرفعال است.")
         return
     if not (opts.gb and opts.days):
-        await answer("گزینه‌های حجم/روز پیکربندی نشده‌اند؛ به پشتیبانی اطلاع دهید.")
+        await answer("گزینه‌های حجم و مدت هنوز پیکربندی نشده‌اند؛ لطفاً به پشتیبانی اطلاع دهید.")
         return
     roots = await _top_level_resellers(session, chat_id)
     if not roots:
-        await answer("فقط نماینده‌های اصلی می‌توانند کاربر بسازند.")
+        await answer("فقط نماینده‌های اصلی می‌توانند سرویس بسازند.")
         return
     if len(roots) == 1:
         await state.update_data(cu_reseller_id=roots[0].id)
         await answer(
-            f"➕ ساخت کاربر روی پنلِ «{_iso(roots[0].name)}»\nنوعِ ساخت را انتخاب کنید:",
+            f"➕ ساخت سرویس روی پنلِ «{_iso(roots[0].name)}»\nنوعِ ساخت را انتخاب کنید:",
             reply_markup=keyboards.create_user_mode_keyboard(),
         )
         return
@@ -61,13 +61,13 @@ async def _begin_create_user(answer, chat_id: int, session, state: FSMContext) -
     for r in roots:
         panel = await session.get(Panel, r.panel_id)
         items.append((r.id, _iso(f"{(panel.name or panel.key) if panel else '?'} — {r.name}")))
-    await answer("➕ ساخت کاربر\nروی کدام پنل؟", reply_markup=keyboards.create_user_panels_keyboard(items))
+    await answer("➕ ساخت سرویس\nروی کدام پنل؟", reply_markup=keyboards.create_user_panels_keyboard(items))
 
 _BOTFATHER_GUIDE = (
     "🏪 راه‌اندازی ربات فروشگاهی\n\n"
     "۱) در تلگرام به @BotFather بروید.\n"
-    "۲) دستور /newbot را بفرستید؛ یک نام و سپس یک یوزرنیم (که به bot ختم می‌شود) انتخاب کنید.\n"
-    "۳) توکنی که می‌دهد (مثلِ <code>123456789:AA...</code>) را کپی کنید.\n"
+    "۲) دستور /newbot را بفرستید؛ یک نام و سپس یک نام کاربری (که به bot ختم می‌شود) انتخاب کنید.\n"
+    "۳) توکنی که در اختیار شما قرار می‌دهد (مانندِ <code>123456789:AA...</code>) را کپی کنید.\n"
     "۴) همان توکن را همین‌جا بفرستید تا رباتِ فروشگاهیِ شما ساخته و فعال شود.\n\n"
     "برای لغو، «انصراف» را بزنید."
 )
@@ -186,7 +186,7 @@ async def _owner_debtors(answer, session) -> None:
         return
     # Each row starts with a right-to-left mark (‏) so a line that begins with an
     # English reseller name still renders right-aligned in Telegram, and links to the card.
-    lines = ["💰 بدهکاران برتر — برای کارت/اقدام روی «🔎 جستجوی نماینده» بزنید:\n"]
+    lines = ["💰 بدهکاران برتر — برای مشاهدهٔ کارت و اقدام، «🔎 جستجوی نماینده» را بزنید:\n"]
     for i, d in enumerate(rows, 1):
         lines.append(f"‏{i}. {_iso(d.name)}: {float(d.total):,.0f} تومان")
     await answer("\n".join(lines))
@@ -315,29 +315,29 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
         lines = [
             f"📄 فاکتور علی‌الحساب — «{r.name}»",
             f"دوره: {period.label} (تا امروز)",
-            f"قیمت هر گیگ: {price:,} تومان",
+            f"قیمت هر گیگابایت: {price:,} تومان",
             "",
             "🟦 مصرف خودتان:",
-            f"• حجم {bd['own']['gb']:g} گیگ ({bd['own']['users']} سرویس) — {bd['own']['amount']:,} تومان",
+            f"• حجم {bd['own']['gb']:g} گیگابایت ({bd['own']['users']} سرویس) — {bd['own']['amount']:,} تومان",
         ]
         if bd["subs"]:
             lines.append("\n🟨 زیرمجموعه‌های شما:")
             for s in bd["subs"]:
                 # Isolate the (possibly English) name so the GB/Toman after it don't reorder.
                 lines.append(
-                    f"• نماینده {_iso(s['name'])}: حجم {s['gb']:g} گیگ "
+                    f"• نماینده {_iso(s['name'])}: حجم {s['gb']:g} گیگابایت "
                     f"({s['users']} سرویس) — {s['amount']:,} تومان"
                 )
         lines += [
             "",
             "➖➖➖➖➖➖➖➖",
-            f"📊 مجموع حجم: {bd['total_gb']:g} گیگ ({bd['total_users']} سرویس)",
+            f"📊 مجموع حجم: {bd['total_gb']:g} گیگابایت ({bd['total_users']} سرویس)",
             f"💰 مجموع مبلغ: {bd['total_amount']:,} تومان",
             "",
             "ℹ️ این فاکتور علی‌الحساب است؛ اول ماه آینده فاکتور کامل و واقعیِ قابل پرداخت برایتان ارسال می‌شود.",
         ]
         if bd["subs"]:
-            lines.append("\n📎 در ادامه، یک PDF جدا برای خودتان و هر زیرمجموعه ارسال می‌شود تا بتوانید به هرکدام بدهید.")
+            lines.append("\n📎 در ادامه، یک PDF جداگانه برای خودتان و هر زیرمجموعه ارسال می‌شود تا بتوانید به هر زیرمجموعه تحویل دهید.")
         text = "\n".join(lines)
 
         owner_name = await settings_service.get(session, "owner_name", "") or ""
@@ -359,7 +359,7 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
                 path, fname = res
                 await bot.send_document(
                     chat_id, FSInputFile(path, filename=fname),
-                    caption=f"📄 فاکتور علی‌الحساب شما «{r.name}» (فقط کاربران خودتان)",
+                    caption=f"📄 فاکتور علی‌الحساب شما «{r.name}» (فقط سرویس‌های خودتان)",
                 )
         except Exception:  # noqa: BLE001
             log.warning("interim own pdf failed", exc_info=True)
@@ -377,7 +377,7 @@ async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None
                     spath, sfname = sres
                     await bot.send_document(
                         chat_id, FSInputFile(spath, filename=sfname),
-                        caption=f"📄 فاکتور علی‌الحساب زیرمجموعه «{sub.name}» — {s['gb']:g} گیگ",
+                        caption=f"📄 فاکتور علی‌الحساب زیرمجموعه «{sub.name}» — {s['gb']:g} گیگابایت",
                     )
             except Exception:  # noqa: BLE001
                 log.warning("interim sub pdf failed for %s", s.get("id"), exc_info=True)
@@ -593,17 +593,17 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
     state = sub.enforcement_state.value
     status_txt = (
         "⛔️ مسدود" if state == "enforced"
-        else "🚫 ساخت کاربر متوقف (کاربرانِ فعلی آنلاین)" if state == "frozen"
+        else "🚫 ساخت سرویس متوقف (سرویس‌های فعلی آنلاین)" if state == "frozen"
         else "🟢 فعال"
     )
     lines = [
         f"👤 زیرمجموعه: {rep['name']}",
         f"وضعیت: {status_txt}",
-        f"تعداد کاربران: {rep['total_users']} (فعال: {rep['enabled_users']})",
+        f"تعداد سرویس‌ها: {rep['total_users']} (فعال: {rep['enabled_users']})",
     ]
     if rep["sub_count"]:
         lines.append(f"زیرمجموعه‌های این نماینده: {rep['sub_count']}")
-    lines.append(f"قیمت هر گیگ: {rep['price_per_gb']:,} تومان")
+    lines.append(f"قیمت هر گیگابایت: {rep['price_per_gb']:,} تومان")
     # Monthly GB-cap progress (the Hiddify-missing volume limit, simulated by us).
     cap = rep.get("gb_cap") or 0
     used = rep.get("current_gb") or 0
@@ -611,23 +611,23 @@ async def _send_sub_detail(answer, chat_id: int, sub_id: int, session) -> None:
         pct = rep.get("cap_pct") or 0
         bar = _cap_bar(pct)
         remaining = rep.get("cap_remaining_gb")
-        status = "⛔️ به سقف رسید" if used >= cap else f"باقی‌مانده: {remaining:g} گیگ"
+        status = "⛔️ به سقف رسید" if used >= cap else f"باقی‌مانده: {remaining:g} گیگابایت"
         lines.append(
             f"\n🎯 سقف حجم ماهانه ({rep['current_period']}):\n"
-            f"{bar} {used:g}/{cap:g} گیگ ({pct}%) — {status}"
+            f"{bar} {used:g}/{cap:g} گیگابایت ({pct}%) — {status}"
         )
     else:
         lines.append(
-            f"\n🎯 سقف حجم ماهانه: تعیین نشده "
-            f"(این ماه تا الان: {used:g} گیگ ساخته شده)"
+            f"\n🎯 سقف حجم ماهانه: تعیین‌نشده "
+            f"(این ماه تا کنون: {used:g} گیگابایت ساخته شده)"
         )
     lines.append("\n📊 فروش ماهانه (سهمیهٔ فروخته‌شده):")
     for m in rep["months"]:
         lines.append(
-            f"• {m['label']}: {m['gb']:g} گیگ — {m['amount_toman']:,} تومان "
+            f"• {m['label']}: {m['gb']:g} گیگابایت — {m['amount_toman']:,} تومان "
             f"({m['new_services']} سرویس جدید)"
         )
-    lines.append("\n📄 برای دریافت فاکتور این زیرمجموعه (برای ارسال به خودش) دکمهٔ ماه را بزنید.")
+    lines.append("\n📄 برای دریافت فاکتور این زیرمجموعه (جهت ارسال به او)، دکمهٔ ماه را بزنید.")
     months = [m["label"] for m in rep["months"]]
     await answer(
         "\n".join(lines),
@@ -655,7 +655,7 @@ async def _send_sub_invoice(answer, chat_id: int, sub_id: int, period_label: str
     try:
         period = parse_period(period_label)
     except Exception:  # noqa: BLE001
-        await answer("دورهٔ نامعتبر.")
+        await answer("دورهٔ نامعتبر است.")
         return
     # The issuer is the chat's own reseller on this panel (the parent billing the sub).
     mine = [r for r in await _resellers_for_chat(session, chat_id) if r.panel_id == sub.panel_id]

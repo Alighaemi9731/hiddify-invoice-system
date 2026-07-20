@@ -112,7 +112,7 @@ def _decrypt_archive(data: bytes, passphrase: str | None) -> bytes:
     if not _is_encrypted(data):
         return data
     if not passphrase:
-        raise ValueError("این پشتیبان رمزگذاری شده است؛ گذرواژهٔ پشتیبان را وارد کنید.")
+        raise ValueError("این پشتیبان رمزگذاری شده است؛ لطفاً گذرواژهٔ پشتیبان را وارد کنید.")
     salt = data[len(_ENC_MAGIC):len(_ENC_MAGIC) + _ENC_SALT_LEN]
     token = data[len(_ENC_MAGIC) + _ENC_SALT_LEN:]
     try:
@@ -596,7 +596,7 @@ def restore_from_zip(zip_bytes: bytes, *, passphrase: str | None = None) -> dict
             )
             restart_signal.request_restart(dt.datetime.now(dt.timezone.utc).isoformat())
             return {"status": "ok", "db_kind": "sqlite", "restored": True,
-                    "note": "سرویس بک‌اند باید یک‌بار ری‌استارت شود. " + key_note, "meta": meta}
+                    "note": "سرویس بک‌اند باید یک‌بار مجدداً راه‌اندازی شود. " + key_note, "meta": meta}
 
         if "db.sql" in names:
             sql = z.read("db.sql")
@@ -610,7 +610,7 @@ def restore_from_zip(zip_bytes: bytes, *, passphrase: str | None = None) -> dict
                 key_note = _finalize_restore_key(meta.get("secret_key") or "", boot.sqlalchemy_url)
                 restart_signal.request_restart(dt.datetime.now(dt.timezone.utc).isoformat())
                 return {"status": "ok", "db_kind": "postgres", "restored": True,
-                        "note": "بازیابی انجام شد؛ سرویس‌ها به‌صورت خودکار به دادهٔ جدید وصل می‌شوند. "
+                        "note": "بازیابی انجام شد؛ سرویس‌ها به‌صورت خودکار به دادهٔ جدید متصل می‌شوند. "
                                 + key_note,
                         "meta": meta}
             # The single-transaction import rolled back: the live DB is unchanged and the

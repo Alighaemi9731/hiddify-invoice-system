@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.98.0 - 2026-07-20
+
+A full professional rewrite of the user-facing wording across the whole product. No behaviour change,
+no database migration.
+
+### Changed
+
+- **Every message shown to a person — in both Telegram bots, the web panel, the reseller portal, the
+  shop-admin portal, PDFs, and all notifications — was reviewed and rewritten to read professionally**:
+  consistent formal tone, no casual/slangy phrasing or throwaway examples (e.g. the "name your
+  service" prompt no longer uses a silly example), correct Persian spacing and ZWNJ, and a single
+  consistent vocabulary throughout. Notable unifications: the sellable item is «سرویس» everywhere,
+  bonus credit is «پاداش» everywhere (was a mix with «بونوس»), the volume unit is «گیگابایت»
+  everywhere (was a mix with «گیگ»), overdue is «سررسید گذشته», «همگام‌سازی» replaces «سینک», and
+  loanwords like «ری‌استارت»/«اکشن»/«آیدی» are gone. The default message templates (invoice, payment
+  received/rejected, reminders, shop welcome) were also polished. Placeholders, links, buttons, and
+  amounts are unchanged — only the wording.
+
 ## 1.97.3 - 2026-07-20
 
 Fixes the User Recovery look-back window and shows dates in Gregorian. No database migration.

@@ -32,7 +32,7 @@ export default function EditResellerDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
-            label="قیمت هر گیگ (تومان) — خالی = پیش‌فرض"
+            label="قیمت هر گیگابایت (تومان) — خالی برای پیش‌فرض"
             type="number"
             value={form?.price_per_gb ?? ""}
             onChange={(event) => onChange(form ? {
@@ -41,14 +41,14 @@ export default function EditResellerDialog({
             } : null)}
           />
           <TextField
-            label="حداقل فروش (تومان) — خالی = پیش‌فرض، ۰ = بدون حداقل"
+            label="حداقل فروش (تومان) — خالی برای پیش‌فرض، ۰ برای حذف حداقل"
             type="number"
             value={form?.min_sale_toman ?? ""}
             onChange={(event) => onChange(form ? {
               ...form,
               min_sale_toman: event.target.value as any,
             } : null)}
-            helperText="برای کل مجموعهٔ این نماینده (خودش + زیرمجموعه‌ها) اعمال می‌شود"
+            helperText="برای کل مجموعهٔ این نماینده (خود نماینده و زیرمجموعه‌هایش) اعمال می‌شود."
           />
           <FormControlLabel
             control={
@@ -75,14 +75,14 @@ export default function EditResellerDialog({
             label="ربات فروشگاهی (اجازهٔ راه‌اندازی)"
           />
           <TextField
-            label="هزینهٔ ماهانهٔ ربات فروشگاهی (تومان) — خالی = پیش‌فرض"
+            label="هزینهٔ ماهانهٔ ربات فروشگاهی (تومان) — خالی برای پیش‌فرض"
             type="number"
             value={form?.storefront_monthly_fee_toman ?? ""}
             onChange={(event) => onChange(form ? {
               ...form,
               storefront_monthly_fee_toman: event.target.value as any,
             } : null)}
-            helperText="فقط ماه‌هایی که نماینده ربات فروشگاهی فعال دارد به فاکتورش اضافه می‌شود"
+            helperText="فقط در ماه‌هایی که نماینده ربات فروشگاهی فعال دارد، به فاکتور او افزوده می‌شود."
           />
         </Stack>
       </DialogContent>

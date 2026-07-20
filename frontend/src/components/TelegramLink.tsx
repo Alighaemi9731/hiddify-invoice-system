@@ -22,7 +22,7 @@ export default function TelegramLink({
     return <Typography variant="caption" color="text.disabled">—</Typography>;
   }
   return (
-    <Tooltip title="گفتگو در تلگرام">
+    <Tooltip title="گفت‌وگو در تلگرام">
       <IconButton
         size="small"
         component="a"
@@ -30,7 +30,7 @@ export default function TelegramLink({
         target="_blank"
         rel="noopener noreferrer"
         sx={{ color: "#229ED9" }}
-        aria-label="گفتگوی تلگرام با این نماینده"
+        aria-label="گفت‌وگوی تلگرام با این نماینده"
       >
         <TelegramIcon fontSize="small" />
       </IconButton>

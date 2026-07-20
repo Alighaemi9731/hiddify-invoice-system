@@ -340,7 +340,7 @@ async def purchase(
                     await storefront_ops.finalize(s, op, "failed", result_order_id=order_id)
                 await s.commit()
                 return PurchaseResult(False, order_id=order_id, reason="reaped",
-                                      message="سفارش توسط سیستم نهایی شد", gb=gb, days=days,
+                                      message="این سفارش به‌صورت خودکار توسط سیستم نهایی شد.", gb=gb, days=days,
                                       label=label)
             if res.ok and res.sub_link:
                 o.status = "provisioned"

@@ -91,7 +91,7 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
     try:
         me = await probe.get_me()
     except Exception:  # noqa: BLE001
-        await message.answer(rtl("این توکن کار نکرد؛ مطمئن شوید درست کپی شده و دوباره بفرستید."),
+        await message.answer(rtl("این توکن معتبر نبود؛ مطمئن شوید درست کپی شده و دوباره بفرستید."),
                              reply_markup=keyboards.cancel_keyboard("« انصراف"))
         return
     finally:
@@ -147,7 +147,7 @@ async def cb_cu_panel(cb: CallbackQuery, state: FSMContext) -> None:
         name = r.name
     await state.update_data(cu_reseller_id=rid)
     await cb.message.answer(
-        f"➕ ساخت کاربر روی پنلِ «{_iso(name)}»\nنوعِ ساخت را انتخاب کنید:",
+        f"➕ ساخت سرویس روی پنلِ «{_iso(name)}»\nنوعِ ساخت را انتخاب کنید:",
         reply_markup=keyboards.create_user_mode_keyboard(),
     )
     await cb.answer()
@@ -158,7 +158,7 @@ async def cb_cu_mode(cb: CallbackQuery, state: FSMContext) -> None:
     mode = cb.data.split(":")[1]
     data = await state.get_data()
     if "cu_reseller_id" not in data:
-        await cb.answer("از ابتدا شروع کنید.", show_alert=True)
+        await cb.answer("لطفاً از ابتدا شروع کنید.", show_alert=True)
         return
     async with common.SessionLocal() as s:
         from app.services import usercreate
@@ -166,7 +166,7 @@ async def cb_cu_mode(cb: CallbackQuery, state: FSMContext) -> None:
     if mode == "bulk":
         await state.update_data(cu_mode="bulk")
         await cb.message.answer(
-            "تعدادِ کاربر را انتخاب کنید:",
+            "تعدادِ سرویس را انتخاب کنید:",
             reply_markup=keyboards.create_user_count_keyboard(opts.counts),
         )
     else:
@@ -184,7 +184,7 @@ async def cb_cu_count(cb: CallbackQuery, state: FSMContext) -> None:
         from app.services import usercreate
         opts = await usercreate.load_options(s)
     if count not in opts.counts:
-        await cb.answer("نامعتبر.", show_alert=True)
+        await cb.answer("مقدار نامعتبر است.", show_alert=True)
         return
     await state.update_data(cu_count=count)
     await cb.message.answer(
@@ -200,7 +200,7 @@ async def cb_cu_gb(cb: CallbackQuery, state: FSMContext) -> None:
         from app.services import usercreate
         opts = await usercreate.load_options(s)
     if gb not in opts.gb:
-        await cb.answer("نامعتبر.", show_alert=True)
+        await cb.answer("مقدار نامعتبر است.", show_alert=True)
         return
     await state.update_data(cu_gb=gb)
     await cb.message.answer(
@@ -216,18 +216,18 @@ async def cb_cu_days(cb: CallbackQuery, state: FSMContext) -> None:
         from app.services import usercreate
         opts = await usercreate.load_options(s)
     if days not in opts.days:
-        await cb.answer("نامعتبر.", show_alert=True)
+        await cb.answer("مقدار نامعتبر است.", show_alert=True)
         return
     data = await state.get_data()
     if not all(k in data for k in ("cu_reseller_id", "cu_gb", "cu_count")):
-        await cb.answer("از ابتدا شروع کنید.", show_alert=True)
+        await cb.answer("لطفاً از ابتدا شروع کنید.", show_alert=True)
         return
     await state.update_data(cu_days=days)
     await state.set_state(CreateUserState.name)
     is_bulk = data.get("cu_mode") == "bulk"
     prompt = (
-        "یک نامِ پایه برای کاربران بفرستید (به انتهای آن شماره اضافه می‌شود):"
-        if is_bulk else "یک نام برای کاربر بفرستید:"
+        "یک نامِ پایه برای سرویس‌ها بفرستید (به انتهای آن شماره اضافه می‌شود):"
+        if is_bulk else "یک نام برای سرویس بفرستید:"
     )
     await cb.message.answer(
         prompt, reply_markup=keyboards.flow_cancel_kb()
@@ -240,7 +240,7 @@ async def on_cu_name(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())  # collapse whitespace
     if not name or len(name) > 40:
         await message.answer(
-            "نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید.",
+            "نام نامعتبر است (۱ تا ۴۰ نویسه)؛ لطفاً دوباره بفرستید.",
             reply_markup=keyboards.cancel_keyboard("« انصراف", "cucancel"),
         )
         return
@@ -248,19 +248,19 @@ async def on_cu_name(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not all(k in data for k in ("cu_reseller_id", "cu_gb", "cu_days", "cu_count")):
         await state.clear()
-        await message.answer("اطلاعات ناقص است؛ از «➕ ساخت کاربر» دوباره شروع کنید.")
+        await message.answer("اطلاعات ناقص است؛ لطفاً از «➕ ساخت سرویس» دوباره شروع کنید.")
         return
     count = int(data["cu_count"])
     gb = int(data["cu_gb"])
     days = int(data["cu_days"])
     if data.get("cu_mode") == "bulk":
         summary = (
-            "تأیید ساخت کاربرِ گروهی؟\n"
+            "تأیید ساخت گروهیِ سرویس؟\n"
             f"• تعداد: {count} (با نام {_iso(f'{name}1')} تا {_iso(f'{name}{count}')})\n"
-            f"• حجم: {gb} گیگ\n• مدت: {days} روز"
+            f"• حجم: {gb} گیگابایت\n• مدت: {days} روز"
         )
     else:
-        summary = f"تأیید ساخت کاربر؟\n• نام: {_iso(name)}\n• حجم: {gb} گیگ\n• مدت: {days} روز"
+        summary = f"تأیید ساخت سرویس؟\n• نام: {_iso(name)}\n• حجم: {gb} گیگابایت\n• مدت: {days} روز"
     await message.answer(summary, reply_markup=keyboards.create_user_confirm_keyboard())
 
 
@@ -269,7 +269,7 @@ async def cb_cu_confirm(cb: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     await state.clear()
     if not all(k in data for k in ("cu_reseller_id", "cu_gb", "cu_days", "cu_name", "cu_count")):
-        await cb.answer("اطلاعات ناقص است؛ از ابتدا شروع کنید.", show_alert=True)
+        await cb.answer("اطلاعات ناقص است؛ لطفاً از ابتدا شروع کنید.", show_alert=True)
         return
     await cb.answer("در حال ساخت…")
     await _finish_create_user(cb.message, cb.from_user.id, data, user=cb.from_user)
@@ -301,9 +301,9 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict, *, use
     if result.capacity_blocked:
         remaining = result.remaining if result.remaining is not None else 0
         await message.answer(
-            f"⛔️ ظرفیتِ شما اجازهٔ ساختِ {count} کاربر را نمی‌دهد "
+            f"⛔️ ظرفیتِ شما برای ساخت {count} سرویس کافی نیست "
             f"(باقی‌مانده: {remaining} از {result.max_users}).\n"
-            "از «👥 زیرمجموعه‌ها» یا پشتیبانی، افزایشِ ظرفیت درخواست کنید."
+            "برای افزایشِ ظرفیت، از «👥 زیرمجموعه‌ها» یا پشتیبانی اقدام کنید."
         )
         async with common.SessionLocal() as s:
             await _reshow_menu(message, s, menu_user)
@@ -313,8 +313,8 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict, *, use
         link_attr = html.escape(u.sub_link, quote=True)
         link_text = html.escape(u.sub_link)
         caption = rtl(
-            f"✅ کاربر «{html.escape(u.name)}» ساخته شد — {gb} گیگ · {days} روز\n\n"
-            f"🔗 لینکِ اشتراک (auto):\n<a href=\"{link_attr}\">{link_text}</a>\n<code>{link_text}</code>"
+            f"✅ سرویس «{html.escape(u.name)}» ساخته شد — {gb} گیگابایت · {days} روز\n\n"
+            f"🔗 لینکِ اشتراک:\n<a href=\"{link_attr}\">{link_text}</a>\n<code>{link_text}</code>"
         )
         try:
             png = usercreate.qr_png(u.sub_link)
@@ -332,19 +332,19 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict, *, use
     made = len(result.created)
     if result.limit_hit:
         await message.answer(
-            f"⚠️ {made} از {count} کاربر ساخته شد؛ بقیه به‌خاطرِ سقفِ ظرفیتِ پنل ناموفق بود. "
-            "افزایشِ ظرفیت درخواست کنید."
+            f"⚠️ {made} سرویس از {count} سرویس ساخته شد؛ ادامه به‌دلیلِ سقفِ ظرفیتِ پنل ممکن نشد. "
+            "لطفاً افزایشِ ظرفیت را درخواست کنید."
         )
     elif result.error:
-        await message.answer(f"⚠️ {made} از {count} کاربر ساخته شد؛ ادامه با خطا متوقف شد.")
+        await message.answer(f"⚠️ {made} سرویس از {count} سرویس ساخته شد؛ ادامه به‌دلیلِ خطا متوقف شد.")
     elif made:
-        await message.answer(f"✅ {made} کاربر ساخته شد.")
+        await message.answer(f"✅ {made} سرویس ساخته شد.")
 
     if made:
         async with common.SessionLocal() as s:
             await owner_notify.notify_owner(
-                s, f"➕ نمایندهٔ «{rname}» روی پنل {pname} تعداد {made} کاربر ساخت "
-                   f"({gb} گیگ، {days} روز)."
+                s, f"➕ نمایندهٔ «{rname}» روی پنل {pname} تعداد {made} سرویس ساخت "
+                   f"({gb} گیگابایت، {days} روز)."
             )
     async with common.SessionLocal() as s:
         await _reshow_menu(message, s, menu_user)
@@ -394,7 +394,7 @@ async def cb_invoice_view(cb: CallbackQuery, bot: Bot, state: FSMContext) -> Non
             await delivery.send_invoice_content(s, bot, cb.from_user.id, inv, reseller)
         except Exception:  # noqa: BLE001
             log.warning("invoice view failed for %s", inv_id, exc_info=True)
-            await cb.message.answer("ارسال فاکتور با خطا مواجه شد؛ بعداً دوباره تلاش کنید.")
+            await cb.message.answer("ارسال فاکتور با خطا مواجه شد؛ لطفاً بعداً دوباره تلاش کنید.")
 
 
 @router.callback_query(F.data == "menu:interim")
@@ -588,7 +588,7 @@ async def pay_state_text(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if text.lower() in ("/cancel", "cancel", "لغو"):
         await state.clear()
-        await message.answer("پرداخت لغو شد. هر وقت خواستی، دوباره از «💳 پرداخت فاکتور» اقدام کن.")
+        await message.answer("پرداخت لغو شد. هر زمان مایل بودید، می‌توانید دوباره از «💳 پرداخت فاکتور» اقدام کنید.")
         return
     from app.services import payment_methods
 
@@ -676,7 +676,7 @@ async def cb_removelink(cb: CallbackQuery) -> None:
 async def cb_rm(cb: CallbackQuery) -> None:
     rid = common._safe_int(cb.data)
     if rid is None:
-        await cb.answer("داده نامعتبر.", show_alert=True)
+        await cb.answer("دادهٔ نامعتبر است.", show_alert=True)
         return
     async with common.SessionLocal() as s:
         r = await s.get(Reseller, rid)
@@ -689,7 +689,7 @@ async def cb_rm(cb: CallbackQuery) -> None:
             await cb.answer()
         else:
             # Single answer on the not-found path (the trailing cb.answer() double-answered).
-            await cb.answer("یافت نشد.", show_alert=True)
+            await cb.answer("موردی یافت نشد.", show_alert=True)
 
 
 @router.callback_query(F.data == "noop")

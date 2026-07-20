@@ -482,7 +482,7 @@ async def revert_to_draft(
         raise HTTPException(404, "Invoice not found")
     if inv.status == InvoiceStatus.paid:
         raise HTTPException(
-            400, "این فاکتور پرداخت‌شده است؛ ابتدا «لغو پرداخت» را بزنید، بعد به پیش‌نویس برگردانید."
+            400, "این فاکتور پرداخت‌شده است؛ ابتدا «لغو پرداخت» را بزنید، سپس به پیش‌نویس برگردانید."
         )
     # Clear the reminder/warning delivery marks BEFORE dropping sent_at, so a later
     # revert→regenerate→resend gets a FRESH dunning cycle. Without this, the old reminder rows

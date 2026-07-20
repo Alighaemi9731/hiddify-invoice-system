@@ -69,7 +69,7 @@ export default function Sales() {
                 <TableCell><Chip size="small" color={STATUS_COLOR[r.status]} label={INVOICE_STATUS_FA[r.status]} /></TableCell>
               </TableRow>
             ))}
-            {data.length === 0 && <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>داده‌ای برای این دوره نیست</TableCell></TableRow>}
+            {data.length === 0 && <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: "text.secondary" }}>برای این دوره فروشی ثبت نشده است</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>

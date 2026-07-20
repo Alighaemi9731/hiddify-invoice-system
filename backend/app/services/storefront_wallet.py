@@ -140,7 +140,7 @@ async def _confirm_topup_core(
         bonus_txn = StorefrontWalletTxn(
             customer_id=customer.id, storefront_bot_id=customer.storefront_bot_id,
             kind="credit_bonus", amount_toman=Decimal(str(q.bonus_toman)),
-            status="done", note="بونوسِ کدِ شارژ", decided_at=_now())
+            status="done", note="پاداشِ کدِ شارژ", decided_at=_now())
         session.add(bonus_txn)
         await session.flush()
         customer.wallet_balance_toman = float(balance(customer) + q.bonus_toman)

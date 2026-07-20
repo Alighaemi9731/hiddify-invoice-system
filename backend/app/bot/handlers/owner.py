@@ -186,7 +186,7 @@ async def on_owner_search(message: Message, state: FSMContext) -> None:
         if len(q) < 2:
             # Stay in the state with a tappable exit instead of a dead error.
             await message.answer(
-                "حداقل ۲ نویسه بفرستید.",
+                "لطفاً حداقل ۲ نویسه وارد کنید.",
                 reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
             )
             return
@@ -203,7 +203,7 @@ async def on_owner_search(message: Message, state: FSMContext) -> None:
         ).scalars().all()
         if not rows:
             await message.answer(
-                "نماینده‌ای پیدا نشد. نام یا UUID دیگری بفرستید.",
+                "نماینده‌ای یافت نشد؛ لطفاً نام یا شناسهٔ دیگری وارد کنید.",
                 reply_markup=keyboards.cancel_keyboard("« بازگشت به منو"),
             )
             return
@@ -272,7 +272,7 @@ async def _send_reseller_card(answer, session, reseller_id: int) -> None:
         _iso(f"پنل: {panel.key if panel else '—'}"),
         f"وضعیت: {'⛔️ مسدود' if enforced else '✅ فعال'} | "
         f"{'متصل به ربات' if r.bot_chat_id else 'بدون ربات'}",
-        f"فروشِ ماهِ جاری ({label}): {gb:g} گیگ ≈ {owner_report._toman(gb * price)} ت",
+        f"فروشِ ماهِ جاری ({label}): {gb:g} گیگابایت ≈ {owner_report._toman(gb * price)} ت",
         f"بدهیِ معوق: {owner_report._toman(owed)} ت",
         f"سقفِ کاربر: {cap or '—'}",
     ]
@@ -310,7 +310,7 @@ async def cb_owner_enforce(cb: CallbackQuery) -> None:
             await cb.answer("نماینده پیدا نشد.", show_alert=True)
             return
         await enforcement.enforce_reseller(s, r, dry_run=False)
-        await cb.message.answer(f"⏳ مسدودسازی «{r.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود.")
+        await cb.message.answer(f"⏳ مسدودسازی «{r.name}» در صف ثبت شد و به‌صورت مرحله‌ای انجام می‌شود.")
     await cb.answer("در صف ثبت شد")
 
 
@@ -330,7 +330,7 @@ async def cb_owner_restore(cb: CallbackQuery) -> None:
         action = await enforcement.queue_restore(s, r, reason="bot-owner")
         await cb.message.answer(
             "این نماینده مسدود نیست." if action is None
-            else f"⏳ آزادسازی «{r.name}» در صف ثبت شد و مرحله‌ای انجام می‌شود."
+            else f"⏳ آزادسازی «{r.name}» در صف ثبت شد و به‌صورت مرحله‌ای انجام می‌شود."
         )
     await cb.answer("در صف ثبت شد")
 
@@ -355,7 +355,7 @@ async def cb_owner_bump(cb: CallbackQuery) -> None:
             await cb.message.answer(f"❌ افزایش ظرفیت ناموفق بود: {exc}")
             await cb.answer()
             return
-        await cb.message.answer(f"✅ ظرفیت «{r.name}» {amount}+ شد (سقف جدید: {new_mu}).")
+        await cb.message.answer(f"✅ ظرفیت «{r.name}» به‌اندازهٔ {amount} افزایش یافت (سقف جدید: {new_mu}).")
     await cb.answer("انجام شد")
 
 
@@ -389,7 +389,7 @@ async def cb_cap_approve(cb: CallbackQuery) -> None:
         await cb.message.edit_reply_markup(reply_markup=None)  # prevent double-tap
     except Exception:  # noqa: BLE001
         pass
-    await cb.message.answer(f"✅ ظرفیت «{rname}» {amount}+ شد (سقف جدید: {new_mu}) و به نماینده اطلاع داده شد.")
+    await cb.message.answer(f"✅ ظرفیت «{rname}» به‌اندازهٔ {amount} افزایش یافت (سقف جدید: {new_mu}) و به نماینده اطلاع داده شد.")
     await cb.answer("اعمال شد")
 
 
@@ -478,7 +478,7 @@ async def cb_owner_reseller_invoices(cb: CallbackQuery) -> None:
             await cb.answer()
             return
         status_fa = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
-                     "overdue": "معوق", "enforced": "مسدود", "canceled": "لغو"}
+                     "overdue": "سررسید گذشته", "enforced": "مسدود", "canceled": "لغو"}
         lines = ["🧾 فاکتورهای اخیر:"]
         for period, toman, status in rows:
             lines.append(

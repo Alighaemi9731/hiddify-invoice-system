@@ -93,7 +93,7 @@ def instructions_text(
         if amount_usdt:
             b.append(f"💵 مبلغ: {amount_usdt} USDT")
         b.append(copyable(opts.wallet))
-        b.append("⚠️ فقط شبکهٔ BEP-20 (BSC)؛ واریز از شبکهٔ دیگر = از‌دست‌رفتن وجه.")
+        b.append("⚠️ لطفاً فقط از طریق شبکهٔ BEP-20 (BSC) واریز کنید؛ واریز از شبکه‌های دیگر موجب از دست رفتن وجه می‌شود.")
         blocks.append("\n".join(b))
     if opts.card:
         b = ["🏦 کارت‌به‌کارت (همین مبلغ به تومان):"]
@@ -111,7 +111,7 @@ def instructions_text(
             # No live Gram rate → tell them to send the Toman equivalent (header amount).
             b.append(f"💎 معادلِ {amount_toman} تومان به GRAM")
         b.append(copyable(opts.ton_address))
-        b.append("⚠️ فقط روی شبکهٔ TON واریز شود.")
+        b.append("⚠️ لطفاً فقط روی شبکهٔ TON واریز کنید.")
         blocks.append("\n".join(b))
     if opts.avax:
         b = ["❄️ اوالانچ (AVAX):"]
@@ -121,26 +121,26 @@ def instructions_text(
             # No live AVAX rate → tell them to send the Toman equivalent (header amount).
             b.append(f"❄️ معادلِ {amount_toman} تومان به AVAX")
         b.append(copyable(opts.avax_address))
-        b.append("⚠️ فقط روی شبکهٔ Avalanche C-Chain واریز شود.")
+        b.append("⚠️ لطفاً فقط روی شبکهٔ Avalanche C-Chain واریز کنید.")
         blocks.append("\n".join(b))
     if opts.screenshot and not (opts.card or opts.ton or opts.avax):
         # Standalone "send a receipt photo" note — useful next to USDT, redundant when card/TON
         # already ask for a photo.
-        blocks.append("🧾 یا تصویر رسید واریز را همین‌جا بفرستید.")
+        blocks.append("🧾 یا می‌توانید تصویر رسید واریز را همین‌جا ارسال کنید.")
     if not blocks:
-        return "برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
+        return "لطفاً برای هماهنگی پرداخت با پشتیبانی در تماس باشید."
 
-    out = ["💳 از یکی از روش‌های زیر پرداخت کنید:", "\n\n".join(blocks)]
+    out = ["💳 لطفاً از یکی از روش‌های زیر پرداخت کنید:", "\n\n".join(blocks)]
     # Only ever shown AFTER the customer taps the «💳 پرداخت فاکتور» button (the locked pay flow);
     # the sent invoice no longer embeds payment instructions. → tell them to submit the proof now.
     txid_m = opts.usdt or opts.ton or opts.avax
     photo_m = opts.card or opts.screenshot
     if txid_m and photo_m:
-        out.append("📩 پس از واریز: برای رمزارز «شناسهٔ تراکنش (TXID)» و برای کارت «تصویر رسید» را همین‌جا بفرستید.")
+        out.append("📩 پس از واریز، برای رمزارز «شناسهٔ تراکنش (TXID)» و برای کارت‌به‌کارت «تصویر رسید» را همین‌جا ارسال کنید.")
     elif txid_m:
-        out.append("📩 پس از واریز، «شناسهٔ تراکنش (TXID)» را همین‌جا بفرستید (لینکِ تراکنش هم قبول است).")
+        out.append("📩 پس از واریز، «شناسهٔ تراکنش (TXID)» را همین‌جا ارسال کنید (لینکِ تراکنش نیز پذیرفته می‌شود).")
     else:
-        out.append("📩 پس از واریز، «تصویر رسید» را همین‌جا بفرستید.")
+        out.append("📩 پس از واریز، «تصویر رسید» را همین‌جا ارسال کنید.")
     if html and (opts.usdt or opts.card or opts.ton or opts.avax):
         out.append("👆 برای کپی، روی آدرس یا شمارهٔ کارت ضربه بزنید.")
     return "\n\n".join(out)

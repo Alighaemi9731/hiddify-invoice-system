@@ -95,11 +95,11 @@ export default function PortalSubs() {
   const saveCap = async () => {
     if (!capSub) return;
     const gb = parseInt(capValue || "0", 10);
-    if (isNaN(gb) || gb < 0) { show("عدد نامعتبر است", "warning"); return; }
+    if (isNaN(gb) || gb < 0) { show("عددِ واردشده معتبر نیست", "warning"); return; }
     setBusy(true);
     try {
       await portalSetSubCap(capSub.id, gb);
-      show(gb > 0 ? `سقف «${capSub.name}» روی ${gb} گیگ تنظیم شد` : `سقف «${capSub.name}» حذف شد`, "success");
+      show(gb > 0 ? `سقف «${capSub.name}» روی ${gb} گیگابایت تنظیم شد` : `سقف «${capSub.name}» حذف شد`, "success");
       setCapSub(null); refresh();
     } catch (e) { show(errMsg(e), "error"); }
     finally { setBusy(false); }
@@ -136,7 +136,7 @@ export default function PortalSubs() {
     setBusy(true);
     try {
       const r = await fn(sub.id);
-      if (r.error) show(`عملیات با خطا: ${r.error}`, "error");
+      if (r.error) show(`خطا در انجامِ عملیات: ${r.error}`, "error");
       else show(okMsg, "success");
       refresh();
     } catch (e) { show(errMsg(e), "error"); }
@@ -274,10 +274,10 @@ export default function PortalSubs() {
         <DialogTitle sx={{ fontWeight: 800 }}>سقف حجم ماهانه — {capSub?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            سقفِ حجمِ ماهانه (گیگابایت). برای حذفِ سقف عدد 0 را وارد کنید. این سقف فقط برای هشدار است و
-            مسدودسازی خودکار نمی‌کند.
+            سقفِ حجمِ ماهانه (گیگابایت). برای حذفِ سقف، عدد ۰ را وارد کنید. این سقف تنها برای هشدار است و
+            مسدودسازیِ خودکار در پی ندارد.
           </Typography>
-          <TextField autoFocus fullWidth type="number" label="سقف (گیگ)" value={capValue}
+          <TextField autoFocus fullWidth type="number" label="سقف (گیگابایت)" value={capValue}
             onChange={(e) => setCapValue(e.target.value)} inputProps={{ min: 0, dir: "ltr" }} />
         </DialogContent>
         <DialogActions>
@@ -291,8 +291,8 @@ export default function PortalSubs() {
         <DialogTitle sx={{ fontWeight: 800 }}>افزایش ظرفیت — {bumpSub?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            مقدارِ افزودنی به سقفِ کاربرِ این زیرمجموعه را انتخاب یا وارد کنید (به max_users و
-            max_active_users اضافه می‌شود).
+            مقدارِ افزودنی به سقفِ کاربرانِ این زیرمجموعه را انتخاب یا وارد کنید (به سقفِ کاربران و
+            کاربرانِ فعال افزوده می‌شود).
           </Typography>
           <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
             {BUMP_CHIPS.map((n) => (

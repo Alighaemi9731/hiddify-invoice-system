@@ -79,7 +79,7 @@ async def check_caps(session: AsyncSession, *, bot: Bot | None = None) -> dict:
                 dl = await notifier.send_to_reseller(
                     session, parent,
                     (f"📊 زیرمجموعهٔ شما «{sub.name}» در دورهٔ {period} به سقف حجمی رسید.\n"
-                     f"سقف: {cap:g} گیگ | ساخته‌شده: {used:g} گیگ\n"
+                     f"سقف: {cap:g} گیگابایت | ساخته‌شده: {used:g} گیگابایت\n"
                      "در صورت نیاز می‌توانید سقف را افزایش دهید، با «🚫 توقف ساخت کاربر» جلوی ساختِ "
                      "کاربرِ جدیدِ او را بگیرید (بدون قطعِ کاربرانِ فعلی)، یا زیرمجموعه را کامل مسدود کنید "
                      "(منوی «مدیریت زیرمجموعه‌ها»)."),
@@ -90,7 +90,7 @@ async def check_caps(session: AsyncSession, *, bot: Bot | None = None) -> dict:
             if sub.bot_chat_id is not None:
                 dl = await notifier.send_to_reseller(
                     session, sub,
-                    (f"📊 شما در دورهٔ {period} به سقف حجمی تعیین‌شده ({cap:g} گیگ) رسیدید.\n"
+                    (f"📊 شما در دورهٔ {period} به سقف حجمی تعیین‌شده ({cap:g} گیگابایت) رسیدید.\n"
                      "برای ادامه با نمایندهٔ بالادست خود هماهنگ کنید."),
                     bot=bot,
                 )

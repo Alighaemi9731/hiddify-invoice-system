@@ -29,14 +29,14 @@ async def on_support_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     text = (message.text or "").strip()
     if not text:
-        await message.answer("پیام خالی بود؛ لغو شد.")
+        await message.answer("پیام شما خالی بود؛ لغو شد.")
         return
     async with common.SessionLocal() as s:
         owner_chat = await settings_service.get(s, "owner_chat_id", "") or ""
         bot = message.bot
         u = message.from_user
         if not owner_chat:
-            await message.answer("در حال حاضر پشتیبانی در دسترس نیست. بعداً تلاش کنید.")
+            await message.answer("در حال حاضر پشتیبانی در دسترس نیست؛ لطفاً بعداً دوباره تلاش کنید.")
             return
         await bot.send_message(
             int(owner_chat),
@@ -106,7 +106,7 @@ async def on_owner_reply(message: Message, state: FSMContext) -> None:
         await message.answer("⛔️ ارسال نشد: این کاربر ربات را مسدود کرده یا حسابش حذف شده است.")
     except TelegramBadRequest as exc:
         if "chat not found" in str(exc).lower():
-            await message.answer("⛔️ ارسال نشد: گفتگویی با این کاربر پیدا نشد (شاید هرگز ربات را استارت نکرده است).")
+            await message.answer("⛔️ ارسال نشد: گفتگویی با این کاربر یافت نشد (شاید هنوز ربات را آغاز نکرده باشد).")
         else:
             await message.answer(f"ارسال پاسخ ناموفق بود: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -135,6 +135,6 @@ async def on_broadcast_text(message: Message, state: FSMContext) -> None:
         if not await common._is_owner_user(s, message.from_user):
             return
         if not (message.text or "").strip():
-            await message.answer("متن خالی بود؛ لغو شد.")
+            await message.answer("متن پیام خالی بود؛ لغو شد.")
             return
         await _do_broadcast(message, s, message.text, audience, panel_id)

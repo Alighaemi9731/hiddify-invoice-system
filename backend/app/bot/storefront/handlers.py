@@ -56,18 +56,18 @@ log = logging.getLogger("bot.storefront")
 
 _PER_PAGE = 8          # customers per page in the admin «مشتری‌ها» list
 _SEARCH_LIMIT = 20     # max matches shown for a customer search (refine if more)
-_TRIAL_NO_RENEW = "⛔️ سرویسِ تستِ رایگان قابلِ تمدید نیست؛ برای ادامه لطفاً یک پلن تهیه کنید."
+_TRIAL_NO_RENEW = "⛔️ سرویسِ تستِ رایگان قابلِ تمدید نیست. برای ادامهٔ استفاده، لطفاً یکی از پلن‌ها را تهیه کنید."
 
 # Credit-code rejection reasons → Persian (customer-facing).
 _CREDIT_ERR = {
-    "not_found": "کدِ واردشده نامعتبر است.",
-    "disabled": "این کد غیرفعال است.",
+    "not_found": "کدِ واردشده معتبر نیست.",
+    "disabled": "این کد در حال حاضر غیرفعال است.",
     "not_started": "این کد هنوز فعال نشده است.",
-    "expired": "این کد منقضی شده است.",
-    "min_not_met": "این کد برای شارژِ شما (یا بدونِ شارژ) قابلِ استفاده نیست.",
-    "per_customer_exhausted": "شما قبلاً از این کد استفاده کرده‌اید.",
-    "global_exhausted": "ظرفیتِ استفاده از این کد پُر شده است.",
-    "no_bonus": "این کد برای این مبلغ بونوسی ندارد.",
+    "expired": "اعتبارِ این کد به پایان رسیده است.",
+    "min_not_met": "این کد برای مبلغِ شارژِ واردشده قابلِ استفاده نیست.",
+    "per_customer_exhausted": "شما پیش از این از این کد استفاده کرده‌اید.",
+    "global_exhausted": "ظرفیتِ استفاده از این کد تکمیل شده است.",
+    "no_bonus": "این کد برای این مبلغ، پاداشی در نظر نگرفته است.",
 }
 
 storefront_router = Router()
@@ -124,10 +124,10 @@ def _toman(value) -> str:  # noqa: ANN001
 
 
 def _usage_line(used_gb: float, limit_gb: float, plan_gb: int) -> str:
-    """The «مصرف» line for a config. Renewal ADDS quota (a renewed 10-گیگ plan shows a 20-گیگ
-    limit), which reads confusingly next to «پلن: ۱۰ گیگ» — so when the live limit exceeds the
+    """The «مصرف» line for a config. Renewal ADDS quota (a renewed 10-گیگابایت plan shows a 20-گیگابایت
+    limit), which reads confusingly next to «پلن: ۱۰ گیگابایت» — so when the live limit exceeds the
     plan size, label it «(شاملِ تمدید)» to make clear the total allowance includes renewals."""
-    base = f"مصرف: {used_gb:.2f} از {limit_gb:.0f} گیگ"
+    base = f"مصرف: {used_gb:.2f} از {limit_gb:.0f} گیگابایت"
     return f"{base} (شاملِ تمدید)" if limit_gb > float(plan_gb) + 0.5 else base
 
 
@@ -201,11 +201,11 @@ def _trial_available(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
 
 async def _send_customer_menu(answer, sf: StorefrontBot, customer: StorefrontCustomer, *, preview=False) -> None:  # noqa: ANN001
     bal = _toman(storefront_wallet.balance(customer))
-    text = sf.welcome_text or "🛍 به فروشگاه خوش آمدید!"
+    text = sf.welcome_text or "🛍 به فروشگاهِ ما خوش آمدید!"
     lines = [text, "", f"👛 موجودیِ کیفِ پولِ شما: {bal} تومان"]
     show_trial = _trial_available(sf, customer)
     if show_trial:
-        lines.append(f"🎁 تستِ رایگان ({sf.free_trial_gb} گیگ · {sf.free_trial_days} روز) فعال است.")
+        lines.append(f"🎁 تستِ رایگان ({sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز) فعال است.")
     await answer(
         rtl("\n".join(lines)),
         reply_markup=kb.customer_reply_kb(is_admin_preview=preview, show_free_trial=show_trial),
@@ -219,14 +219,14 @@ async def _send_customer_preview(answer, preview: dict) -> None:  # noqa: ANN001
         lines.extend(["", preview["closed_text"] or _SHOP_CLOSED_DEFAULT])
     trial = preview["trial"]
     if trial["enabled"]:
-        lines.append(f"🎁 تستِ رایگان ({trial['gb']} گیگ · {trial['days']} روز) فعال است.")
+        lines.append(f"🎁 تستِ رایگان ({trial['gb']} گیگابایت · {trial['days']} روز) فعال است.")
     if preview["channel_required"]:
         lines.append("🔒 عضویت در کانال پیش از استفاده الزامی است.")
     plans = preview["plans"]
     if plans:
         lines.extend(["", "📦 پلن‌های فعال:"])
         lines.extend(
-            f"• {plan['title'] or 'پلن فروشگاه'}: {plan['gb']} گیگ · {plan['days']} روز · "
+            f"• {plan['title'] or 'پلن فروشگاه'}: {plan['gb']} گیگابایت · {plan['days']} روز · "
             f"{_toman(plan['price_toman'])} تومان"
             for plan in plans[:10]
         )
@@ -302,7 +302,7 @@ def _fsm_ctx(user_id: int, data: dict, sf: StorefrontBot) -> storefront_admin.Co
 
 def _admin_error(exc: storefront_admin.AdminCommandError) -> str:
     if exc.code == "config_conflict":
-        return "⚠️ تنظیمات همزمان تغییر کرد. اطلاعات تازه بارگذاری شد؛ لطفاً دوباره تلاش کنید."
+        return "⚠️ تنظیمات به‌طور همزمان تغییر کرد؛ اطلاعاتِ تازه بارگذاری شد. لطفاً دوباره تلاش کنید."
     if exc.code == "in_flight":
         return "این درخواست هنوز در حال انجام است؛ چند لحظه بعد دوباره بررسی کنید."
     if exc.code == "unknown":
@@ -380,7 +380,7 @@ async def _deliver_config(  # noqa: ANN001
 ) -> None:
     head = f"✅ سرویسِ «{name}» آماده شد" if name else "✅ سرویسِ شما آماده شد"
     caption = rtl(
-        f"{head} — {gb} گیگ · {days} روز\n\n"
+        f"{head} — {gb} گیگابایت · {days} روز\n\n"
         f"🔗 لینکِ اشتراک:\n<code>{sub_link}</code>"
     )
     try:
@@ -628,8 +628,8 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await ans(rtl(
             f"🎁 تستِ رایگان (یک‌بار برای هر مشتری)\n"
             f"وضعیت: {'فعال ✅' if sf.free_trial_enabled else 'غیرفعال ❌'}\n"
-            f"حجم: {sf.free_trial_gb} گیگ · مدت: {sf.free_trial_days} روز\n\n"
-            "نکته: حجمِ ۱ گیگ (یا کمتر) برای شما رایگان است؛ بیشتر از آن در فاکتورِ شما حساب می‌شود."),
+            f"حجم: {sf.free_trial_gb} گیگابایت · مدت: {sf.free_trial_days} روز\n\n"
+            "نکته: حجمِ ۱ گیگابایت (یا کمتر) برای شما رایگان است؛ بیشتر از آن در فاکتورِ شما حساب می‌شود."),
             reply_markup=kb.trial_settings_kb(sf))
     elif action == "topups":
         pend = await storefront_wallet.pending_topups_for_bot(s, sf.id)
@@ -639,7 +639,7 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await ans(rtl(f"🧾 {len(pend)} شارژِ در انتظارِ تأیید:"))
         for txn in pend:
             cust = await s.get(StorefrontCustomer, txn.customer_id)
-            cap = (f"#{txn.id} — {_toman(txn.amount_toman)} ت — {txn.method or '—'}\n"
+            cap = (f"#{txn.id} — {_toman(txn.amount_toman)} تومان — {txn.method or '—'}\n"
                    f"مشتری: {(cust.name if cust else '') or txn.customer_id}")
             await ans(rtl(cap), reply_markup=kb.topup_decide_kb(txn.id))
     elif action == "customers":
@@ -661,7 +661,7 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             f"💳 شارژ تأییدشدهٔ این ماه: {st_.topups_month_toman:,.0f} تومان\n"
             f"⏸ شارژِ در انتظار تأیید: {st_.pending_topups}\n"
             f"🎁 کدهای شارژ (این ماه): {st_.credit_redemptions_month} استفاده · "
-            f"{st_.credit_bonus_month_toman:,.0f} تومان بونوس\n"
+            f"{st_.credit_bonus_month_toman:,.0f} تومان پاداش\n"
             f"🏦 موجودی کیف پول مشتری‌ها: {st_.wallet_liability_toman:,.0f} تومان"))
     elif action == "broadcast":
         await ans(rtl("📢 پیامِ همگانی — گیرندگان را انتخاب کنید:"),
@@ -670,14 +670,14 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         await _start_admin_fsm(state, sf)
         await state.set_state(SF.support)
         await ans(rtl(
-            f"شناسهٔ پشتیبانی (مثلاً @yourID) را بفرستید.\nفعلی: {sf.support_contact or '—'}"),
+            f"شناسهٔ پشتیبانی خود را بفرستید (برای مثال @Support).\nفعلی: {sf.support_contact or '—'}"),
             reply_markup=kb.flow_cancel_kb())
     elif action == "welcome":
         await _start_admin_fsm(state, sf)
         await state.set_state(SF.welcome)
         await ans(rtl(
             "متنِ خوش‌آمدگوییِ فروشگاه را بفرستید (به مشتری در شروع نشان داده می‌شود).\n"
-            f"فعلی: {sf.welcome_text or '🛍 به فروشگاه خوش آمدید!'}"),
+            f"فعلی: {sf.welcome_text or '🛍 به فروشگاهِ ما خوش آمدید!'}"),
             reply_markup=kb.flow_cancel_kb())
     elif action == "joincfg":
         cur = sf.channel_id or "—"
@@ -695,8 +695,8 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
     elif action == "credits":
         codes = await storefront_credit.list_codes(s, sf.id)
         await ans(rtl(
-            "🎁 کدهای شارژ\n\nمشتری موقعِ شارژِ کیف‌پول کد را وارد می‌کند و بونوس می‌گیرد (یا کدِ "
-            "هدیهٔ بدونِ‌پرداخت). هر تخفیف فقط از سودِ شما کم می‌شود، پس مبلغ‌ها را با دقت تنظیم کنید."),
+            "🎁 کدهای شارژ\n\nمشتری هنگامِ شارژِ کیفِ پول، کد را وارد می‌کند و پاداش می‌گیرد (یا کدِ "
+            "هدیهٔ بدونِ پرداخت). هر تخفیف فقط از سودِ شما کم می‌شود؛ بنابراین مبلغ‌ها را با دقت تنظیم کنید."),
             reply_markup=kb.credit_codes_manage_kb(codes))
     elif action == "shopstate":
         state_fa = "🔴 بسته" if sf.shop_closed else "🟢 باز"
@@ -729,7 +729,7 @@ async def _send_admins_panel(ans, s, sf, reseller) -> None:  # noqa: ANN001
         lines += ["", "مدیرانِ اضافه:"] + [f"• {tid}" for tid in co_ids]
     else:
         lines += ["", "هنوز مدیرِ اضافه‌ای ندارید."]
-    lines += ["", "«➕ افزودن مدیر» را بزنید تا یک آیدیِ دیگر هم بتواند این فروشگاه را مدیریت کند."]
+    lines += ["", "«➕ افزودن مدیر» را بزنید تا فردِ دیگری هم بتواند این فروشگاه را مدیریت کند."]
     await ans(rtl("\n".join(lines)), reply_markup=kb.admins_manage_kb(co_ids))
 
 
@@ -743,7 +743,7 @@ async def sf_add_admin_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> 
     await _start_admin_fsm(state, sf)
     await state.set_state(SF.add_admin)
     await cb.message.answer(rtl(
-        "👤 آیدیِ عددیِ تلگرامِ فرد را بفرستید،\n"
+        "👤 شناسهٔ عددیِ تلگرامِ فرد را بفرستید،\n"
         "یا یک پیام از او را برای همین ربات فوروارد کنید.\n\n"
         "نکته: آن فرد باید حداقل یک‌بار ربات را /start کرده باشد تا بتواند وارد پنلِ مدیریت شود."),
         reply_markup=kb.flow_cancel_kb())
@@ -766,9 +766,9 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
             target_id = int(t)
     if not target_id or target_id <= 0:
         await message.answer(rtl(
-            "نشد. یک آیدیِ عددیِ معتبر بفرستید، یا پیامی از آن فرد را فوروارد کنید.\n"
-            "(اگر فوروارد اثری نداشت، آن فرد در تنظیماتِ حریمِ خصوصیِ تلگرام فوروارد را بسته است؛ "
-            "آیدیِ عددی‌اش را دستی بفرستید.)"),
+            "ورودیِ واردشده معتبر نبود. یک شناسهٔ عددیِ معتبر بفرستید، یا پیامی از آن فرد را فوروارد کنید.\n"
+            "(اگر فوروارد بی‌اثر بود، آن فرد در تنظیماتِ حریمِ خصوصیِ تلگرام فوروارد را بسته است؛ "
+            "شناسهٔ عددیِ او را به‌صورت دستی بفرستید.)"),
             reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
@@ -793,13 +793,13 @@ async def sf_add_admin_set(message: Message, state: FSMContext, bot: Bot) -> Non
                 result = "invalid" if exc.code in ("validation", "not_found") else "error"
         await state.clear()
         note = {
-            "ok": f"✅ آیدیِ {target_id} به‌عنوان مدیرِ فروشگاه اضافه شد.",
-            "exists": f"این آیدی ({target_id}) از قبل مدیر است.",
-            "is_owner": "این آیدیِ خودِ شماست؛ شما مدیرِ اصلی هستید.",
+            "ok": f"✅ شناسهٔ {target_id} به‌عنوان مدیرِ فروشگاه اضافه شد.",
+            "exists": f"این شناسه ({target_id}) از قبل مدیر است.",
+            "is_owner": "این شناسهٔ خودِ شماست؛ شما مدیرِ اصلی هستید.",
             "full": f"حداکثر {storefront.MAX_CO_ADMINS} مدیرِ اضافه مجاز است.",
-            "invalid": "آیدیِ نامعتبر است؛ یک عددِ مثبت بفرستید.",
-            "banned": "این کاربر مسدود است؛ ابتدا رفعِ مسدودی کنید، سپس مدیر کنید.",
-            "conflict": "⚠️ فهرست مدیران تغییر کرده است؛ دوباره تلاش کنید.",
+            "invalid": "شناسهٔ نامعتبر است؛ یک عددِ مثبت بفرستید.",
+            "banned": "این کاربر مسدود است؛ ابتدا رفعِ مسدودی را انجام دهید، سپس او را مدیر کنید.",
+            "conflict": "⚠️ فهرستِ مدیران تغییر کرده است؛ لطفاً دوباره تلاش کنید.",
         }.get(result, "خطا در افزودنِ مدیر.")
         await message.answer(rtl(note))
         await _send_admins_panel(message.answer, s, sf, reseller)
@@ -843,7 +843,7 @@ async def sf_del_admin(cb: CallbackQuery, bot: Bot) -> None:
 # ── CUSTOMER ──────────────────────────────────────────────────────────────────
 
 _SHOP_CLOSED_DEFAULT = (
-    "🔴 فروشگاه موقتاً بسته است؛ خرید و تمدیدِ سرویس در دسترس نیست. لطفاً بعداً دوباره سر بزنید."
+    "🔴 فروشگاه موقتاً بسته است؛ خرید و تمدیدِ سرویس در دسترس نیست. لطفاً کمی بعد دوباره مراجعه کنید."
 )
 
 
@@ -887,7 +887,7 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
         if other:
             labels = {"pending": "در حالِ پردازش", "failed": "ناموفق"}
             lines = ["⏳ سایر:"]
-            lines += [f"• {o.label or 'سرویس'} — {o.gb}گیگ/{o.days}روز — "
+            lines += [f"• {o.label or 'سرویس'} — {o.gb}گیگابایت/{o.days}روز — "
                       f"{labels.get(o.status, o.status)}" for o in other[:10]]
             await ans(rtl("\n".join(lines)))
     elif action == "support":
@@ -973,7 +973,7 @@ async def sf_buy(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await state.update_data(buy_plan_id=plan_id)
     await cb.message.answer(rtl(
         f"🛒 {plan_text}\n\n"
-        "یک نام برای این سرویس بفرستید (مثلاً: گوشی) تا بعداً آن را از هم تشخیص دهید:"),
+        "یک نام دلخواه برای این سرویس انتخاب کنید تا در فهرستِ سرویس‌هایتان به‌راحتی آن را از بقیه تشخیص دهید:"),
         reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
@@ -983,7 +983,7 @@ async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
     """Step 2: validate the chosen name and show a final confirm card before charging."""
     name = " ".join((message.text or "").split())
     if not name or len(name) > 40:
-        await message.answer(rtl("نام نامعتبر است (۱ تا ۴۰ نویسه). دوباره بفرستید."),
+        await message.answer(rtl("نامِ واردشده معتبر نیست (۱ تا ۴۰ نویسه). لطفاً دوباره وارد کنید."),
                              reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
@@ -1105,7 +1105,7 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
         renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
         armed = storefront_autorenew.is_armed(order)
         status = await storefront_provision.live_status(s, sf, order)
-    lines = [f"📦 {name}", f"پلن: {gb} گیگ · {days} روز"]
+    lines = [f"📦 {name}", f"پلن: {gb} گیگابایت · {days} روز"]
     if paused:
         lines.append("وضعیت: متوقف ⏸")
     if status.ok:
@@ -1187,7 +1187,7 @@ async def sf_autorenew_toggle(cb: CallbackQuery, bot: Bot) -> None:
         async with SessionLocal() as s:
             await storefront_autorenew.disarm(s, order_id, expected_sf_id=sf_id)
         new_armed = False
-        await cb.message.answer(rtl("🔁 «تمدید خودکار» خاموش شد و مبلغِ رزروشده به کیف پول برگشت."))
+        await cb.message.answer(rtl("🔁 «تمدید خودکار» خاموش شد و مبلغِ رزروشده به کیفِ پولِ شما بازگردانده شد."))
     else:
         async with SessionLocal() as s:
             res = await storefront_autorenew.arm(s, order_id, expected_sf_id=sf_id)
@@ -1274,8 +1274,8 @@ async def sf_delete(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer("یافت نشد.", show_alert=True)
             return
     await cb.message.answer(
-        rtl("🗑 از حذفِ این سرویس مطمئن هستید؟ کانفیگ از پنل پاک می‌شود و وجهی بازنمی‌گردد."),
-        reply_markup=kb.confirm_kb(rtl("🗑 بله، حذف کن"), f"sfdelok:{order_id}"))
+        rtl("🗑 از حذفِ این سرویس مطمئن هستید؟ سرویس از پنل حذف می‌شود و مبلغی بازگردانده نمی‌شود."),
+        reply_markup=kb.confirm_kb(rtl("🗑 بله، حذف شود"), f"sfdelok:{order_id}"))
     await cb.answer()
 
 
@@ -1460,7 +1460,7 @@ async def sf_customers_search_start(cb: CallbackQuery, state: FSMContext, bot: B
         await cb.answer("دسترسی ندارید.", show_alert=True)
         return
     await state.set_state(SF.cust_search)
-    await cb.message.answer(rtl("نام یا آیدیِ عددیِ مشتری را بفرستید:"), reply_markup=kb.flow_cancel_kb())
+    await cb.message.answer(rtl("نام یا شناسهٔ عددیِ مشتری را بفرستید:"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
 
@@ -1529,7 +1529,7 @@ async def sf_admin_sub_detail(cb: CallbackQuery, bot: Bot) -> None:
         name, gb, days, paused = (
             order.label or "سرویس", order.gb, order.days, order.status == "disabled")
         live = await storefront_provision.live_status(s, sf, order)
-    lines = [f"📦 {name}", f"پلن: {gb} گیگ · {days} روز"]
+    lines = [f"📦 {name}", f"پلن: {gb} گیگابایت · {days} روز"]
     if paused:
         lines.append("وضعیت: متوقف ⏸")
     if live.ok:
@@ -1560,7 +1560,7 @@ async def sf_admin_renew(cb: CallbackQuery, bot: Bot) -> None:
     res = await storefront_subscription.renew(
         SessionLocal, order_id=oid, by_admin=True, expected_sf_id=sf_id)
     await cb.message.answer(
-        rtl(f"✅ تمدید شد — {res.gb} گیگ · {res.days} روز." if res.ok else "❌ تمدید ناموفق بود."))
+        rtl(f"✅ تمدید شد — {res.gb} گیگابایت · {res.days} روز." if res.ok else "❌ تمدید ناموفق بود."))
 
 
 @storefront_router.callback_query(F.data.startswith("sfatgl:"))
@@ -1612,7 +1612,7 @@ async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None
         cap = int(await settings_service.get(s, "storefront_max_pending_topups", 3) or 3)
     if len(pending) >= cap:  # anti-spam: don't pile up unreviewed top-ups
         await cb.message.answer(rtl(
-            f"شما {len(pending)} شارژِ در انتظارِ تأیید دارید؛ تا بررسیِ آن‌ها صبر کنید."))
+            f"شما {len(pending)} شارژِ در انتظارِ تأیید دارید؛ لطفاً تا بررسیِ آن‌ها منتظر بمانید."))
         await cb.answer()
         return
     await state.set_state(SF.topup_amount)
@@ -1625,7 +1625,7 @@ async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None
 async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("یک مبلغِ معتبر (تومان) بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک مبلغِ معتبر (به تومان) وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     async with SessionLocal() as s:
         sf, _r, _a = await _resolve(s, bot, message.from_user)
@@ -1680,12 +1680,12 @@ async def sf_topup_code_entered(message: Message, state: FSMContext, bot: Bot) -
         await state.set_state(None)
         await state.update_data(topup_code_id=q.code_id, topup_bonus=q.bonus_toman)
         await message.answer(rtl(
-            f"✅ کد پذیرفته شد: +{_toman(q.bonus_toman)} تومان بونوس.\n"
+            f"✅ کد پذیرفته شد: +{_toman(q.bonus_toman)} تومان پاداش.\n"
             f"مجموعِ اعتبار پس از تأیید: {_toman(amount + q.bonus_toman)} تومان.\n\n"
             "روشِ پرداخت را انتخاب کنید:"), reply_markup=pay_kb)
     else:
         await message.answer(
-            rtl(f"❌ {_CREDIT_ERR.get(q.reason or '', 'کد نامعتبر است.')}"),
+            rtl(f"❌ {_CREDIT_ERR.get(q.reason or '', 'کدِ واردشده معتبر نیست.')}"),
             reply_markup=kb.credit_skip_kb("sftopnocode", "➡️ ادامه بدون کد"))
 
 
@@ -1715,7 +1715,7 @@ async def sf_gift_entered(message: Message, state: FSMContext, bot: Bot) -> None
         await message.answer(rtl(
             f"🎁 کدِ هدیه اعمال شد: +{_toman(q.bonus_toman)} تومان.\nموجودیِ جدید: {bal} تومان."))
     else:
-        await message.answer(rtl(f"❌ {_CREDIT_ERR.get(q.reason or '', 'کدِ هدیه نامعتبر است.')}"))
+        await message.answer(rtl(f"❌ {_CREDIT_ERR.get(q.reason or '', 'کدِ هدیه معتبر نیست.')}"))
 
 
 @storefront_router.callback_query(F.data.startswith("sftop:"))
@@ -1734,7 +1734,7 @@ async def sf_topup_method(cb: CallbackQuery, state: FSMContext, bot: Bot) -> Non
         "usdt": f"تتر USDT (شبکهٔ BEP-20)\n<code>{sf.usdt_address}</code>",
         "ton": f"گرام/تون (TON)\n<code>{sf.ton_address}</code>",
     }.get(method, "")
-    bonus_line = (f"\n🎁 با کدِ شارژ، پس از تأیید {_toman(bonus)} تومان بونوس هم اضافه می‌شود "
+    bonus_line = (f"\n🎁 با کدِ شارژ، پس از تأیید {_toman(bonus)} تومان پاداش هم اضافه می‌شود "
                   f"(مجموع: {_toman(amount + bonus)} تومان)." if bonus else "")
     await state.update_data(topup_method=method)
     await state.set_state(SF.topup_proof)
@@ -1781,7 +1781,7 @@ async def sf_topup_proof(message: Message, state: FSMContext, bot: Bot) -> None:
             f"✅ درخواستِ شارژِ {_toman(amount)} تومان ثبت شد (#{txn.id}). پس از تأییدِ مدیر، "
             "کیفِ پولِ شما شارژ می‌شود."))
         # notify the admin via the same bot (with the proof)
-        cap = (f"🧾 شارژِ جدید #{txn.id}\nمبلغ: {_toman(amount)} ت — روش: {method}\n"
+        cap = (f"🧾 شارژِ جدید #{txn.id}\nمبلغ: {_toman(amount)} تومان — روش: {method}\n"
                f"مشتری: {customer.name or customer.telegram_id}"
                + (f"\nمتن/TXID: {txid}" if txid else ""))
         # Send the proof + decide buttons to the owner AND every co-admin (whoever acts first
@@ -1916,7 +1916,7 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
     data = await state.get_data()
     txn_id = int(data.get("confirm_txn") or 0)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً مبلغِ معتبری وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     key = str(data.get("sf_topup_key") or f"sf-topup-amt:{message.message_id}")
     await state.clear()
@@ -1973,7 +1973,7 @@ async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_plan_gb(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(p_gb=int(raw))
     await state.set_state(SF.plan_days)
@@ -1984,7 +1984,7 @@ async def sf_plan_gb(message: Message, state: FSMContext) -> None:
 async def sf_plan_days(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(p_days=int(raw))
     await state.set_state(SF.plan_price)
@@ -1995,7 +1995,7 @@ async def sf_plan_days(message: Message, state: FSMContext) -> None:
 async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     async with SessionLocal() as s:
@@ -2080,7 +2080,7 @@ async def _sf_plan_move(cb: CallbackQuery, bot: Bot, direction: str) -> None:
         await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
     except Exception:  # noqa: BLE001 — "not modified" at an edge → ignore
         pass
-    await cb.answer("جابه‌جا شد." if moved else "همین‌جاست.")
+    await cb.answer("جابه‌جا شد." if moved else "تغییری نکرد.")
 
 
 @storefront_router.callback_query(F.data.startswith("sfplanedit:"))
@@ -2095,7 +2095,7 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         if plan is None or plan.storefront_bot_id != sf.id:
             await cb.answer("پلن یافت نشد.", show_alert=True)
             return
-        cur = f"{plan.gb} گیگ · {plan.days} روز · {plan.price_toman:,} تومان"
+        cur = f"{plan.gb} گیگابایت · {plan.days} روز · {plan.price_toman:,} تومان"
     await state.set_state(SF.edit_gb)
     await _start_admin_fsm(state, sf)
     await state.update_data(edit_plan_id=plan_id)
@@ -2108,7 +2108,7 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_edit_gb(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(e_gb=int(raw))
     await state.set_state(SF.edit_days)
@@ -2119,7 +2119,7 @@ async def sf_edit_gb(message: Message, state: FSMContext) -> None:
 async def sf_edit_days(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(e_days=int(raw))
     await state.set_state(SF.edit_price)
@@ -2130,7 +2130,7 @@ async def sf_edit_days(message: Message, state: FSMContext) -> None:
 async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     plan_id = int(data.get("edit_plan_id", 0))
@@ -2178,7 +2178,7 @@ async def sf_credit_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_credit_code(message: Message, state: FSMContext, bot: Bot) -> None:
     code = storefront_credit.normalize_code(message.text)
     if not code or len(code) > 32 or not code.replace("_", "").isalnum():
-        await message.answer(rtl("کدِ نامعتبر. فقط حروف/عدد (۱ تا ۳۲ نویسه)."),
+        await message.answer(rtl("کدِ واردشده معتبر نیست. فقط حروف و عدد (۱ تا ۳۲ نویسه)."),
                              reply_markup=kb.flow_cancel_kb())
         return
     async with SessionLocal() as s:
@@ -2204,7 +2204,7 @@ async def sf_credit_type(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.message.answer(rtl("درصدِ تخفیف (عددِ ۱ تا ۱۰۰):"), reply_markup=kb.flow_cancel_kb())
     else:
         await cb.message.answer(
-            rtl("مبلغِ هدیه به تومان:" if t == "gift" else "مبلغِ بونوس به تومان:"),
+            rtl("مبلغِ هدیه به تومان:" if t == "gift" else "مبلغِ پاداش به تومان:"),
             reply_markup=kb.flow_cancel_kb())
     await cb.answer()
 
@@ -2214,7 +2214,7 @@ async def sf_credit_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     val = int(raw)
     if data.get("c_kind") == "percent":
@@ -2238,7 +2238,7 @@ async def sf_credit_value(message: Message, state: FSMContext) -> None:
 async def sf_credit_maxbonus(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید یا «بدون سقف»:"),
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید یا «بدون سقف»:"),
                              reply_markup=kb.credit_skip_kb("sfcredskip:maxbonus", "بدون سقف"))
         return
     await state.update_data(c_maxbonus=int(raw))
@@ -2255,7 +2255,7 @@ async def _credit_ask_mintopup(ans, state: FSMContext) -> None:  # noqa: ANN001
 async def sf_credit_mintopup(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
-        await message.answer(rtl("عددِ معتبر بفرستید یا «بدون حداقل»:"),
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید یا «بدون حداقل»:"),
                              reply_markup=kb.credit_skip_kb("sfcredskip:mintopup", "بدون حداقل"))
         return
     await state.update_data(c_mintopup=int(raw))
@@ -2272,7 +2272,7 @@ async def _credit_ask_maxuses(ans, state: FSMContext) -> None:  # noqa: ANN001
 async def sf_credit_maxuses(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید یا «نامحدود»:"),
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید یا «نامحدود»:"),
                              reply_markup=kb.credit_skip_kb("sfcredskip:maxuses", "نامحدود"))
         return
     await state.update_data(c_maxuses=int(raw))
@@ -2300,7 +2300,7 @@ async def sf_credit_percustomer(cb: CallbackQuery, state: FSMContext) -> None:
 async def sf_credit_expiry(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("تعدادِ روزِ معتبر بفرستید یا «بدون انقضا»:"),
+        await message.answer(rtl("لطفاً تعدادِ روزِ معتبری وارد کنید یا «بدون انقضا»:"),
                              reply_markup=kb.credit_skip_kb("sfcredskip:expiry", "بدون انقضا"))
         return
     await state.update_data(c_expiry_days=int(raw))
@@ -2354,7 +2354,7 @@ async def _credit_finalize(ans, state: FSMContext, bot: Bot, from_user) -> None:
             return
         credit = result.body.get("credit", {}) if isinstance(result.body, dict) else {}
         codes = await storefront_credit.list_codes(s, sf.id)
-        warn = ("\n⚠️ این کد سقفِ تخفیف ندارد؛ روی شارژِ بزرگ، بونوسِ زیادی می‌دهد."
+        warn = ("\n⚠️ این کد سقفِ تخفیف ندارد؛ روی شارژِ بزرگ، پاداشِ زیادی می‌دهد."
                 if kind == "percent" and not credit.get("max_bonus_toman") else "")
     await ans(rtl(f"✅ کدِ «{data.get('c_code', '')}» ساخته شد.{warn}"),
               reply_markup=kb.credit_codes_manage_kb(codes))
@@ -2448,7 +2448,7 @@ async def sf_pay_toggle(cb: CallbackQuery, bot: Bot) -> None:
             return
         if method not in {"card", "usdt", "ton"} or target is None:
             await cb.message.edit_reply_markup(reply_markup=kb.pay_settings_kb(sf))
-            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
             return
         desired, rendered_version = target
         try:
@@ -2462,7 +2462,7 @@ async def sf_pay_toggle(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer(_admin_error(exc), show_alert=True)
             return
         await cb.message.edit_reply_markup(reply_markup=kb.pay_settings_kb(sf))
-    await cb.answer("بروزرسانی شد.")
+    await cb.answer("به‌روزرسانی شد.")
 
 
 @storefront_router.callback_query(F.data.startswith("sfpayset:"))
@@ -2527,7 +2527,7 @@ async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
             return
         if target is None:
             await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
-            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
             return
         desired, rendered_version = target
         try:
@@ -2560,7 +2560,7 @@ async def sf_trial_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 async def sf_trial_gb(message: Message, state: FSMContext) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(t_gb=int(raw))
     await state.set_state(SF.trial_days)
@@ -2571,7 +2571,7 @@ async def sf_trial_gb(message: Message, state: FSMContext) -> None:
 async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("عددِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     async with SessionLocal() as s:
@@ -2589,7 +2589,7 @@ async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         await state.clear()
         await message.answer(
-            rtl(f"✅ تستِ رایگان: {sf.free_trial_gb} گیگ · {sf.free_trial_days} روز"),
+            rtl(f"✅ تستِ رایگان: {sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز"),
             reply_markup=kb.trial_settings_kb(sf))
 
 
@@ -2618,7 +2618,7 @@ async def sf_adjust_amount(message: Message, state: FSMContext, bot: Bot) -> Non
     raw = _digits(message.text)
     data = await state.get_data()
     if not raw.isdigit() or int(raw) <= 0:
-        await message.answer(rtl("مبلغِ معتبر بفرستید."), reply_markup=kb.flow_cancel_kb())
+        await message.answer(rtl("لطفاً مبلغِ معتبری وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.clear()
     signed = int(raw) * (1 if data.get("adj_sign") == "+" else -1)
@@ -2709,7 +2709,7 @@ async def sf_join_set(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await _start_admin_fsm(state, sf)
     await state.set_state(SF.join_channel)
     await cb.message.answer(rtl(
-        f"یک پیام از کانالِ خود را همین‌جا فوروارد کنید (یا @username یا آیدیِ -100… را بفرستید).\n"
+        f"یک پیام از کانالِ خود را همین‌جا فوروارد کنید (یا @username یا شناسهٔ -100… را بفرستید).\n"
         f"توجه: ربات (@{sf.bot_username or '—'}) باید در آن کانال ادمین باشد."),
         reply_markup=kb.flow_cancel_kb())
     await cb.answer()
@@ -2731,7 +2731,7 @@ async def sf_join_channel_set(message: Message, state: FSMContext, bot: Bot) -> 
             channel_id = t
     if not channel_id:
         await message.answer(rtl(
-            "نشد. یک پیام از کانال را فوروارد کنید یا @username / آیدیِ -100… را بفرستید."),
+            "ورودیِ واردشده معتبر نبود. یک پیام از کانال را فوروارد کنید یا @username / شناسهٔ -100… را بفرستید."),
             reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
@@ -2852,7 +2852,7 @@ async def sf_join_toggle(cb: CallbackQuery, bot: Bot) -> None:
             return
         if target is None:
             await cb.message.edit_reply_markup(reply_markup=kb.join_settings_kb(sf))
-            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
             return
         desired, rendered_version = target
         if desired:  # turning ON → verify through the durable external command flow
@@ -2905,7 +2905,7 @@ async def sf_join_toggle(cb: CallbackQuery, bot: Bot) -> None:
         async with SessionLocal() as s:
             await storefront_admin.finalize_verified_channel(
                 s, claim, ctx, verified=False, resolved_link=None)
-        await cb.answer("اول ربات را در کانال ادمین کنید.", show_alert=True)
+        await cb.answer("ابتدا ربات را در کانال ادمین کنید.", show_alert=True)
         return
     link = existing_link
     if not link:
@@ -2951,7 +2951,7 @@ async def sf_shop_toggle(cb: CallbackQuery, bot: Bot) -> None:
             return
         if target is None:
             await cb.message.edit_reply_markup(reply_markup=kb.shop_state_kb(sf))
-            await cb.answer("این منو قدیمی بود و تازه شد؛ دوباره انتخاب کنید.", show_alert=True)
+            await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
             return
         now_closed, rendered_version = target
         try:
@@ -3036,8 +3036,8 @@ async def sf_join_check(cb: CallbackQuery, bot: Bot) -> None:
 _SEGMENT_FA = {
     "all": "همهٔ مشتری‌ها",
     "expired": "مشتریانِ منقضی‌شده",
-    "inactive30": "۳۰ روز غیرفعال‌ها",
-    "trial_no_purchase": "تست‌گرفته‌های نخریده",
+    "inactive30": "غیرفعال در ۳۰ روز اخیر",
+    "trial_no_purchase": "تستِ رایگان گرفته، بدونِ خرید",
 }
 
 

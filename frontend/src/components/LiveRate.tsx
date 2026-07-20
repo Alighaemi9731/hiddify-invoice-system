@@ -46,7 +46,7 @@ export default function LiveRate() {
       {node}
       <CurrencyExchangeIcon fontSize="small" sx={{ color: "primary.main" }} />
       <Stack direction="row" spacing={1.25} alignItems="center" sx={{ flexWrap: "wrap" }}>
-        <Tooltip title={`نرخی که هنگام صدور فاکتور اعمال می‌شود${data?.stale ? " (نرخ آنلاین کهنه است؛ نرخ دستی اعمال می‌شود)" : ""}`}>
+        <Tooltip title={`نرخی که هنگام صدور فاکتور اعمال می‌شود${data?.stale ? " (نرخ آنلاین به‌روز نیست؛ نرخ دستی اعمال می‌شود)" : ""}`}>
           <Typography variant="body2" sx={{ fontWeight: 700, whiteSpace: "nowrap" }}>
             تتر: {usdt ? fmtNum(usdt) : "—"}
             <Typography component="span" variant="caption" color="text.secondary"> ت</Typography>

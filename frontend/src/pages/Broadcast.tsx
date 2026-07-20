@@ -20,15 +20,15 @@ import { fmtNum, fmtToman } from "../format";
 // list that are not exempt from billing and are on an active panel). The panel filter is combinable.
 // Grouped by lifecycle so the owner targets exactly the right stage (debt state / access / activity).
 const AUDIENCES: { value: string; label: string; group: string; hint?: string; threshold?: { label: string; def: number } }[] = [
-  { value: "all", label: "همه نمایندگان", group: "عمومی" },
+  { value: "all", label: "همهٔ نمایندگان", group: "عمومی" },
 
   { value: "debtors", label: "بدهکاران (هر فاکتورِ پرداخت‌نشده)", group: "بدهی و پرداخت" },
   { value: "overdue", label: "سررسیدگذشته‌ها (فاکتورِ معوق)", group: "بدهی و پرداخت",
-    hint: "فاکتورهایی که واردِ چرخهٔ یادآوری شده‌اند و الان سررسیدشان گذشته است" },
+    hint: "فاکتورهایی که واردِ چرخهٔ یادآوری شده‌اند و اکنون سررسیدشان گذشته است" },
   { value: "deferred", label: "مهلت‌دارها (هنوز به مهلت نرسیده)", group: "بدهی و پرداخت",
     hint: "بدهکارانی که مهلتِ پرداخت گرفته‌اند و مهلتشان هنوز نرسیده است" },
   { value: "pending_payment", label: "پرداختِ در انتظارِ تأیید", group: "بدهی و پرداخت",
-    hint: "رسید/تراکنش فرستاده‌اند و منتظرِ تأییدِ شما هستند" },
+    hint: "رسید/تراکنش ارسال کرده‌اند و منتظرِ تأییدِ شما هستند" },
   { value: "paid_up", label: "خوش‌حساب‌ها (بدونِ بدهی)", group: "بدهی و پرداخت",
     hint: "هیچ فاکتورِ بازی ندارند — مناسبِ تشکر یا پیشنهادِ ویژه" },
 
@@ -40,7 +40,7 @@ const AUDIENCES: { value: string; label: string; group: string; hint?: string; t
     threshold: { label: "فاکتور کم‌تر از این مبلغ (تومان)", def: 100000 } },
   { value: "invoice_above", label: "فاکتورِ این ماه بالای مبلغ (VIP)", group: "فروش و فعالیت",
     threshold: { label: "فاکتور دست‌کم این مبلغ (تومان)", def: 1000000 } },
-  { value: "few_active", label: "کم‌تر از N کاربرِ فعال", group: "فروش و فعالیت",
+  { value: "few_active", label: "کم‌تر از تعدادِ مشخص کاربرِ فعال", group: "فروش و فعالیت",
     threshold: { label: "کم‌تر از این تعداد کاربرِ فعال", def: 10 } },
   { value: "new_resellers", label: "تازه‌واردها (ثبت‌نامِ اخیر)", group: "فروش و فعالیت",
     threshold: { label: "ثبت‌نام در این چند روزِ اخیر", def: 30 } },
@@ -96,7 +96,7 @@ export default function Broadcast() {
     onSuccess: (r: any) => {
       show(
         `ارسال در پس‌زمینه شروع شد — به ${fmtNum(r.total)} نماینده`
-        + (r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات پیام نمی‌گیرند)` : "")
+        + (r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات، پیام دریافت نمی‌کنند)` : "")
         + "؛ خلاصهٔ نتیجه به تلگرامِ شما می‌رسد.",
         "success");
       setText("");
@@ -136,12 +136,12 @@ export default function Broadcast() {
   });
   const hvWarnAll = useMutation({
     mutationFn: () => highVolumeWarn(hvParams()),
-    onSuccess: (r: any) => show(`هشدارها در پس‌زمینه ارسال شد — به ${fmtNum(r.total)} ادمین${r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات)` : ""}؛ خلاصه به تلگرامِ شما می‌رسد.`, "success"),
+    onSuccess: (r: any) => show(`هشدارها در پس‌زمینه ارسال شد — به ${fmtNum(r.total)} نماینده${r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات)` : ""}؛ خلاصه به تلگرامِ شما می‌رسد.`, "success"),
     onError: (e) => show(errMsg(e), "error"),
   });
   const hvWarnOne = useMutation({
     mutationFn: (rootId: number) => highVolumeWarn({ ...hvParams(), root_reseller_ids: [rootId] }),
-    onSuccess: () => show("هشدار به این ادمین ارسال شد؛ خلاصه به تلگرامِ شما می‌رسد.", "success"),
+    onSuccess: () => show("هشدار به این نماینده ارسال شد؛ خلاصه به تلگرامِ شما می‌رسد.", "success"),
     onError: (e) => show(errMsg(e), "error"),
   });
   const hvRows = hvData?.rows || [];
@@ -178,7 +178,7 @@ export default function Broadcast() {
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             پایهٔ همهٔ فیلترها: نماینده‌هایِ «فهرستِ اصلی» که از فاکتور معاف نیستند و پنلِ فعال دارند.
-            فیلتر و پنل را انتخاب کنید، «پیش‌نمایشِ گیرندگان» را بزنید تا دقیقاً ببینید پیام به چه کسانی می‌رود، بعد ارسال کنید.
+            فیلتر و پنل را انتخاب کنید، «پیش‌نمایشِ گیرندگان» را بزنید تا دقیقاً ببینید پیام به چه کسانی می‌رسد، سپس ارسال کنید.
             ارسال در <b>پس‌زمینه</b> انجام می‌شود؛ پیشرفتِ زنده همین‌جا نمایش داده می‌شود و <b>خلاصهٔ نهایی به تلگرامِ شما</b> می‌رسد.
           </Typography>
 
@@ -221,7 +221,7 @@ export default function Broadcast() {
           {report && (
             <Alert severity="info" sx={{ mb: 2 }}
               action={rows.length
-                ? <Button color="inherit" size="small" onClick={() => setShowList((s) => !s)}>{showList ? "بستن لیست" : "نمایش لیست"}</Button>
+                ? <Button color="inherit" size="small" onClick={() => setShowList((s) => !s)}>{showList ? "بستن فهرست" : "نمایش فهرست"}</Button>
                 : undefined}>
               این فیلتر <b>{fmtNum(report.matched)}</b> نماینده را شامل می‌شود: {fmtNum(report.total)} قابل‌ارسال{report.unregistered ? ` • ${fmtNum(report.unregistered)} بدون ربات (قابل‌دسترس نیستند)` : ""}.
             </Alert>
@@ -281,8 +281,8 @@ export default function Broadcast() {
             <Typography variant="h6">اعلامِ آدرسِ جدیدِ پنل</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            به هر نمایندهٔ ثبت‌شدهٔ یک پنل، پیامِ آماده‌ای با <b>لینکِ مخصوصِ خودش</b> (آدرسِ جدید + آدرسِ قبلی) فرستاده می‌شود.
-            متن ثابت است و تایپ نمی‌کنید. ابتدا در «پنل‌ها» با «مهاجرتِ دامنه» هاستِ قبلی را ثبت کنید.
+            به هر نمایندهٔ ثبت‌شدهٔ یک پنل، پیامی با <b>لینکِ اختصاصیِ خودش</b> (آدرسِ جدید + آدرسِ قبلی) ارسال می‌شود.
+            متنِ پیام ثابت و آماده است و نیازی به نوشتنِ آن ندارید. ابتدا در «پنل‌ها» با «انتقال دامنه» دامنهٔ قبلی را ثبت کنید.
           </Typography>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap">
             <Select size="small" value={migPanelId} displayEmpty
@@ -290,7 +290,7 @@ export default function Broadcast() {
               renderValue={(v) => v ? (panels.find((p: any) => String(p.id) === String(v))?.key ?? v) : "انتخابِ پنل"}
               sx={{ minWidth: 200, "& .MuiSelect-select": { py: "7px !important" } }}>
               <MenuItem value="">انتخابِ پنل</MenuItem>
-              {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}{p.host_aliases?.length ? "" : " (بدون هاستِ قبلی)"}</MenuItem>)}
+              {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}{p.host_aliases?.length ? "" : " (بدون دامنهٔ قبلی)"}</MenuItem>)}
             </Select>
             {migPreview?.aliases?.length > 1 && (
               <Select size="small" value={migPrevHost} displayEmpty
@@ -307,14 +307,14 @@ export default function Broadcast() {
             <Alert severity={migPreview.previous_host ? "info" : "warning"} sx={{ mb: 2 }}>
               {migPreview.previous_host ? (<>
                 به <b>{fmtNum(migPreview.total)}</b> نمایندهٔ ثبت‌شده ارسال می‌شود
-                {migPreview.unregistered ? ` • ${fmtNum(migPreview.unregistered)} بدون ربات (پیام نمی‌گیرند)` : ""}.
+                {migPreview.unregistered ? ` • ${fmtNum(migPreview.unregistered)} بدون ربات (پیام دریافت نمی‌کنند)` : ""}.
                 <Box sx={{ mt: 1, fontSize: 13 }}>
                   <Box sx={{ mt: 0.5 }}>🟢 نمونهٔ آدرسِ جدید:</Box>
                   <Box component="code" sx={{ display: "block", direction: "ltr", textAlign: "left", wordBreak: "break-all", fontFamily: "monospace", color: "success.main" }}>{migPreview.sample_new_link}</Box>
                   <Box sx={{ mt: 0.5 }}>🔵 نمونهٔ آدرسِ قبلی:</Box>
                   <Box component="code" sx={{ display: "block", direction: "ltr", textAlign: "left", wordBreak: "break-all", fontFamily: "monospace", color: "text.secondary" }}>{migPreview.sample_previous_link}</Box>
                 </Box>
-              </>) : "این پنل «هاستِ قبلی» ندارد؛ ابتدا در صفحهٔ «پنل‌ها» با «مهاجرتِ دامنه» یا فیلدِ «هاست‌های قبلی» آن را ثبت کنید."}
+              </>) : "این پنل «دامنهٔ قبلی» ندارد؛ ابتدا در صفحهٔ «پنل‌ها» با «انتقال دامنه» یا بخشِ «دامنه‌های قبلی» آن را ثبت کنید."}
             </Alert>
           )}
 
@@ -334,8 +334,8 @@ export default function Broadcast() {
             <Typography variant="h6">پاک‌سازی کانال</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            کاربرانی که ربات را استارت زده‌اند ولی نماینده نیستند و در کانال عضو شده‌اند، حذف می‌شوند.
-            تا وقتی در تنظیمات «مسدودسازی واقعی کانال» را روشن نکنید، فقط حالت آزمایشی (گزارش) اجرا می‌شود.
+            کاربرانی که ربات را آغاز کرده‌اند اما نماینده نیستند و در کانال عضو شده‌اند، حذف می‌شوند.
+            تا زمانی که در تنظیمات «مسدودسازی واقعی کانال» را روشن نکنید، تنها حالت آزمایشی (گزارش) اجرا می‌شود.
           </Typography>
           <Button variant="outlined" color="warning" startIcon={<CleaningServicesIcon />}
             disabled={guard.isPending} onClick={() => guard.mutate()}>
@@ -351,12 +351,12 @@ export default function Broadcast() {
             <Typography variant="h6">هشدارِ کاربرانِ پرحجم</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            کاربرانی که با حجمِ بسیار بالا (حجمِ پیش‌فرضِ ۱۰۰۰ گیگِ هیدیفای، اغلب اشتباهی) ساخته شده‌اند
-            و فاکتورِ ادمینِ اصلی را سنگین می‌کنند. می‌توانید به ادمینِ اصلیِ هر کاربر هشدار دهید تا حجم را اصلاح کند.
+            کاربرانی که با حجمِ بسیار بالا (حجمِ پیش‌فرضِ ۱۰۰۰ گیگابایتِ هیدیفای، اغلب اشتباهی) ساخته شده‌اند
+            و فاکتورِ نمایندهٔ اصلی را سنگین می‌کنند. می‌توانید به نمایندهٔ اصلیِ هر کاربر هشدار دهید تا حجم را اصلاح کند.
           </Typography>
 
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap" alignItems="center">
-            <TextField size="small" type="number" label="آستانهٔ حجم (گیگ)" sx={{ minWidth: 150 }}
+            <TextField size="small" type="number" label="آستانهٔ حجم (گیگابایت)" sx={{ minWidth: 150 }}
               value={hvThreshold} placeholder="1000"
               onChange={(e) => setHvThreshold(e.target.value)}
               InputProps={{ inputProps: { min: 1, dir: "ltr" } }} />
@@ -375,11 +375,11 @@ export default function Broadcast() {
           {hvData && (
             <Alert severity={hvRows.length ? "warning" : "success"} sx={{ mb: 2 }}
               action={hvRows.length
-                ? <Button color="inherit" size="small" onClick={() => setHvShow((s) => !s)}>{hvShow ? "بستن لیست" : "نمایش لیست"}</Button>
+                ? <Button color="inherit" size="small" onClick={() => setHvShow((s) => !s)}>{hvShow ? "بستن فهرست" : "نمایش فهرست"}</Button>
                 : undefined}>
               {hvRows.length
-                ? <><b>{fmtNum(hvRows.length)}</b> کاربر با حجمِ ≥ {fmtNum(hvData.threshold)} گیگ پیدا شد.</>
-                : `کاربری با حجمِ ≥ ${fmtNum(hvData.threshold)} گیگ پیدا نشد.`}
+                ? <><b>{fmtNum(hvRows.length)}</b> کاربر با حجمِ ≥ {fmtNum(hvData.threshold)} گیگابایت پیدا شد.</>
+                : `کاربری با حجمِ ≥ ${fmtNum(hvData.threshold)} گیگابایت پیدا نشد.`}
             </Alert>
           )}
 
@@ -390,8 +390,8 @@ export default function Broadcast() {
                   <TableHead>
                     <TableRow>
                       <TableCell>کاربر</TableCell><TableCell>پنل</TableCell>
-                      <TableCell>حجم (گیگ)</TableCell><TableCell>مبلغِ تقریبی</TableCell>
-                      <TableCell>تاریخِ ساخت</TableCell><TableCell>ادمینِ اصلی</TableCell>
+                      <TableCell>حجم (گیگابایت)</TableCell><TableCell>مبلغِ تقریبی</TableCell>
+                      <TableCell>تاریخِ ساخت</TableCell><TableCell>نمایندهٔ اصلی</TableCell>
                       <TableCell align="center">هشدار</TableCell>
                     </TableRow>
                   </TableHead>
@@ -407,7 +407,7 @@ export default function Broadcast() {
                               <Typography variant="caption" color="warning.main" display="block">↳ ساختهٔ زیرمجموعه: {r.creator_name}</Typography>
                             )}
                             {r.from_deleted && (
-                              <Typography variant="caption" color="error" display="block">↳ حذف‌شده؛ به‌خاطرِ مصرف، کل حجم حساب می‌شود</Typography>
+                              <Typography variant="caption" color="error" display="block">↳ حذف‌شده؛ به‌دلیلِ مصرف، کل حجم محاسبه می‌شود</Typography>
                             )}
                           </TableCell>
                           <TableCell>{r.panel_key}</TableCell>
@@ -418,7 +418,7 @@ export default function Broadcast() {
                             {href ? <Link href={href} target="_blank" rel="noopener noreferrer">{r.root_name}</Link> : r.root_name}
                           </TableCell>
                           <TableCell align="center">
-                            <Tooltip title={r.root_bot_chat_id ? "هشدار به این ادمین" : "این ادمین در ربات ثبت نشده"}>
+                            <Tooltip title={r.root_bot_chat_id ? "هشدار به این نماینده" : "این نماینده در ربات ثبت نشده"}>
                               <span><IconButton size="small" color="warning" disabled={!r.root_bot_chat_id || hvWarnOne.isPending}
                                 onClick={() => hvWarnOne.mutate(r.root_reseller_id)}><NotificationsActiveIcon fontSize="small" /></IconButton></span>
                             </Tooltip>
@@ -433,9 +433,9 @@ export default function Broadcast() {
                 disabled={hvWarnAll.isPending}
                 onClick={() => {
                   const admins = new Set(hvRows.map((r: any) => r.root_reseller_id)).size;
-                  if (window.confirm(`هشدار به ${fmtNum(admins)} ادمینِ اصلی ارسال شود؟`))
+                  if (window.confirm(`هشدار به ${fmtNum(admins)} نمایندهٔ اصلی ارسال شود؟`))
                     hvWarnAll.mutate();
-                }}>ارسالِ هشدار به همهٔ ادمین‌های جدول</Button>
+                }}>ارسالِ هشدار به همهٔ نماینده‌های جدول</Button>
             </Collapse>
           )}
         </CardContent>

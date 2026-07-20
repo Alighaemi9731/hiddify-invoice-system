@@ -52,7 +52,7 @@ def test_sent_invoice_text_is_lean(tmp_path):
         # present: amount, the CTA to the pay button, and the invoice number header
         assert "مبلغ قابل پرداخت" in text and "200,000" in text
         assert "💳 پرداخت فاکتور" in text
-        assert "🔢 شماره فاکتور" in text
+        assert "🔢 شمارهٔ فاکتور" in text
         # absent: no embedded payment details
         assert "0xWALLETADDR1234" not in text
         assert "UQ_ton_addr" not in text

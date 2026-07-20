@@ -57,7 +57,7 @@ export default function StorefrontPlanHistoryDialog({
 function planSnapshot(value: Partial<StorefrontPlan>) {
   const parts = [];
   if (value.title !== undefined) parts.push(value.title || "بدون عنوان");
-  if (value.gb !== undefined) parts.push(`${fmtNum(value.gb)} گیگ`);
+  if (value.gb !== undefined) parts.push(`${fmtNum(value.gb)} گیگابایت`);
   if (value.days !== undefined) parts.push(`${fmtNum(value.days)} روز`);
   if (value.price_toman !== undefined) parts.push(fmtToman(value.price_toman));
   if (value.enabled !== undefined) parts.push(value.enabled ? "فعال" : "غیرفعال");

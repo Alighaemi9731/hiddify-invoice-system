@@ -119,8 +119,8 @@ export default function ResellerTable({
           <TableRow>
             <SortTh id="name" label="نماینده" sortKey={sortKey} dir={dir} onSort={onSort} />
             <SortTh id="panel_key" label="پنل" sortKey={sortKey} dir={dir} onSort={onSort} />
-            <SortTh id="effective_price_per_gb" label="قیمت/گیگ" sortKey={sortKey} dir={dir} onSort={onSort} />
-            <SortTh id="capacity_pct" label="پُری ظرفیت" sortKey={sortKey} dir={dir} onSort={onSort} />
+            <SortTh id="effective_price_per_gb" label="قیمت/گیگابایت" sortKey={sortKey} dir={dir} onSort={onSort} />
+            <SortTh id="capacity_pct" label="اشغال ظرفیت" sortKey={sortKey} dir={dir} onSort={onSort} />
             <SortTh id="can_add_admin" label="زیرمجموعه" sortKey={sortKey} dir={dir} onSort={onSort} />
             <SortTh id="registered" label="ربات" sortKey={sortKey} dir={dir} onSort={onSort} />
             <SortTh id="enforcement_state" label="وضعیت" sortKey={sortKey} dir={dir} onSort={onSort} />

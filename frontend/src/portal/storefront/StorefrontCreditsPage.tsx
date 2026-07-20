@@ -256,12 +256,12 @@ function CreditFormDialog({
             </Alert>
           )}
           {err != null && !locked && (
-            <Alert severity="error">ثبت ناموفق بود (شاید این کد قبلاً وجود دارد یا ورودی نامعتبر است).</Alert>
+            <Alert severity="error">ثبت ناموفق بود (ممکن است این کد از قبل وجود داشته باشد یا ورودی نامعتبر باشد).</Alert>
           )}
           {!editing && (
             <TextField label="کد" value={form.code} onChange={(e) => set("code", e.target.value)}
               inputProps={{ dir: "ltr", maxLength: 32 }} fullWidth
-              error={!!form.code && !codeValid} helperText="۱ تا ۳۲ نویسه؛ برای مشتری بدون حساسیت به بزرگی/کوچکی" />
+              error={!!form.code && !codeValid} helperText="۱ تا ۳۲ نویسه؛ برای مشتری به کوچک و بزرگیِ حروف حساس نیست" />
           )}
           {!locked && (
             <>
@@ -273,7 +273,7 @@ function CreditFormDialog({
                 <>
                   <TextField label="درصد" type="number" value={form.percent_off}
                     onChange={(e) => set("percent_off", e.target.value)} inputProps={{ dir: "ltr", min: 1, max: 100 }} fullWidth />
-                  <TextField label="سقف بونوس (تومان، اختیاری)" type="number" value={form.max_bonus_toman}
+                  <TextField label="سقفِ پاداش (تومان، اختیاری)" type="number" value={form.max_bonus_toman}
                     onChange={(e) => set("max_bonus_toman", e.target.value)} inputProps={{ dir: "ltr", min: 1 }} fullWidth />
                 </>
               ) : (
@@ -342,7 +342,7 @@ function CreditUsageDialog({ shopId, code, onClose }: { shopId: number; code: Cr
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <Stat label="تعداد استفاده" value={fmtNum(usage?.total_redemptions ?? 0)} />
               <Stat label="مشتریان یکتا" value={fmtNum(usage?.unique_customers ?? 0)} />
-              <Stat label="مجموع بونوس" value={fmtToman(usage?.total_bonus_toman ?? 0)} />
+              <Stat label="مجموعِ پاداش" value={fmtToman(usage?.total_bonus_toman ?? 0)} />
             </Stack>
             <Typography variant="subtitle2">آخرین استفاده‌ها</Typography>
             {!redemptions.length ? (

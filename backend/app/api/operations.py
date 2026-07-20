@@ -139,7 +139,7 @@ async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
         avax = await rates.refresh_avax_rate(session)
     if usdt is None and ton is None and avax is None:
         raise HTTPException(
-            502, "دریافت نرخ آنلاین ناموفق بود؛ بعداً دوباره تلاش کنید یا نرخ را دستی تنظیم کنید."
+            502, "دریافت نرخ آنلاین ناموفق بود؛ لطفاً بعداً دوباره تلاش کنید یا نرخ را به‌صورت دستی تنظیم کنید."
         )
     return {
         "rate": usdt, "ton": ton, "avax": avax,
@@ -442,7 +442,7 @@ async def backup_restore(
         from app.core.db import engine
 
         await engine.dispose()
-        result["note"] = "بازیابی انجام شد. سرویس به‌صورت خودکار ری‌استارت می‌شود (چند ثانیه صبر کنید)."
+        result["note"] = "بازیابی انجام شد. سرویس به‌صورت خودکار مجدداً راه‌اندازی می‌شود (لطفاً چند ثانیه صبر کنید)."
         _schedule_self_restart(1.5)
     return result
 
@@ -451,7 +451,7 @@ async def backup_restore(
 async def restart_service() -> dict:
     """Restart the backend service from the panel (no server terminal needed)."""
     _schedule_self_restart(1.0)
-    return {"status": "restarting", "message": "سرویس در حال راه‌اندازی مجدد است (چند ثانیه صبر کنید)."}
+    return {"status": "restarting", "message": "سرویس در حال راه‌اندازی مجدد است (لطفاً چند ثانیه صبر کنید)."}
 
 
 # ------------------------------- self-update -------------------------------
@@ -514,7 +514,7 @@ async def update_now() -> dict:
         "current_version": __version__,
         "message": (
             "درخواست به‌روزرسانی ثبت شد. اگر سرویس به‌روزرسانیِ خودکار روی سرور نصب باشد، "
-            "چند دقیقه بعد سامانه به آخرین نسخه می‌رسد و دوباره بالا می‌آید."
+            "چند دقیقه بعد سامانه به آخرین نسخه به‌روزرسانی می‌شود و دوباره در دسترس قرار می‌گیرد."
         ),
     }
 

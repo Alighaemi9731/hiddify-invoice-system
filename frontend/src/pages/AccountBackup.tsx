@@ -198,7 +198,7 @@ export default function AccountBackup() {
         setUpdateMsg("سامانه در حال بازسازی است… (چند لحظه از دسترس خارج می‌شود)");
       }
       if (!stop && elapsed > MAX_MS) {
-        setUpdateMsg("به‌روزرسانی بیش از حد انتظار طول کشید. اگر سایت بالا آمده، دکمهٔ «بارگذاری مجدد» را بزنید.");
+        setUpdateMsg("به‌روزرسانی بیش از حد انتظار طول کشید. اگر سامانه در دسترس است، دکمهٔ «بارگذاری مجدد» را بزنید.");
       }
       if (!stop) setTimeout(tick, 3000);
     };
@@ -243,7 +243,7 @@ export default function AccountBackup() {
 
           {me?.totp_enabled ? (
             <Stack spacing={2}>
-              <Alert severity="success">ورود دو مرحله‌ای فعال است. برای غیرفعال‌سازی رمز عبور را وارد کنید.</Alert>
+              <Alert severity="success">ورود دو مرحله‌ای فعال است. برای غیرفعال‌سازی، رمز عبور خود را وارد کنید.</Alert>
               <TextField label="رمز عبور فعلی" type="password" value={disablePass}
                 onChange={(e) => setDisablePass(e.target.value)} sx={{ maxWidth: 320 }} />
               <Box>
@@ -254,14 +254,14 @@ export default function AccountBackup() {
           ) : setup ? (
             <Stack spacing={2}>
               <Typography variant="body2" color="text.secondary">
-                ۱) برنامهٔ Google Authenticator (یا مشابه) را باز کنید و این QR را اسکن کنید.
+                ۱) برنامهٔ Google Authenticator (یا مشابه) را باز کنید و این کد QR را اسکن کنید.
                 ۲) سپس کد ۶ رقمی را وارد و تأیید کنید.
               </Typography>
               <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
                 <img src={setup.qr} alt="کد QR تأیید دو مرحله‌ای" width={170} height={170}
                   style={{ border: "1px solid rgba(120,130,170,0.28)", borderRadius: 8 }} />
                 <Box>
-                  <Typography variant="caption" color="text.secondary">کلید دستی:</Typography>
+                  <Typography variant="caption" color="text.secondary">کلید ورود دستی:</Typography>
                   <Typography dir="ltr" sx={{ fontFamily: "monospace", wordBreak: "break-all", mb: 2 }}>{setup.secret}</Typography>
                   <TextField label="کد ۶ رقمی" value={code} inputProps={{ maxLength: 6, dir: "ltr" }}
                     onChange={(e) => setCode(e.target.value)} sx={{ mb: 1, display: "block" }} />
@@ -326,8 +326,8 @@ export default function AccountBackup() {
             <Typography variant="h6">پشتیبان‌گیری</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            هر ۲ ساعت یک پشتیبان کامل (دیتابیس + تنظیمات) به‌صورت خودکار به پی‌وی تلگرام
-            ارسال می‌شود. می‌توانید همین حالا هم پشتیبان بگیرید.
+            هر ۲ ساعت یک پشتیبان کامل (دیتابیس + تنظیمات) به‌صورت خودکار به تلگرام شما
+            ارسال می‌شود. می‌توانید هم‌اکنون نیز پشتیبان بگیرید.
           </Typography>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
             <Button variant="outlined" startIcon={<CloudDownloadIcon />}
@@ -347,10 +347,10 @@ export default function AccountBackup() {
           </Stack>
           <Alert severity="warning" sx={{ mb: 2 }}>
             بازیابی، دیتابیس فعلی را با فایل پشتیبان جایگزین می‌کند. اگر خطایی رخ دهد، دیتابیس
-            فعلی بدون تغییر می‌ماند. پس از بازیابیِ موفق سرویس‌ها خودکار ری‌استارت می‌شوند.
+            فعلی بدون تغییر می‌ماند. پس از بازیابیِ موفق، سرویس‌ها به‌صورت خودکار راه‌اندازی مجدد می‌شوند.
           </Alert>
           <TextField
-            placeholder="گذرواژه (در صورت رمزگذاری)"
+            placeholder="رمز عبور (در صورت رمزگذاری)"
             type="password"
             size="small"
             value={restorePass}
@@ -375,8 +375,8 @@ export default function AccountBackup() {
             <Typography variant="h6">راه‌اندازی مجدد سرویس</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            اگر لازم شد سرویس را یک‌بار راه‌اندازی مجدد کنید — نیازی به ترمینال سرور نیست.
-            بازیابی به‌صورت خودکار این کار را انجام می‌دهد.
+            در صورت نیاز می‌توانید سرویس را یک‌بار راه‌اندازی مجدد کنید؛ نیازی به ترمینال سرور نیست.
+            بازیابی نیز این کار را به‌صورت خودکار انجام می‌دهد.
           </Typography>
           <Button variant="outlined" startIcon={<RestartAltIcon />} disabled={restart.isPending}
             onClick={() => { if (confirm("سرویس یک‌بار راه‌اندازی مجدد شود؟")) restart.mutate(); }}>
@@ -395,14 +395,14 @@ export default function AccountBackup() {
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             با این دکمه، سامانه به آخرین نسخه به‌روزرسانی می‌شود (بدون نیاز به ترمینال سرور). دیتابیس شما حفظ می‌شود.
-            هنگام به‌روزرسانی، سایت برای چند لحظه از دسترس خارج می‌شود و سپس صفحه به‌صورت خودکار دوباره بارگذاری می‌شود.
+            هنگام به‌روزرسانی، سامانه برای چند لحظه از دسترس خارج می‌شود و سپس صفحه به‌صورت خودکار دوباره بارگذاری می‌شود.
           </Typography>
           {updating ? (
             <Box>
               <LinearProgress sx={{ mb: 1 }} />
               <Typography variant="body2" sx={{ mb: 1.5 }}>{updateMsg}</Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-                اگر بعد از چند دقیقه صفحه خودکار باز نشد، دکمهٔ زیر را بزنید.
+                اگر بعد از چند دقیقه صفحه به‌صورت خودکار بارگذاری نشد، دکمهٔ زیر را بزنید.
               </Typography>
               <Button variant="outlined" startIcon={<RestartAltIcon />}
                 onClick={() => window.location.reload()}>
@@ -411,7 +411,7 @@ export default function AccountBackup() {
             </Box>
           ) : (
             <Button variant="contained" startIcon={<SystemUpdateAltIcon />} disabled={update.isPending}
-              onClick={() => { if (confirm("سامانه به آخرین نسخه به‌روزرسانی شود؟ سایت برای چند لحظه از دسترس خارج می‌شود.")) update.mutate(); }}>
+              onClick={() => { if (confirm("سامانه به آخرین نسخه به‌روزرسانی شود؟ سامانه برای چند لحظه از دسترس خارج می‌شود.")) update.mutate(); }}>
               به‌روزرسانی به آخرین نسخه
             </Button>
           )}
@@ -427,7 +427,7 @@ export default function AccountBackup() {
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             دامنهٔ خود را وارد کنید (رکورد A آن باید به IP این سرور اشاره کند). سامانه به‌صورت
-            خودکار گواهی SSL می‌گیرد و پنل روی همان دامنه با HTTPS در دسترس می‌شود.
+            خودکار گواهی SSL دریافت می‌کند و پنل روی همان دامنه با HTTPS در دسترس می‌شود.
           </Typography>
           <Stack spacing={2} sx={{ maxWidth: 420 }}>
             <TextField label="دامنه" inputProps={{ dir: "ltr" }} placeholder="panel.example.com"
@@ -454,13 +454,13 @@ export default function AccountBackup() {
           </Stack>
           <Alert severity="error" sx={{ mb: 2 }}>
             همهٔ پنل‌ها، نمایندگان، فاکتورها، پرداخت‌ها و گزارش‌ها حذف می‌شوند. حساب مدیر و
-            تنظیمات (توکن، کیف پول، …) حفظ می‌شوند. این عمل غیرقابل بازگشت است — قبل از آن
+            تنظیمات (توکن، کیف پول، …) حفظ می‌شوند. این عمل غیرقابل بازگشت است — پیش از آن
             حتماً یک پشتیبان بگیرید.
           </Alert>
           <Button variant="contained" color="error" startIcon={<DeleteForeverIcon />}
             disabled={wipe.isPending}
             onClick={() => {
-              if (prompt("برای حذف همهٔ داده‌ها عبارت DELETE را تایپ کنید:") === "DELETE") wipe.mutate();
+              if (prompt("برای حذف همهٔ داده‌ها عبارت DELETE را وارد کنید:") === "DELETE") wipe.mutate();
             }}>
             پاک‌سازی همهٔ داده‌ها
           </Button>

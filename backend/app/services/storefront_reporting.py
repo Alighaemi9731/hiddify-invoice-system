@@ -195,7 +195,7 @@ async def _top_plans(
     for plan_id, count, amount in rows:
         plan = plans.get(plan_id) if plan_id is not None else None
         if plan is not None:
-            title = f"{plan.gb} گیگ · {plan.days} روزه"
+            title = f"{plan.gb} گیگابایت · {plan.days} روزه"
         elif plan_id is None:
             title = "بدون پلن (تمدید/قدیمی)"
         else:

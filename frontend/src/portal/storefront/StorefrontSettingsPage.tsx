@@ -165,7 +165,7 @@ export default function StorefrontSettingsPage() {
                     <FormControlLabel control={<Switch checked={payment.pay_usdt_enabled} onChange={(_, value) => setPayment({ ...payment, pay_usdt_enabled: value })} />} label="USDT" />
                     {payment.pay_usdt_enabled && <TextField label="آدرس USDT" value={payment.usdt_address || ""} error={!!payment.usdt_address && !validUsdtAddress(payment.usdt_address)} helperText="آدرس BEP-20 با 0x و ۴۰ رقم هگز" inputProps={{ maxLength: 128, dir: "ltr" }} onChange={(event) => setPayment({ ...payment, usdt_address: event.target.value })} />}
                     <FormControlLabel control={<Switch checked={payment.pay_ton_enabled} onChange={(_, value) => setPayment({ ...payment, pay_ton_enabled: value })} />} label="TON" />
-                    {payment.pay_ton_enabled && <TextField label="آدرس TON" value={payment.ton_address || ""} error={!!payment.ton_address && !validTonAddress(payment.ton_address)} helperText="آدرس friendly شبکه TON" inputProps={{ maxLength: 128, dir: "ltr" }} onChange={(event) => setPayment({ ...payment, ton_address: event.target.value })} />}
+                    {payment.pay_ton_enabled && <TextField label="آدرس TON" value={payment.ton_address || ""} error={!!payment.ton_address && !validTonAddress(payment.ton_address)} helperText="آدرسِ کاربرپسند (friendly) شبکهٔ TON" inputProps={{ maxLength: 128, dir: "ltr" }} onChange={(event) => setPayment({ ...payment, ton_address: event.target.value })} />}
                     <SaveButton disabled={!paymentValid || !paymentDirty || mutation.isPending} />
                   </Stack>
                 </Box>
@@ -177,7 +177,7 @@ export default function StorefrontSettingsPage() {
                 <Box component="form" onSubmit={(event: FormEvent) => { event.preventDefault(); if (trialValid) saveGroup("trial", trial); }}>
                   <Stack spacing={1.5}>
                     <FormControlLabel control={<Switch checked={trial.free_trial_enabled} onChange={(_, value) => setTrial({ ...trial, free_trial_enabled: value })} />} label="تست رایگان فعال باشد" />
-                    <TextField label="حجم (گیگ)" type="number" value={trial.free_trial_gb} error={trial.free_trial_gb < 1 || trial.free_trial_gb > 1000} inputProps={{ min: 1, max: 1000 }} onChange={(event) => setTrial({ ...trial, free_trial_gb: Number(event.target.value) })} />
+                    <TextField label="حجم (گیگابایت)" type="number" value={trial.free_trial_gb} error={trial.free_trial_gb < 1 || trial.free_trial_gb > 1000} inputProps={{ min: 1, max: 1000 }} onChange={(event) => setTrial({ ...trial, free_trial_gb: Number(event.target.value) })} />
                     <TextField label="مدت (روز)" type="number" value={trial.free_trial_days} error={trial.free_trial_days < 1 || trial.free_trial_days > 90} inputProps={{ min: 1, max: 90 }} onChange={(event) => setTrial({ ...trial, free_trial_days: Number(event.target.value) })} />
                     <SaveButton disabled={!trialValid || !trialDirty || mutation.isPending} />
                   </Stack>

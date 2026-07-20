@@ -27,7 +27,7 @@ function resellerActions({ reseller, onEdit, onBump, enforce, restore }: ActionA
   if (reseller.enforcement_state === "enforced")
     acts.push({ key: "restore", label: "بازگردانی", color: "success", icon: <RestartAltIcon fontSize="small" />, disabled: restore.isPending, onClick: () => restore.mutate(reseller.id) });
   else
-    acts.push({ key: "enforce", label: "مسدودسازی", color: "error", icon: <BlockIcon fontSize="small" />, disabled: enforce.isPending, onClick: () => { if (confirm("مسدودسازی این نماینده؟ (در حالت آزمایشی فقط ثبت می‌شود)")) enforce.mutate(reseller.id); } });
+    acts.push({ key: "enforce", label: "مسدودسازی", color: "error", icon: <BlockIcon fontSize="small" />, disabled: enforce.isPending, onClick: () => { if (confirm("این نماینده مسدود شود؟ (در حالت آزمایشی فقط ثبت می‌شود)")) enforce.mutate(reseller.id); } });
   return acts;
 }
 

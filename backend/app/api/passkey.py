@@ -44,7 +44,7 @@ def _check_locked(request: Request) -> str:
     if locked:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"تعداد تلاش‌ها بیش از حد مجاز است. {locked // 60 + 1} دقیقه بعد دوباره تلاش کنید.",
+            detail=f"تعداد تلاش‌ها بیش از حد مجاز است؛ لطفاً {locked // 60 + 1} دقیقه بعد دوباره تلاش کنید.",
         )
     return ip
 
@@ -87,7 +87,7 @@ async def register_begin(
     ).scalars().all()
     opts = webauthn.generate_registration_options(
         rp_id=rp_id,
-        rp_name="سامانه فاکتور",
+        rp_name="سامانهٔ فاکتور",
         user_id=str(user.id).encode(),
         user_name=user.username,
         user_display_name=user.username,
@@ -119,7 +119,7 @@ async def register_complete(
     rp_id, origin = await _rp(session)
     taken = webauthn_store.take(body.handle)
     if not taken:
-        raise HTTPException(400, "نشست منقضی شد؛ دوباره تلاش کنید.")
+        raise HTTPException(400, "نشست منقضی شد؛ لطفاً دوباره تلاش کنید.")
     challenge, _ = taken
     try:
         ver = webauthn.verify_registration_response(
@@ -132,7 +132,7 @@ async def register_complete(
     except Exception:  # noqa: BLE001 — details to the log only, never to the client
         log.warning("passkey registration verification failed", exc_info=True)
         raise HTTPException(
-            400, "ثبت کلید عبور ناموفق بود. دوباره تلاش کنید."
+            400, "ثبت کلید عبور ناموفق بود؛ لطفاً دوباره تلاش کنید."
         ) from None
     session.add(WebauthnCredential(
         user_id=user.id,
@@ -152,7 +152,7 @@ async def login_begin(request: Request, session: AsyncSession = Depends(get_sess
     if not loginsec.passkey_login_allowed(_client_ip(request)):  # F8: throttle the unauth begin
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            "درخواست‌های زیاد؛ کمی بعد دوباره تلاش کنید.",
+            "درخواست‌های شما زیاد است؛ لطفاً کمی بعد دوباره تلاش کنید.",
         )
     _check_locked(request)
     rp_id, _origin = await _rp(session)
@@ -177,7 +177,7 @@ async def login_complete(
     rp_id, origin = await _rp(session)
     taken = webauthn_store.take(body.handle)
     if not taken:
-        raise HTTPException(400, "نشست منقضی شد؛ دوباره تلاش کنید.")
+        raise HTTPException(400, "نشست منقضی شد؛ لطفاً دوباره تلاش کنید.")
     challenge, _ = taken
     raw_id = body.credential.get("id") or body.credential.get("rawId")
     cred = (
@@ -200,7 +200,7 @@ async def login_complete(
         loginsec.record_failure(_PK_USER, ip)
         log.warning("passkey login verification failed", exc_info=True)
         raise HTTPException(
-            401, "ورود با کلید عبور ناموفق بود. دوباره تلاش کنید."
+            401, "ورود با کلید عبور ناموفق بود؛ لطفاً دوباره تلاش کنید."
         ) from None
     user = await session.get(AppUser, cred.user_id)
     if not user or not user.is_active or user.role != OWNER_ROLE:

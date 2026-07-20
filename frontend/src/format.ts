@@ -1,13 +1,13 @@
 export const fmtToman = (n: number) =>
   `${Math.round(n || 0).toLocaleString("fa-IR")} تومان`;
 
-// Show real (possibly fractional) GB — e.g. 0.5 GB must not round to "۱ گیگ".
+// Show real (possibly fractional) GB — e.g. 0.5 GB must not round to "۱ گیگابایت".
 export const fmtGb = (n: number) => {
   const v = n || 0;
   const s = Number.isInteger(v)
     ? v.toLocaleString("fa-IR")
     : v.toLocaleString("fa-IR", { maximumFractionDigits: 2 });
-  return `${s} گیگ`;
+  return `${s} گیگابایت`;
 };
 
 export const fmtNum = (n: number) => (n || 0).toLocaleString("fa-IR");

@@ -74,7 +74,7 @@ async def exchange(
         require_secure_transport(request)
     parsed = verify_portal_login_token(body.token)
     if parsed is None:
-        raise HTTPException(401, "لینکِ ورود نامعتبر یا منقضی شده است؛ از ربات دوباره وارد شوید.")
+        raise HTTPException(401, "لینکِ ورود نامعتبر یا منقضی شده است؛ لطفاً از ربات دوباره وارد شوید.")
     chat_id, jti = parsed
     has = (await session.execute(
         select(Reseller.id).where(Reseller.bot_chat_id == chat_id).limit(1)
@@ -93,7 +93,7 @@ async def exchange(
         except IntegrityError:
             await session.rollback()
             raise HTTPException(
-                401, "این لینکِ ورود قبلاً استفاده شده است؛ از ربات یک لینکِ تازه بگیرید."
+                401, "این لینکِ ورود قبلاً استفاده شده است؛ لطفاً از ربات یک لینکِ تازه دریافت کنید."
             ) from None
         await session.commit()
     epoch = await current_session_epoch(session, chat_id)
@@ -165,7 +165,7 @@ async def auth_telegram(
     token = (await settings_service.get(session, "telegram_bot_token", "") or "").strip()
     telegram_id = verify_telegram_login(body.auth, token)
     if telegram_id is None:
-        raise HTTPException(401, "تأیید تلگرام ناموفق بود؛ دوباره تلاش کنید.")
+        raise HTTPException(401, "تأیید تلگرام ناموفق بود؛ لطفاً دوباره تلاش کنید.")
 
     uid = (body.uuid or "").strip().lower()
     if not uid:
@@ -194,7 +194,7 @@ async def auth_telegram(
     # String(64), so it fits the existing table with no schema change.
     auth_hash = str(body.auth.get("hash") or "").lower()
     if len(auth_hash) != 64:
-        raise HTTPException(401, "تأیید تلگرام ناموفق بود؛ دوباره تلاش کنید.")
+        raise HTTPException(401, "تأیید تلگرام ناموفق بود؛ لطفاً دوباره تلاش کنید.")
     now = dt.datetime.now(dt.timezone.utc)
     await session.execute(sa_delete(PortalLoginNonce).where(PortalLoginNonce.expires_at < now))
     session.add(PortalLoginNonce(
@@ -206,7 +206,7 @@ async def auth_telegram(
     except IntegrityError:
         await session.rollback()
         raise HTTPException(
-            401, "این تأییدِ تلگرام قبلاً استفاده شده است؛ دوباره وارد شوید."
+            401, "این تأییدِ تلگرام قبلاً استفاده شده است؛ لطفاً دوباره وارد شوید."
         ) from None
     await session.commit()
 
@@ -719,7 +719,7 @@ async def pay_screenshot(
     """Submit a deposit screenshot as a PENDING payment for one OR MORE owed invoices, forwarded
     to the owner for manual confirmation (same as the bot's photo path)."""
     if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(400, "فقط تصویر قابل قبول است.")
+        raise HTTPException(400, "تنها فایل تصویری پذیرفته می‌شود.")
     data = await file.read(_MAX_PROOF_BYTES + 1)
     if len(data) > _MAX_PROOF_BYTES:
         raise HTTPException(413, "حجم تصویر بیش از حد مجاز است.")
@@ -773,7 +773,7 @@ async def pay_screenshot(
             ) from None
         return {
             "status": "proof_not_saved",
-            "message": "پرداخت ثبت شد اما ذخیرهٔ تصویرِ رسید ناموفق بود؛ پشتیبانی بررسی می‌کند.",
+            "message": "پرداخت ثبت شد اما ذخیرهٔ تصویرِ رسید ناموفق بود؛ پشتیبانی آن را بررسی خواهد کرد.",
             "number": payment_code(payment.id),
         }
 
@@ -892,7 +892,7 @@ async def support(
     sent = await owner_notify.notify_owner(
         session, msg, html=True, reply_markup=kb.support_reply_keyboard(ctx.chat_id, 0))
     if not sent:
-        raise HTTPException(503, "در حال حاضر پشتیبانی در دسترس نیست؛ بعداً تلاش کنید.")
+        raise HTTPException(503, "در حال حاضر پشتیبانی در دسترس نیست؛ لطفاً بعداً تلاش کنید.")
     return {"ok": True}
 
 
@@ -1061,7 +1061,7 @@ async def capacity_request(
         session, msg, html=True,
         reply_markup=kb.capacity_request_keyboard(r.id, int(body.amount or 0)))
     if not sent:
-        raise HTTPException(503, "در حال حاضر در دسترس نیست؛ بعداً تلاش کنید.")
+        raise HTTPException(503, "این قابلیت در حال حاضر در دسترس نیست؛ لطفاً بعداً تلاش کنید.")
     return {"ok": True}
 
 
