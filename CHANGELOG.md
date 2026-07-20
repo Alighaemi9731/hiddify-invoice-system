@@ -8,6 +8,26 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.98.1 - 2026-07-20
+
+A bot-menu polish fix. No behaviour change to any flow's outcome, no database migration.
+
+### Fixed
+
+- **The docked menu now always returns after a flow that finishes via a button tap.** Both bots
+  re-dock the persistent reply-keyboard menu when a flow ends, but that logic only ran for flows that
+  end by *typing* a message. Flows that end by *tapping an inline button* — most visibly a successful
+  storefront purchase (buy → confirm → delivered), but also new-user creation confirm, the GB-cap /
+  capacity preset buttons, the pay-network choice, and the shop broadcast with an empty audience —
+  cleared their state inside a callback the message-only re-dock never saw, so the cancel-only
+  «✖️ انصراف» keyboard lingered with nothing to cancel. Added a callback re-dock middleware to both
+  the main-bot router (`app/bot/handlers/common.py`) and the storefront router
+  (`app/bot/storefront/handlers.py`): whenever a callback takes the flow state active → None it
+  re-docks the correct role menu, except for callbacks that intentionally replace the view themselves
+  (the main bot's `cancel` and legacy `menu:*` navigation buttons; the storefront's `sfcancel`).
+  Regression coverage in `tests/test_bot_router_inventory.py` (the new middleware is pinned in the
+  router inventory fixture).
+
 ## 1.98.0 - 2026-07-20
 
 A full professional rewrite of the user-facing wording across the whole product. No behaviour change,

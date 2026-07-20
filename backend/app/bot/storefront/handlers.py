@@ -180,19 +180,24 @@ async def _reshow_admin_menu(message, note: str, *, bot: Bot) -> None:  # noqa: 
     await message.answer(rtl(note))
 
 
-async def _redock_sf_menu(message, bot: Bot) -> None:  # noqa: ANN001
-    """Re-dock the correct menu after a flow ends: the admin home (owner reply+inline / co-admin reply)
-    or the customer menu."""
+async def _redock_sf_menu_for(msg, user, bot: Bot) -> None:  # noqa: ANN001
+    """Re-dock the correct menu (admin home / customer menu) for `user` — the HUMAN — sending through
+    `msg` (any Message we can `.answer`). `user` is explicit so this works from a CALLBACK too, where
+    `msg.from_user` is the bot, not the customer."""
     async with SessionLocal() as s:
-        sf, reseller, is_admin = await _resolve(s, bot, message.from_user)
+        sf, reseller, is_admin = await _resolve(s, bot, user)
         if sf is None:
             return
         if is_admin:
-            await _send_admin_menu(
-                message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
+            await _send_admin_menu(msg, sf, session=s, reseller=reseller, user_id=user.id)
         else:
-            cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-            await _send_customer_menu(message.answer, sf, cust)
+            cust = await storefront.get_or_create_customer(s, sf.id, user)
+            await _send_customer_menu(msg.answer, sf, cust)
+
+
+async def _redock_sf_menu(message, bot: Bot) -> None:  # noqa: ANN001
+    """Re-dock after a MESSAGE-driven flow ends (a message's `from_user` IS the human)."""
+    await _redock_sf_menu_for(message, message.from_user, bot)
 
 
 def _trial_available(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
@@ -540,6 +545,33 @@ async def _sf_redock_after_flow(handler, event, data):  # noqa: ANN001, ANN202
                 await _redock_sf_menu(event, bot)
     except Exception:  # noqa: BLE001 — a menu re-show must never break the handler
         log.warning("storefront re-dock after flow failed", exc_info=True)
+    return result
+
+
+# Callbacks that already restore the menu themselves → don't let the middleware double-dock.
+_CB_SELF_REDOCK = {"sfcancel"}
+
+
+@storefront_router.callback_query.outer_middleware
+async def _sf_redock_after_cb_flow(handler, event, data):  # noqa: ANN001, ANN202
+    """Companion to `_sf_redock_after_flow` for flows that COMPLETE via a CALLBACK (the purchase
+    confirm, renew confirm, top-up submit, …). Those clear the FSM state inside a callback, which the
+    message-only middleware never sees — so the cancel-only «✖️ انصراف» keyboard used to linger after a
+    successful purchase. Re-dock the right menu whenever a callback takes the flow state active → None."""
+    state = data.get("state")
+    before = await state.get_state() if state is not None else None
+    result = await handler(event, data)
+    try:
+        cb_data = getattr(event, "data", "") or ""
+        if (cb_data not in _CB_SELF_REDOCK and before is not None and state is not None
+                and await state.get_state() is None):
+            bot = data.get("bot")
+            user = getattr(event, "from_user", None)
+            msg = getattr(event, "message", None)
+            if bot is not None and user is not None and msg is not None:
+                await _redock_sf_menu_for(msg, user, bot)
+    except Exception:  # noqa: BLE001 — a menu re-show must never break the handler
+        log.warning("storefront re-dock after callback flow failed", exc_info=True)
     return result
 
 

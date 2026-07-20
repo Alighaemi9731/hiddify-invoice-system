@@ -100,7 +100,8 @@
       "cb_owner_reseller_invoices"
     ],
     "outer_middleware": [
-      "_membership_gate_mw"
+      "_membership_gate_mw",
+      "_redock_menu_after_cb_flow"
     ],
     "middleware": []
   }

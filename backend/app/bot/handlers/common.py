@@ -202,6 +202,38 @@ async def _redock_menu_after_flow(handler, event, data):
     return result
 
 
+def _cb_reshows_own_view(cb_data: str) -> bool:
+    """A callback that ENDS a flow but INTENTIONALLY shows its own view (a picker/list) instead of the
+    menu — the middleware must not bury it. `cancel` re-docks the menu itself; the legacy inline
+    `menu:*` buttons navigate (e.g. `menu:pay` clears the pay state and shows the invoice picker with
+    no trailing menu). Everything else that ends a flow is a genuine completion → re-dock."""
+    return cb_data == "cancel" or cb_data.startswith("menu:")
+
+
+@router.callback_query.outer_middleware
+async def _redock_menu_after_cb_flow(handler, event, data):
+    """Companion to `_redock_menu_after_flow` for flows that COMPLETE via a CALLBACK — the GB-cap /
+    capacity preset buttons (`setcap:`/`capok:`), the shop-setup confirms, `cucancel`, etc. Those clear
+    the FSM state inside a callback, which the message-only middleware never sees, so the cancel-only
+    keyboard used to linger. Re-dock the role menu whenever a callback takes the flow state active →
+    None, except for callbacks that restore/replace the view themselves (see `_cb_reshows_own_view`)."""
+    state = data.get("state")
+    before = await state.get_state() if state is not None else None
+    result = await handler(event, data)
+    try:
+        cb_data = getattr(event, "data", "") or ""
+        if (not _cb_reshows_own_view(cb_data) and before is not None and state is not None
+                and await state.get_state() is None):
+            user = getattr(event, "from_user", None)
+            msg = getattr(event, "message", None)
+            if user is not None and msg is not None:
+                async with SessionLocal() as s:
+                    await _reshow_menu(msg, s, user)
+    except Exception:  # noqa: BLE001 — a menu re-show must never break the handler
+        log.warning("re-dock after callback flow failed", exc_info=True)
+    return result
+
+
 _TXID_RE = re.compile(r"0x[0-9a-fA-F]{64}")          # BEP-20 (BSC) / Avalanche C-Chain tx hash
 _TON_EXPLORERS = ("tonscan.org", "tonviewer.com", "ton.cx", "dton.io", "toncoin.org")
 
