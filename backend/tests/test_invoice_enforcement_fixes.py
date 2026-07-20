@@ -42,9 +42,11 @@ def test_interim_pdf_lines_match_text_with_metering(tmp_path, monkeypatch):
 
     async def fake_bundle_extra(session, panel_id, uuids, period_label, free_threshold,
                                 exclude_user_uuids=None):
-        # A 5 GB abuse extra on one of the reseller's users.
+        # A 5 GB abuse extra on one of the reseller's users (typed-line shape).
         return {"gb": 5.0, "abnormal": [],
-                "lines": [{"user_uuid": "x1", "name": "ابر مصرف", "usage_gb": 5.0, "added_by_uuid": "A"}]}
+                "lines": [{"user_uuid": "x1", "name": "ابر مصرف",
+                           "display_name": "ابر مصرف — مصرف مازاد بر بسته",
+                           "usage_gb": 5.0, "added_by_uuid": "A", "kind": "overage"}]}
 
     monkeypatch.setattr(metering, "bundle_extra", fake_bundle_extra)
 
@@ -69,8 +71,8 @@ def test_interim_pdf_lines_match_text_with_metering(tmp_path, monkeypatch):
         assert total_gb == pytest.approx(15.0)
         assert bd["own"]["gb"] == pytest.approx(15.0)
         assert total_gb == pytest.approx(bd["own"]["gb"])
-        # The metered extra appears as its own labelled line in the PDF.
-        assert any((ln["name"] or "").endswith("مصرف اضافه/تمدید") for ln in lines)
+        # The metered extra appears as its own TYPED labelled line in the PDF.
+        assert any((ln["name"] or "").endswith("مصرف مازاد بر بسته") for ln in lines)
         assert sum(ln["usage_gb"] for ln in lines) == pytest.approx(15.0)
 
     _run(body, tmp_path, "fixes.db")

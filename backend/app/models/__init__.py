@@ -38,7 +38,7 @@ from app.models.storefront import (
     StorefrontPlan,
     StorefrontWalletTxn,
 )
-from app.models.usage_meter import UsageMeter
+from app.models.usage_meter import UsageMeter, UsageMeterEvent
 from app.models.webauthn_credential import WebauthnCredential
 
 __all__ = [
@@ -69,6 +69,7 @@ __all__ = [
     "StorefrontBroadcastJob",
     "StorefrontDeliveryRecipient",
     "UsageMeter",
+    "UsageMeterEvent",
     "DeliveryLog",
     "EnforcementAction",
     "SyncRun",

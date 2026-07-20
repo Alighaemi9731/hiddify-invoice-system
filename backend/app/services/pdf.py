@@ -127,6 +127,23 @@ def _font_or_default(name: str) -> str:
     return name if _register_fonts() else "Helvetica"
 
 
+def service_count(lines: list[dict]) -> int:
+    """THE one service-count rule for every human-facing surface (PDF summary, Telegram
+    breakdown, Invoice.users_count all agree): each base line (has a creation date) is one
+    service, plus each DISTINCT real config among the dateless metering-extra lines — so a
+    config split into «تمدید اول/دوم»+overage still counts once, and the storefront-fee /
+    reconciliation artifact rows never count."""
+    base = sum(1 for ln in lines if ln.get("start_date"))
+    extra_uuids = {
+        str(ln.get("uuid") or "") for ln in lines
+        if not ln.get("start_date")
+        and str(ln.get("uuid") or "")
+        and not str(ln.get("uuid") or "").startswith("storefront_fee_")
+        and (ln.get("name") or "") != "تعدیل فاکتور"
+    }
+    return base + len(extra_uuids)
+
+
 def build_invoice_pdf(
     output_path: str,
     *,
@@ -288,9 +305,9 @@ def build_invoice_pdf(
                     ParagraphStyle("g", fontName=bold, fontSize=15, alignment=2, textColor=colors.white)),
           Paragraph(rtl("مجموع حجم"),
                     ParagraphStyle("gl", fontName=bold, fontSize=11, alignment=2, textColor=colors.white))],
-         [Paragraph(rtl(f"{_fa_digits(str(len(lines)))} سرویس"),
+         [Paragraph(rtl(f"{_fa_digits(str(service_count(lines)))} سرویس"),
                     ParagraphStyle("gc", fontName=reg, fontSize=9.5, alignment=2, textColor=colors.HexColor("#dbe6fb"))),
-          Paragraph(rtl("تعداد سرویس‌های جدید"),
+          Paragraph(rtl("تعداد سرویس‌ها"),
                     ParagraphStyle("gcl", fontName=reg, fontSize=9, alignment=2, textColor=colors.HexColor("#dbe6fb")))]],
         colWidths=[60 * mm, 55 * mm],
     )

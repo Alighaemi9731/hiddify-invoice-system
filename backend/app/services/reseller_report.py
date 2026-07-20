@@ -218,10 +218,11 @@ async def node_invoice_pdf_lines(
         }
         for ln in bundle.lines
     ]
-    # The metered extra as explicit per-user lines (same label/convention as the real invoice).
+    # The metered extra as explicit typed lines (identical labels to the real invoice —
+    # `display_name` comes from the same metering builder).
     for el in extra.get("lines", []):
         lines.append({
-            "name": ((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
+            "name": (el.get("display_name") or el.get("name") or "")[:255],
             "uuid": el.get("user_uuid", ""), "start_date": None,
             "usage_gb": float(el.get("usage_gb", 0) or 0), "sub_reseller_name": node.name,
         })
@@ -295,7 +296,9 @@ async def _billable_gb_with_metering(
         session, panel_id, uuids, period.label, free_threshold,
         exclude_user_uuids=exclude_user_uuids,
     )
-    return round(base_gb + float(extra.get("gb", 0) or 0), 3), cnt + len(extra.get("lines", []))
+    # Extras split into one line per component → count DISTINCT metered users, not lines.
+    extra_users = {el["user_uuid"] for el in extra.get("lines", [])}
+    return round(base_gb + float(extra.get("gb", 0) or 0), 3), cnt + len(extra_users)
 
 
 @dataclass
@@ -368,7 +371,7 @@ async def node_months(
             "label": p.label,
             "gb": gb,
             "amount_toman": round(gb * ctx.price),
-            "new_services": cnt + len(extra.get("lines", [])),
+            "new_services": cnt + len({el["user_uuid"] for el in extra.get("lines", [])}),
         })
     return by_month
 

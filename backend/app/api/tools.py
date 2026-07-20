@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.security import get_current_subject
-from app.models import EndUserSnapshot, Panel, Reseller, UsageMeter
+from app.models import EndUserSnapshot, Panel, Reseller, UsageMeter, UsageMeterEvent
 from app.services import enforcement
 from app.services.reseller_report import node_descendants
 
@@ -101,6 +101,11 @@ async def remove_end_user(
         )
     )
     meters = cast("CursorResult[Any]", res).rowcount or 0
+    await session.execute(
+        sa_delete(UsageMeterEvent).where(
+            UsageMeterEvent.panel_id == panel_id, UsageMeterEvent.user_uuid == user_uuid
+        )
+    )
     await session.execute(
         sa_delete(EndUserSnapshot).where(EndUserSnapshot.id == snapshot_id)
     )

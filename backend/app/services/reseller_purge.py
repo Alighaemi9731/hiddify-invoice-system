@@ -18,6 +18,7 @@ from app.models import (
     Payment,
     Reseller,
     UsageMeter,
+    UsageMeterEvent,
 )
 
 log = logging.getLogger("reseller_purge")
@@ -53,6 +54,12 @@ async def purge_subtree(
             await session.execute(
                 sa_delete(UsageMeter).where(
                     UsageMeter.panel_id == panel_id, UsageMeter.user_uuid.in_(user_uuids)
+                )
+            )
+            await session.execute(
+                sa_delete(UsageMeterEvent).where(
+                    UsageMeterEvent.panel_id == panel_id,
+                    UsageMeterEvent.user_uuid.in_(user_uuids),
                 )
             )
         await session.execute(

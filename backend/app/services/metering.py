@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import UsageMeter
+from app.models import UsageMeter, UsageMeterEvent
 from app.models.enums import DeliveryKind
 from app.services import settings_service
 
@@ -75,6 +75,10 @@ class MeterUpdate:
     reset_count: int
     consumed_gb: float
     overage_gb: float
+    # Billable events this step DETECTED, as (kind, gb) — "renewal" (the banked closed-cycle
+    # consumption) or "edit_topup" (the quota added without a fresh start_date). Persisted by
+    # `record_events` so invoices can enumerate each renewal separately.
+    events: tuple[tuple[str, float], ...] = ()
 
 
 def compute(
@@ -104,13 +108,14 @@ def compute(
     overage_total = float(meter.overage_gb or 0)
     m_name = (name or "")[:255]
     in_period = period_of(start_date) == period_label
+    events: list[tuple[str, float]] = []
 
     def _result() -> MeterUpdate:
         return MeterUpdate(
             meter_provisioned_gb=prov, meter_consumed_gb=cons, meter_init=init,
             added_by_uuid=added_by_uuid, name=m_name, quota_added_gb=quota_added,
             renew_used_gb=renew_used, edit_renewal_gb=edit_renewal, reset_count=reset_count,
-            consumed_gb=consumed, overage_gb=overage_total,
+            consumed_gb=consumed, overage_gb=overage_total, events=tuple(events),
         )
 
     # First time we see this user (a brand-new user, OR an existing one when metering
@@ -141,7 +146,9 @@ def compute(
         if usage_reset and period_of(prev_start) == period_label:
             closing_used = min(cons, prov)
             if closing_used > _EPS:
-                renew_used += round(closing_used, 3)
+                banked = round(closing_used, 3)
+                renew_used += banked
+                events.append(("renewal", banked))
         prov = new_limit
         cons = new_used
         # A proper renewal (renew-day advances start_date) is the CORRECT way and supersedes any
@@ -166,6 +173,7 @@ def compute(
         if not in_period:
             # Topped up without a fresh start_date → renew-by-edit (snapshot rule misses it).
             edit_renewal += add
+            events.append(("edit_topup", round(add, 3)))
 
     # Consumption since last sync (reset-aware).
     if new_used + _EPS >= prev_used:
@@ -194,6 +202,20 @@ def compute(
     if overage > _EPS:
         overage_total += overage
     return _result()
+
+
+def record_events(
+    session: AsyncSession, *, panel_id: int, user_uuid: str, period_label: str, u: MeterUpdate
+) -> None:
+    """Persist the billable events a compute() step detected — one UsageMeterEvent row per
+    (kind, gb). Call together with write() so the event log and the aggregate move as one;
+    at billing time a month whose events don't sum to the aggregate falls back to the
+    aggregate, so a missed event can shift presentation but never money."""
+    for kind, gb in u.events:
+        session.add(UsageMeterEvent(
+            panel_id=panel_id, user_uuid=user_uuid, period_label=period_label,
+            kind=kind, gb=gb,
+        ))
 
 
 def write(snapshot, meter: UsageMeter, u: MeterUpdate) -> None:  # noqa: ANN001
@@ -233,18 +255,90 @@ def apply(
     ))
 
 
+# Display suffixes for the typed extra lines. Every metered extra on an invoice names WHAT
+# it is; multiple renewals of one config in a month are enumerated («تمدید اول»، «تمدید دوم»)
+# from the per-event log so the invoice is unambiguous.
+LABEL_RENEWAL = " — تمدید"
+LABEL_EDIT = " — افزایش حجم با ویرایش"
+LABEL_OVERAGE = " — مصرف مازاد بر بسته"
+
+_FA_ORDINALS = (
+    "اول", "دوم", "سوم", "چهارم", "پنجم", "ششم",
+    "هفتم", "هشتم", "نهم", "دهم", "یازدهم", "دوازدهم",
+)
+
+
+def _fa_ordinal(i: int) -> str:
+    """1-based Persian ordinal word; falls back to a numbered form past twelve."""
+    return _FA_ORDINALS[i - 1] if 1 <= i <= len(_FA_ORDINALS) else f"شمارهٔ {i}"
+
+
+# Reconciliation slack between an aggregate accumulator and the sum of its logged events:
+# both sides round each addend to 3 decimals, so any real drift means missing/legacy events.
+_EVENT_MATCH_TOL = 0.06
+
+
+def _typed_parts(
+    *,
+    renew_bill: float,
+    edit_bill: float,
+    over_bill: float,
+    user_events: list[tuple[str, float]],
+) -> list[tuple[str, str, float]]:
+    """Split one user's billed extra into display parts [(kind, label_suffix, gb), …].
+
+    The per-event log only refines PRESENTATION: renewal/edit parts are taken from the
+    events when they reconcile with the billed aggregate (then each renewal gets its own
+    enumerated line), otherwise the aggregate renders as a single typed line (legacy
+    months, a cleared edit accumulator, or a missed event write). Amounts always come
+    from the aggregates — callers re-adjust rounding so the parts sum exactly."""
+    parts: list[tuple[str, str, float]] = []
+    if renew_bill > 0:
+        renew_events = [g for k, g in user_events if k == "renewal" and g > _EPS]
+        if renew_events and abs(sum(renew_events) - renew_bill) <= _EVENT_MATCH_TOL:
+            if len(renew_events) == 1:
+                parts.append(("renewal", LABEL_RENEWAL, renew_events[0]))
+            else:
+                parts.extend(
+                    ("renewal", f"{LABEL_RENEWAL} {_fa_ordinal(i)}", g)
+                    for i, g in enumerate(renew_events, start=1)
+                )
+        else:
+            parts.append(("renewal", LABEL_RENEWAL, renew_bill))
+    if edit_bill > 0:
+        edit_events = [g for k, g in user_events if k == "edit_topup" and g > _EPS]
+        if edit_events and abs(sum(edit_events) - edit_bill) <= _EVENT_MATCH_TOL:
+            if len(edit_events) == 1:
+                parts.append(("edit", LABEL_EDIT, edit_events[0]))
+            else:
+                parts.extend(
+                    ("edit", f"{LABEL_EDIT} (نوبت {_fa_ordinal(i)})", g)
+                    for i, g in enumerate(edit_events, start=1)
+                )
+        else:
+            parts.append(("edit", LABEL_EDIT, edit_bill))
+    if over_bill > 0:
+        parts.append(("overage", LABEL_OVERAGE, over_bill))
+    return parts
+
+
 def _extra_from_rows(
     rows,
     free_threshold_gb: float,
     overage_tol: float,
     exclude_user_uuids: set[str] | None,
+    events_by_user: dict[str, list[tuple[str, float]]] | None = None,
 ) -> dict:
     """Pure per-row extra math shared by bundle_extra / bundle_extra_many.
 
     A user keeps consuming for a couple of minutes after hitting their quota (xray cuts off
     lazily), so a few hundred MB of "overage" is normal, not abuse. Threshold (NOT subtract):
     overage at/below the tolerance is pure soft-cutoff slack → ignored entirely; above it, it's
-    real over-consumption → the FULL overage is billed. Real reset-abuse is many GB → billed."""
+    real over-consumption → the FULL overage is billed. Real reset-abuse is many GB → billed.
+
+    Each billed component renders as its OWN typed line (`display_name` = user name + a
+    suffix naming the component; renewals enumerated per event) — the money is identical to
+    the old single merged line, only the presentation is split."""
     total = 0.0
     lines: list[dict] = []
     abnormal: list[dict] = []
@@ -259,8 +353,8 @@ def _extra_from_rows(
         abuse = 0.0
         if over > _EPS:
             abuse += over
-        if edit > free_threshold_gb:        # ignore tiny test-config renewals
-            abuse += edit
+        edit_bill = edit if edit > free_threshold_gb else 0.0  # ignore tiny test-config renewals
+        abuse += edit_bill
         # LEGITIMATE extra: the actual usage of cycles renewed properly (day+volume) earlier this
         # month — billed, but it's NORMAL (not abuse), so it never triggers the abuse warning.
         renew = float(m.renew_used_gb or 0)
@@ -269,13 +363,41 @@ def _extra_from_rows(
         if extra <= _EPS:
             continue
         total += extra
-        lines.append({
-            "user_uuid": m.user_uuid, "name": m.name or "",
-            "usage_gb": round(extra, 3), "added_by_uuid": m.added_by_uuid,
-        })
+        parts = _typed_parts(
+            renew_bill=renew_bill,
+            edit_bill=edit_bill,
+            over_bill=over if over > _EPS else 0.0,
+            user_events=(events_by_user or {}).get(m.user_uuid, []),
+        )
+        # Round each part to 3 decimals and pin the LAST one so the parts sum EXACTLY to the
+        # user's billed extra — persisted lines must always add up to the locked total (M75).
+        name = m.name or ""
+        target = round(extra, 3)
+        rounded = [round(g, 3) for _k, _lbl, g in parts]
+        if rounded:
+            rounded[-1] = round(target - sum(rounded[:-1]), 3)
+            if rounded[-1] <= 0:
+                # Events reconciled within tolerance yet overshoot the billed aggregate
+                # (stale/orphaned event edge case) — never let the split inflate the lines:
+                # rebuild from the aggregates alone (those parts always pin positively).
+                parts = _typed_parts(
+                    renew_bill=renew_bill, edit_bill=edit_bill,
+                    over_bill=over if over > _EPS else 0.0, user_events=[],
+                )
+                rounded = [round(g, 3) for _k, _lbl, g in parts]
+                rounded[-1] = round(target - sum(rounded[:-1]), 3)
+        for (kind, suffix, _g), gb_part in zip(parts, rounded):
+            if gb_part <= 0:
+                continue
+            lines.append({
+                "user_uuid": m.user_uuid, "name": name,
+                "display_name": name[:200] + suffix,
+                "usage_gb": gb_part, "added_by_uuid": m.added_by_uuid,
+                "kind": kind,
+            })
         if abuse > _EPS:
             abnormal.append({
-                "name": m.name or m.user_uuid[-6:], "user_uuid": m.user_uuid,
+                "name": name or m.user_uuid[-6:], "user_uuid": m.user_uuid,
                 "overage_gb": round(over, 3), "edit_renewal_gb": round(edit, 3),
                 "reset_count": int(m.reset_count or 0), "billed_gb": round(abuse, 3),
             })
@@ -330,10 +452,44 @@ async def bundle_extra_many(
     for m in rows:
         if m.period_label in by_label:
             by_label[m.period_label].append(m)
+    events_by_label = await _load_events(
+        session, panel_id, period_labels, {m.user_uuid for m in rows}
+    )
     return {
-        lbl: _extra_from_rows(by_label[lbl], free_threshold_gb, overage_tol, exclude_user_uuids)
+        lbl: _extra_from_rows(
+            by_label[lbl], free_threshold_gb, overage_tol, exclude_user_uuids,
+            events_by_user=events_by_label.get(lbl),
+        )
         for lbl in period_labels
     }
+
+
+async def _load_events(
+    session: AsyncSession,
+    panel_id: int,
+    period_labels: list[str],
+    user_uuids: set[str],
+) -> dict[str, dict[str, list[tuple[str, float]]]]:
+    """The logged metering events for these users/periods, keyed {label: {uuid: [(kind, gb)…]}}
+    in detection (id) order — the data behind the per-renewal enumeration. Chunked IN() so a
+    huge bundle can't overflow SQLite's bound-parameter limit."""
+    out: dict[str, dict[str, list[tuple[str, float]]]] = {}
+    uuids = sorted(user_uuids)
+    for i in range(0, len(uuids), 500):
+        rows = (
+            await session.execute(
+                select(UsageMeterEvent).where(
+                    UsageMeterEvent.panel_id == panel_id,
+                    UsageMeterEvent.period_label.in_(period_labels),
+                    UsageMeterEvent.user_uuid.in_(uuids[i:i + 500]),
+                ).order_by(UsageMeterEvent.id)
+            )
+        ).scalars().all()
+        for ev in rows:
+            out.setdefault(ev.period_label, {}).setdefault(ev.user_uuid, []).append(
+                (ev.kind, float(ev.gb or 0))
+            )
+    return out
 
 
 def _abuse_text(period: str, abnormal: list[dict]) -> str:

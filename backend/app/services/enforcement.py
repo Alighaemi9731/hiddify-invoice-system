@@ -18,7 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.db import SessionLocal
-from app.models import EndUserSnapshot, EnforcementAction, Panel, Reseller, UsageMeter
+from app.models import (
+    EndUserSnapshot,
+    EnforcementAction,
+    Panel,
+    Reseller,
+    UsageMeter,
+    UsageMeterEvent,
+)
 from app.models.enums import (
     EnforcementActionStatus,
     EnforcementActionType,
@@ -1713,6 +1720,12 @@ async def _process_delete_action(
             await session.execute(
                 _sa_delete(UsageMeter).where(
                     UsageMeter.panel_id == panel.id, UsageMeter.user_uuid.in_(removable_uuids)
+                )
+            )
+            await session.execute(
+                _sa_delete(UsageMeterEvent).where(
+                    UsageMeterEvent.panel_id == panel.id,
+                    UsageMeterEvent.user_uuid.in_(removable_uuids),
                 )
             )
             await session.execute(

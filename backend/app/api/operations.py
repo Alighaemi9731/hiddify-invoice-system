@@ -28,6 +28,7 @@ from app.models import (
     Reseller,
     SyncRun,
     UsageMeter,
+    UsageMeterEvent,
 )
 from app.models.enums import PanelStatus
 from app.services import (
@@ -232,7 +233,7 @@ async def wipe_data(body: WipeBody, session: AsyncSession = Depends(get_session)
     # invoice would reuse an old id and silently overwrite a historic financial_records row.
     for model in (
         InvoiceLine, Payment, DeliveryLog, EnforcementAction, Invoice,
-        UsageMeter, EndUserSnapshot, SyncRun, BotUser, Reseller, Panel,
+        UsageMeter, UsageMeterEvent, EndUserSnapshot, SyncRun, BotUser, Reseller, Panel,
     ):
         await session.execute(delete(model))
     await session.commit()

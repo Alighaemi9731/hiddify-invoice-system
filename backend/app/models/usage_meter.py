@@ -2,16 +2,27 @@
 Monthly usage-metering bucket per end-user — the data behind abuse-resistant billing.
 
 The current-state running totals live on EndUserSnapshot (meter_provisioned_gb /
-meter_consumed_gb). This table accumulates, per (panel, user, month), what was
-provisioned and consumed and — crucially — the ABNORMAL extra that the old
-"quota of users created this month" rule would have missed:
+meter_consumed_gb). `UsageMeter` accumulates, per (panel, user, month), what was
+provisioned and consumed and the extra the base "quota of users created this month"
+rule would have missed:
   • overage_gb       — usage beyond the paid-for buffer (the daily-reset trick).
   • edit_renewal_gb  — quota topped up without updating start_date (renew-by-edit).
-Billing adds (overage_gb + edit_renewal_gb) on top of the normal snapshot total.
+  • renew_used_gb    — consumption of cycles legitimately renewed away this month.
+Billing adds (thresholded overage + edit_renewal + renew_used) on top of the normal
+snapshot total. `UsageMeterEvent` keeps the per-event detail behind those aggregates
+so invoices can name and enumerate each component («تمدید اول/دوم»، «افزایش حجم با
+ویرایش»، «مصرف مازاد بر بسته») — see app.services.metering.
 """
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -52,3 +63,27 @@ class UsageMeter(Base, TimestampMixin):
         Numeric(16, 3), default=0, server_default="0", nullable=False
     )
     reset_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class UsageMeterEvent(Base, TimestampMixin):
+    """One row per DETECTED billable metering event — the per-event detail the aggregated
+    UsageMeter row cannot keep. Written by the sync (metering.record_events) whenever a
+    renewal banks the closed cycle's consumption (kind="renewal", gb=banked) or a quota
+    top-up without a fresh start_date is caught (kind="edit_topup", gb=added). At billing
+    time the events let the invoice enumerate each renewal separately («تمدید اول»،
+    «تمدید دوم»، …) instead of one merged blob; when a month's events don't reconcile with
+    the aggregate (legacy months, a missed sync write) billing falls back to the aggregate,
+    so money is never derived from events — only presentation is. Append-only; `id` order
+    is the in-month event order (detection is sync-granularity)."""
+    __tablename__ = "usage_meter_events"
+    __table_args__ = (
+        Index("ix_usage_meter_events_lookup", "panel_id", "period_label", "user_uuid"),
+        CheckConstraint("gb >= 0", name="ck_usage_meter_events_gb_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    panel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_uuid: Mapped[str] = mapped_column(String(64), nullable=False)
+    period_label: Mapped[str] = mapped_column(String(32), nullable=False)  # "2026-07"
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # "renewal" | "edit_topup"
+    gb: Mapped[float] = mapped_column(Numeric(16, 3), nullable=False, default=0)

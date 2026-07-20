@@ -50,6 +50,7 @@ from app.models import (
     StorefrontWalletTxn,
     SyncRun,
     UsageMeter,
+    UsageMeterEvent,
 )
 from app.models.enums import (
     EnforcementActionStatus,
@@ -213,6 +214,15 @@ async def prune_stale_snapshots(session: AsyncSession) -> dict[str, int]:
         EndUserSnapshot.user_uuid == UsageMeter.user_uuid,
     )
     meters = await _delete(delete(UsageMeter).where(~orphan_meter))
+    # The per-event log follows its meter's lifecycle exactly: an event whose aggregate
+    # meter is gone must never linger (a stale event could otherwise poison the renewal
+    # enumeration of a rebuilt meter in the same month).
+    orphan_event = exists().where(
+        UsageMeter.panel_id == UsageMeterEvent.panel_id,
+        UsageMeter.user_uuid == UsageMeterEvent.user_uuid,
+        UsageMeter.period_label == UsageMeterEvent.period_label,
+    )
+    await _delete(delete(UsageMeterEvent).where(~orphan_event))
 
     # usage_meters keeps one row per active user per month forever, so old periods accumulate even
     # for present users. Those periods are already locked into invoices + the financial ledger, so
@@ -226,6 +236,9 @@ async def prune_stale_snapshots(session: AsyncSession) -> dict[str, int]:
         cutoff_label = _months_ago_label(keep_months)
         old_meters = await _delete(
             delete(UsageMeter).where(UsageMeter.period_label < cutoff_label)
+        )
+        await _delete(
+            delete(UsageMeterEvent).where(UsageMeterEvent.period_label < cutoff_label)
         )
     await session.commit()
 

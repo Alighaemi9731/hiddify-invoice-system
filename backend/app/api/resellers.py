@@ -22,6 +22,7 @@ from app.models import (
     Payment,
     Reseller,
     UsageMeter,
+    UsageMeterEvent,
 )
 from app.models.enums import InvoiceStatus, PanelStatus
 from app.schemas.reseller import (
@@ -382,6 +383,9 @@ async def delete_absent_reseller(
     if user_uuids:
         await session.execute(sa_delete(UsageMeter).where(
             UsageMeter.panel_id == reseller.panel_id, UsageMeter.user_uuid.in_(user_uuids)))
+        await session.execute(sa_delete(UsageMeterEvent).where(
+            UsageMeterEvent.panel_id == reseller.panel_id,
+            UsageMeterEvent.user_uuid.in_(user_uuids)))
     await session.execute(sa_delete(EndUserSnapshot).where(
         EndUserSnapshot.panel_id == reseller.panel_id,
         func.lower(EndUserSnapshot.added_by_uuid).in_(del_uuids)))

@@ -162,16 +162,11 @@ async def invoice_node_breakdown(
     subs: list[dict] = []
     for g in grouped:
         gb = round(sum(float(ln["usage_gb"]) for ln in g["lines"]), 3)
-        # The storefront-fee and reconciliation-adjustment rows are billing artifacts, not
-        # services — they must not inflate the user counts shown in the breakdown.
-        entry = {
-            "gb": gb,
-            "users": sum(
-                1 for ln in g["lines"]
-                if not str(ln.get("uuid") or "").startswith("storefront_fee_")
-                and (ln.get("name") or "") != "تعدیل فاکتور"
-            ),
-        }
+        # One shared counting rule (pdf.service_count) across the PDF summary, this
+        # breakdown, and Invoice.users_count: base lines count each, the typed metering
+        # lines (renewal #1/#2, edit top-up, overage) count once per config, and the
+        # storefront-fee / reconciliation artifact rows never count.
+        entry = {"gb": gb, "users": pdf_service.service_count(g["lines"])}
         if g["is_own"]:
             own = entry
         else:

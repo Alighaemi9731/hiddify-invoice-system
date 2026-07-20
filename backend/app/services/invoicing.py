@@ -483,7 +483,10 @@ async def _compute_totals(
         floor_applied=floor_applied,
         storefront_fee=storefront_fee,
         amount_toman=amount_toman,
-        users_count=base_users_count + len(extra.get("lines", []) or []),
+        # Extras are split into one line per component (renewal #1/#2, edit top-up, overage),
+        # so count the DISTINCT metered users — the semantics users_count always had.
+        users_count=base_users_count
+        + len({el["user_uuid"] for el in (extra.get("lines", []) or [])}),
     )
 
 
@@ -519,10 +522,13 @@ def _write_lines(
             sub_reseller_name=(line.sub_reseller_name or "")[:255],
         ))
     for el in extra.get("lines", []) or []:
+        # `display_name` is the typed label built by metering (« — تمدید اول/دوم»,
+        # « — افزایش حجم با ویرایش», « — مصرف مازاد بر بسته») — one line per component,
+        # so the invoice says exactly what each item is.
         session.add(InvoiceLine(
             invoice_id=invoice.id,
             end_user_uuid=el["user_uuid"],
-            name=((el.get("name") or "")[:235] + " — مصرف اضافه/تمدید"),
+            name=(el.get("display_name") or el.get("name") or "")[:255],
             start_date=None,
             usage_gb=el["usage_gb"],
             added_by_uuid=el.get("added_by_uuid"),

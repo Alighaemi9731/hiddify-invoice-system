@@ -224,6 +224,10 @@ async def _upsert_users(
                     session.add(meter)
                     meters[u.uuid] = meter
                 metering.write(s, meter, update)
+                metering.record_events(
+                    session, panel_id=panel.id, user_uuid=u.uuid,
+                    period_label=period_label, u=update,
+                )
             except Exception:  # noqa: BLE001 — metering must never break a sync
                 meter_ok = False
                 log.warning("metering.apply failed for user %s", u.uuid, exc_info=True)
