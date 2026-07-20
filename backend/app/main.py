@@ -20,6 +20,7 @@ from app.api import (
     payments,
     portal,
     portal_storefront,
+    recovery,
     reports,
     resellers,
     tools,
@@ -131,6 +132,7 @@ app.include_router(invoices.router)
 app.include_router(payments.router)
 app.include_router(reports.router)
 app.include_router(operations.router)
+app.include_router(recovery.router)
 app.include_router(settings_api.router)
 app.include_router(portal.router)
 app.include_router(portal_storefront.router)

@@ -102,6 +102,54 @@ export const syncPanel = (id: number) => api.post(`/api/panels/${id}/sync`).then
 export const syncAllPanels = () => api.post("/api/panels/sync-all").then((r) => r.data);
 export const testPanel = (id: number) => api.post(`/api/panels/${id}/test`).then((r) => r.data);
 
+// ── User recovery (restore users a panel backup-rollback removed) ─────────────
+export interface RecoveryUser {
+  panel_id: number;
+  user_uuid: string;
+  name: string;
+  added_by_uuid: string | null;
+  admin_name: string | null;
+  has_admin: boolean;
+  gb: number;
+  days: number;
+  start_date: string | null;
+  current_usage_gb: number;
+  enable: boolean;
+  last_seen_at: string | null;
+  created_at: string | null;
+}
+export interface RecoveryCluster {
+  last_seen_at: string;
+  count: number;
+  users: RecoveryUser[];
+}
+export interface RecoveryPanel {
+  panel_id: number;
+  panel_key: string;
+  panel_last_synced_at: string | null;
+  total_lost: number;
+  clusters: RecoveryCluster[];
+}
+export interface RecoveryResult {
+  created: any[];
+  skipped: any[];
+  errors: any[];
+  counts: { created: number; skipped: number; errors: number };
+}
+export const recoveryCandidates = (panelIds: number[], lookbackDays = 7) =>
+  api
+    .get("/api/recovery/candidates", {
+      params: { panel_ids: panelIds.join(","), lookback_days: lookbackDays },
+    })
+    .then((r) => r.data as RecoveryPanel[]);
+export const recoveryRestore = (
+  users: { panel_id: number; user_uuid: string }[],
+  dryRun = false,
+) =>
+  api
+    .post("/api/recovery/restore", { users, dry_run: dryRun })
+    .then((r) => r.data as RecoveryResult);
+
 // ---- resellers ----
 export interface ResellerRow {
   id: number;

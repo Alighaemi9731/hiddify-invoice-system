@@ -8,6 +8,25 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.97.0 - 2026-07-20
+
+Adds a **User Recovery** tool that restores end-users a panel backup-rollback removed. No database
+migration.
+
+### Added
+
+- **ابزارها → «بازیابی کاربران».** When a panel is rolled back to an older backup (server migration,
+  ban, disaster restore), every user an admin created between that backup and the rollback disappears
+  from the panel — but the system still remembers them (the sync never hard-deletes its records). This
+  tool lets the owner pick the affected panels, then finds those lost users and **groups them by the
+  moment they vanished** — a large cluster all lost at the same instant is almost certainly a rollback,
+  so it stands out from ordinary one-off deletions. It shows the full detail of each (name, owning
+  admin, GB, days, **start date**, usage, uuid) for review, and after an explicit confirm re-creates
+  each on the panel **under its original admin with its original uuid**, so the customer's existing
+  config/subscription keeps working. It skips any user already back (never a duplicate — the panel's
+  unique key guarantees it) and refuses one whose admin no longer exists. Owner-only,
+  preview-then-confirm, never automatic (so intentionally-deleted users are never resurrected).
+
 ## 1.96.0 - 2026-07-20
 
 Renewals now reset a config to a fresh plan instead of piling onto the used volume. No database

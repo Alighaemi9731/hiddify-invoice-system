@@ -1,22 +1,24 @@
 import { useState } from "react";
 import {
-  Box, Button, Card, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, InputAdornment, Stack, Table, TableBody, TableCell, TableHead, TableRow,
-  TextField, Tooltip, Typography,
+  Alert, Box, Button, Card, CardContent, Checkbox, Chip, CircularProgress, Dialog, DialogActions,
+  DialogContent, DialogTitle, Divider, IconButton, InputAdornment, Stack, Table, TableBody,
+  TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import DeleteForeverIcon from "@mui/icons-material/esm/DeleteForever";
 import LinkOffIcon from "@mui/icons-material/esm/LinkOff";
 import PersonRemoveIcon from "@mui/icons-material/esm/PersonRemove";
+import RestoreIcon from "@mui/icons-material/esm/Restore";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   searchEndUsers, removeEndUser, ToolsEndUser,
   listResellers, unbindResellerTelegram, ResellerRow,
   previewAdminDelete, deleteAdminCascade,
+  listPanels, recoveryCandidates, recoveryRestore, RecoveryPanel, RecoveryResult,
 } from "../api/client";
 import { errMsg, useToast } from "../components/Toast";
-import { fmtGb, fmtNum, fmtDate } from "../format";
+import { fmtGb, fmtNum, fmtDate, fmtDateTime } from "../format";
 
 // ── Section 1: remove a mistaken end-user from billing ────────────────────────
 function RemoveUserTool() {
@@ -396,6 +398,184 @@ function DeleteAdminTool() {
   );
 }
 
+// ── Section 4: recover users a panel backup-rollback removed ──────────────────
+function RecoverUsersTool() {
+  const { node: toast, show } = useToast();
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [lookback, setLookback] = useState(7);
+  const [result, setResult] = useState<RecoveryPanel[] | null>(null);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [confirm, setConfirm] = useState(false);
+  const [report, setReport] = useState<RecoveryResult | null>(null);
+
+  const { data: panels = [] } = useQuery<any[]>({ queryKey: ["panels"], queryFn: listPanels });
+  const keyOf = (u: { panel_id: number; user_uuid: string }) => `${u.panel_id}|${u.user_uuid}`;
+
+  const detect = useMutation({
+    mutationFn: () => recoveryCandidates([...sel], lookback),
+    onSuccess: (r) => {
+      setResult(r);
+      const s = new Set<string>();
+      r.forEach((p) => p.clusters.forEach((c) => c.users.forEach((u) => { if (u.has_admin) s.add(keyOf(u)); })));
+      setChosen(s);
+      setReport(null);
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
+
+  const restore = useMutation({
+    mutationFn: () => {
+      const users = [...chosen].map((k) => { const [pid, uuid] = k.split("|"); return { panel_id: Number(pid), user_uuid: uuid }; });
+      return recoveryRestore(users, false);
+    },
+    onSuccess: (r) => {
+      setReport(r);
+      setConfirm(false);
+      const done = new Set<string>();
+      [...r.created, ...r.skipped].forEach((u: any) => done.add(`${u.panel_id}|${u.user_uuid}`));
+      setResult((prev) => !prev ? prev : prev
+        .map((p) => {
+          const clusters = p.clusters
+            .map((c) => { const users = c.users.filter((u) => !done.has(keyOf(u))); return { ...c, users, count: users.length }; })
+            .filter((c) => c.users.length > 0);
+          return { ...p, clusters, total_lost: clusters.reduce((a, c) => a + c.count, 0) };
+        })
+        .filter((p) => p.total_lost > 0));
+      setChosen((s) => { const n = new Set(s); done.forEach((k) => n.delete(k)); return n; });
+      show(`${r.counts.created} کاربر بازیابی شد.`);
+    },
+    onError: (e) => { setConfirm(false); show(errMsg(e), "error"); },
+  });
+
+  const togglePanel = (id: number) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleUser = (k: string) => setChosen((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const totalLost = (result || []).reduce((a, p) => a + p.total_lost, 0);
+
+  return (
+    <Card>
+      <CardContent>
+        {toast}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+          <RestoreIcon color="primary" />
+          <Typography variant="h6">بازیابی کاربران</Typography>
+        </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          کاربرانی که به‌خاطرِ برگرداندنِ پنل به یک بکاپِ قدیمی‌تر (مهاجرت/ری‌استور) از پنل حذف شده‌اند
+          ولی هنوز در حافظهٔ سامانه‌اند — با همان UUID و زیرِ همان ادمینِ اصلی دوباره ساخته می‌شوند.
+        </Typography>
+
+        <Typography variant="body2" sx={{ mb: 0.5 }}>۱) پنل‌های موردِ‌نظر را انتخاب کنید:</Typography>
+        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 1.5 }}>
+          {panels.map((p) => (
+            <Chip key={p.id} label={p.host || p.key || `#${p.id}`} onClick={() => togglePanel(p.id)}
+              color={sel.has(p.id) ? "primary" : "default"} variant={sel.has(p.id) ? "filled" : "outlined"} />
+          ))}
+        </Stack>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+          <TextField label="بازه (روزِ اخیر)" type="number" size="small" value={lookback}
+            onChange={(e) => setLookback(Math.max(1, Math.min(90, Number(e.target.value) || 7)))}
+            sx={{ width: 150 }} inputProps={{ dir: "ltr", min: 1, max: 90 }} />
+          <Button variant="contained" onClick={() => detect.mutate()} disabled={sel.size === 0 || detect.isPending}
+            startIcon={detect.isPending ? <CircularProgress size={16} /> : <SearchIcon />}>
+            ۲) بررسیِ کاربرانِ گم‌شده
+          </Button>
+        </Stack>
+
+        {result && totalLost === 0 && (
+          <Alert severity="success">هیچ کاربرِ گم‌شده‌ای در بازهٔ انتخابی پیدا نشد. ✅</Alert>
+        )}
+
+        {result && totalLost > 0 && result.map((p) => (
+          <Box key={p.panel_id} sx={{ mb: 2 }}>
+            <Divider sx={{ my: 1 }}><Chip size="small" color="primary" variant="outlined"
+              label={`${p.panel_key} — ${fmtNum(p.total_lost)} کاربرِ گم‌شده`} /></Divider>
+            {p.clusters.map((c) => (
+              <Box key={c.last_seen_at} sx={{ mb: 1.5 }}>
+                <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5, flexWrap: "wrap" }}>
+                  <Chip size="small" color={c.count >= 5 ? "warning" : "default"}
+                    label={`${fmtNum(c.count)} کاربر · آخرین حضور: ${fmtDateTime(c.last_seen_at)}`} />
+                  {c.count >= 5 && <Typography variant="caption" color="warning.main">خوشهٔ بزرگ — احتمالاً بازیابیِ پنل</Typography>}
+                </Stack>
+                <Box sx={{ overflowX: "auto" }}>
+                <Table size="small">
+                  <TableHead><TableRow>
+                    <TableCell padding="checkbox">
+                      <Checkbox size="small"
+                        checked={c.users.some((u) => u.has_admin) && c.users.every((u) => !u.has_admin || chosen.has(keyOf(u)))}
+                        onChange={(e) => setChosen((s) => { const n = new Set(s); c.users.forEach((u) => { if (u.has_admin) { e.target.checked ? n.add(keyOf(u)) : n.delete(keyOf(u)); } }); return n; })} />
+                    </TableCell>
+                    <TableCell>نام</TableCell><TableCell>ادمین</TableCell><TableCell>حجم</TableCell>
+                    <TableCell>مدت</TableCell><TableCell>تاریخِ شروع</TableCell><TableCell>مصرف</TableCell>
+                    <TableCell>UUID</TableCell><TableCell>وضعیت</TableCell>
+                  </TableRow></TableHead>
+                  <TableBody>
+                    {c.users.map((u) => (
+                      <TableRow key={u.user_uuid} hover>
+                        <TableCell padding="checkbox">
+                          <Tooltip title={u.has_admin ? "" : "ادمینِ این کاربر پیدا نشد — قابلِ بازیابی نیست"}>
+                            <span><Checkbox size="small" disabled={!u.has_admin}
+                              checked={chosen.has(keyOf(u))} onChange={() => toggleUser(keyOf(u))} /></span>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>{u.name || "—"}</TableCell>
+                        <TableCell>{u.admin_name || <Chip size="small" color="error" label="؟ ادمین" />}</TableCell>
+                        <TableCell>{fmtGb(u.gb)}</TableCell>
+                        <TableCell>{fmtNum(u.days)} روز</TableCell>
+                        <TableCell dir="ltr">{u.start_date ? fmtDate(u.start_date) : "—"}</TableCell>
+                        <TableCell>{fmtGb(u.current_usage_gb)}</TableCell>
+                        <TableCell><Box component="code" sx={{ fontSize: 11 }} dir="ltr">{u.user_uuid.slice(0, 13)}</Box></TableCell>
+                        <TableCell>{u.enable ? "فعال" : "غیرفعال"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        ))}
+
+        {result && totalLost > 0 && (
+          <Stack direction="row" alignItems="center" spacing={2} sx={{ mt: 1 }}>
+            <Typography variant="body2">{fmtNum(chosen.size)} کاربر انتخاب شده</Typography>
+            <Button variant="contained" startIcon={<RestoreIcon />} disabled={chosen.size === 0}
+              onClick={() => setConfirm(true)}>۳) بازیابیِ انتخاب‌شده‌ها</Button>
+          </Stack>
+        )}
+
+        {report && (
+          <Alert severity={report.counts.errors ? "warning" : "success"} sx={{ mt: 2 }}>
+            <b>{fmtNum(report.counts.created)}</b> ساخته شد، {fmtNum(report.counts.skipped)} از قبل موجود بود
+            {report.counts.errors ? <>، <b>{fmtNum(report.counts.errors)}</b> خطا</> : null}.
+            {report.errors.length > 0 && (
+              <Box sx={{ mt: 1 }}>{report.errors.map((e: any, i: number) => (
+                <Typography key={i} variant="caption" display="block">• {e.name || e.user_uuid?.slice(0, 8)}: {e.reason}</Typography>
+              ))}</Box>
+            )}
+          </Alert>
+        )}
+
+        <Dialog open={confirm} onClose={() => setConfirm(false)}>
+          <DialogTitle>تأییدِ بازیابی</DialogTitle>
+          <DialogContent>
+            <Typography>
+              {fmtNum(chosen.size)} کاربر با همان UUID و زیرِ همان ادمینِ اصلی روی پنل ساخته می‌شوند.
+              کاربری که همین الان روی پنل باشد رد می‌شود (تکراری ساخته نمی‌شود).
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirm(false)}>انصراف</Button>
+            <Button variant="contained" onClick={() => restore.mutate()} disabled={restore.isPending}
+              startIcon={restore.isPending ? <CircularProgress size={16} /> : <RestoreIcon />}>
+              بله، بازیابی کن
+            </Button>
+          </DialogActions>
+        </Dialog>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Tools() {
   return (
     <Box>
@@ -404,6 +584,7 @@ export default function Tools() {
         عملیاتِ نادر و ویژه (با احتیاط استفاده شود)
       </Typography>
       <Stack spacing={2} sx={{ maxWidth: 1000 }}>
+        <RecoverUsersTool />
         <RemoveUserTool />
         <UnbindTelegramTool />
         <DeleteAdminTool />
