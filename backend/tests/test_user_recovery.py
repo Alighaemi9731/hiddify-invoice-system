@@ -74,30 +74,32 @@ def test_detect_finds_lost_clusters_only(tmp_path):
         assert by["NoAdmin"]["has_admin"] is False         # unresolved admin flagged, not hidden
         uuids = {u["user_uuid"] for u in c["users"]}
         assert "u-present" not in uuids and "u-old" not in uuids
-        # No sync_runs seeded + cluster < _BIG_CLUSTER → NOT flagged a rollback (would be churn).
-        assert c["likely_rollback"] is False and panel["rollback_lost"] == 0
+        # No sync_runs seeded → the hints are empty (owner still decides; nothing auto-classified).
+        assert c["drop_size"] == 0 and c["had_failure"] is False
     _run(body, tmp_path, "d1.db")
 
 
-def test_detect_flags_rollback_cluster_via_sync_drop(tmp_path):
+def test_detect_annotates_drop_and_failure_hints(tmp_path):
     async def body(s, _Session):  # noqa: ANN001
         from app.models import SyncRun
         p, _r = await _seed(s)
         latest = p.last_synced_at
-        drop_t = latest - dt.timedelta(hours=1)   # == the lost cluster's last-seen instant
-        # A successful sync at drop_t saw 100 users; the next successful sync (at `latest`) saw 90 →
-        # a drop of 10 at that instant → the cluster last-seen there is a real rollback event.
+        drop_t = latest - dt.timedelta(hours=1)          # == the lost cluster's last-seen instant
+        mid = drop_t + dt.timedelta(minutes=20)
+        # success(100) at drop_t → a FAILED sync (panel down) → success(90) at latest: a drop of 10
+        # with an outage in between — the migration tell. These are HINTS on the cluster, not a verdict.
         s.add_all([
             SyncRun(panel_id=p.id, source="backup_json", status="success", admin_count=1,
                     user_count=100, started_at=drop_t, finished_at=drop_t),
+            SyncRun(panel_id=p.id, source="backup_json", status="failed", admin_count=0,
+                    user_count=0, started_at=mid, finished_at=mid),
             SyncRun(panel_id=p.id, source="backup_json", status="success", admin_count=1,
                     user_count=90, started_at=latest, finished_at=latest),
         ])
         await s.commit()
         res = await user_recovery.detect(s, [p.id], lookback_days=7)
         c = res[0]["clusters"][0]
-        assert c["likely_rollback"] is True and c["drop_size"] == 10
-        assert res[0]["rollback_lost"] == 3
+        assert c["drop_size"] == 10 and c["had_failure"] is True
     _run(body, tmp_path, "d3.db")
 
 

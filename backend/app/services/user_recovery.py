@@ -34,12 +34,6 @@ log = logging.getLogger("user_recovery")
 # A user whose last sighting predates the panel's latest sync by more than this is "gone from the
 # panel" (not merely a mid-sync timing skew — one sync stamps every present user with the SAME time).
 _GONE_MARGIN = dt.timedelta(minutes=2)
-# A drop of this many users between two consecutive SUCCESSFUL syncs is an "event" (a rollback), not
-# ordinary churn (expiries/one-off deletions trickle a user or two per sync).
-_MIN_DROP = 3
-# A cluster at least this big is treated as an event even without a matching sync drop (belt-and-braces
-# — e.g. sync_runs pruned, or the drop split across ticks). Ordinary deletions never bunch this tightly.
-_BIG_CLUSTER = 10
 
 
 def _iso(v) -> str | None:  # noqa: ANN001
@@ -80,21 +74,23 @@ def _user_dict(s: EndUserSnapshot, admin_name: str | None) -> dict:
     }
 
 
-async def _drop_markers(
+async def _sync_events(
     session: AsyncSession, panel_ids: list[int], cutoff: dt.datetime
-) -> dict[int, dict[str, int]]:
-    """Per panel, the minute-key of each SUCCESSFUL sync whose user count then DROPPED at the next
-    successful sync → the drop size. A lost cluster whose last-seen minute matches one of these was a
-    real event (rollback/migration), not ordinary churn. Because sync stamps `last_synced_at`,
-    `panel.last_synced_at` and `sync_run.finished_at` with the SAME instant, the cluster time and the
-    marker time are the same value — the match is exact."""
+) -> dict[int, dict[str, dict]]:
+    """Per panel, minute-key of each SUCCESSFUL sync → context for the loss that followed it:
+    `{"drop": users lost by the next successful sync, "failure": a sync FAILED in between}`.
+
+    These are HINTS, not a classifier: a rollback/migration typically shows a count drop and often a
+    sync failure (the panel was briefly unreachable while it was moved/restored) — but ordinary
+    expiry churn also drops users, and network blips also fail, so the owner still decides. Because
+    sync stamps `last_synced_at`, `panel.last_synced_at` and `sync_run.finished_at` with the SAME
+    instant, a cluster's last-seen minute equals its sync's minute here — the match is exact."""
     from app.models import SyncRun
 
-    out: dict[int, dict[str, int]] = {pid: {} for pid in panel_ids}
+    out: dict[int, dict[str, dict]] = {pid: {} for pid in panel_ids}
     rows = (await session.execute(
         select(SyncRun).where(
             SyncRun.panel_id.in_(panel_ids),
-            SyncRun.status == "success",
             SyncRun.started_at >= cutoff,
         ).order_by(SyncRun.panel_id, SyncRun.started_at)
     )).scalars().all()
@@ -103,14 +99,24 @@ async def _drop_markers(
         if r.panel_id is not None:
             by_panel.setdefault(r.panel_id, []).append(r)
     for pid, runs in by_panel.items():
-        for prev, cur in zip(runs, runs[1:]):
-            drop = int(prev.user_count or 0) - int(cur.user_count or 0)
-            if drop < _MIN_DROP:
+        for i, r in enumerate(runs):
+            if r.status != "success":
                 continue
-            t = _aware(prev.finished_at or prev.started_at)
+            failure = False
+            nxt = None
+            for j in range(i + 1, len(runs)):
+                if runs[j].status == "failed":
+                    failure = True
+                elif runs[j].status == "success":
+                    nxt = runs[j]
+                    break
+            if nxt is None:
+                continue
+            t = _aware(r.finished_at or r.started_at)
             if t is not None:
-                key = t.replace(second=0, microsecond=0).isoformat()
-                out[pid][key] = max(out[pid].get(key, 0), drop)
+                drop = max(0, int(r.user_count or 0) - int(nxt.user_count or 0))
+                out[pid][t.replace(second=0, microsecond=0).isoformat()] = {
+                    "drop": drop, "failure": failure}
     return out
 
 
@@ -151,7 +157,7 @@ async def detect(
             key, {"key": key, "last_seen_at": _iso(s.last_synced_at), "users": []})
         cluster["users"].append(_user_dict(s, names.get((s.panel_id, (s.added_by_uuid or "").lower()))))
 
-    markers = await _drop_markers(session, panel_ids, cutoff)
+    events = await _sync_events(session, panel_ids, cutoff)
     out: list[dict] = []
     for pid, buckets in per_panel.items():
         p = panels[pid]
@@ -159,19 +165,20 @@ async def detect(
         for c in clusters:
             c["users"].sort(key=lambda u: ((u["admin_name"] or "~"), u["name"]))
             c["count"] = len(c["users"])
-            # A cluster is a real EVENT (rollback) if the panel's sync count dropped at that instant,
-            # or if it's implausibly large for ordinary churn. Everything else is scattered deletions.
-            c["drop_size"] = markers.get(pid, {}).get(c["key"], 0)
-            c["likely_rollback"] = bool(c["drop_size"]) or c["count"] >= _BIG_CLUSTER
-        # Events first (they're what recovery is for), biggest first, then most-recent.
-        clusters.sort(key=lambda c: (c["likely_rollback"], c["count"], c["last_seen_at"] or ""),
-                      reverse=True)
+            ev = events.get(pid, {}).get(c["key"], {})
+            # HINTS only (the owner decides which cluster is their rollback): how many the panel's
+            # count dropped at that instant, and whether a sync FAILED then (panel was down = a
+            # migration/restore tell). Deliberately NOT auto-classified — on a busy panel the
+            # migration loss is the same size as ordinary expiry churn, so a guess would be wrong.
+            c["drop_size"] = int(ev.get("drop", 0))
+            c["had_failure"] = bool(ev.get("failure", False))
+        # Biggest clusters first (the rollback is usually a bunch lost at once), then most recent.
+        clusters.sort(key=lambda c: (c["count"], c["last_seen_at"] or ""), reverse=True)
         out.append({
             "panel_id": pid,
             "panel_key": p.key,
             "panel_last_synced_at": _iso(p.last_synced_at),
             "total_lost": sum(c["count"] for c in clusters),
-            "rollback_lost": sum(c["count"] for c in clusters if c["likely_rollback"]),
             "clusters": clusters,
         })
     out.sort(key=lambda x: x["panel_id"])

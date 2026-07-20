@@ -8,6 +8,21 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.97.2 - 2026-07-20
+
+Reworks how User Recovery presents lost users so it's honest and safe. No database migration.
+
+### Changed
+
+- **User Recovery no longer guesses which losses were a rollback — it presents them clearly and lets
+  you choose.** On a busy panel the handful of users lost to a restore look exactly like an ordinary
+  day's expiries (same size), so any automatic "this was a rollback" verdict would sometimes be
+  wrong. Now the tool clusters the lost users by the instant they vanished, sorts them biggest-first,
+  and annotates each cluster with **how far the panel's user-count dropped then** and a **«قطعیِ پنل»
+  badge when a sync failed at that moment** (a strong migration tell) — then leaves every box
+  unchecked so you pick the cluster that matches your own migration. The default look-back is now 2
+  days. This removes any risk of one click restoring users an admin had deliberately deleted.
+
 ## 1.97.1 - 2026-07-20
 
 Makes the User Recovery tool focus on actual rollback events instead of ordinary deletions. No
