@@ -1,6 +1,9 @@
 version: 2
-# Dependency updates are GROUPED (one PR per ecosystem) and infrequent, to keep the repo close to a
-# single `main` branch while still surfacing security updates. NOTE: /deploy has no Dockerfile (only
+# SINGLE-BRANCH POLICY (owner decision, 2026-07-21): the repository always has exactly one branch —
+# `main`. Dependabot must never open PRs/branches: every ecosystem below is pinned to
+# open-pull-requests-limit: 0, which keeps the config (and GitHub's security alerts) active while
+# producing zero branches. Dependency bumps are done deliberately, inside a normal release, guided
+# by `gh api repos/{owner}/{repo}/dependabot/alerts` and the lockfile audit in CI. NOTE: /deploy has no Dockerfile (only
 # compose + shell scripts), so there is intentionally no docker ecosystem for it — its image pins
 # (Caddy/Postgres) are reviewed manually at release time.
 updates:
@@ -8,7 +11,7 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       github-actions:
         patterns: ["*"]
@@ -17,7 +20,7 @@ updates:
     directory: "/backend"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       backend-python:
         patterns: ["*"]
@@ -26,7 +29,7 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       frontend-npm:
         patterns: ["*"]
@@ -35,7 +38,7 @@ updates:
     directory: "/backend"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       backend-docker:
         patterns: ["*"]
@@ -44,7 +47,7 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       frontend-docker:
         patterns: ["*"]

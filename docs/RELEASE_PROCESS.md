@@ -10,7 +10,11 @@ tracked documentation.
 
 ## 1. Prepare one batch
 
-- Work on a dedicated branch.
+- **Single-branch policy: all work happens directly on `main`.** The repository must
+  always have exactly one branch. Never create release/feature branches and never let
+  tooling (Dependabot etc.) open PR branches. CI runs on every push to `main`; a release
+  is tagged only from a commit whose CI is green — if CI fails, fix forward on `main`
+  before tagging or deploying.
 - Keep the release scoped to one batch (from the active plan/roadmap item).
 - Add focused regression tests for every fixed failure mode.
 - Update behavior documentation and the batch status.
@@ -31,7 +35,9 @@ Then update these files to the same version:
 
 - `VERSION`
 - `backend/app/__init__.py`
-- `CHANGELOG.md`
+- `CHANGELOG.md` — **local-only** (gitignored): the changelog is the operator's private
+  release story, kept on the working machine and never pushed to GitHub. Keep writing a
+  full entry per release there; the public GitHub release uses `--generate-notes`.
 
 If the release adds an Alembic migration, record its `down_revision` in the CHANGELOG
 entry. That is the schema the rollback target expects, and `deploy/rollback.sh` needs it

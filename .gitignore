@@ -62,3 +62,12 @@ invoice-backup/
 # ───────────────────── Local operator metadata ─────────────────────
 # Production host/user/path are intentionally local. Keep public docs generic.
 .claude/*.local.md
+
+# ───────────── Internal working files (local-only, not part of the published repo) ─────────────
+# The release/development story, agent instructions, plans and tooling config are for the
+# operator's own machine. The repo publishes only the product: code, deploy, and product docs.
+CHANGELOG.md
+CLAUDE.md
+.claude/
+.mcp.json
+plans/
