@@ -8,6 +8,24 @@ recorded here from `v1.37.35` onward. Older detailed history remains available i
 
 No changes yet.
 
+## 1.96.0 - 2026-07-20
+
+Renewals now reset a config to a fresh plan instead of piling onto the used volume. No database
+migration.
+
+### Changed
+
+- **A renewed service is now RESET to a clean fresh plan** — the volume limit becomes exactly the
+  plan sold and the used counter goes back to zero — instead of the old cumulative method that added
+  the new plan on top of the already-used volume (so a renewed 30 GB plan showed as 59.5 GB on the
+  panel, and it compounded every cycle). The day period still restarts fresh. Because auto-renew
+  fires only when a config is nearly out of volume/time, the reset forfeits essentially nothing.
+- This corrects the reseller invoice **at the source**: a renewed shop config now reads exactly the
+  plan it sold, so nothing is over-counted. Configs that were already inflated by the old method heal
+  themselves the next time they renew; the billing cap shipped in v1.94.2 stays as a backstop for any
+  config that hasn't renewed yet. Verified on the panel: a renewal writes `usage_limit = plan`,
+  `current_usage = 0`.
+
 ## 1.95.1 - 2026-07-19
 
 Trims the auto-renew messages. No database migration.

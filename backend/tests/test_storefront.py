@@ -1170,7 +1170,10 @@ def test_delete_subscription_removes_panel_user(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_renew_user_grants_fresh_quota_on_top_of_usage(tmp_path, monkeypatch):
+def test_renew_user_is_a_clean_reset_not_cumulative(tmp_path, monkeypatch):
+    """A renewal RESETS to a fresh plan (limit = gb, consumed = 0), NOT the old cumulative used+gb.
+    So a config renewed at 7.5 GB used becomes a clean 10 GB from zero — the quota never compounds
+    and the reseller invoice reads exactly the plan sold."""
     from app.services.panel_client.admin_api import AdminApiClient
 
     body = {}
@@ -1186,7 +1189,8 @@ def test_renew_user_grants_fresh_quota_on_top_of_usage(tmp_path, monkeypatch):
 
     async def go():
         await AdminApiClient().renew_user(SimpleNamespace(), "u1", gb=10, days=30, api_key="k")
-        assert body["usage_limit_GB"] == 17.5   # used 7.5 + fresh 10 → remaining is exactly 10
+        assert body["usage_limit_GB"] == 10.0   # the plan sold — NOT 7.5 + 10 = 17.5
+        assert body["current_usage_GB"] == 0     # consumed counter reset to zero
         assert body["package_days"] == 30 and body["start_date"] is None and body["enable"] is True
 
     asyncio.run(go())

@@ -39,6 +39,12 @@ class RenewUserTarget:
     def body(self) -> dict:
         return {
             "usage_limit_GB": self.usage_limit_gb,
+            # CLEAN RESET: zero the consumed counter so a renewal is a FRESH plan (limit = the plan
+            # sold, remaining = the whole plan) instead of the old cumulative `used + gb`, which
+            # inflated the quota every cycle and over-billed the reseller. Auto-renew fires at
+            # near-exhaustion, so resetting forfeits ~no volume. Hiddify accepts + persists this
+            # (verified on prod). `start_date: None` restarts the day-clock on first connect.
+            "current_usage_GB": 0,
             "package_days": self.package_days,
             "start_date": None,
             "enable": True,
@@ -195,18 +201,20 @@ class AdminApiClient(PanelClient):
     async def prepare_renew_user(  # noqa: ANN001
         self, panel, user_uuid: str, *, gb: int, days: int, api_key: str | None = None
     ) -> RenewUserTarget:
-        """Read and calculate the absolute renewal target without mutating the panel."""
+        """Read and calculate the absolute renewal target without mutating the panel.
+
+        CLEAN RESET: the target quota is exactly the plan `gb` (from ZERO usage — see
+        `RenewUserTarget.body`), NOT the old cumulative `used + gb`. So a renewed config reads as the
+        plan it sold, the quota never compounds across renewals, and the reseller invoice is correct
+        at the source (the billing cap then becomes a harmless no-op for cleanly-renewed configs).
+        The panel row is still read here only to capture `prior_start_date` for the durable
+        reconciler's applied-check."""
         data = await self.get_user(panel, user_uuid, api_key=api_key)
         if data is None:
             raise RuntimeError("panel user not found")
-        used = 0.0
-        try:
-            used = float(data.get("current_usage_GB") or 0)
-        except (TypeError, ValueError):
-            used = 0.0
         raw_start = data.get("start_date")
         return RenewUserTarget(
-            usage_limit_gb=round(used + float(gb), 3),
+            usage_limit_gb=round(float(gb), 3),
             package_days=int(days),
             prior_start_date=(str(raw_start)[:32] if raw_start not in (None, "") else None),
         )

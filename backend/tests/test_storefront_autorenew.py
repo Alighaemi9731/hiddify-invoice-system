@@ -91,6 +91,25 @@ def _fake_renew(calls):  # noqa: ANN001, ANN202
     return prepare, apply
 
 
+def test_prepare_renew_user_is_a_clean_reset(monkeypatch):
+    """A renewal targets a FRESH plan — usage_limit = the plan (gb) and the consumed counter reset to
+    ZERO — NOT the old cumulative `used + gb` that inflated the quota every cycle."""
+    async def fake_get_user(self, panel, uuid, *, api_key=None):  # noqa: ANN001, ANN002
+        return {"current_usage_GB": 45.0, "usage_limit_GB": 50.0, "start_date": "2026-07-01"}
+    monkeypatch.setattr(admin_api.AdminApiClient, "get_user", fake_get_user)
+
+    async def go():
+        t = await admin_api.AdminApiClient().prepare_renew_user(object(), "uuid", gb=30, days=30)
+        assert t.usage_limit_gb == 30.0          # the plan sold — NOT 45 + 30 = 75
+        body = t.body
+        assert body["usage_limit_GB"] == 30.0
+        assert body["current_usage_GB"] == 0     # consumed counter reset → fresh 30 GB from zero
+        assert body["package_days"] == 30
+        assert body["start_date"] is None        # day-clock restarts on first connect
+        assert t.prior_start_date == "2026-07-01"  # still captured for the durable reconciler
+    asyncio.run(go())
+
+
 async def _wallet(Session, cid):  # noqa: ANN001
     async with Session() as s:
         return int((await s.get(StorefrontCustomer, cid)).wallet_balance_toman)
