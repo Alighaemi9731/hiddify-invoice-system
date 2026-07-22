@@ -102,7 +102,7 @@ jobs:
       - run: |
           bash -n deploy/install.sh deploy/bootstrap.sh deploy/updater.sh get.sh \
             deploy/package-release.sh deploy/release-installer.sh deploy/rollback.sh \
-            deploy/smoke.sh deploy/test-release-tools.sh
+            deploy/smoke.sh deploy/test-release-tools.sh deploy/healthwatch.sh
       - run: bash deploy/test-release-tools.sh
       - name: Build and verify release assets
         run: |
@@ -118,3 +118,62 @@ jobs:
         run: |
           cp deploy/.env.staging.example .env.staging
           docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml config >/dev/null
+
+  # Boots the REAL staging stack (Postgres + backend with boot-time Alembic + SPA +
+  # ingress) and smoke-checks it — the one failure class nothing else in CI exercised
+  # (boot loops, migration ordering, broken imports, unhealthy containers).
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Boot staging stack
+        run: |
+          cp deploy/.env.staging.example .env.staging
+          docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml up -d --build
+      - name: Wait for backend health (deterministic timeout)
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:18080/health" >/tmp/health.json 2>/dev/null; then
+              cat /tmp/health.json; echo; break
+            fi
+            sleep 5
+            [ "$i" = "60" ] && { echo "backend never became healthy"; exit 1; }
+          done
+          python3 - <<'PY'
+          import json
+          h = json.load(open("/tmp/health.json"))
+          assert h["database"] == "ok", h
+          PY
+      - name: Version endpoint matches the repo VERSION
+        run: |
+          curl -fsS http://127.0.0.1:18080/api/info | tee /tmp/info.json
+          python3 - <<'PY'
+          import json
+          info = json.load(open("/tmp/info.json"))
+          repo = open("VERSION").read().strip()
+          assert info["version"] == repo, (info, repo)
+          PY
+      - name: Migration head matches the pinned HEAD
+        run: |
+          PIN=$(sed -n 's/^HEAD = "\(.*\)"$//p' backend/tests/test_migrations_contracts.py)
+          DBV=$(docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml             exec -T db psql -U invoice_staging -d invoice_staging -tAc "SELECT version_num FROM alembic_version")
+          echo "pin=$PIN db=$DBV"
+          [ -n "$PIN" ] && [ "$PIN" = "$DBV" ]
+      - name: No unhealthy containers
+        run: |
+          bad=$(docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml ps             --format '{{.Name}} {{.Status}}' | grep -vE '\(healthy\)|Up' || true)
+          [ -z "$bad" ] || { echo "unhealthy: $bad"; exit 1; }
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml logs --no-color > /tmp/compose-smoke.log 2>&1 || true
+          tail -200 /tmp/compose-smoke.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: compose-smoke-logs
+          path: /tmp/compose-smoke.log
+      - name: Teardown
+        if: always()
+        run: docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml down -v

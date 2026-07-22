@@ -258,6 +258,37 @@ UNIT
       && systemctl restart hiddify-updater >/dev/null 2>&1 || true
   fi
   c "Update watcher active — the panel can now self-update."
+
+  # External health monitor (Wave 7): probes the public /health from the HOST every
+  # 2 minutes and Telegram-alerts the owner on consecutive failures — the app's own
+  # alerting runs inside the containers it is meant to watch. Runbook: docs/MONITORING.md
+  c "Installing the external health monitor (systemd: hiddify-healthwatch)…"
+  cat > /etc/systemd/system/hiddify-healthwatch.service <<UNIT
+[Unit]
+Description=Hiddify Invoice System — external health probe
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+Environment=REPO_DIR=$REPO_DIR
+ExecStart=/usr/bin/env bash $REPO_DIR/deploy/healthwatch.sh
+UNIT
+  cat > /etc/systemd/system/hiddify-healthwatch.timer <<UNIT
+[Unit]
+Description=Run the Hiddify Invoice health probe every 2 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
+  chmod +x "$REPO_DIR/deploy/healthwatch.sh" 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable --now hiddify-healthwatch.timer >/dev/null 2>&1 || true
+  c "Health monitor active (hiddify-healthwatch.timer, every 2 min)."
 else
   err "systemd not found — the in-panel «به‌روزرسانی» button won't work (update from the terminal instead)."
 fi
