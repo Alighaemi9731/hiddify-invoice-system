@@ -7,12 +7,14 @@ owner's manual toggle is preserved across syncs.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db import SessionLocal
 from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
 from app.models.enums import EnforcementState, PanelStatus, SyncSource, SyncStatus
 from app.services.panel_client import BackupJsonClient, PanelClient, PanelData
@@ -52,6 +54,24 @@ async def sync_panel(
     # so reading panel.id afterwards would trigger a sync lazy-load (MissingGreenlet) and
     # mask the real error / abort the whole run.
     panel_id = panel.id
+    # When this attempt began — anchors the F12 recency guard below AND the new
+    # superseded guard: because the fetch now happens BEFORE the lock, a concurrent sync
+    # that COMMITTED after this timestamp has strictly fresher data than ours.
+    attempt_started = _now()
+
+    # Wave 4 (B10): fetch the backup BEFORE opening the write transaction / taking the
+    # per-panel lock. The network call (up to the panel timeout, 45–90 s) used to hold a
+    # pooled connection idle-in-transaction for its whole duration — the single biggest
+    # pool/lock hold in the app. A fetch failure is re-raised inside the guarded block so
+    # the failure bookkeeping below stays identical.
+    fetch_exc: Exception | None = None
+    if data is None:
+        client = client or BackupJsonClient()
+        try:
+            data = await client.fetch_backup(panel)
+        except Exception as exc:  # noqa: BLE001 - recorded via the unified failure path
+            fetch_exc = exc
+
     # Serialize concurrent syncs of THIS panel (F12): scheduler tick, sync-all, a manual sync click,
     # create/update-panel background sync, and recompute can all target one panel at once — without a
     # lease, a reverse-order finish overwrites newer data or two first-time inserts collide on
@@ -64,17 +84,21 @@ async def sync_panel(
             text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
             {"ns": _SYNC_LOCK_NS, "pid": panel_id},
         )
-    # When this attempt actually began its work (under the lock) — used by the F12 recency guard so an
-    # older failed attempt never clobbers a newer success's `ok` status.
-    attempt_started = _now()
     run = SyncRun(panel_id=panel_id, source=source, status=SyncStatus.running)
     session.add(run)
     await session.flush()
 
     try:
-        if data is None:
-            client = client or BackupJsonClient()
-            data = await client.fetch_backup(panel)
+        if fetch_exc is not None:
+            raise fetch_exc
+        assert data is not None
+        # Superseded guard (new with fetch-outside-lock): if another sync COMMITTED after
+        # this attempt began, its data is fresher than what we fetched — writing ours,
+        # stamped with a later last_synced_at, would regress the snapshots. Abort through
+        # the failure path; the recency guard there keeps the panel's ok status intact.
+        await session.refresh(panel)
+        if _newer_success_since(panel.last_synced_at, attempt_started):
+            raise RuntimeError("superseded by a newer concurrent sync (kept its data)")
 
         now = _now()
         await _upsert_resellers(session, panel, data, now)
@@ -253,15 +277,35 @@ async def _upsert_users(
         s.last_synced_at = now
 
 
+# Bounded fan-out for sync_all: panels are independent (per-panel advisory locks), so a
+# slow/unreachable panel must not serialize the rest — but unbounded parallelism would
+# burst connections and panel-API load. 3 keeps worst-case wall time ≈ ceil(N/3)×slowest
+# instead of N×slowest, with at most 3 pooled connections in write phases.
+_SYNC_ALL_CONCURRENCY = 3
+
+
 async def sync_all(session: AsyncSession) -> list[SyncRun]:
-    panels = (
-        await session.execute(select(Panel).where(Panel.enabled.is_(True)))
+    """Sync every enabled panel with bounded concurrency, one session per panel.
+
+    The caller's session is used only to list panels; each panel's sync runs in its own
+    short-lived session so a failure/rollback in one can never poison another's
+    transaction (the old serial loop shared one session across all panels)."""
+    panel_ids = (
+        await session.execute(select(Panel.id).where(Panel.enabled.is_(True)))
     ).scalars().all()
-    runs: list[SyncRun] = []
-    for panel in panels:
-        try:
-            runs.append(await sync_panel(session, panel))
-        except Exception:  # noqa: BLE001 — one bad panel must not abort the rest
-            log.exception("sync_all: panel %s failed", getattr(panel, "key", "?"))
-            await session.rollback()
-    return runs
+    sem = asyncio.Semaphore(_SYNC_ALL_CONCURRENCY)
+
+    async def _one(pid: int) -> SyncRun | None:
+        async with sem:
+            async with SessionLocal() as s:
+                panel = await s.get(Panel, pid)
+                if panel is None:
+                    return None
+                try:
+                    return await sync_panel(s, panel)
+                except Exception:  # noqa: BLE001 — one bad panel must not abort the rest
+                    log.exception("sync_all: panel id=%s failed", pid)
+                    return None
+
+    results = await asyncio.gather(*(_one(pid) for pid in panel_ids))
+    return [r for r in results if r is not None]
