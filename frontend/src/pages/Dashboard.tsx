@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -159,7 +159,9 @@ export default function Dashboard() {
         : fmtNum(v);
   const accent = theme.palette.primary.main;
   const salesDayEmpty = !salesByDay.length || salesByDay.every((d: any) => !d.amount_toman);
-  const salesByDayOption = {
+  // Memoized: EChart re-applies setOption whenever the option object identity changes,
+  // so rebuilding these on every render forced a full canvas redraw per re-render.
+  const salesByDayOption = useMemo(() => ({
     textStyle: { fontFamily: FONT },
     grid: { left: 6, right: 14, top: 18, bottom: 4, containLabel: true },
     tooltip: {
@@ -216,8 +218,9 @@ export default function Dashboard() {
         },
       },
     }],
-  };
-  const statusOption = {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [salesByDay, isDark, accent, theme]);
+  const statusOption = useMemo(() => ({
     textStyle: { fontFamily: FONT },
     tooltip: {
       trigger: "item",
@@ -241,7 +244,8 @@ export default function Dashboard() {
         itemStyle: { color: item.color },
       })),
     }],
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [statusData.map((i) => `${i.status}:${i.count}`).join(","), isDark, theme]);
 
   const salesTrend = salesChange === null ? (
     <MetricDetail>{data?.period_billed_toman ? "اولین فروش ثبت‌شده" : "بدون فروش در دورهٔ قبل"}</MetricDetail>

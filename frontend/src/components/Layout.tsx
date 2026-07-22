@@ -320,7 +320,10 @@ export default function Layout() {
                 </Box>
               }
             >
-              <PageTransition key={loc.pathname}>
+              {/* Not keyed on the pathname: keying forced a full unmount/remount (and a
+                  replayed entrance animation + refetch) on every navigation. The entrance
+                  plays once per app load; route changes just swap the Outlet content. */}
+              <PageTransition>
                 <Outlet />
               </PageTransition>
             </Suspense>

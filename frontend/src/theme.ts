@@ -574,7 +574,6 @@ export function makeTheme(mode: PaletteMode) {
   });
 }
 
-export const theme = makeTheme("light");
 
 /**
  * Background for a mobile row-card NESTED inside a glass Card. Dark: a solid surface one step

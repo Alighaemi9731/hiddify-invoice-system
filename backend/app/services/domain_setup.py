@@ -73,6 +73,10 @@ async def _caddy_set_domain(domain: str, email: str | None) -> tuple[bool, str]:
                 "servers": {
                     "srv0": {
                         "listen": [":443", ":80"],
+                        # No h3: the optional SNI relay in front forwards TCP only, so an
+                        # advertised h3 alt-svc would point browsers at a dead UDP path
+                        # (cached 30 days). Mirrors the same setting in deploy/Caddyfile.
+                        "protocols": ["h1", "h2"],
                         "routes": [
                             {
                                 # The domain: proxy API → backend, everything else → SPA.

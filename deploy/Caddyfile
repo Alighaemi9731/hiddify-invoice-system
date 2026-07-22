@@ -13,6 +13,12 @@
 {
 	admin 0.0.0.0:2019
 	email {$ACME_EMAIL}
+	# No HTTP/3: the SNI TLS-passthrough relay in front of Caddy forwards TCP only, so an
+	# advertised h3 alt-svc points browsers at a dead UDP path (they cache it for 30 days
+	# and waste QUIC attempts before falling back). Advertise only what is reachable.
+	servers {
+		protocols h1 h2
+	}
 }
 
 {$SERVER_DOMAIN::80} {

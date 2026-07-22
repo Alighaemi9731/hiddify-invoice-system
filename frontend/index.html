@@ -18,13 +18,25 @@
     <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#f5f5f7" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Self-hosted Vazirmatn (variable, weights 100-900, OFL) — same-origin so first paint
+         never blocks on a third-party font CDN (Google Fonts is slow/unreachable from some
+         networks). Preload + font-display:swap: text paints immediately in the fallback and
+         swaps when the single 111 KB woff2 arrives; the service worker precaches it. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      href="/fonts/Vazirmatn-var.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
     />
     <style>
+      @font-face {
+        font-family: "Vazirmatn";
+        src: url("/fonts/Vazirmatn-var.woff2") format("woff2-variations");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
       html, body, #root { height: 100%; margin: 0; }
       body { font-family: Vazirmatn, system-ui, sans-serif; }
     </style>

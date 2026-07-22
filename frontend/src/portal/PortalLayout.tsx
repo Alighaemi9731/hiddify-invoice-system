@@ -246,7 +246,7 @@ export default function PortalLayout() {
                 </Box>
               }
             >
-              <PageTransition key={loc.pathname}>
+              <PageTransition>
                 <Outlet />
               </PageTransition>
             </Suspense>

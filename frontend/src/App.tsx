@@ -3,7 +3,9 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Box, CircularProgress } from "@mui/material";
 import { useAuth } from "./auth/AuthContext";
 import { getSetupStatus } from "./api/client";
-import Layout from "./components/Layout";
+// Layout is lazy so the pre-login entry doesn't drag in its import graph — notably
+// framer-motion (~40 KB gz) via PageTransition. It only renders behind RequireAuth.
+const Layout = lazy(() => import("./components/Layout"));
 const PortalApp = lazy(() => import("./portal/PortalApp"));
 // Login + Setup stay eager — they're the pre-auth entry points and must paint instantly
 // with no chunk flash. Everything behind auth is lazy so each route (and the heavy chart
@@ -54,7 +56,13 @@ export default function App() {
 
   // Gate everything on the one-time setup state. Until the owner completes setup,
   // the wizard is shown for ANY path; afterwards it's never shown again.
-  const [setupDone, setSetupDone] = useState<boolean | null>(null);
+  // setup_done is one-way (false → true, never back), so once observed true it's cached in
+  // localStorage and the app paints immediately on later visits instead of blocking first
+  // render on a network round trip. The status is still fetched in the background to keep
+  // the cache honest (e.g. a restored-to-fresh install clears it).
+  const [setupDone, setSetupDone] = useState<boolean | null>(() =>
+    localStorage.getItem("setup_done") === "1" ? true : null
+  );
 
   useEffect(() => {
     if (isPortal) return; // portal doesn't need the owner setup status
@@ -63,11 +71,16 @@ export default function App() {
     // install doesn't skip the setup wizard and strand the user on a login they can't use.
     const attempt = (n: number) => {
       getSetupStatus()
-        .then((s) => { if (!cancelled) setSetupDone(s.setup_done); })
+        .then((s) => {
+          if (cancelled) return;
+          if (s.setup_done) localStorage.setItem("setup_done", "1");
+          else localStorage.removeItem("setup_done");
+          setSetupDone(s.setup_done);
+        })
         .catch(() => {
           if (cancelled) return;
           if (n > 0) setTimeout(() => attempt(n - 1), 1500);
-          else setSetupDone(true); // give up after retries → show login
+          else setSetupDone((cur) => (cur === null ? true : cur)); // give up → show login
         });
     };
     attempt(4);
@@ -90,7 +103,9 @@ export default function App() {
       <Route
         element={
           <RequireAuth>
-            <Layout />
+            <Suspense fallback={<Spinner />}>
+              <Layout />
+            </Suspense>
           </RequireAuth>
         }
       >

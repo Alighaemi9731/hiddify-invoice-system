@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   IconButton, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField,
@@ -59,6 +59,15 @@ export default function Panels() {
   const [link, setLink] = useState("");
   const [migrateHost, setMigrateHost] = useState("");
   const refresh = () => qc.invalidateQueries({ queryKey: ["panels"] });
+  // Post-sync refresh timers: tracked so navigating away cancels them instead of leaving
+  // orphaned invalidations firing against the backend for up to 25s after unmount.
+  const refreshTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const scheduleRefreshes = () => {
+    [4000, 9000, 16000, 25000].forEach((ms) =>
+      refreshTimers.current.push(setTimeout(refresh, ms))
+    );
+  };
+  useEffect(() => () => { refreshTimers.current.forEach(clearTimeout); }, []);
 
   // Domain move in one save: the current host drops into the aliases (so old reseller links keep
   // matching in the bot) and the new host replaces it (host change → normal re-sync).
@@ -103,7 +112,7 @@ export default function Panels() {
     mutationFn: (id: number) => syncPanel(id),
     success: ["همگام‌سازی آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info"],
     // Poll a few times so the status flips to «موفق» without a manual reload.
-    onSuccess: () => [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms)),
+    onSuccess: scheduleRefreshes,
     invalidate: ["panels"],
   });
   const doTest = useToastMutation({
@@ -116,7 +125,7 @@ export default function Panels() {
     show,
     mutationFn: () => syncAllPanels(),
     success: ["همگام‌سازی همهٔ پنل‌ها آغاز شد؛ نتیجه تا چند لحظه دیگر به‌روزرسانی می‌شود.", "info"],
-    onSuccess: () => [4000, 9000, 16000, 25000].forEach((ms) => setTimeout(refresh, ms)),
+    onSuccess: scheduleRefreshes,
     invalidate: ["panels"],
   });
   // Deleting a billed panel permanently removes hundreds of invoice rows (and can strand a

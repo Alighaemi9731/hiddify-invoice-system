@@ -77,7 +77,9 @@ def test_detect_finds_lost_clusters_only(tmp_path):
         assert c["count"] == 3
         by = {u["name"]: u for u in c["users"]}
         assert by["Lost1"]["has_admin"] and by["Lost1"]["admin_name"] == "Ali"
-        assert by["Lost1"]["start_date"] == "2026-07-20"   # start_date surfaced for the owner
+        # start_date surfaced for the owner (the fixture sets it to the CURRENT date, so
+        # assert dynamically — a hardcoded literal broke the day after it was written)
+        assert by["Lost1"]["start_date"] == dt.datetime.now(dt.timezone.utc).date().isoformat()
         assert by["NoAdmin"]["has_admin"] is False         # unresolved admin flagged, not hidden
         uuids = {u["user_uuid"] for u in c["users"]}
         assert "u-present" not in uuids and "u-old" not in uuids

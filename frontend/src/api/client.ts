@@ -9,7 +9,11 @@ import { queryClient } from "./queryClient";
 const _envBase = (import.meta as any).env?.VITE_API_BASE_URL;
 const baseURL = _envBase === undefined ? "http://localhost:8000" : _envBase;
 
-export const api = axios.create({ baseURL, timeout: 120000 });
+// 20s default: on an unstable connection a stalled request must fail fast (and show the
+// error/retry UI) instead of pinning a spinner for minutes. Genuinely long operations
+// (backup, restore, invoice generation/sending, panel test) override per call below.
+export const api = axios.create({ baseURL, timeout: 20000 });
+const LONG_OP_MS = 300000; // 5 min ceiling for owner-triggered heavy operations
 
 const TOKEN_KEY = "invoice_token";
 
@@ -41,7 +45,7 @@ api.interceptors.response.use(
 
 // Fetch the PDF WITH the auth header (a plain link would 401), then open it.
 export async function openInvoicePdf(invoiceId: number) {
-  const res = await api.get(`/api/invoices/${invoiceId}/pdf`, { responseType: "blob" });
+  const res = await api.get(`/api/invoices/${invoiceId}/pdf`, { responseType: "blob", timeout: 60000 });
   const url = URL.createObjectURL(res.data as Blob);
   window.open(url, "_blank");
   setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -100,7 +104,8 @@ export const deletePanel = (id: number, force = false) =>
   api.delete(`/api/panels/${id}`, { params: force ? { force: true } : {} });
 export const syncPanel = (id: number) => api.post(`/api/panels/${id}/sync`).then((r) => r.data);
 export const syncAllPanels = () => api.post("/api/panels/sync-all").then((r) => r.data);
-export const testPanel = (id: number) => api.post(`/api/panels/${id}/test`).then((r) => r.data);
+export const testPanel = (id: number) =>
+  api.post(`/api/panels/${id}/test`, null, { timeout: 120000 }).then((r) => r.data);
 
 // ── User recovery (restore users a panel backup-rollback removed) ─────────────
 export interface RecoveryUser {
@@ -143,6 +148,7 @@ export const recoveryCandidates = (panelIds: number[], lookbackDays = 7) =>
   api
     .get("/api/recovery/candidates", {
       params: { panel_ids: panelIds.join(","), lookback_days: lookbackDays },
+      timeout: 120000,
     })
     .then((r) => r.data as RecoveryPanel[]);
 export const recoveryRestore = (
@@ -150,7 +156,7 @@ export const recoveryRestore = (
   dryRun = false,
 ) =>
   api
-    .post("/api/recovery/restore", { users, dry_run: dryRun })
+    .post("/api/recovery/restore", { users, dry_run: dryRun }, { timeout: LONG_OP_MS })
     .then((r) => r.data as RecoveryResult);
 
 // ---- resellers ----
@@ -292,16 +298,19 @@ export interface InvoiceListItem {
 export const listInvoices = (params: any = {}) =>
   api.get("/api/invoices", { params }).then((r) => r.data as InvoiceListItem[]);
 export const getInvoice = (id: number) => api.get(`/api/invoices/${id}`).then((r) => r.data);
-export const generateInvoices = (b: any) => api.post("/api/invoices/generate", b).then((r) => r.data);
+export const generateInvoices = (b: any) =>
+  api.post("/api/invoices/generate", b, { timeout: LONG_OP_MS }).then((r) => r.data);
 export const discardDrafts = (period?: string) =>
   api.post("/api/invoices/discard-drafts", null, { params: { period } }).then((r) => r.data);
-export const sendInvoice = (id: number) => api.post(`/api/invoices/${id}/send`).then((r) => r.data);
+export const sendInvoice = (id: number) =>
+  api.post(`/api/invoices/${id}/send`, null, { timeout: 60000 }).then((r) => r.data);
 export const sendPeriod = (period: string) =>
-  api.post("/api/invoices/send-period", null, { params: { period } }).then((r) => r.data);
+  api.post("/api/invoices/send-period", null, { params: { period }, timeout: LONG_OP_MS }).then((r) => r.data);
 export const markInvoicePaid = (id: number) => api.post(`/api/invoices/${id}/mark-paid`).then((r) => r.data);
 export const unmarkInvoicePaid = (id: number) => api.post(`/api/invoices/${id}/unmark-paid`).then((r) => r.data);
 export const editInvoice = (id: number, body: any) => api.patch(`/api/invoices/${id}`, body).then((r) => r.data);
-export const recomputeInvoice = (id: number) => api.post(`/api/invoices/${id}/recompute`).then((r) => r.data);
+export const recomputeInvoice = (id: number) =>
+  api.post(`/api/invoices/${id}/recompute`, null, { timeout: 120000 }).then((r) => r.data);
 export const revertInvoiceToDraft = (id: number) => api.post(`/api/invoices/${id}/revert-to-draft`).then((r) => r.data);
 export const deferInvoice = (id: number, body: { deferred_until: string | null; defer_note?: string }) =>
   api.post(`/api/invoices/${id}/defer`, body).then((r) => r.data);
@@ -317,8 +326,8 @@ export const rejectPayment = (id: number) => api.post(`/api/payments/${id}/rejec
 export const deletePayment = (id: number) => api.delete(`/api/payments/${id}`).then((r) => r.data);
 // Manual-confirm aid: the actual on-chain deposit (TON or USDT/BEP-20) vs the invoice amount.
 export const depositCheck = (id: number) =>
-  api.get(`/api/payments/${id}/deposit-check`).then((r) => r.data);
-export const refreshRate = () => api.post("/api/ops/refresh-rate").then((r) => r.data);
+  api.get(`/api/payments/${id}/deposit-check`, { timeout: 45000 }).then((r) => r.data);
+export const refreshRate = () => api.post("/api/ops/refresh-rate", null, { timeout: 45000 }).then((r) => r.data);
 
 export interface RatesInfo {
   mode: "auto" | "manual";
@@ -435,7 +444,7 @@ export const updateAccount = (body: { current_password: string; new_username?: s
 
 // ---- backup ----
 export async function downloadBackup() {
-  const res = await api.get("/api/ops/backup/download", { responseType: "blob" });
+  const res = await api.get("/api/ops/backup/download", { responseType: "blob", timeout: LONG_OP_MS });
   const url = URL.createObjectURL(res.data as Blob);
   const a = document.createElement("a");
   a.href = url;
@@ -443,14 +452,15 @@ export async function downloadBackup() {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
-export const sendBackupToTelegram = () => api.post("/api/ops/backup/send").then((r) => r.data);
+export const sendBackupToTelegram = () =>
+  api.post("/api/ops/backup/send", null, { timeout: LONG_OP_MS }).then((r) => r.data);
 export const wipeData = () => api.post("/api/ops/wipe-data", { confirm: "DELETE" }).then((r) => r.data);
 export const restoreBackup = (file: File, passphrase?: string) => {
   const fd = new FormData();
   fd.append("file", file);
   if (passphrase) fd.append("passphrase", passphrase);
   return api
-    .post("/api/ops/backup/restore", fd, { headers: { "Content-Type": "multipart/form-data" } })
+    .post("/api/ops/backup/restore", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: LONG_OP_MS })
     .then((r) => r.data);
 };
 
