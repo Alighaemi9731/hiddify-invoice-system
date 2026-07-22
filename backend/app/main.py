@@ -99,6 +99,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+# Outermost: one structured log line per request with its duration (WARNING when slow) —
+# the only per-endpoint latency signal the system has. Raw ASGI, negligible overhead.
+from app.core.timing import TimingMiddleware  # noqa: E402
+
+app.add_middleware(TimingMiddleware)
+
 # CORS. In production the SPA is same-origin (served via Caddy), so cross-origin is not
 # needed and we keep it CLOSED (only the configured domain, if any). In local dev we
 # allow any origin for the Vite server.

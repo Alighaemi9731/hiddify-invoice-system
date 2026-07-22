@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Integer, Numeric, String
+from sqlalchemy import CheckConstraint, Date, DateTime, Index, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -21,6 +21,9 @@ from app.models.mixins import TimestampMixin
 class FinancialRecord(Base, TimestampMixin):
     __tablename__ = "financial_records"
     __table_args__ = (
+        # The financial-history view sorts (period_label DESC, amount_toman DESC) over a
+        # ledger that grows forever by design.
+        Index("ix_finrec_period_amount", "period_label", "amount_toman"),
         CheckConstraint("usage_gb >= 0", name="ck_financial_records_usage_nonnegative"),
         CheckConstraint("price_per_gb >= 0", name="ck_financial_records_price_nonnegative"),
         CheckConstraint("amount_toman >= 0", name="ck_financial_records_toman_nonnegative"),

@@ -1,6 +1,7 @@
 """Read adapter: download a panel's backup JSON from /admin/backup/backupfile/."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -44,8 +45,12 @@ class BackupJsonClient(PanelClient):
                 if resp.status_code != 200:
                     last = f"HTTP {resp.status_code}"
                     continue
+                # Decoding a multi-MB JSON body and building thousands of dataclasses is
+                # pure CPU; on the shared single-worker event loop it stalled every
+                # concurrent request for the duration of each panel's parse — so both run
+                # in a worker thread.
                 try:
-                    payload = resp.json()
+                    payload = await asyncio.to_thread(resp.json)
                 except Exception:  # noqa: BLE001
                     last = f"non-JSON response (content-type={resp.headers.get('content-type')})"
                     continue
@@ -55,7 +60,7 @@ class BackupJsonClient(PanelClient):
                 # as lists, and a non-empty admin set (every panel has at least the owner admin).
                 if isinstance(payload, dict) and isinstance(payload.get("admin_users"), list) \
                         and isinstance(payload.get("users"), list):
-                    data = parse_backup(payload)
+                    data = await asyncio.to_thread(parse_backup, payload)
                     if not data.admins:
                         last = "backup has no admins (truncated/partial?)"
                         continue

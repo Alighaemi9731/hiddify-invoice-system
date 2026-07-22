@@ -213,37 +213,46 @@ async def create_backup(
 
     # Resolve the DB image FIRST and fail loudly if it's unusable — never ship an archive
     # whose only contents are meta + settings.
+    # Everything below (file read / pg_dump, validation, DEFLATE zip assembly, optional
+    # Fernet encryption) is CPU/blocking work on multi-MB payloads. It runs in ONE worker
+    # thread so the single-worker event loop keeps serving requests during the (scheduled
+    # every-2h and manual) backup — previously this stalled every concurrent request.
     sqlite = _sqlite_path()
-    db_member: tuple[str, bytes] | None = None
-    if sqlite is not None:
-        if not sqlite.exists():
-            raise BackupError("فایل دیتابیس یافت نشد؛ پشتیبان ساخته نشد.")
-        data = sqlite.read_bytes()
-        _validate_sqlite(data)
-        db_member = ("db.sqlite", data)
-    else:
-        dump = (await asyncio.to_thread(_pg_dump)).encode("utf-8")
-        # STRICT on the create side only: prove the dump really covers this application's schema
-        # and carries data. `settings_rows` was already read from the live DB above, so if it is
-        # non-empty the dump must contain those rows too — that is what catches a pg_dump pointed
-        # at the wrong (or a freshly-created, empty) database.
-        from app.core.db import Base
 
-        _validate_dump(
-            dump,
-            strict_tables=set(Base.metadata.tables),
-            expect_settings=bool(settings_rows),
-        )
-        db_member = ("db.sql", dump)
+    def _assemble() -> bytes:
+        db_member: tuple[str, bytes]
+        if sqlite is not None:
+            if not sqlite.exists():
+                raise BackupError("فایل دیتابیس یافت نشد؛ پشتیبان ساخته نشد.")
+            data = sqlite.read_bytes()
+            _validate_sqlite(data)
+            db_member = ("db.sqlite", data)
+        else:
+            dump = _pg_dump().encode("utf-8")
+            # STRICT on the create side only: prove the dump really covers this application's
+            # schema and carries data. `settings_rows` was already read from the live DB above,
+            # so if it is non-empty the dump must contain those rows too — that is what catches
+            # a pg_dump pointed at the wrong (or a freshly-created, empty) database.
+            from app.core.db import Base
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
-        z.writestr("settings.json", json.dumps(settings_dump, ensure_ascii=False, indent=2))
-        z.writestr(db_member[0], db_member[1])
-    raw = buf.getvalue()
-    if passphrase:
-        raw = _encrypt_archive(raw, passphrase)
+            _validate_dump(
+                dump,
+                strict_tables=set(Base.metadata.tables),
+                expect_settings=bool(settings_rows),
+            )
+            db_member = ("db.sql", dump)
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+            z.writestr("settings.json", json.dumps(settings_dump, ensure_ascii=False, indent=2))
+            z.writestr(db_member[0], db_member[1])
+        out = buf.getvalue()
+        if passphrase:
+            out = _encrypt_archive(out, passphrase)
+        return out
+
+    raw = await asyncio.to_thread(_assemble)
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     return raw, f"invoice-backup-{stamp}.zip"

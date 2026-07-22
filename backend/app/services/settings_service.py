@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import crypto
+from app.core import crypto, proccache
 from app.core.config import settings as boot
 from app.models.setting import Setting
 
@@ -524,20 +524,71 @@ async def seed_defaults(session: AsyncSession) -> None:
     await session.commit()
 
 
+# Settings are read-mostly (the owner edits them rarely) but were fetched from the DB —
+# and Fernet-decrypted for secrets — on EVERY access, several times per request on hot
+# paths (pricing, rates, payments). A short process-local TTL cache absorbs that. The
+# cache stores the RESOLVED value (post-decrypt) or _ROW_ABSENT; the caller-supplied
+# `default` is applied at read time so differing defaults can't poison each other.
+# Writers invalidate via set_value below; cross-process (bot vs API) staleness is
+# bounded by the 5s TTL, which no current setting is sensitive to.
+_ROW_ABSENT = object()
+_settings_cache = proccache.TTLCache(ttl_seconds=5.0)
+
+
+def _resolve_absent(key: str, default: Any) -> Any:
+    d = _DEF_BY_KEY.get(key)
+    return d.default if d else default
+
+
+def clear_settings_cache() -> None:
+    _settings_cache.clear()
+
+
 async def get(session: AsyncSession, key: str, default: Any = None) -> Any:
     """Read a setting (secrets returned decrypted). Falls back to the registered default."""
+    ns = proccache.engine_ns(session)
+    hit = _settings_cache.get((ns, key))
+    if hit is not proccache.MISS:
+        return _resolve_absent(key, default) if hit is _ROW_ABSENT else hit
     row = await session.get(Setting, key)
     if row is None:
-        d = _DEF_BY_KEY.get(key)
-        return d.default if d else default
+        _settings_cache.put((ns, key), _ROW_ABSENT)
+        return _resolve_absent(key, default)
     value = row.value
     if row.is_secret and isinstance(value, str):
-        return crypto.decrypt(value)
+        value = crypto.decrypt(value)
+    _settings_cache.put((ns, key), value)
     return value
 
 
 async def get_many(session: AsyncSession, keys: list[str]) -> dict[str, Any]:
-    return {k: await get(session, k) for k in keys}
+    """Batch read: one SELECT for every cache-miss key (was one round-trip PER key)."""
+    ns = proccache.engine_ns(session)
+    out: dict[str, Any] = {}
+    missing: list[str] = []
+    for k in keys:
+        hit = _settings_cache.get((ns, k))
+        if hit is proccache.MISS:
+            missing.append(k)
+        else:
+            out[k] = _resolve_absent(k, None) if hit is _ROW_ABSENT else hit
+    if missing:
+        rows = (
+            await session.execute(select(Setting).where(Setting.key.in_(missing)))
+        ).scalars().all()
+        found = {r.key: r for r in rows}
+        for k in missing:
+            row = found.get(k)
+            if row is None:
+                _settings_cache.put((ns, k), _ROW_ABSENT)
+                out[k] = _resolve_absent(k, None)
+            else:
+                value = row.value
+                if row.is_secret and isinstance(value, str):
+                    value = crypto.decrypt(value)
+                _settings_cache.put((ns, k), value)
+                out[k] = value
+    return out
 
 
 async def set_value(
@@ -556,8 +607,12 @@ async def set_value(
     else:
         row.value = stored
         row.is_secret = is_secret
+    # Invalidate before AND after the write: dropping only before would let a concurrent
+    # reader re-cache the old row between our drop and the commit.
+    _settings_cache.drop((proccache.engine_ns(session), key))
     if commit:
         await session.commit()
+    _settings_cache.drop((proccache.engine_ns(session), key))
 
 
 async def all_for_api(session: AsyncSession) -> list[dict]:

@@ -2,6 +2,8 @@
 profile, password/account change, and TOTP (Google Authenticator) management."""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,10 +14,10 @@ from app.core.security import (
     OWNER_ROLE,
     create_access_token,
     get_current_subject,
-    hash_password,
+    hash_password_async,
     require_secure_transport,
     validate_new_password,
-    verify_password,
+    verify_password_async,
 )
 from app.models.app_user import AppUser
 from app.schemas.auth import (
@@ -75,7 +77,8 @@ async def get_captcha(request: Request) -> CaptchaOut:
     # amplifier (the real login page needs only a handful per minute).
     if not loginsec.captcha_allowed(_client_ip(request)):
         raise HTTPException(status_code=429, detail="درخواست‌های شما بیش از حد است؛ لطفاً کمی بعد دوباره تلاش کنید.")
-    cid, img = loginsec.new_captcha()
+    # PIL renders a PNG — CPU work, unauthenticated endpoint: keep it off the loop.
+    cid, img = await asyncio.to_thread(loginsec.new_captcha)
     return CaptchaOut(captcha_id=cid, image=img)
 
 
@@ -100,17 +103,19 @@ async def login(body: LoginRequest, request: Request,
 
     # 3) credentials
     user = await _get_user(session, body.username)
-    if (
-        not user
-        or not user.is_active
-        or user.role != OWNER_ROLE
-        or not verify_password(body.password, user.password_hash)
-    ):
+    pw_ok = (
+        user is not None
+        and user.is_active
+        and user.role == OWNER_ROLE
+        and await verify_password_async(body.password, user.password_hash)
+    )
+    if not pw_ok:
         remaining = loginsec.record_failure(body.username, ip)
         detail = "نام کاربری یا رمز عبور نادرست است."
         if remaining and remaining <= 2:
             detail += f" ({remaining} تلاش باقی مانده)"
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+    assert user is not None  # pw_ok implies it; narrows the type for the code below
 
     # 4) 2FA (if enabled)
     if user.totp_enabled:
@@ -141,7 +146,7 @@ async def update_account(body: AccountUpdate, subject: str = Depends(get_current
                          session: AsyncSession = Depends(get_session)) -> Token:
     """Change the owner's username and/or password. Returns a fresh token."""
     user = await _get_user(session, subject)
-    if not user or not verify_password(body.current_password, user.password_hash):
+    if not user or not await verify_password_async(body.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="رمز عبور فعلی نادرست است")
     if body.new_username and body.new_username != user.username:
         if await _get_user(session, body.new_username):
@@ -150,7 +155,7 @@ async def update_account(body: AccountUpdate, subject: str = Depends(get_current
         user.token_epoch = int(user.token_epoch or 0) + 1  # invalidate tokens with the old name
     if body.new_password:
         _validate_password(body.new_password)
-        user.password_hash = hash_password(body.new_password)
+        user.password_hash = await hash_password_async(body.new_password)
         user.token_epoch = int(user.token_epoch or 0) + 1  # invalidate older tokens
     await session.commit()
     return Token(access_token=_token_for(user))
@@ -168,7 +173,8 @@ async def totp_setup(subject: str = Depends(get_current_subject),
     user.totp_pending_secret_enc = crypto.encrypt(secret)
     await session.commit()
     uri = loginsec.totp_uri(secret, user.username)
-    return TotpSetupOut(secret=secret, otpauth_uri=uri, qr=loginsec.totp_qr_data_uri(uri))
+    qr = await asyncio.to_thread(loginsec.totp_qr_data_uri, uri)
+    return TotpSetupOut(secret=secret, otpauth_uri=uri, qr=qr)
 
 
 @router.post("/2fa/enable")
@@ -191,7 +197,7 @@ async def totp_enable(body: TotpEnable, subject: str = Depends(get_current_subje
 async def totp_disable(body: TotpDisable, subject: str = Depends(get_current_subject),
                        session: AsyncSession = Depends(get_session)) -> dict:
     user = await _get_user(session, subject)
-    if not user or not verify_password(body.current_password, user.password_hash):
+    if not user or not await verify_password_async(body.current_password, user.password_hash):
         raise HTTPException(400, "رمز عبور نادرست است.")
     user.totp_enabled = False
     user.totp_secret_enc = None

@@ -34,27 +34,49 @@ router = APIRouter(
 )
 
 
-async def _to_out(session: AsyncSession, panel: Panel) -> PanelOut:
-    # Count only non-owner resellers that are still present on the panel (seen in the
-    # latest successful sync).  Resellers removed from Hiddify keep their DB row for
-    # billing history but must not inflate the UI count.
-    count_q = select(func.count(Reseller.id)).where(
-        Reseller.panel_id == panel.id,
-        Reseller.is_owner.is_(False),
-    )
-    if panel.status == PanelStatus.ok and panel.last_synced_at is not None:
-        cutoff = panel.last_synced_at - _PRESENCE_SKEW
-        count_q = count_q.where(
-            or_(Reseller.last_seen_at.is_(None), Reseller.last_seen_at >= cutoff)
+def _as_utc(ts: dt.datetime | None) -> dt.datetime | None:
+    """SQLite returns naive datetimes; the app stores UTC. Normalize before comparing."""
+    if ts is None:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
+
+def _present(panel: Panel, last_seen_at: dt.datetime | None) -> bool:
+    """Presence rule: only non-owner resellers seen in the latest successful sync count.
+    Resellers removed from Hiddify keep their DB row for billing history but must not
+    inflate the UI count."""
+    synced = _as_utc(panel.last_synced_at)
+    if panel.status != PanelStatus.ok or synced is None:
+        return True
+    seen = _as_utc(last_seen_at)
+    return seen is None or seen >= synced - _PRESENCE_SKEW
+
+
+async def _to_out(
+    session: AsyncSession,
+    panel: Panel,
+    counts: tuple[int, int] | None = None,
+) -> PanelOut:
+    if counts is not None:
+        resellers_count, users_count = counts
+    else:
+        count_q = select(func.count(Reseller.id)).where(
+            Reseller.panel_id == panel.id,
+            Reseller.is_owner.is_(False),
         )
-    resellers_count = (await session.execute(count_q)).scalar_one()
-    users_count = (
-        await session.execute(
-            select(func.count(EndUserSnapshot.id)).where(
-                EndUserSnapshot.panel_id == panel.id
+        if panel.status == PanelStatus.ok and panel.last_synced_at is not None:
+            cutoff = panel.last_synced_at - _PRESENCE_SKEW
+            count_q = count_q.where(
+                or_(Reseller.last_seen_at.is_(None), Reseller.last_seen_at >= cutoff)
             )
-        )
-    ).scalar_one()
+        resellers_count = (await session.execute(count_q)).scalar_one()
+        users_count = (
+            await session.execute(
+                select(func.count(EndUserSnapshot.id)).where(
+                    EndUserSnapshot.panel_id == panel.id
+                )
+            )
+        ).scalar_one()
     return PanelOut(
         id=panel.id,
         key=panel.key,
@@ -84,8 +106,37 @@ async def _get_or_404(session: AsyncSession, panel_id: int) -> Panel:
 
 @router.get("", response_model=list[PanelOut])
 async def list_panels(session: AsyncSession = Depends(get_session)) -> list[PanelOut]:
+    """The list view batches its counts: 2 queries total instead of 2 PER panel — this
+    endpoint is polled every 3s by the SPA while any panel is syncing."""
     panels = (await session.execute(select(Panel).order_by(Panel.key))).scalars().all()
-    return [await _to_out(session, p) for p in panels]
+    by_panel: dict[int, Panel] = {p.id: p for p in panels}
+    users_by_panel: dict[int, int] = {
+        pid: cnt
+        for pid, cnt in (
+            await session.execute(
+                select(EndUserSnapshot.panel_id, func.count(EndUserSnapshot.id))
+                .group_by(EndUserSnapshot.panel_id)
+            )
+        ).all()
+    }
+    resellers_by_panel: dict[int, int] = {}
+    rows = (
+        await session.execute(
+            select(Reseller.panel_id, Reseller.last_seen_at).where(
+                Reseller.is_owner.is_(False)
+            )
+        )
+    ).all()
+    for panel_id, last_seen_at in rows:
+        panel = by_panel.get(panel_id)
+        if panel is not None and _present(panel, last_seen_at):
+            resellers_by_panel[panel_id] = resellers_by_panel.get(panel_id, 0) + 1
+    return [
+        await _to_out(
+            session, p, counts=(resellers_by_panel.get(p.id, 0), users_by_panel.get(p.id, 0))
+        )
+        for p in panels
+    ]
 
 
 async def _same_physical_panel(

@@ -13,11 +13,13 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +31,11 @@ class EndUserSnapshot(Base, TimestampMixin):
     __tablename__ = "end_user_snapshots"
     __table_args__ = (
         UniqueConstraint("panel_id", "user_uuid", name="uq_enduser_panel_uuid"),
+        # Hot filter of the whole app: WHERE panel_id=? AND added_by_uuid IN (...)
+        # (reports/portal/capacity/invoice engine) plus the lower() variant used by
+        # enforcement/reseller counts, which a plain b-tree can't serve.
+        Index("ix_enduser_panel_addedby", "panel_id", "added_by_uuid"),
+        Index("ix_enduser_panel_addedby_lower", "panel_id", text("lower(added_by_uuid)")),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

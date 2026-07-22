@@ -8,10 +8,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +25,14 @@ from app.models.mixins import TimestampMixin
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
     __table_args__ = (
+        # Dunning scans pending payments daily; the table is dominated by settled rows,
+        # so a partial index keeps it tiny (works on both PostgreSQL and SQLite).
+        Index(
+            "ix_payments_pending",
+            "status",
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
         CheckConstraint("confirmations >= 0", name="ck_payments_confirmations_nonnegative"),
         CheckConstraint("amount_usdt >= 0", name="ck_payments_usdt_nonnegative"),
         CheckConstraint(

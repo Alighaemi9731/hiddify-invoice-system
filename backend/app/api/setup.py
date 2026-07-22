@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import loginsec
 from app.core.db import get_session
-from app.core.security import hash_password, validate_new_password, verify_password
+from app.core.security import (
+    hash_password_async,
+    validate_new_password,
+    verify_password_async,
+)
 from app.models.app_user import AppUser
 from app.models.setting import Setting
 from app.services import settings_service
@@ -99,14 +103,16 @@ async def do_setup(
             validate_new_password(body.password)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if token_hash and (not body.token or not verify_password(body.token, token_hash)):
+        if token_hash and (
+            not body.token or not await verify_password_async(body.token, token_hash)
+        ):
             raise HTTPException(403, "توکنِ راه‌اندازی نادرست است.")
 
         # All inputs valid — create the owner, mark setup done, and consume the token atomically.
         session.add(
             AppUser(
                 username=username,
-                password_hash=hash_password(body.password),
+                password_hash=await hash_password_async(body.password),
                 role="owner",
             )
         )

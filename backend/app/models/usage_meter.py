@@ -43,6 +43,10 @@ class UsageMeter(Base, TimestampMixin):
             "renew_used_gb >= 0", name="ck_usage_meters_renew_used_nonnegative"
         ),
         CheckConstraint("reset_count >= 0", name="ck_usage_meters_reset_count_nonnegative"),
+        # Every sync's meter load (panel_id, period_label) and every billing/metering
+        # read (…, added_by_uuid IN …); the unique index leads with user_uuid and can't
+        # serve a period filter.
+        Index("ix_usage_meters_panel_period_addedby", "panel_id", "period_label", "added_by_uuid"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

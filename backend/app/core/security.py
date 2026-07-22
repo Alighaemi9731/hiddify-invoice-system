@@ -1,6 +1,7 @@
 """Password hashing (bcrypt) and JWT auth (PyJWT) for the owner web panel."""
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
@@ -44,6 +45,17 @@ def verify_password(password: str, password_hash: str) -> bool:
         return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
     except (ValueError, TypeError):
         return False
+
+
+# bcrypt costs ~200-300 ms of pure CPU per call. On the single-worker event loop that
+# stalls EVERY concurrent request, so async endpoints use these thread-offloaded
+# wrappers. The sync forms above remain for boot-time/CLI callers.
+async def verify_password_async(password: str, password_hash: str) -> bool:
+    return await asyncio.to_thread(verify_password, password, password_hash)
+
+
+async def hash_password_async(password: str) -> str:
+    return await asyncio.to_thread(hash_password, password)
 
 
 # ------------------------------- JWT ---------------------------------
@@ -113,6 +125,11 @@ async def get_current_subject(
         or isinstance(token_epoch, bool)
     ):
         raise credentials_error
+    # NOTE (2026-07-22 perf audit): a 30s cache of this lookup was implemented and then
+    # REVERTED — B01's hardening deliberately binds every request to the LIVE account row
+    # (deactivation/epoch bumps take effect immediately, enforced by
+    # tests/test_auth_hardening.py). The lookup is a unique-index single-row SELECT on a
+    # same-host database; the guarantee is worth more than the sub-millisecond it costs.
     try:
         user = (
             await session.execute(select(AppUser).where(AppUser.username == subject))

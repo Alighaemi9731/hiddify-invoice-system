@@ -56,7 +56,8 @@ class DeliveryLog(Base):
     # cap on Postgres, failing the delivery-log write.
     tg_message_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc),
+        index=True,  # report ORDER BY … DESC LIMIT + daily retention delete
     )
 
 
@@ -85,7 +86,8 @@ class EnforcementAction(Base):
     snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc),
+        index=True,  # report ORDER BY … DESC LIMIT + daily retention delete
     )
 
 
@@ -108,7 +110,8 @@ class SyncRun(Base):
     user_count: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc),
+        index=True,  # retention delete + latest-run lookups
     )
     finished_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

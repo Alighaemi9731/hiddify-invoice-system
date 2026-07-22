@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import proccache
 from app.core.db import SessionLocal, get_session
 from app.core.security import get_current_subject
 from app.models import (
@@ -47,6 +48,25 @@ OUTSTANDING = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced
 COUNTED = (
     InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced, InvoiceStatus.paid,
 )
+
+# sales-by-day and zero-invoices run the FULL billing preview (`invoicing.preview_bundles`
+# loads every enabled panel's resellers + end-user snapshots as ORM objects) and were
+# recomputed on EVERY Dashboard/Invoices visit — seconds of single-worker CPU per view.
+# Their inputs only change when a panel syncs (or pricing settings change), so the result
+# is cached per (period, per-panel last_synced_at) with a short TTL as the settings-edit
+# safety valve. Billing generation itself is NEVER cached.
+_preview_cache = proccache.TTLCache(ttl_seconds=300.0)
+
+
+async def _panel_sync_state(session: AsyncSession) -> tuple:
+    rows = (
+        await session.execute(
+            select(Panel.id, Panel.last_synced_at)
+            .where(Panel.enabled.is_(True))
+            .order_by(Panel.id)
+        )
+    ).all()
+    return tuple((pid, ts.isoformat() if ts else "") for pid, ts in rows)
 
 
 def _sales_row(inv: Invoice, name: str, key: str) -> SalesRow:
@@ -89,12 +109,7 @@ async def sales(
     return out
 
 
-@router.get("/sales-by-panel", response_model=list[PanelSalesRow])
-async def sales_by_panel(
-    period: str | None = None, session: AsyncSession = Depends(get_session)
-) -> list[PanelSalesRow]:
-    label = period or current_month().label
-    rows = await _period_rows(session, label, None)
+def _panel_sales_from_rows(rows) -> list[PanelSalesRow]:
     agg: dict[int, dict] = defaultdict(lambda: {"key": "", "invoices": 0, "gb": 0.0, "t": 0.0})
     for inv, _name, key in rows:
         a = agg[inv.panel_id]
@@ -109,6 +124,14 @@ async def sales_by_panel(
     ]
     out.sort(key=lambda r: r.amount_toman, reverse=True)
     return out
+
+
+@router.get("/sales-by-panel", response_model=list[PanelSalesRow])
+async def sales_by_panel(
+    period: str | None = None, session: AsyncSession = Depends(get_session)
+) -> list[PanelSalesRow]:
+    label = period or current_month().label
+    return _panel_sales_from_rows(await _period_rows(session, label, None))
 
 
 @router.get("/debts", response_model=list[DebtRow])
@@ -255,6 +278,11 @@ async def zero_invoices(
     from app.services.periods import current_month, parse_period
 
     p = parse_period(period) if period else current_month()
+    cache_key = (proccache.engine_ns(session), "zero-invoices", p.label,
+                 await _panel_sync_state(session))
+    hit = _preview_cache.get(cache_key)
+    if hit is not proccache.MISS:
+        return hit
     pairs = await invoicing.preview_bundles(session, p)
     zero = [(panel, b) for panel, b in pairs if b.total_gb <= 0]
     # Resolve Telegram @usernames for the connected resellers → clickable PV deep-link.
@@ -284,6 +312,7 @@ async def zero_invoices(
         for panel, b in zero
     ]
     rows.sort(key=lambda r: r["reseller_name"])
+    _preview_cache.put(cache_key, rows)
     return rows
 
 
@@ -358,13 +387,18 @@ async def sales_by_day(
     in-progress current month. NOTE: per-bundle floor (min-sale) and metering overage are
     bundle-level, not per-line, so this is the faithful BASE-sale trend (sum of days ≈ month base)."""
     p = parse_period(period) if period else current_month()
+    cache_key = (proccache.engine_ns(session), "sales-by-day", p.label,
+                 await _panel_sync_state(session))
+    hit = _preview_cache.get(cache_key)
+    if hit is not proccache.MISS:
+        return hit
     n_days = p.end.day
     buckets = [0.0] * n_days
     for _panel, b in await invoicing.preview_bundles(session, p):
         for line in b.lines:
             if line.start_date and p.contains(line.start_date):
                 buckets[line.start_date.day - 1] += line.usage_gb * b.price_per_gb
-    return [
+    out = [
         SalesByDayRow(
             day=i + 1,
             date=dt.date(p.start.year, p.start.month, i + 1).isoformat(),
@@ -372,6 +406,8 @@ async def sales_by_day(
         )
         for i, v in enumerate(buckets)
     ]
+    _preview_cache.put(cache_key, out)
+    return out
 
 
 @router.get("/dashboard", response_model=DashboardSummary)
@@ -416,18 +452,21 @@ async def dashboard(
     for i, _, _ in rows:
         status_map[i.status.value] += 1
 
-    # outstanding across all periods
-    out_rows = (
+    # outstanding across all periods — aggregated in SQL (was: load every outstanding
+    # row into Python to sum/dedupe)
+    out_t, outstanding_resellers = (
         await session.execute(
-            select(Invoice.amount_toman, Invoice.reseller_id).where(
-                Invoice.status.in_(OUTSTANDING)
-            )
+            select(
+                func.coalesce(func.sum(Invoice.amount_toman), 0),
+                func.count(func.distinct(Invoice.reseller_id)),
+            ).where(Invoice.status.in_(OUTSTANDING))
         )
-    ).all()
-    out_t = sum(float(t) for t, _reseller_id in out_rows)
-    outstanding_resellers = len({reseller_id for _t, reseller_id in out_rows})
+    ).one()
+    out_t = float(out_t)
 
-    by_panel = await sales_by_panel(label, session)  # type: ignore[arg-type]
+    # Reuse the period rows already loaded above (was: an identical second query
+    # inside sales_by_panel).
+    by_panel = _panel_sales_from_rows(rows)
     sales_rows = [_sales_row(i, n, k) for i, n, k in rows]
     sales_rows.sort(key=lambda r: r.amount_toman, reverse=True)
 
