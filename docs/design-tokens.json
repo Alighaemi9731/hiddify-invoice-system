@@ -44,6 +44,13 @@
       "source": "src/portal/PortalLayout.tsx:100-102"
     },
     "brandGradient": { "value": "linear-gradient(145deg, #5ab5ff 0%, #0071e3 100%)", "source": "src/components/Layout.tsx:144" },
+    "portalAuthWash": { "value": "radial-gradient(ellipse 80% 60% at 70% 0%, rgba(0,113,227,.14) 0%, transparent 60%)", "source": "src/portal/PortalEntry.tsx:125-126" },
+    "glossOverlays": {
+      "navChip": "linear-gradient(145deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 60%)",
+      "statCardTile": "linear-gradient(145deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 60%)",
+      "navSelected": "linear-gradient(175deg,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 60%)",
+      "source": "src/components/Layout.tsx:81,187; src/components/StatCard.tsx:56"
+    },
     "iconAssetGradient": { "value": "#5ab5ff → #0064d2", "note": "favicon/manifest icon only (§5-C11)", "source": "public/favicon.svg" },
     "telegram": { "value": "#229ED9", "source": "src/components/TelegramLink.tsx:32" },
     "navPalette": {
@@ -127,6 +134,7 @@
       "blur": "blur(48px) saturate(220%) brightness(1.03)",
       "sidebarBg": { "light": "rgba(255,255,255,.55)", "dark": "rgba(9,11,20,.50)" },
       "sidebarBgNote": "Dark tint is legacy navy (§5-C2); target family is rgba(28,28,30,…).",
+      "sidebarBorder": { "light": "rgba(255,255,255,.75)", "dark": "rgba(255,255,255,.10)" },
       "appBarBg": { "light": "rgba(255,255,255,0.80)", "dark": "rgba(0,0,0,0.60)" },
       "appBarBlur": "blur(40px) saturate(180%)",
       "appBarRing": { "light": "0 0 0 0.5px rgba(0,0,0,0.08)", "dark": "0 0 0 0.5px rgba(255,255,255,0.08)" },
@@ -190,9 +198,19 @@
     },
     "navItem": {
       "selectedBg": { "light": "rgba(255,255,255,.60)", "dark": "rgba(255,255,255,.07)" },
+      "selectedHoverBg": { "light": "rgba(255,255,255,.76)", "dark": "rgba(255,255,255,.10)" },
       "hoverBg": { "light": "rgba(255,255,255,.38)", "dark": "rgba(255,255,255,.05)" },
       "selectedBorder": { "light": "rgba(255,255,255,.78)", "dark": "rgba(255,255,255,.10)" },
       "source": "src/components/Layout.tsx:79-103"
+    },
+    "segmentedTabs": {
+      "containerBg": { "light": "rgba(255,255,255,0.55)", "dark": "rgba(255,255,255,0.05)" },
+      "tabHoverBg": { "light": "rgba(255,255,255,.55)", "dark": "rgba(255,255,255,.06)" },
+      "selectedBgAlpha": { "light": "alpha(primary, 0.10)", "dark": "alpha(primary, 0.18)" },
+      "selectedGloss": "linear-gradient(175deg,rgba(255,255,255,.20) 0%,rgba(255,255,255,0) 60%)",
+      "selectedRim": { "light": "inset 0 1px 0 rgba(255,255,255,.92)", "dark": "inset 0 1px 0 rgba(255,255,255,.16)" },
+      "selectedGlow": { "light": "0 2px 10px -4px alpha(primary,.30)", "dark": "0 2px 10px -4px alpha(primary,.45)" },
+      "source": "src/components/SegmentedTabs.tsx:33,63-78"
     },
     "insetBox": { "value": "action.hover", "source": "src/portal/PayDialog.tsx:34" },
     "selectIcon": { "light": "rgba(0,0,0,0.28)", "dark": "rgba(255,255,255,0.35)", "source": "src/theme.ts:295-298" },
@@ -286,7 +304,8 @@
     "mobileRowCard": { "value": "sx-3 (42px)", "source": "src/pages/resellers/ResellerMobileCard.tsx:32" },
     "pillInputs": { "value": "50px", "roles": "single-line inputs, SegmentedTabs, LiveRate", "source": "src/theme.ts:316" },
     "pillControls": { "value": 980, "roles": "Buttons, Chips; canonical spelling for badge/meter pills too (§5-C6)", "source": "src/theme.ts:341,374" },
-    "circle": { "value": "50%", "roles": "status dots", "source": "src/pages/resellers/ResellerIdentity.tsx:38" }
+    "circle": { "value": "50%", "roles": "status dots", "source": "src/pages/resellers/ResellerIdentity.tsx:38" },
+    "phonePreviewFrame": { "value": "sx {xs: 3 (42px), sm: 5 (70px)}", "roles": "storefront customer-preview phone bezel — the only sx-5 in the app", "source": "src/portal/storefront/StorefrontPreviewPage.tsx:29" }
   },
   "shadows": {
     "containedPrimaryButton": { "rest": "0 4px 14px alpha(primary,0.40)", "hover": "0 6px 20px alpha(primary,0.55)", "source": "src/theme.ts:349-352" },
@@ -299,7 +318,25 @@
     "alertRimInset": { "light": "inset 0 1px 0 rgba(255,255,255,0.90)", "dark": "inset 0 1px 0 rgba(255,255,255,0.06)", "source": "src/theme.ts:489-491" },
     "navAccentBarGlow": { "value": "0 0 8px 2px alpha(primary,0.42)", "source": "src/components/Layout.tsx:98" },
     "logoTile": { "value": "0 6px 18px -6px rgba(0,113,227,.55), inset 0 1.5px 0 rgba(255,255,255,.40)", "source": "src/components/Layout.tsx:145-148" },
-    "statCardHover": { "light": "0 10px 28px -12px alpha(accent,0.45)", "dark": "0 8px 26px -10px alpha(accent,0.5)", "source": "src/components/StatCard.tsx:18-20" }
+    "statCardHover": { "light": "0 10px 28px -12px alpha(accent,0.45)", "dark": "0 8px 26px -10px alpha(accent,0.5)", "source": "src/components/StatCard.tsx:18-20" },
+    "navItemSelected": {
+      "dark": "inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)",
+      "lightRim": "inset 0 1px 0 rgba(255,255,255,.96)",
+      "note": "light depth tint rgba(30,40,100,.18) is legacy navy → §5-C2; neutral target set in DS04",
+      "source": "src/components/Layout.tsx:82-84"
+    },
+    "iconChip": {
+      "selected": "0 0 0 1px alpha(c,0.50), 0 4px 12px -4px alpha(c,0.55), inset 0 1px 0 rgba(255,255,255,.32)",
+      "resting": "inset 0 1px 0 rgba(255,255,255,.18)",
+      "source": "src/components/Layout.tsx:188-194"
+    },
+    "portalEntryLogo": { "value": "0 8px 22px -8px rgba(0,113,227,.6)", "source": "src/portal/PortalEntry.tsx:137" },
+    "settingsHeader": {
+      "dark": "0 8px 24px -14px rgba(0,0,0,.65)",
+      "note": "light value rgba(31,38,80,.22) is legacy navy → §5-C2",
+      "source": "src/pages/Settings.tsx:608-609"
+    },
+    "sidebarInnerEdge": { "light": "inset -1px 0 0 rgba(255,255,255,.60)", "dark": "inset -1px 0 0 rgba(255,255,255,.05)", "source": "src/components/Layout.tsx:250-252" }
   },
   "blurTiers": {
     "canonical": {
@@ -381,7 +418,10 @@
     "countBadge": { "radius": 999, "minWidth": 20, "fontSize": 12, "fontWeight": 800, "lineHeight": "20px", "note": "radius normalizes to 980 per §5-C6", "source": "src/portal/storefront/StorefrontShell.tsx:126-143" },
     "qrBlock": { "bg": "#fff", "sizePx": 132, "level": "M", "source": "src/portal/PayDialog.tsx:17-25" },
     "emptyStateMinHeight": { "value": 180, "note": "canonical per §5-C14; Dashboard ships 210", "source": "src/portal/ui.tsx:27" },
-    "notificationsPopoverWidth": { "value": 340, "max": "92vw", "source": "src/portal/NotificationsBell.tsx:53" }
+    "notificationsPopoverWidth": { "value": 340, "max": "92vw", "source": "src/portal/NotificationsBell.tsx:53" },
+    "compactSelectPy": { "value": "7px !important", "roles": "size=small Select vertical padding — PeriodPicker + inline table filters", "source": "src/components/PeriodPicker.tsx:29" },
+    "tooltipPadding": { "block": 6, "inline": 10, "source": "src/theme.ts:467-468" },
+    "accordion": { "radius": "14px !important", "marginBottom": 8, "source": "src/theme.ts:516-519" }
   },
   "assets": {
     "manifest": { "backgroundColor": "#000000", "themeColor": "#0071e3", "dir": "rtl", "display": "standalone", "source": "public/site.webmanifest:6-10" },
@@ -397,6 +437,7 @@
     "toman": { "value": "rounded integer + « تومان»", "source": "src/format.ts:1-2" },
     "gb": { "value": "≤2 decimals + « گیگابایت»", "source": "src/format.ts:5-11" },
     "axisCompression": { "value": "م for millions, هزار for thousands", "source": "src/pages/Dashboard.tsx:156-159" },
-    "ltrInputRule": { "value": "inputProps={{ dir: \"ltr\" }} only — labels/helperText stay RTL", "source": "src/pages/Setup.tsx:107" }
+    "ltrInputRule": { "value": "inputProps={{ dir: \"ltr\" }} only — labels/helperText stay RTL", "source": "src/pages/Setup.tsx:107" },
+    "cryptoAmounts": { "value": "ASCII digits via toLocaleString(\"en-US\"), rendered LTR — never Persian digits", "source": "src/portal/PayDialog.tsx:173,185,197" }
   }
 }

@@ -755,17 +755,27 @@ Tooltip `{pct}% پر شده` / «بدون سقف».
 
 ### 4.1 Page anatomy
 
-Header block: `variant="h5"` Persian title (+ optional `body2 text.secondary`
-subtitle at `mt 0.4` / `mb 0.4`), with page-level actions/filters on the opposite side
-of the same row (`Stack direction {xs column / sm row} justifyContent space-between`,
-`mb 2–2.5`) — canonical instances `src/pages/Dashboard.tsx:262-278`,
-`src/pages/resellers/index.tsx:197`, `src/portal/pages/Panels.tsx:54-57`,
-`src/pages/Tools.tsx:594`. Then: optional SegmentedTabs row → summary line/chips →
-one Card containing the table/content → dialogs at the end. Settings replaces the
-header with its sticky glass action bar (`src/pages/Settings.tsx:600-620`). Filters
-are compact controls: search `TextField size="small"` with start `SearchIcon`
-adornment (`src/pages/resellers/index.tsx:200-236`), `Select size="small"`,
-`PeriodPicker`.
+*(Corrected in v1.1 — the v1.0 text over-generalized the header block.)* Two header
+conventions coexist (recorded as §5-C22, kept per app):
+
+- **Admin pages:** the page title lives in the AppBar (from the NAV label,
+  `src/components/Layout.tsx:296-298`); most pages start directly with their
+  toolbar/filters and add an in-page `variant="h5"` header **only when they carry a
+  subtitle or page-level explanation** — 3 of 14 do (`src/pages/Dashboard.tsx:272`,
+  `src/pages/resellers/index.tsx:197`, `src/pages/Tools.tsx:594`). Settings replaces
+  the header with its sticky glass action bar (`src/pages/Settings.tsx:600-620`).
+- **Portal pages:** every page opens with an in-page `variant="h5"` title + optional
+  `body2 text.secondary` subtitle at `mb 0.4` (e.g. `src/portal/pages/Panels.tsx:54-57`,
+  `src/portal/pages/Payments.tsx:56`), in addition to the AppBar label.
+
+Shared shape when a header exists: `Stack direction {xs column / sm row}
+justifyContent space-between`, `mb 2–2.5`, actions/filters on the opposite side. Then:
+optional SegmentedTabs row → summary line/chips → one Card containing the
+table/content → dialogs at the end. Filters are compact controls: search
+`TextField size="small"` with start `SearchIcon` adornment
+(`src/pages/resellers/index.tsx:200-236`), `Select size="small"`, `PeriodPicker`.
+Desktop table scroll bound: `maxHeight: calc(100vh - 300px)`
+(`src/pages/Invoices.tsx:398`) — six variant offsets exist → §5-C20.
 
 ### 4.2 RTL rules (hard rules)
 
@@ -803,7 +813,9 @@ adornment (`src/pages/resellers/index.tsx:200-236`), `Select size="small"`,
   (`src/format.ts:1-13`). Chart axes compress: `م` for millions, `هزار` for thousands
   (`src/pages/Dashboard.tsx:156-159`). Percentages ≤1 decimal
   (`src/pages/Dashboard.tsx:42-44`) with `٪`. Currency display: Toman is primary;
-  USDT/crypto amounts render LTR inline `<b dir="ltr">` (`src/pages/Payments.tsx:379-401`).
+  USDT/crypto amounts render LTR inline `<b dir="ltr">` (`src/pages/Payments.tsx:379-401`)
+  and, when formatted, use **ASCII digits via `toLocaleString("en-US")`** (crypto values
+  are identifiers-adjacent, never Persian-digit: `src/portal/PayDialog.tsx:173,185,197`).
   Deviation: Settings shows a raw ISO-UTC timestamp (`src/pages/Settings.tsx:542-544`)
   → §5-G8.
 - Identifiers («#N» tracking, 8-digit invoice numbers) stay ASCII in monospace;
@@ -989,7 +1001,9 @@ Phase‑2 work-list.
   stop is accepted as an asset-specific contrast tweak (recorded, not to be copied
   into the app).
 - **C12 — Progress-bar geometry variants.** 6/4 (theme `src/theme.ts:547`), 6/3
-  (CapacityBar), 7/3 (portal Subs), 8/4 (storefront), 8-9/99 (dashboard meters).
+  (CapacityBar), 7/3 (portal Subs), 8/4 (storefront), 8-9/99 (dashboard meters), and
+  *(added v1.1)* default-height/radius sx‑1 = 14px
+  (`src/portal/storefront/StorefrontCampaignsPage.tsx:175`).
   **Canonical:** theme 6/radius 4 for LinearProgress-based bars (rule a); the
   hand-rolled dashboard meters keep 8–9/99 as a distinct "meter" component (b).
 - **C13 — `SectionCard` and `EmptyState` duplicated** in
@@ -1024,6 +1038,65 @@ Phase‑2 work-list.
   (`src/pages/Dashboard.tsx:292-305`). **Canonical:** match the shape being faked —
   `"18px"` when faking Cards, default otherwise; DataState's 1.5 approximates inner
   rows and stays.
+
+*Entries C20–C24 were added in v1.1 by the Phase‑2 audit (new deviations not caught in
+Phase 1):*
+
+- **C20 — Table scroll-bound variants** *(added v1.1)*. One intent ("bound the desktop
+  table under the page header") spelled seven ways:
+  `calc(100vh - 300px)` (`src/pages/Invoices.tsx:398` — the tokenized value),
+  `- 320px` (`src/pages/resellers/ResellerTable.tsx:116`), `- 260px` ×3
+  (`src/pages/FinancialHistory.tsx:85`, `src/pages/Logs.tsx:59,90`), `- 240px`
+  (`src/pages/Sales.tsx:51`), `- 220px` (`src/pages/Debts.tsx:28`), and `- 180px` via
+  **`height:`** instead of `maxHeight:` (`src/pages/Payments.tsx:251` — also fixes
+  height vs max-height semantics). **Canonical:** the already-tokenized
+  `maxHeight: calc(100vh - 300px)` (`design-tokens.json layout.tableScrollBound`),
+  responsive form `{ xs: "none", md/sm: … }` kept where the table renders on xs.
+  Rationale: rule (a) — the doc/JSON designated 300 in v1.0; a single token beats
+  per-page tuning (max-height only scrolls earlier, it never clips).
+- **C21 — Dialogs missing the xs-fullscreen convention** *(added v1.1)*. §3.5's
+  `fullScreen={useXsFullScreen()}` convention holds in the admin money flows
+  (Invoices ×3, Payments, EditReseller, BumpLimits, PayDialog) but **21 dialog roots
+  omit it**: `src/pages/Tools.tsx:124,242,370,570` (570 also lacks
+  `fullWidth maxWidth`), `src/pages/Panels.tsx:215`,
+  `src/pages/resellers/AbsentResellers.tsx:117`,
+  `src/portal/pages/Subs.tsx:273,290`, `src/portal/pages/Panels.tsx:132`,
+  `src/portal/storefront/StorefrontConflictDialog.tsx:19`,
+  `src/portal/storefront/StorefrontPlansPage.tsx:197`,
+  `src/portal/storefront/TopupsPage.tsx:370,408,440,662`,
+  `src/portal/storefront/StorefrontPlanHistoryDialog.tsx:24`,
+  `src/portal/storefront/StorefrontCampaignsPage.tsx:207`,
+  `src/portal/storefront/CustomerDetailPage.tsx:428,802`,
+  `src/portal/storefront/StorefrontCreditsPage.tsx:249,336`.
+  **Canonical:** the §3.5 convention (rule b — it is the documented pattern of the
+  primary flows). Fix = add `fullScreen={useXsFullScreen()}` (+ missing
+  `fullWidth maxWidth="xs"` on Tools:570).
+- **C22 — Page-title anatomy split (admin vs portal)** *(added v1.1)*. 10 of 14 admin
+  pages have **no in-page title** (the AppBar label is the title); every portal page
+  renders an in-page `h5` **in addition to** the AppBar label (census in §4.1).
+  **Canonical:** keep per-app conventions as corrected in §4.1 (admin: AppBar-title,
+  in-page h5 only with subtitle; portal: in-page h5 standard). No code change —
+  recorded so Phase 3 doesn't "unify" it blindly; revisit only via a doc-first change.
+- **C23 — Tables with no mobile adaptation** *(added v1.1)*. Eight simple tables use
+  neither mobile pattern A nor B — they only scroll horizontally:
+  `src/pages/Tools.tsx:74-75,206-207,331-332,509-510` (wrapped in
+  `Box overflowX:"auto"`), `src/portal/pages/Invoices.tsx:53-54` and
+  `src/portal/pages/Payments.tsx:65-66` (wrapped in `Card overflowX:"auto"`),
+  `src/pages/Broadcast.tsx:240-241,388-389` (bounded preview boxes, `maxHeight
+  320/360`). **Canonical:** pattern B (`className="resp-table"`) — these are exactly
+  the "simple/read-only" tables C3 designates it for. The Broadcast preview boxes are
+  borderline-acceptable as-is (bounded in-dialog-style previews); converting them is
+  optional and must be visually verified below 600px.
+- **C24 — LTR display via sx `direction` instead of the `dir` attribute** *(added
+  v1.1)*. `src/pages/Broadcast.tsx:313,315` set
+  `sx={{ direction: "ltr", textAlign: "left", … }}` on link-preview `code` boxes. All
+  emotion-generated CSS passes through the stylis RTL plugin (cssjanus semantics,
+  `src/rtlCache.ts:5-8`), which **flips physical values** — `textAlign: "left"` and
+  `direction: "ltr"` compile to their RTL counterparts, the opposite of the intent.
+  Every other LTR display site uses the `dir="ltr"` **attribute**, which bypasses the
+  CSS transform (§4.2 rule 3). **Canonical:** the `dir="ltr"` attribute (+ drop the
+  `textAlign`/`direction` sx keys). Rationale: rule (b) — the attribute is the
+  app-wide mechanism — and mechanism correctness under the RTL pipeline.
 
 ### 5.2 Gaps (real absences — recorded, not invented)
 
@@ -1082,6 +1155,10 @@ Phase‑2 work-list.
 3. The §5 conflict log is the authoritative Phase‑2 audit input and the Phase‑3
    standardization work-list; resolving an entry means updating both code and this doc
    (move the entry to a "resolved" note with the release number).
-4. Doc version: **1.0**, extracted 2026-07-22 against `v1.100.4` (frontend at commit
-   `78179b6`). Re-verify line citations after any large frontend refactor; the tokens
-   themselves are anchored by value + role, not line numbers.
+4. Doc version: **1.1**, 2026-07-23. v1.0 extracted 2026-07-22 against `v1.100.4`
+   (frontend at commit `78179b6`); v1.1 is the Phase‑2 audit errata — §4.1 corrected
+   (page-title anatomy), §4.3 crypto-digit rule added, §5 extended with C20–C24 and the
+   C12 sx‑1 variant, and `design-tokens.json` extended with 14 entries (E1–E14) that §2
+   documented but the v1.0 mirror omitted. The code itself is unchanged since `d5d8c9f`.
+   Re-verify line citations after any large frontend refactor; the tokens themselves
+   are anchored by value + role, not line numbers.
