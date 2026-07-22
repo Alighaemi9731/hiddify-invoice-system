@@ -156,7 +156,7 @@ jobs:
           PY
       - name: Migration head matches the pinned HEAD
         run: |
-          PIN=$(sed -n 's/^HEAD = "\(.*\)"$//p' backend/tests/test_migrations_contracts.py)
+          PIN=$(sed -n 's/^HEAD = "\(.*\)"$/\1/p' backend/tests/test_migrations_contracts.py)
           DBV=$(docker compose --env-file .env.staging -f deploy/docker-compose.staging.yml             exec -T db psql -U invoice_staging -d invoice_staging -tAc "SELECT version_num FROM alembic_version")
           echo "pin=$PIN db=$DBV"
           [ -n "$PIN" ] && [ "$PIN" = "$DBV" ]
