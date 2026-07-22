@@ -500,14 +500,20 @@ async def subs(
     pmap = await _panel_keys(session, {r.panel_id for r in ctx.resellers})
     out = []
     for root in ctx.resellers:
-        children = (await session.execute(
-            select(Reseller).where(
-                Reseller.panel_id == root.panel_id,
-                Reseller.parent_admin_uuid == root.admin_uuid,
-            )
-        )).scalars().all()
+        # Load the panel's reseller list ONCE per root and derive both the children and
+        # every sub's descendant subtree from it — node_report used to re-read the whole
+        # table per sub (N+1 across the portal's heaviest interactive view).
+        panel_resellers = list((await session.execute(
+            select(Reseller).where(Reseller.panel_id == root.panel_id)
+        )).scalars().all())
+        children = [
+            r for r in panel_resellers
+            if r.parent_admin_uuid == root.admin_uuid
+        ]
         for sub in children:
-            rep = await reseller_report.node_report(session, sub, months=6)
+            rep = await reseller_report.node_report(
+                session, sub, months=6, _panel_resellers=panel_resellers
+            )
             this_month = next(
                 (m for m in rep["months"] if m["label"] == rep["current_period"]), None)
             out.append({

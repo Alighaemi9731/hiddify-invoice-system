@@ -199,17 +199,17 @@ async def generate_invoices(
             exclude_user_uuids=trial_uuids,
             cap_gb_by_uuid=caps,
         )
-        for bundle in bundles:
+        # Abuse-resistant extras (overage from usage resets + renew-by-edit) for ALL
+        # bundles in one pass — was 2 queries per bundle (N+1 across every root).
+        extras = await metering.bundle_extra_for_bundles(
+            session, panel.id, [b.admin_uuids for b in bundles], period.label,
+            free_threshold, exclude_user_uuids=trial_uuids,
+        )
+        for bundle, extra in zip(bundles, extras):
             # A reseller removed from the panel (gone in the latest sync) must not be billed
             # forever on lingering data.
             if not _reseller_present(bundle.root, panel):
                 continue
-            # Abuse-resistant extra (overage from usage resets + renew-by-edit), added
-            # on top of the normal snapshot total. See app.services.metering.
-            extra = await metering.bundle_extra(
-                session, panel.id, bundle.admin_uuids, period.label, free_threshold,
-                exclude_user_uuids=trial_uuids,
-            )
             if bundle.total_gb + extra["gb"] <= 0:
                 # Zero usage still yields an invoice when the flat storefront-bot fee applies —
                 # otherwise a fee-only month is silently never billed AND a prior fee-only
@@ -297,7 +297,7 @@ async def preview_bundles(
         ).scalars().all()
         trial_uuids = await storefront.trial_user_uuids(session, panel.id)
         caps = await storefront.billing_caps(session, panel.id)
-        for b in compute_invoices(
+        preview_bundles_list = compute_invoices(
             resellers, users, period,
             default_price_per_gb=default_price, excluded_usage_gb=excluded,
             default_min_sale_toman=default_min_sale, free_threshold_gb=free_threshold,
@@ -305,15 +305,16 @@ async def preview_bundles(
             deleted_full_quota_over_gb=deleted_over,
             exclude_user_uuids=trial_uuids,
             cap_gb_by_uuid=caps,
-        ):
+        )
+        extras = await metering.bundle_extra_for_bundles(
+            session, panel.id, [b.admin_uuids for b in preview_bundles_list],
+            period.label, free_threshold, exclude_user_uuids=trial_uuids,
+        )
+        for b, extra in zip(preview_bundles_list, extras):
             if not _reseller_present(b.root, panel):
                 continue
             # Fold in the abuse-metered extra so total_gb here equals what billing would invoice
             # (a reseller with only metered overage must NOT show up as a "zero sale").
-            extra = await metering.bundle_extra(
-                session, panel.id, b.admin_uuids, period.label, free_threshold,
-                exclude_user_uuids=trial_uuids,
-            )
             b.total_gb = round(b.total_gb + float(extra.get("gb", 0) or 0), 3)
             out.append((panel, b))
     return out

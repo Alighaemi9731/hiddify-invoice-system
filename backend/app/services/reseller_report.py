@@ -45,9 +45,18 @@ def _last_months(n: int, today: dt.date | None = None) -> list[Period]:
     return out
 
 
-async def node_descendants(session: AsyncSession, reseller: Reseller) -> list[Reseller]:
-    """The reseller node + all of its descendant sub-resellers (same panel)."""
-    panel_resellers = (
+async def node_descendants(
+    session: AsyncSession,
+    reseller: Reseller,
+    *,
+    _panel_resellers: list[Reseller] | None = None,
+) -> list[Reseller]:
+    """The reseller node + all of its descendant sub-resellers (same panel).
+
+    `_panel_resellers` lets a caller iterating MANY nodes of the same panel load the
+    panel's reseller list once (Wave 6 — the portal subs view called this per sub,
+    re-reading the whole table each time)."""
+    panel_resellers = _panel_resellers if _panel_resellers is not None else (
         await session.execute(select(Reseller).where(Reseller.panel_id == reseller.panel_id))
     ).scalars().all()
     children = build_children_map(panel_resellers)
@@ -317,8 +326,15 @@ class _NodeCtx:
     caps: dict[str, float]
 
 
-async def _node_ctx(session: AsyncSession, reseller: Reseller) -> _NodeCtx:
-    descendants = await node_descendants(session, reseller)
+async def _node_ctx(
+    session: AsyncSession,
+    reseller: Reseller,
+    *,
+    _panel_resellers: list[Reseller] | None = None,
+) -> _NodeCtx:
+    descendants = await node_descendants(
+        session, reseller, _panel_resellers=_panel_resellers
+    )
     uuids = {d.admin_uuid for d in descendants}
     users = (
         await session.execute(
@@ -376,8 +392,14 @@ async def node_months(
     return by_month
 
 
-async def node_report(session: AsyncSession, reseller: Reseller, *, months: int = 3) -> dict:
-    ctx = await _node_ctx(session, reseller)
+async def node_report(
+    session: AsyncSession,
+    reseller: Reseller,
+    *,
+    months: int = 3,
+    _panel_resellers: list[Reseller] | None = None,
+) -> dict:
+    ctx = await _node_ctx(session, reseller, _panel_resellers=_panel_resellers)
     by_month = await node_months(session, reseller, months=months, _ctx=ctx)
 
     # Current-month progress against the parent-set GB cap (the bot shows this so the

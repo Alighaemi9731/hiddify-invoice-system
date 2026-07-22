@@ -464,6 +464,66 @@ async def bundle_extra_many(
     }
 
 
+async def bundle_extra_for_bundles(
+    session: AsyncSession,
+    panel_id: int,
+    bundles: list[set[str]],
+    period_label: str,
+    free_threshold_gb: float,
+    exclude_user_uuids: set[str] | None = None,
+) -> list[dict]:
+    """`bundle_extra` for EVERY bundle of a panel in one pass (Wave 6): ONE UsageMeter
+    query + ONE events pass for the union of all bundles' admin uuids, bucketed per
+    bundle in Python (root subtrees are disjoint, so each meter row belongs to exactly
+    one bundle). Was: 2 queries PER bundle — an N+1 across every billable root on every
+    generation/preview. Per-row math is the shared `_extra_from_rows`, identical to the
+    per-bundle path (parity-tested in tests/test_metering_batch_parity.py)."""
+    empty = lambda: {"gb": 0.0, "lines": [], "abnormal": []}  # noqa: E731
+    if not bundles:
+        return []
+    if not await is_enabled(session):
+        return [empty() for _ in bundles]
+    union: set[str] = set()
+    for b in bundles:
+        union |= b or set()
+    if not union:
+        return [empty() for _ in bundles]
+    rows = (
+        await session.execute(
+            select(UsageMeter).where(
+                UsageMeter.panel_id == panel_id,
+                UsageMeter.period_label == period_label,
+                UsageMeter.added_by_uuid.in_(union),
+            )
+        )
+    ).scalars().all()
+    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 0.5) or 0)
+    events_by_label = await _load_events(
+        session, panel_id, [period_label], {m.user_uuid for m in rows}
+    )
+    events_for_label = events_by_label.get(period_label)
+    owner_of: dict[str, int] = {}
+    for i, b in enumerate(bundles):
+        for uuid in b or set():
+            owner_of[uuid] = i
+    rows_by_bundle: list[list] = [[] for _ in bundles]
+    for m in rows:
+        if m.added_by_uuid is None:
+            continue
+        bundle_idx = owner_of.get(m.added_by_uuid)
+        if bundle_idx is not None:
+            rows_by_bundle[bundle_idx].append(m)
+    return [
+        _extra_from_rows(
+            rows_by_bundle[idx], free_threshold_gb, overage_tol, exclude_user_uuids,
+            events_by_user=events_for_label,
+        )
+        if (bundles[idx] or set())
+        else empty()
+        for idx in range(len(bundles))
+    ]
+
+
 async def _load_events(
     session: AsyncSession,
     panel_id: int,
