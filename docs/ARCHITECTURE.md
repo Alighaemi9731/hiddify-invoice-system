@@ -24,7 +24,7 @@ flowchart LR
         P2[(Panel N)]
     end
 
-    subgraph Backend["Backend (FastAPI + APScheduler)"]
+    subgraph Backend["Backend (FastAPI); scheduler = separate container since v1.100.2"]
         SYNC[Sync service<br/>PanelClient: backup-JSON adapter]
         DB[(PostgreSQL<br/>snapshots, invoices,<br/>payments, settings)]
         ENGINE[Invoice engine<br/>+ pricing Toman→USDT]

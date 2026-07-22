@@ -46,8 +46,10 @@ async def health() -> dict:
     try:
         async with SessionLocal() as session:
             await session.execute(text("SELECT 1"))
-            if settings.run_scheduler:
-                scheduler_state = await _scheduler_state(session)
+            # The heartbeat lives in the settings table — global state written by
+            # whichever process runs the scheduler. Since Wave 5 that is a separate
+            # container, so EVERY process reports it (previously gated on run_scheduler).
+            scheduler_state = await _scheduler_state(session)
     except Exception as exc:  # noqa: BLE001 - any database outage must become a 503
         log.warning("database readiness check failed: %s", exc)
         raise HTTPException(status_code=503, detail="database unavailable") from exc

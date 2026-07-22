@@ -56,11 +56,14 @@ async def lifespan(app: FastAPI):
 
         await scheduler.start()
 
-        # Self-restart if a restore performed by the bot process changed the DB / SECRET_KEY,
-        # so the backend never keeps a stale key or a pooled handle to the pre-restore DB.
-        from app.services import restart_signal
+    # Self-restart if a restore performed by ANOTHER process changed the DB / SECRET_KEY,
+    # so this process never keeps a stale key or a pooled handle to the pre-restore DB.
+    # Unconditional since Wave 5: the API and the scheduler run as separate processes and
+    # BOTH must react to a restore (previously gated on run_scheduler, which was correct
+    # only while one process did both jobs).
+    from app.services import restart_signal
 
-        restart_signal.start_watcher()
+    restart_signal.start_watcher()
 
     yield
 

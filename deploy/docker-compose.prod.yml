@@ -48,7 +48,13 @@ services:
     env_file: ../.env
     environment:
       POSTGRES_HOST: db
-      RUN_SCHEDULER: "true"
+      # Wave 5: the scheduler runs in its OWN container (below) so a heavy job (sync
+      # parse, monthly invoicing, backup) can never contend with API requests for the
+      # event loop or the API's connection pool. The API deliberately stays at ONE
+      # uvicorn worker: loginsec keeps captcha + rate-limit state in process-local
+      # dicts, so a second worker would fail ~half of captcha validations and halve
+      # brute-force lockouts (measured decision, 2026-07-22 program).
+      RUN_SCHEDULER: "false"
       CADDY_ADMIN: "http://caddy:2019"
       UPDATE_DIR: /app/data/update
     depends_on:
@@ -72,6 +78,34 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  scheduler:
+    build: ../backend
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: db
+      RUN_SCHEDULER: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/data
+    # Same image/app as the backend, but its only job is APScheduler (sync, invoicing,
+    # dunning, enforcement queue, backups, rate refresh). The HTTP server exists solely
+    # for the healthcheck below — port 8010, never published, unreachable from outside
+    # (Caddy routes only to backend:8000). Exactly ONE replica: jobs already serialize
+    # via per-subsystem Postgres advisory locks, but the schedule itself must not
+    # double-fire.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8010
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8010/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   bot:
     build: ../backend

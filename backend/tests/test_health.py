@@ -42,13 +42,29 @@ def _with_scheduler(monkeypatch, stamp: str) -> None:
 
 
 def test_health_checks_database(monkeypatch):
+    # Wave 5: the scheduler runs in its own container, so EVERY process reports the
+    # shared heartbeat. No heartbeat recorded → scheduler stale → degraded (DB still ok,
+    # still HTTP 200 — the container healthcheck keys off the 503-on-db-outage only).
     monkeypatch.setattr(meta, "SessionLocal", lambda: _Session())
+
+    async def _get(_session, _key, default=None):
+        return "" or default
+
+    monkeypatch.setattr(settings_service, "get", _get)
+    result = asyncio.run(meta.health())
+    assert result["status"] == "degraded"
+    assert result["database"] == "ok"
+    assert result["scheduler"] == "stale"
+    assert "errors_24h" in result
+
+
+def test_health_ok_with_fresh_heartbeat_regardless_of_process_role(monkeypatch):
+    # A fresh heartbeat written by the scheduler CONTAINER must read as ok from the API
+    # process too (run_scheduler is False there since Wave 5).
+    _with_scheduler(monkeypatch, _stamp(minutes_ago=1))
     result = asyncio.run(meta.health())
     assert result["status"] == "ok"
-    assert result["database"] == "ok"
-    assert "errors_24h" in result
-    # No scheduler in this process (run_scheduler defaults False) → no scheduler field.
-    assert "scheduler" not in result
+    assert result["scheduler"] == "ok"
 
 
 def test_health_returns_503_when_database_is_unavailable(monkeypatch):
