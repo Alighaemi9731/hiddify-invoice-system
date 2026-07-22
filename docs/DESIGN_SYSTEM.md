@@ -1025,9 +1025,12 @@ Phase‑2 work-list.
   Rationale: (b)+(c) — the desktop chrome is the reference look of both layouts.
 - **C17 — AppBar double styling.** Theme paints the AppBar glass
   (`src/theme.ts:270-283`) while Layout also passes `color="transparent"` +
-  `elevation={0}` (`Layout.tsx:288`); the rendered look (verified in M58/M59 milestones)
-  is the theme glass, making the prop redundant-but-harmless. **Canonical:** theme
-  values; note for Phase 3 cleanup.
+  `elevation={0}` (`Layout.tsx:288`, `src/portal/PortalLayout.tsx:219`).
+  **Canonical (reclassified v1.1): keep both props — they are load-bearing, not
+  redundant.** `color="transparent"` guarantees MUI's color-variant class
+  (`colorPrimary` background) never competes with the theme's root glass background,
+  and `elevation={0}` suppresses the default elevation-4 shadow. Resolution: no code
+  change; the v1.0 "Phase 3 cleanup" note is withdrawn.
 - **C18 — BottomNav translucency (dark `rgba(0,0,0,0.72)`, light
   `rgba(255,255,255,0.86)`) near-duplicates AppBar (0.60 / 0.80)**
   (`src/components/BottomNav.tsx:40`, `src/theme.ts:275`). **Canonical:** keep both —
@@ -1129,6 +1132,12 @@ Phase 1):*
 - **G12 — `src/pages/Debts.tsx` connection chip** uses `error` for «بدون ربات» while
   the resellers pages use a muted grey StatusPill for the same fact
   (`src/pages/Debts.tsx:45` vs `ResellerIdentity.tsx:48`) — same state, two severities.
+- **G13 — Loading-state coverage is incomplete** *(added v1.1)*. The `DataState`
+  skeleton pattern (§3.14) is used by Debts/Sales/Logs/FinancialHistory/Payments and
+  all portal/storefront lists, but `src/pages/Tools.tsx`, `src/pages/Broadcast.tsx`
+  and `src/pages/Panels.tsx` render their tables with no loading skeleton at all
+  (0 `DataState`/`Skeleton` usages; census 2026-07-23). Recorded — adopting DataState
+  there is a gap resolution, not a token fix.
 
 ### 5.3 Top 5 worst inconsistencies (Phase‑2 preview)
 
