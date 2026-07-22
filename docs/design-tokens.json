@@ -1,0 +1,402 @@
+{
+  "$meta": {
+    "title": "Design tokens — سامانه مدیریت و فاکتور نمایندگان",
+    "version": "1.0",
+    "extractedAt": "2026-07-22",
+    "appVersion": "v1.100.4",
+    "spec": "docs/DESIGN_SYSTEM.md",
+    "rules": {
+      "canonicalOnly": "This file mirrors §2 canonical values. Variants that lost a conflict live only in DESIGN_SYSTEM.md §5.",
+      "sxRadiusMultiplier": "Numeric sx borderRadius values multiply shape.borderRadius (14px). Numeric styleOverrides values and quoted strings are literal px.",
+      "sxSpacingUnit": "Numeric sx spacing values multiply the MUI default 8px unit.",
+      "citations": "Every token carries `source` as frontend-relative file:line."
+    }
+  },
+  "colors": {
+    "accent": {
+      "primary": { "light": "#0071e3", "dark": "#2997ff", "source": "src/theme.ts:16,107" },
+      "secondary": { "light": "#ff9500", "dark": "#ff9f0a", "source": "src/theme.ts:108" },
+      "info": { "light": "#0071e3", "dark": "#2997ff", "note": "identical to primary", "source": "src/theme.ts:115" }
+    },
+    "semantic": {
+      "success": { "light": "#28cd41", "dark": "#30d158", "source": "src/theme.ts:112" },
+      "error": { "light": "#ff3b30", "dark": "#ff453a", "source": "src/theme.ts:113" },
+      "warning": { "light": "#ff9500", "dark": "#ffd60a", "source": "src/theme.ts:114" }
+    },
+    "background": {
+      "default": { "light": "#f5f5f7", "dark": "#000000", "source": "src/theme.ts:109-111,150" },
+      "paper": { "light": "rgba(255,255,255,0.78)", "dark": "rgba(28,28,30,0.90)", "source": "src/theme.ts:27,110-111" }
+    },
+    "text": {
+      "primary": { "light": "#1d1d1f", "dark": "#f5f5f7", "source": "src/theme.ts:117-119" },
+      "secondary": { "light": "#6e6e73", "dark": "#a1a1a6", "source": "src/theme.ts:117-119" }
+    },
+    "divider": { "light": "rgba(0,0,0,0.08)", "dark": "rgba(255,255,255,0.10)", "source": "src/theme.ts:116" },
+    "ambientGlow": {
+      "light": "radial-gradient(100% 40% at 50% 0%, rgba(0,113,227,0.025), transparent 60%)",
+      "dark": "radial-gradient(100% 40% at 50% 0%, rgba(41,151,255,0.06), transparent 60%)",
+      "source": "src/theme.ts:89-93"
+    },
+    "sidebarAmbient": {
+      "light": "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.18) 0%, transparent 70%)",
+      "dark": "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent 70%)",
+      "note": "Canonical per §5-C1 (blue); admin Layout still ships the violet variant.",
+      "source": "src/portal/PortalLayout.tsx:100-102"
+    },
+    "brandGradient": { "value": "linear-gradient(145deg, #5ab5ff 0%, #0071e3 100%)", "source": "src/components/Layout.tsx:144" },
+    "iconAssetGradient": { "value": "#5ab5ff → #0064d2", "note": "favicon/manifest icon only (§5-C11)", "source": "public/favicon.svg" },
+    "telegram": { "value": "#229ED9", "source": "src/components/TelegramLink.tsx:32" },
+    "navPalette": {
+      "dashboard": "#0071e3",
+      "panels": "#0ea5e9",
+      "resellers": "#22c55e",
+      "invoices": "#f59e0b",
+      "payments": "#10b981",
+      "debts": "#f43f5e",
+      "sales": "#30d158",
+      "financialHistory": "#14b8a6",
+      "broadcast": "#ec4899",
+      "logs": "#0891b2",
+      "account": "#3b82f6",
+      "tools": "#8b5cf6",
+      "settings": "#64748b",
+      "help": "#06b6d4",
+      "storefront": "#ec4899",
+      "support": "#a855f7",
+      "chipTintAlpha": { "light": 0.14, "dark": 0.22 },
+      "source": "src/components/Layout.tsx:39-54, src/portal/PortalLayout.tsx:32-41, tint src/components/Layout.tsx:186"
+    },
+    "chartCategorical": {
+      "order": ["#0071e3", "#30d158", "#ff9500", "#32ade6", "#bf5af2"],
+      "source": "src/pages/Dashboard.tsx:33 (RANK_COLORS)"
+    },
+    "statusPill": {
+      "active": "#10b981",
+      "muted": "#94a3b8",
+      "enforced": "#f43f5e",
+      "frozen": "#f59e0b",
+      "bgAlpha": { "light": 0.09, "dark": 0.16, "muted": 0.05 },
+      "borderAlpha": { "light": 0.22, "dark": 0.34, "muted": 0.12 },
+      "note": "Current pill tints; convergence with semantic palette tracked as §5-C8.",
+      "source": "src/pages/resellers/ResellerIdentity.tsx:9-55"
+    },
+    "invoiceStatusDonut": {
+      "paid": "#34d399",
+      "sent": "#60a5fa",
+      "overdue": "#f7a928",
+      "enforced": "#fb7185",
+      "fallback": "#94a3b8",
+      "note": "Current chart tints; convergence tracked as §5-C8.",
+      "source": "src/pages/Dashboard.tsx:34-39,136"
+    }
+  },
+  "statusChipMaps": {
+    "mechanism": "MUI Chip color prop bound to the semantic palette",
+    "invoice": { "draft": "default", "sent": "info", "paid": "success", "overdue": "warning", "enforced": "error", "canceled": "default", "source": "src/pages/Invoices.tsx:44" },
+    "payment": { "pending": "warning", "confirmed": "success", "rejected": "error", "source": "src/pages/Payments.tsx:33" },
+    "panelSync": { "ok": "success", "error": "error", "unknown": "info", "disabled": "warning", "source": "src/pages/Panels.tsx:156-159" },
+    "delivery": { "sent": "success", "failed": "error", "blocked": "error", "unmatched": "warning", "source": "src/pages/Logs.tsx:14" },
+    "enforcementAction": { "dry_run": "info", "planned": "default", "running": "info", "partial": "warning", "done": "success", "failed": "error", "source": "src/pages/Logs.tsx:16-22" },
+    "broadcast": { "sent": "success", "blocked": "warning", "failed": "error", "unregistered": "default", "pending": "default", "source": "src/pages/Broadcast.tsx:50-55" },
+    "storefrontOrder": { "provisioned": "success", "failed": "error", "disabled": "warning", "other": "default", "source": "src/portal/storefront/CustomerDetailPage.tsx:42-45" },
+    "storefrontCampaign": { "completed": "success", "canceled": "warning", "running": "info", "other": "default", "source": "src/portal/storefront/StorefrontCampaignsPage.tsx:27-28" }
+  },
+  "glass": {
+    "noiseTexture": { "value": "inline SVG feTurbulence fractalNoise, baseFrequency 0.85, opacity 0.03", "source": "src/theme.ts:4-10" },
+    "tier1Content": {
+      "bg": { "light": "rgba(255,255,255,0.78)", "dark": "rgba(28,28,30,0.90)" },
+      "border": { "light": "rgba(0,0,0,0.05)", "dark": "rgba(255,255,255,0.12)" },
+      "blur": { "light": "blur(40px) saturate(180%)", "dark": "blur(20px) saturate(140%)" },
+      "gloss": { "light": "linear-gradient(175deg,rgba(255,255,255,0.70) 0%,rgba(255,255,255,0) 50%)", "dark": "none (noise only)" },
+      "shadow": {
+        "light": "0 0 0 0.5px rgba(0,0,0,0.05), 0 2px 20px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,1.0)",
+        "dark": "0 0 0 0.5px rgba(255,255,255,0.10), 0 2px 20px rgba(0,0,0,0.50), inset 0 1px 0 rgba(255,255,255,0.08)"
+      },
+      "source": "src/theme.ts:27-29,36-46,61-77"
+    },
+    "tier2Float": {
+      "bg": { "light": "rgba(255,255,255,0.88)", "dark": "rgba(28,28,30,0.82)" },
+      "blur": "blur(40px) saturate(180%)",
+      "shadow": {
+        "light": "0 0 0 0.5px rgba(0,0,0,0.08), 0 12px 40px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,1.0)",
+        "dark": "0 0 0 0.5px rgba(255,255,255,0.14), 0 12px 40px rgba(0,0,0,0.70), inset 0 1px 0 rgba(255,255,255,0.10)"
+      },
+      "source": "src/theme.ts:32-33,48-58,80-87"
+    },
+    "chrome": {
+      "blur": "blur(48px) saturate(220%) brightness(1.03)",
+      "sidebarBg": { "light": "rgba(255,255,255,.55)", "dark": "rgba(9,11,20,.50)" },
+      "sidebarBgNote": "Dark tint is legacy navy (§5-C2); target family is rgba(28,28,30,…).",
+      "appBarBg": { "light": "rgba(255,255,255,0.80)", "dark": "rgba(0,0,0,0.60)" },
+      "appBarBlur": "blur(40px) saturate(180%)",
+      "appBarRing": { "light": "0 0 0 0.5px rgba(0,0,0,0.08)", "dark": "0 0 0 0.5px rgba(255,255,255,0.08)" },
+      "bottomNavBg": { "light": "rgba(255,255,255,0.86)", "dark": "rgba(0,0,0,0.72)" },
+      "bottomNavBlur": "blur(40px) saturate(180%)",
+      "source": "src/components/Layout.tsx:245-253; src/theme.ts:270-283; src/components/BottomNav.tsx:38-41"
+    },
+    "nestedCardBg": { "light": "rgba(255,255,255,0.48)", "dark": "#232326", "source": "src/theme.ts:578-585" },
+    "respTableRowBg": { "light": "rgba(255,255,255,0.72)", "dark": "rgba(36,36,38,0.94)", "source": "src/theme.ts:187" },
+    "tooltip": {
+      "bg": { "light": "rgba(255,255,255,0.92)", "dark": "rgba(28,28,30,0.92)" },
+      "blur": "blur(40px) saturate(180%)",
+      "shadow": { "light": "0 4px 16px rgba(0,0,0,0.12)", "dark": "0 4px 16px rgba(0,0,0,0.60)" },
+      "source": "src/theme.ts:461-481"
+    },
+    "snackbar": {
+      "bg": { "light": "rgba(255,255,255,0.88)", "dark": "rgba(28,28,30,0.88)" },
+      "blur": "blur(40px) saturate(180%)",
+      "shadow": { "light": "0 8px 32px rgba(0,0,0,0.12)", "dark": "0 8px 32px rgba(0,0,0,0.60)" },
+      "source": "src/theme.ts:495-509"
+    },
+    "backdrop": { "light": "rgba(0,0,0,0.20)", "dark": "rgba(0,0,0,0.50)", "source": "src/theme.ts:253-257" }
+  },
+  "stateTints": {
+    "input": {
+      "bg": { "light": "rgba(255,255,255,0.80)", "dark": "rgba(255,255,255,0.06)" },
+      "bgHover": { "light": "rgba(255,255,255,0.95)", "dark": "rgba(255,255,255,0.09)" },
+      "bgFocus": { "light": "rgba(255,255,255,1.0)", "dark": "rgba(255,255,255,0.08)" },
+      "outline": { "light": "rgba(0,0,0,0.12)", "dark": "rgba(255,255,255,0.10)" },
+      "outlineHover": { "light": "rgba(0,0,0,0.18)", "dark": "rgba(255,255,255,0.22)" },
+      "focusRing": "0 0 0 3px alpha(primary, 0.22)",
+      "source": "src/theme.ts:302-334"
+    },
+    "buttonOutlined": {
+      "bg": { "light": "rgba(255,255,255,0.70)", "dark": "rgba(255,255,255,0.05)" },
+      "border": { "light": "rgba(0,0,0,0.15)", "dark": "rgba(255,255,255,0.20)" },
+      "bgHover": { "light": "rgba(255,255,255,0.90)", "dark": "rgba(255,255,255,0.09)" },
+      "borderHover": { "light": "rgba(0,0,0,0.22)", "dark": "rgba(255,255,255,0.30)" },
+      "source": "src/theme.ts:353-361"
+    },
+    "buttonTextHover": { "value": "alpha(primary, light 0.07 / dark 0.12)", "source": "src/theme.ts:362-365" },
+    "chipOutlined": {
+      "bg": { "light": "rgba(255,255,255,0.60)", "dark": "rgba(255,255,255,0.05)" },
+      "border": { "light": "rgba(0,0,0,0.12)", "dark": "rgba(255,255,255,0.14)" },
+      "source": "src/theme.ts:375-379"
+    },
+    "table": {
+      "zebraEven": { "light": "rgba(0,0,0,0.015)", "dark": "rgba(255,255,255,0.03)" },
+      "rowHover": { "light": "rgba(255,255,255,0.70)", "dark": "rgba(255,255,255,0.07)" },
+      "cellBorder": { "light": "rgba(0,0,0,0.06)", "dark": "rgba(255,255,255,0.05)" },
+      "headBg": { "light": "#eef4fc", "dark": "#20262f" },
+      "headText": { "light": "#0064c8", "dark": "#6aadff" },
+      "headBorder": { "light": "rgba(0,113,227,0.14)", "dark": "rgba(41,151,255,0.18)" },
+      "source": "src/theme.ts:387-422"
+    },
+    "tab": {
+      "selectedBg": { "light": "rgba(255,255,255,0.80)", "dark": "rgba(255,255,255,0.10)" },
+      "selectedBlur": "blur(20px) saturate(180%)",
+      "hoverBg": { "light": "rgba(0,0,0,0.04)", "dark": "rgba(255,255,255,0.05)" },
+      "source": "src/theme.ts:425-448"
+    },
+    "navItem": {
+      "selectedBg": { "light": "rgba(255,255,255,.60)", "dark": "rgba(255,255,255,.07)" },
+      "hoverBg": { "light": "rgba(255,255,255,.38)", "dark": "rgba(255,255,255,.05)" },
+      "selectedBorder": { "light": "rgba(255,255,255,.78)", "dark": "rgba(255,255,255,.10)" },
+      "source": "src/components/Layout.tsx:79-103"
+    },
+    "insetBox": { "value": "action.hover", "source": "src/portal/PayDialog.tsx:34" },
+    "selectIcon": { "light": "rgba(0,0,0,0.28)", "dark": "rgba(255,255,255,0.35)", "source": "src/theme.ts:295-298" },
+    "muiDivider": { "light": "rgba(0,0,0,0.08)", "dark": "rgba(255,255,255,0.08)", "source": "src/theme.ts:566-572" },
+    "skeleton": {
+      "base": { "light": "rgba(0,0,0,0.06)", "dark": "rgba(255,255,255,0.06)" },
+      "shimmer": { "light": "rgba(255,255,255,0.80)", "dark": "rgba(255,255,255,0.08)" },
+      "source": "src/theme.ts:553-565"
+    },
+    "progressTrack": { "light": "rgba(0,0,0,0.06)", "dark": "rgba(255,255,255,0.08)", "source": "src/theme.ts:544-552" },
+    "scrollbarThumb": {
+      "rest": { "light": "rgba(0,0,0,.12)", "dark": "rgba(255,255,255,.14)" },
+      "hover": { "light": "rgba(0,0,0,.20)", "dark": "rgba(255,255,255,.22)" },
+      "source": "src/theme.ts:136-144"
+    },
+    "selection": { "value": "alpha(primary, 0.28)", "source": "src/theme.ts:209" },
+    "focusVisible": { "value": "2px solid alpha(primary, 0.80), offset 2px, radius 4px", "source": "src/theme.ts:210-213" }
+  },
+  "typography": {
+    "fontFamily": { "value": "Vazirmatn, system-ui, -apple-system, sans-serif", "source": "src/theme.ts:122" },
+    "fontFace": { "value": "Vazirmatn variable woff2, weight 100-900, font-display swap, self-hosted + preloaded", "source": "index.html:25-42" },
+    "monospaceRule": { "value": "fontFamily \"monospace\" + dir ltr for identifiers (invoice numbers, TXIDs, UUIDs, links, secrets)", "source": "src/pages/Invoices.tsx:424" },
+    "chartFontFamily": { "value": "Vazirmatn, sans-serif", "source": "src/pages/Dashboard.tsx:32" },
+    "headings": {
+      "h4": { "fontWeight": 700, "letterSpacing": "-.02em" },
+      "h5": { "fontWeight": 700, "letterSpacing": "-.015em" },
+      "h6": { "fontWeight": 700, "letterSpacing": "-.01em" },
+      "subtitle1": { "fontWeight": 600 },
+      "subtitle2": { "fontWeight": 600 },
+      "button": { "fontWeight": 600 },
+      "source": "src/theme.ts:121-129"
+    },
+    "weightRamp": {
+      "base": [500, 600, 700, 800],
+      "emphasisHalfSteps": [650, 750, 850],
+      "roles": {
+        "500": "unselected nav/tab",
+        "600": "labels, secondary emphasis, buttons",
+        "650": "metric detail",
+        "700": "bold values, selected tab",
+        "750": "row titles, StatusPill, prices",
+        "800": "page/section headers, brand",
+        "850": "hero numbers, StatCard values"
+      },
+      "source": "census §2.7 (e.g. src/pages/Dashboard.tsx:58, src/components/StatCard.tsx:36)"
+    },
+    "sizePx": {
+      "vocabulary": [9, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 17, 18, 19, 23, 25, 27, 36, 48],
+      "roles": {
+        "9": "compact chart axis",
+        "11": "chart axis, bottom-nav labels",
+        "11.5": "fine print",
+        "12": "tooltip, StatusPill, badges",
+        "12.5": "table head, resp-table labels, StatCard sub",
+        "13": "compact alerts, copy rows",
+        "13.5": "SegmentedTabs",
+        "14": "compact body",
+        "14.5": "nav labels",
+        "15-17": "inline text-adjacent icons",
+        "15.5": "login submit",
+        "18": "pay-dialog amount emphasis",
+        "19": "nav-chip glyphs, login brand",
+        "23": "StatCard icon glyphs, login h1 xs",
+        "25": "login h1 sm",
+        "27": "donut center",
+        "36": "help hero icon",
+        "48": "hero state icons"
+      },
+      "statCardValueRem": { "xs": "1.35rem", "sm": "1.65rem" },
+      "source": "census §2.7 (e.g. src/theme.ts:396,464; src/components/BottomNav.tsx:56; src/components/StatCard.tsx:37)"
+    },
+    "lineHeights": { "tight": 1, "brand": 1.1, "value": 1.2, "longPersianCopy": 1.9, "source": "src/components/Layout.tsx:154; src/components/StatCard.tsx:36; src/portal/PortalEntry.tsx:155" },
+    "tableHeadLetterSpacing": { "value": ".01em", "source": "src/theme.ts:397" }
+  },
+  "radii": {
+    "unitNote": "sx-N = N × shape.borderRadius (14px). Quoted values are literal.",
+    "base": { "value": 14, "source": "src/theme.ts:130" },
+    "focusRing": { "value": 4, "source": "src/theme.ts:213" },
+    "tabsIndicator": { "value": 2, "source": "src/theme.ts:453-454" },
+    "progress": { "value": 4, "source": "src/theme.ts:547" },
+    "small": { "value": 8, "roles": "tooltip, tab, scrollbar thumb, QR border", "source": "src/theme.ts:140,432,466" },
+    "icon": { "value": 10, "roles": "IconButton, ListItemButton", "source": "src/theme.ts:526,535" },
+    "switchTrack": { "value": 11, "source": "src/theme.ts:541" },
+    "alert": { "value": 12, "source": "src/theme.ts:487" },
+    "menuPopoverSnackbarAccordionMultiline": { "value": 14, "source": "src/theme.ts:236,241,312,503,516" },
+    "card": { "value": 18, "source": "src/theme.ts:223" },
+    "dialog": { "value": 20, "fullScreen": 0, "source": "src/theme.ts:244-252" },
+    "loginHeroCard": { "value": "24px", "source": "src/pages/Login.tsx:156" },
+    "iconChip": { "value": "sx-2 (28px)", "source": "src/components/Layout.tsx:182" },
+    "navItemAndLogoTile": { "value": "sx-2.5 (35px)", "source": "src/components/Layout.tsx:71,140" },
+    "mobileRowCard": { "value": "sx-3 (42px)", "source": "src/pages/resellers/ResellerMobileCard.tsx:32" },
+    "pillInputs": { "value": "50px", "roles": "single-line inputs, SegmentedTabs, LiveRate", "source": "src/theme.ts:316" },
+    "pillControls": { "value": 980, "roles": "Buttons, Chips; canonical spelling for badge/meter pills too (§5-C6)", "source": "src/theme.ts:341,374" },
+    "circle": { "value": "50%", "roles": "status dots", "source": "src/pages/resellers/ResellerIdentity.tsx:38" }
+  },
+  "shadows": {
+    "containedPrimaryButton": { "rest": "0 4px 14px alpha(primary,0.40)", "hover": "0 6px 20px alpha(primary,0.55)", "source": "src/theme.ts:349-352" },
+    "tabsIndicatorGlow": { "value": "0 0 8px 1px alpha(primary,0.50)", "source": "src/theme.ts:455" },
+    "tabSelected": {
+      "light": "0 0 0 0.5px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.08)",
+      "dark": "0 0 0 0.5px rgba(255,255,255,0.12), 0 2px 8px rgba(0,0,0,0.40)",
+      "source": "src/theme.ts:439-441"
+    },
+    "alertRimInset": { "light": "inset 0 1px 0 rgba(255,255,255,0.90)", "dark": "inset 0 1px 0 rgba(255,255,255,0.06)", "source": "src/theme.ts:489-491" },
+    "navAccentBarGlow": { "value": "0 0 8px 2px alpha(primary,0.42)", "source": "src/components/Layout.tsx:98" },
+    "logoTile": { "value": "0 6px 18px -6px rgba(0,113,227,.55), inset 0 1.5px 0 rgba(255,255,255,.40)", "source": "src/components/Layout.tsx:145-148" },
+    "statCardHover": { "light": "0 10px 28px -12px alpha(accent,0.45)", "dark": "0 8px 26px -10px alpha(accent,0.5)", "source": "src/components/StatCard.tsx:18-20" }
+  },
+  "blurTiers": {
+    "canonical": {
+      "tier1Light": "blur(40px) saturate(180%)",
+      "tier1Dark": "blur(20px) saturate(140%)",
+      "tier2": "blur(40px) saturate(180%)",
+      "chrome": "blur(48px) saturate(220%) brightness(1.03)"
+    },
+    "note": "All other in-code recipes (28/200/1.02, 48/220/1.04, 20/180, 16/180, 14/180, 12/160-180) are drift → §5-C5.",
+    "source": "src/theme.ts:29,33; src/components/Layout.tsx:246"
+  },
+  "motion": {
+    "easeStandard": { "value": "cubic-bezier(.22,1,.36,1)", "source": "src/components/motion.tsx:5" },
+    "easeSpring": { "value": "cubic-bezier(.34,1.56,.64,1)", "source": "src/theme.ts:345" },
+    "durationsSec": {
+      "micro": [0.14, 0.15, 0.18, 0.2],
+      "rowEntrance": 0.36,
+      "pageEntrance": 0.4,
+      "reveal": 0.45,
+      "heroEntrance": 0.55,
+      "meterFill": 0.65,
+      "countUp": 1.2,
+      "source": "src/theme.ts:171,224,317,345,412,433; src/components/motion.tsx:17,39,52; src/pages/Dashboard.tsx:354,404; src/pages/Login.tsx:184"
+    },
+    "staggers": { "tableRowsMs": 28, "statCardsSec": 0.07, "meterBarsSec": 0.06, "source": "src/theme.ts:96-101; src/pages/Dashboard.tsx:354,404" },
+    "entranceOffsets": { "pagePx": 14, "revealPx": 16, "rowPx": 6, "heroScale": 0.97, "source": "src/components/motion.tsx:15,49; src/theme.ts:161-168" },
+    "hover": {
+      "buttonLift": "translateY(-1px) + opacity 0.90",
+      "buttonPress": "scale(.97)",
+      "iconButtonHover": "scale(1.10)",
+      "iconButtonPress": "scale(.94)",
+      "statCardLift": "translateY(-2px)",
+      "navIcon": "scale(1.14) rotate(-3deg)",
+      "source": "src/theme.ts:346-347,528-529; src/components/StatCard.tsx:16; src/components/Layout.tsx:104"
+    },
+    "reducedMotion": { "value": "all animation/transition durations forced to 0.001ms", "source": "src/theme.ts:206-208" },
+    "toastAutoHideMs": { "value": 4500, "source": "src/components/Toast.tsx:16" }
+  },
+  "layout": {
+    "breakpoints": { "value": "MUI defaults (xs 0, sm 600, md 900, lg 1200, xl 1536)", "source": "src/theme.ts:103 (not overridden)" },
+    "mobileCssQuery": { "value": "@media (max-width:599.95px)", "source": "src/theme.ts:176" },
+    "sidebarWidth": { "value": 256, "note": "canonical per §5-C10; portal currently 248", "source": "src/components/Layout.tsx:37" },
+    "settingsSideNavWidth": { "value": 240, "source": "src/pages/Settings.tsx:623" },
+    "contentPadding": { "value": "p {xs:2, md:3} (16/24px)", "source": "src/components/Layout.tsx:314" },
+    "mobileBottomClearance": { "value": "calc(76px + env(safe-area-inset-bottom))", "source": "src/components/Layout.tsx:314" },
+    "bottomNavHeight": { "value": 60, "source": "src/components/BottomNav.tsx:48" },
+    "authCardMaxWidths": { "login": 520, "setupWizard": 480, "setupSuccess": 460, "portalEntry": 420, "source": "src/pages/Login.tsx:154; src/pages/Setup.tsx:93,56; src/portal/PortalEntry.tsx:129" },
+    "spacingUnitPx": { "value": 8, "source": "MUI default (not overridden)" },
+    "tableScrollBound": { "value": "calc(100vh - 300px)", "source": "src/pages/Invoices.tsx:398" },
+    "zIndex": { "ambient": -1, "sidebarGlow": 0, "sidebarContent": 1, "loginZones": 2, "settingsStickyHeader": 3, "bottomNav": "theme.zIndex.appBar", "source": "src/theme.ts:156; src/components/Layout.tsx:129,133; src/pages/Login.tsx:145; src/pages/Settings.tsx:601; src/components/BottomNav.tsx:35" }
+  },
+  "charts": {
+    "adapter": { "value": "src/components/EChart.tsx (canvas, tree-shaken Bar/Pie/Grid/Tooltip/Legend, ResizeObserver, notMerge+lazyUpdate)", "source": "src/components/EChart.tsx:10-40" },
+    "defaultHeight": { "value": 300, "range": "190-300", "source": "src/components/EChart.tsx:17" },
+    "axisLabel": { "sizePx": 11, "compactSizePx": 9, "color": "text.secondary", "source": "src/pages/Dashboard.tsx:183; src/portal/dailyTrend.ts:41" },
+    "axisLine": { "value": "alpha(text.secondary, 0.25)", "source": "src/pages/Dashboard.tsx:181" },
+    "splitLine": { "value": "theme.palette.divider", "source": "src/pages/Dashboard.tsx:193" },
+    "barGradient": { "value": "vertical accent → alpha(accent, light 0.45 / dark 0.35); hover bottom stop alpha(accent, 0.7)", "source": "src/pages/Dashboard.tsx:199-218" },
+    "barTopRadius": { "value": [6, 6, 0, 0], "compact": [4, 4, 0, 0], "source": "src/pages/Dashboard.tsx:201; src/portal/dailyTrend.ts:58" },
+    "barMaxWidth": { "daily": 18, "compact": 12, "monthly": 34, "source": "src/pages/Dashboard.tsx:198; src/portal/dailyTrend.ts:56; src/portal/monthlyTrend.ts:55" },
+    "donut": { "radius": ["66%", "84%"], "itemBorderRadius": 7, "itemBorderWidth": 3, "itemBorderColor": "background.paper", "source": "src/pages/Dashboard.tsx:230-240" },
+    "tooltip": {
+      "canonical": { "bg": { "light": "rgba(255,255,255,0.92)", "dark": "rgba(28,28,30,0.92)" }, "textColor": "theme text tiers" },
+      "note": "Canonical = the glass Tooltip token per §5-C2; charts currently ship legacy navy values (rgba(14,16,32,0.88), #e2e8f0/#334155, rgba(200,210,255,0.55)).",
+      "source": "canonical src/theme.ts:471-479; current src/pages/Dashboard.tsx:150-154"
+    },
+    "htmlMeterBars": { "trackHeightPx": "8-9", "trackColor": "alpha(text.secondary, 0.11)", "radius": 99, "fill": "linear-gradient(90deg, alpha(color,0.72), color)", "source": "src/pages/Dashboard.tsx:390-411,553-570" }
+  },
+  "componentDefaults": {
+    "buttonPaddingInline": { "default": 20, "small": 14, "large": 28, "source": "src/theme.ts:344,366-367" },
+    "selectPadding": { "value": "paddingBlock 7px, paddingInlineStart 16px", "source": "src/theme.ts:288-290" },
+    "switch": { "padding": 8, "trackOpacity": { "light": 0.28, "dark": 0.35 }, "source": "src/theme.ts:538-543" },
+    "linearProgress": { "height": 6, "radius": 4, "source": "src/theme.ts:544-552" },
+    "capacityBarThresholds": { "info": "<70%", "warning": ">=70%", "error": ">=90%", "source": "src/components/CapacityBar.tsx:10-12" },
+    "tab": { "minHeight": 40, "segmentedMinHeight": 38, "source": "src/theme.ts:431; src/components/SegmentedTabs.tsx:48,54" },
+    "tablePagination": { "rowsPerPageOptions": [25, 50, 100], "source": "src/components/TablePager.tsx:27" },
+    "tableSortIconOpacity": { "value": 0.4, "source": "src/theme.ts:423" },
+    "statusPillDotPx": { "value": 7, "source": "src/pages/resellers/ResellerIdentity.tsx:38" },
+    "countBadge": { "radius": 999, "minWidth": 20, "fontSize": 12, "fontWeight": 800, "lineHeight": "20px", "note": "radius normalizes to 980 per §5-C6", "source": "src/portal/storefront/StorefrontShell.tsx:126-143" },
+    "qrBlock": { "bg": "#fff", "sizePx": 132, "level": "M", "source": "src/portal/PayDialog.tsx:17-25" },
+    "emptyStateMinHeight": { "value": 180, "note": "canonical per §5-C14; Dashboard ships 210", "source": "src/portal/ui.tsx:27" },
+    "notificationsPopoverWidth": { "value": 340, "max": "92vw", "source": "src/portal/NotificationsBell.tsx:53" }
+  },
+  "assets": {
+    "manifest": { "backgroundColor": "#000000", "themeColor": "#0071e3", "dir": "rtl", "display": "standalone", "source": "public/site.webmanifest:6-10" },
+    "metaThemeColor": { "light": "#f5f5f7", "dark": "#000000", "source": "index.html:18-20; src/main.tsx:24-28" },
+    "favicon": { "value": "receipt glyph, rx14/64 tile, gradient #5ab5ff→#0064d2, gloss rgba(255,255,255,0.28)→0, paper rgba(255,255,255,0.95), lines #0071e3 @ 0.7/0.35, badge #0071e3", "source": "public/favicon.svg" },
+    "loginIllustration": { "value": "public/login.svg — licensed artwork; internal palette excluded from tokens; only contract is drop-shadow(0 28px 30px rgba(35,69,108,.14))", "source": "src/pages/Login.tsx:431" }
+  },
+  "dataDisplayRules": {
+    "displayDates": { "value": "Jalali via toLocaleDateString(fa-IR)", "source": "src/format.ts:15-22" },
+    "exactMoments": { "value": "Gregorian YYYY-MM-DD HH:mm in Asia/Tehran, LTR", "source": "src/format.ts:24-38" },
+    "billingPeriods": { "value": "Gregorian YYYY-MM; picker shows ASCII digits + English month names", "source": "src/components/PeriodPicker.tsx:4-9" },
+    "numbers": { "value": "Persian digits via toLocaleString(fa-IR)", "source": "src/format.ts:1-13" },
+    "toman": { "value": "rounded integer + « تومان»", "source": "src/format.ts:1-2" },
+    "gb": { "value": "≤2 decimals + « گیگابایت»", "source": "src/format.ts:5-11" },
+    "axisCompression": { "value": "م for millions, هزار for thousands", "source": "src/pages/Dashboard.tsx:156-159" },
+    "ltrInputRule": { "value": "inputProps={{ dir: \"ltr\" }} only — labels/helperText stay RTL", "source": "src/pages/Setup.tsx:107" }
+  }
+}
