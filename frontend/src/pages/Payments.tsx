@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useDeferredValue } from "react";
 import {
   Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, InputAdornment, MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer,
@@ -12,15 +12,16 @@ import CheckIcon from "@mui/icons-material/esm/Check";
 import CloseIcon from "@mui/icons-material/esm/Close";
 import ImageIcon from "@mui/icons-material/esm/Image";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listPayments, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
+  listPayments, listPaymentsPaged, confirmPayment, rejectPayment, deletePayment, openPaymentProof,
   depositCheck,
 } from "../api/client";
 import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
 import { useToastMutation } from "../hooks/useToastMutation";
-import { useSort, SortTh } from "../components/sortable";
+import { SortTh } from "../components/sortable";
+import { TablePager } from "../components/TablePager";
 import { DataState } from "../components/DataState";
 import { fmtToman, fmtDate, fmtNum, PAYMENT_STATUS_FA, PAYMENT_METHOD_FA } from "../format";
 import { nestedCardBg } from "../theme";
@@ -41,20 +42,41 @@ export default function Payments() {
   const xsFull = useXsFullScreen();
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
-  const { data = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ["payments", status],
-    queryFn: () => listPayments({ status: status || undefined }),
+  // Server-side pagination (B4): one page per request; search (public «#N» tracking
+  // number — decoded server-side, Persian digits normalized — or reseller name),
+  // sorting and the total count run in the database.
+  const [page, setPage] = useState(0);
+  const [rpp, setRpp] = useState(50);
+  const [sortState, setSortState] = useState<{ key: string; dir: "asc" | "desc" }>(
+    { key: "created_at", dir: "desc" },
+  );
+  const { key, dir } = sortState;
+  const toggle = (k: string) =>
+    setSortState((s) => (s.key === k ? { key: k, dir: s.dir === "asc" ? "desc" : "asc" } : { key: k, dir: "asc" }));
+  const dq = useDeferredValue(search);
+  const q = dq.trim();
+  const listParams = (p: number) => ({
+    status: status || undefined, q: q || undefined,
+    sort: key, order: dir, limit: rpp, offset: p * rpp,
   });
-  const { sorted, key, dir, toggle } = useSort(data, "created_at", "desc");
-  // Search by tracking number (the public «#N» the customer quotes) or reseller name.
-  // Persian/Arabic digits are normalized to ASCII so a hand-typed «#۱۲» matches the code.
-  const toAscii = (s: string) =>
-    s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
-     .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
-  const q = toAscii(search.trim().replace(/^#/, "")).toLowerCase();
-  const matchesSearch = (p: any) =>
-    String(p.number || "").includes(q) || (p.reseller_name || "").toLowerCase().includes(q);
-  const shown = q ? sorted.filter(matchesSearch) : sorted;
+  const listKey = (p: number) => ["payments", status, q, key, dir, rpp, p];
+  const { data: pageData, isLoading, isError, refetch } = useQuery({
+    queryKey: listKey(page),
+    queryFn: ({ signal }) => listPaymentsPaged(listParams(page), signal),
+  });
+  const data = pageData?.rows ?? [];
+  const totalCount = pageData?.total ?? 0;
+  const qcPrefetch = useQueryClient();
+  useEffect(() => {
+    if ((page + 1) * rpp < totalCount)
+      qcPrefetch.prefetchQuery({
+        queryKey: listKey(page + 1),
+        queryFn: ({ signal }) => listPaymentsPaged(listParams(page + 1), signal),
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageData]);
+  useEffect(() => setPage(0), [status, q, key, dir]);
+  const shown = data;
 
   // ---- confirm dialog: a payment is for ONE invoice; the owner just confirms it ----
   const confirmDlg = useDialogState<any>();
@@ -123,15 +145,12 @@ export default function Payments() {
     if (window.confirm(`پرداختِ «${p.reseller_name || ""}» (${scope}) برای همیشه حذف شود؟${extra}`)) del.mutate(p.id);
   };
 
-  // CSV export: re-fetch the FULL dataset (the page query uses the backend default of 200;
-  // the cap is 2000) with the CURRENT status filter, apply the same client-side search,
-  // and build the file in the browser.
+  // CSV export: re-fetch the FULL dataset server-filtered with the same status/search
+  // (backend cap 2000) and build the file in the browser.
   const exportCsv = useToastMutation({
     show,
-    mutationFn: async () => {
-      const rows = await listPayments({ status: status || undefined, limit: 2000 });
-      return q ? rows.filter(matchesSearch) : rows;
-    },
+    mutationFn: () =>
+      listPayments({ status: status || undefined, q: q || undefined, limit: 2000 }),
     success: (rows: any[]) => `${fmtNum(rows.length)} پرداخت در فایل CSV ذخیره شد`,
     onSuccess: (rows: any[]) => downloadCsv(
       "payments.csv",
@@ -315,6 +334,8 @@ export default function Payments() {
           )}
         </Stack>
         )}
+        <TablePager count={totalCount} page={page} rpp={rpp} onPage={setPage}
+          onRpp={(v) => { setRpp(v); setPage(0); }} />
       </Card>
       </DataState>
 

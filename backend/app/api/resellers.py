@@ -5,8 +5,8 @@ import datetime as dt
 from collections import defaultdict
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from sqlalchemy import case, func, or_, select
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
+from sqlalchemy import case, false, func, or_, select, tuple_
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -183,6 +183,7 @@ async def _usage_counts(
 
 @router.get("", response_model=list[ResellerOut])
 async def list_resellers(
+    response: Response,
     panel_id: int | None = None,
     q: str | None = Query(None, description="search by name"),
     include_owners: bool = False,
@@ -208,14 +209,36 @@ async def list_resellers(
         root_keys = {(r.panel_id, r.admin_uuid) for r in top_level_roots(all_res)}
 
     query = select(Reseller, Panel.key).join(Panel, Reseller.panel_id == Panel.id).where(_present_filter())
+    count_q = (
+        select(func.count())
+        .select_from(Reseller)
+        .join(Panel, Reseller.panel_id == Panel.id)
+        .where(_present_filter())
+    )
+    if root_keys is not None:
+        # Filter to the root set IN SQL (was: post-filter of the fetched page, which made
+        # limit/offset windows shrink unpredictably and a total count impossible).
+        root_filter = (
+            tuple_(Reseller.panel_id, Reseller.admin_uuid).in_(list(root_keys))
+            if root_keys
+            else false()
+        )
+        query = query.where(root_filter)
+        count_q = count_q.where(root_filter)
     if panel_id is not None:
         query = query.where(Reseller.panel_id == panel_id)
+        count_q = count_q.where(Reseller.panel_id == panel_id)
     if not include_owners:
         query = query.where(Reseller.is_owner.is_(False))
+        count_q = count_q.where(Reseller.is_owner.is_(False))
     if registered is True:
         query = query.where(Reseller.bot_chat_id.is_not(None))
+        count_q = count_q.where(Reseller.bot_chat_id.is_not(None))
     elif registered is False:
         query = query.where(Reseller.bot_chat_id.is_(None))
+        count_q = count_q.where(Reseller.bot_chat_id.is_(None))
+    if not isinstance(q, str) or not q.strip():
+        q = None
     if q:
         query = query.where(or_(Reseller.name.ilike(f"%{q}%"), Reseller.admin_uuid.ilike(f"%{q}%")))
         # Relevance ordering so a search surfaces the intended reseller even when dozens share
@@ -229,12 +252,15 @@ async def list_resellers(
             (func.lower(Reseller.name).like(f"{ql}%"), 1),
             else_=2,
         )
+        search_filter = or_(Reseller.name.ilike(f"%{q}%"), Reseller.admin_uuid.ilike(f"%{q}%"))
+        count_q = count_q.where(search_filter)
         query = query.order_by(rank, Reseller.name).limit(limit).offset(offset)
     else:
         query = query.order_by(Reseller.name).limit(limit).offset(offset)
+    response.headers["X-Total-Count"] = str(
+        (await session.execute(count_q)).scalar_one()
+    )
     rows = list((await session.execute(query)).tuples().all())
-    if root_keys is not None:
-        rows = [(r, key) for r, key in rows if (r.panel_id, r.admin_uuid) in root_keys]
     counts = await _usage_counts(session, panel_id)
     # Telegram @usernames for the registered resellers in this page → clickable PV deep-link.
     chat_ids = [r.bot_chat_id for r, _ in rows if r.bot_chat_id]

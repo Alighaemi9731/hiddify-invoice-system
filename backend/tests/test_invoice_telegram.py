@@ -3,6 +3,7 @@ render a clickable PV deep-link. A reseller who never started the bot has neithe
 import asyncio
 import datetime as dt
 
+from fastapi import Response
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.invoices import list_invoices
@@ -46,6 +47,7 @@ def test_invoice_list_exposes_telegram_link(tmp_path):
                 await s.commit()
 
                 rows = await list_invoices(
+                Response(),
                     period="2026-06", sort="amount", order="desc", limit=200, offset=0,
                     session=s,
                 )

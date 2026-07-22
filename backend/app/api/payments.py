@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.codes import payment_code
+from app.core.codes import decode_payment_code, payment_code
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import BotUser, Invoice, Payment, Reseller
@@ -96,25 +97,84 @@ async def _load_invoice_map(
     return {inv.id: inv for inv in rows}
 
 
+# UI SortTh ids → columns. `invoice_period` and other derived fields are computed from
+# the settled-invoice set and cannot be SQL-sorted; they fall back to created_at (the
+# period correlates with submission time). `total_amount_toman` maps to the stored
+# Toman amount.
+_PAY_SORT = {
+    "id": Payment.id,
+    "reseller_name": Reseller.name,
+    "method": Payment.method,
+    "total_amount_toman": Payment.amount_toman,
+    "confirmations": Payment.confirmations,
+    "status": Payment.status,
+    "created_at": Payment.created_at,
+}
+
+
+def _ascii_digits(s: str) -> str:
+    out = []
+    for ch in s:
+        if "\u06f0" <= ch <= "\u06f9":
+            out.append(chr(ord(ch) - 0x06F0 + ord("0")))
+        elif "\u0660" <= ch <= "\u0669":
+            out.append(chr(ord(ch) - 0x0660 + ord("0")))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 @router.get("", response_model=list[PaymentOut])
 async def list_payments(
+    response: Response,
     status: PaymentStatus | None = None,
     reseller_id: int | None = None,
+    q: str | None = Query(None, description="search: tracking number (#id) or reseller name"),
+    sort: str = Query("created_at"),
+    order: str = Query("desc"),
     limit: int = Query(200, le=2000),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> list[PaymentOut]:
-    q = (
+    """Server-side pagination; full filtered count in `X-Total-Count` (additive header)."""
+    filters: list[ColumnElement[bool]] = []
+    if status is not None:
+        filters.append(Payment.status == status)
+    if reseller_id is not None:
+        filters.append(Payment.reseller_id == reseller_id)
+    if isinstance(q, str) and q.strip():
+        needle = _ascii_digits(q.strip().lstrip("#"))
+        ors: list[ColumnElement[bool]] = [Reseller.name.ilike(f"%{q.strip()}%")]
+        if needle.isdigit():
+            ids = [int(needle)] if len(needle) < 8 else []
+            decoded = decode_payment_code(needle)  # the public «شمارهٔ پیگیری»
+            if decoded is not None:
+                ids.append(decoded)
+            if ids:
+                ors.append(Payment.id.in_(ids))
+        filters.append(or_(*ors))
+
+    total = (
+        await session.execute(
+            select(func.count())
+            .select_from(Payment)
+            .outerjoin(Reseller, Payment.reseller_id == Reseller.id)
+            .where(*filters)
+        )
+    ).scalar_one()
+    response.headers["X-Total-Count"] = str(total)
+
+    col = _PAY_SORT.get(sort, Payment.created_at)
+    query = (
         select(Payment, Reseller.name, Reseller.bot_chat_id, BotUser.username)
         .outerjoin(Reseller, Payment.reseller_id == Reseller.id)
         .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
-        .order_by(Payment.created_at.desc())
+        .where(*filters)
+        .order_by(col.asc() if order == "asc" else col.desc(), Payment.id.desc())
         .limit(limit)
+        .offset(offset)
     )
-    if status is not None:
-        q = q.where(Payment.status == status)
-    if reseller_id is not None:
-        q = q.where(Payment.reseller_id == reseller_id)
-    rows = (await session.execute(q)).all()
+    rows = (await session.execute(query)).all()
     from app.services import rates
 
     ton_rate = await rates.get_ton_toman(session)

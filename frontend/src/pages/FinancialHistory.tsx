@@ -6,7 +6,7 @@ import {
 import DownloadIcon from "@mui/icons-material/esm/Download";
 import SearchIcon from "@mui/icons-material/esm/Search";
 import { useQuery } from "@tanstack/react-query";
-import { getFinancialHistory } from "../api/client";
+import { getFinancialHistoryPaged } from "../api/client";
 import { downloadCsv } from "../csv";
 import PeriodPicker from "../components/PeriodPicker";
 import { DataState } from "../components/DataState";
@@ -26,17 +26,22 @@ export default function FinancialHistory() {
   const [rpp, setRpp] = useState(50);
   useEffect(() => setPage(0), [period, q, status]);
 
-  const { data = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ["financial-history", period, q, status],
-    queryFn: () => getFinancialHistory({
+  // Server-side pagination (B4): the ledger grows forever by design, so the browser
+  // must never download it whole — one page per request; count and money sums come
+  // from response headers computed over the FULL filtered set.
+  const { data: pageData, isLoading, isError, refetch } = useQuery({
+    queryKey: ["financial-history", period, q, status, rpp, page],
+    queryFn: ({ signal }) => getFinancialHistoryPaged({
       period: period || undefined, q: q || undefined, status: status || undefined,
-    }),
+      limit: rpp, offset: page * rpp,
+    }, signal),
   });
-  const paged = data.slice(page * rpp, page * rpp + rpp);
+  const data = pageData?.rows ?? [];
+  const totalCount = pageData?.total ?? 0;
+  const paged = data;
 
-  const total = data.reduce((s: number, r: any) => s + r.amount_toman, 0);
-  const paid = data.filter((r: any) => r.status === "paid")
-    .reduce((s: number, r: any) => s + r.amount_toman, 0);
+  const total = pageData?.totalAmount ?? 0;
+  const paid = pageData?.paidAmount ?? 0;
 
   const exportCsv = () => downloadCsv(
     "financial-history.csv",
@@ -113,7 +118,7 @@ export default function FinancialHistory() {
             </TableBody>
           </Table>
         </TableContainer>
-        <TablePager count={data.length} page={page} rpp={rpp} onPage={setPage}
+        <TablePager count={totalCount} page={page} rpp={rpp} onPage={setPage}
           onRpp={(v) => { setRpp(v); setPage(0); }} />
       </Card>
       </DataState>

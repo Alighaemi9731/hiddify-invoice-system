@@ -5,9 +5,9 @@ import datetime as dt
 import logging
 from collections import defaultdict
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import proccache
@@ -228,27 +228,58 @@ async def enforcement_actions(
 
 @router.get("/financial-history")
 async def financial_history(
+    response: Response,
     period: str | None = None,
     panel_key: str | None = None,
     status: str | None = None,
     q: str | None = None,
     limit: int = Query(1000, le=10000),
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
     """Durable ledger: panel, reseller, month, amount, paid/unpaid — kept permanently
-    even after a data wipe or panel/reseller removal."""
-    query = select(FinancialRecord).order_by(
-        FinancialRecord.period_label.desc(), FinancialRecord.amount_toman.desc()
-    )
+    even after a data wipe or panel/reseller removal. Server-paged: the ledger grows
+    forever by design, so the SPA must never download it whole; the filtered total is
+    returned in `X-Total-Count`. The sort is served by ix_finrec_period_amount."""
+    filters = []
     if period:
-        query = query.where(FinancialRecord.period_label == period)
+        filters.append(FinancialRecord.period_label == period)
     if panel_key:
-        query = query.where(FinancialRecord.panel_key == panel_key)
+        filters.append(FinancialRecord.panel_key == panel_key)
     if status:
-        query = query.where(FinancialRecord.status == status)
+        filters.append(FinancialRecord.status == status)
     if q:
-        query = query.where(FinancialRecord.reseller_name.ilike(f"%{q}%"))
-    rows = (await session.execute(query.limit(limit))).scalars().all()
+        filters.append(FinancialRecord.reseller_name.ilike(f"%{q}%"))
+
+    total, amount_sum, paid_sum = (
+        await session.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(FinancialRecord.amount_toman), 0),
+                func.coalesce(
+                    func.sum(
+                        case((FinancialRecord.status == "paid", FinancialRecord.amount_toman), else_=0)
+                    ),
+                    0,
+                ),
+            ).select_from(FinancialRecord).where(*filters)
+        )
+    ).one()
+    response.headers["X-Total-Count"] = str(total)
+    # Whole-filtered-set sums for the header cards (a single page can't compute them).
+    response.headers["X-Total-Amount-Toman"] = str(int(amount_sum))
+    response.headers["X-Paid-Amount-Toman"] = str(int(paid_sum))
+
+    query = (
+        select(FinancialRecord)
+        .where(*filters)
+        .order_by(
+            FinancialRecord.period_label.desc(),
+            FinancialRecord.amount_toman.desc(),
+            FinancialRecord.id.desc(),
+        )
+    )
+    rows = (await session.execute(query.limit(limit).offset(offset))).scalars().all()
     return [
         {
             "id": r.id,

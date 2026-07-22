@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useDeferredValue } from "react";
 import {
   Autocomplete, Box, Button, Card, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -21,9 +21,9 @@ import SearchIcon from "@mui/icons-material/esm/Search";
 import InputAdornment from "@mui/material/InputAdornment";
 import SegmentedTabs from "../components/SegmentedTabs";
 import TelegramLink, { telegramHref } from "../components/TelegramLink";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  listInvoices, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
+  listInvoices, listInvoicesPaged, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
   listResellers, bulkDeferInvoices, discardDrafts, recomputeInvoice, revertInvoiceToDraft,
 } from "../api/client";
@@ -31,7 +31,7 @@ import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
 import { useXsFullScreen } from "../responsive";
 import { useToastMutation } from "../hooks/useToastMutation";
-import { useSort, SortTh } from "../components/sortable";
+import { SortTh } from "../components/sortable";
 import { MONEY_KEYS } from "../queryKeys";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
@@ -74,37 +74,54 @@ export default function Invoices() {
     enabled: rInput.trim().length >= 1,
   });
 
-  const { data = [] } = useQuery({
-    queryKey: inResellerMode
-      ? ["invoices", "reseller", resellerFilter!.id, status]
-      : ["invoices", period, status],
-    queryFn: () => inResellerMode
-      ? listInvoices({ reseller_id: resellerFilter!.id, status: status || undefined, limit: 1000 })
-      : listInvoices({ period, status: status || undefined, limit: 1000 }),
+  // Server-side pagination (B4): the browser fetches ONE page; sorting, searching (by
+  // reseller name or the public 8-digit invoice number — Persian digits normalized
+  // server-side), filtering, count and money totals all happen in the database.
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  const [sortState, setSortState] = useState<{ key: string; dir: "asc" | "desc" }>(
+    { key: "amount_toman", dir: "desc" },
+  );
+  const { key, dir } = sortState;
+  const toggle = (k: string) =>
+    setSortState((s) => (s.key === k ? { key: k, dir: s.dir === "asc" ? "desc" : "asc" } : { key: k, dir: "asc" }));
+  const dq = useDeferredValue(search);
+  const q = dq.trim();
+  const listParams = (p: number) => ({
+    ...(inResellerMode ? { reseller_id: resellerFilter!.id } : { period }),
+    status: status || undefined,
+    q: q || undefined,
+    sort: key, order: dir, limit: rowsPerPage, offset: p * rowsPerPage,
   });
+  const listKey = (p: number) =>
+    ["invoices", inResellerMode ? `r${resellerFilter!.id}` : period, status, q, key, dir, rowsPerPage, p];
+  const { data: pageData } = useQuery({
+    queryKey: listKey(page),
+    queryFn: ({ signal }) => listInvoicesPaged(listParams(page), signal),
+  });
+  const data = pageData?.rows ?? [];
+  const totalCount = pageData?.total ?? 0;
+  const totalAmount = pageData?.totalAmount ?? 0;
+  // Prefetch the adjacent page so «بعدی» renders instantly.
+  const qcPrefetch = useQueryClient();
+  useEffect(() => {
+    if ((page + 1) * rowsPerPage < totalCount)
+      qcPrefetch.prefetchQuery({
+        queryKey: listKey(page + 1),
+        queryFn: ({ signal }) => listInvoicesPaged(listParams(page + 1), signal),
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageData]);
   const { data: zero = [] } = useQuery({
     queryKey: ["zero-invoices", period],
     queryFn: () => getZeroInvoices(period),
     enabled: tab === 1,
   });
-  const { sorted, key, dir, toggle } = useSort(data, "amount_toman", "desc");
-  // Search by reseller name or the public 8-digit invoice number. Persian/Arabic digits are
-  // normalized to ASCII so a hand-typed «۱۲۳۴…» matches the number shown on each row.
-  const toAscii = (s: string) =>
-    s.replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
-     .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString());
-  const q = toAscii(search.trim()).toLowerCase();
-  const matchesSearch = (i: any) =>
-    String(i.number || "").includes(q) || (i.reseller_name || "").toLowerCase().includes(q);
-  const filtered = q ? sorted.filter(matchesSearch) : sorted;
-  // Paginate the (often hundreds of) rows so we never render the whole month at once.
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(50);
   // Row selection for bulk actions (extend deadline). Cleared whenever the data context changes
   // so a stale selection from another month/reseller can't leak into a bulk action.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  useEffect(() => { setPage(0); setSelectedIds(new Set()); }, [period, status, search, tab, key, dir, resellerFilter]);
-  const paged = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  useEffect(() => { setPage(0); setSelectedIds(new Set()); }, [period, status, q, tab, key, dir, resellerFilter]);
+  const paged = data;
   const pageIds = paged.map((i: any) => i.id);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
   const toggleId = (id: number) => setSelectedIds((prev) => {
@@ -182,15 +199,12 @@ export default function Invoices() {
     invalidate: ["invoices"],
   });
 
-  // CSV export: re-fetch the FULL filtered dataset (the page query caps at 1000; the
-  // backend cap is 2000) with the CURRENT period/status filters, apply the same
-  // client-side search, and build the file in the browser.
+  // CSV export: re-fetch the FULL filtered dataset (server-filtered with the same
+  // period/status/search the list uses; backend cap 2000) and build the file in the browser.
   const exportCsv = useToastMutation({
     show,
-    mutationFn: async () => {
-      const rows = await listInvoices({ period, status: status || undefined, limit: 2000 });
-      return q ? rows.filter(matchesSearch) : rows;
-    },
+    mutationFn: () =>
+      listInvoices({ period, status: status || undefined, q: q || undefined, limit: 2000 }),
     success: (rows: any[]) => `${fmtNum(rows.length)} فاکتور در فایل CSV ذخیره شد`,
     onSuccess: (rows: any[]) => downloadCsv(
       `invoices-${period}.csv`,
@@ -205,7 +219,6 @@ export default function Invoices() {
   });
 
   const openDetail = async (id: number) => detailDlg.openWith(await getInvoice(id));
-  const total = filtered.reduce((sum, invoice) => sum + invoice.amount_toman, 0);
 
   // The per-row operations as a single RowAction[] — one source of truth rendered as an icon
   // row on desktop (RowActionIcons) and as 1–2 labeled buttons + a ⋮ menu on mobile
@@ -302,7 +315,7 @@ export default function Invoices() {
           <Chip
             color="primary"
             onDelete={() => { setResellerFilter(null); setRInput(""); }}
-            label={`همهٔ فاکتورهای «${resellerFilter!.name}» — ${fmtNum(filtered.length)} فاکتور`}
+            label={`همهٔ فاکتورهای «${resellerFilter!.name}» — ${fmtNum(totalCount)} فاکتور`}
           />
         ) : (
           <SegmentedTabs
@@ -376,7 +389,7 @@ export default function Invoices() {
         </Stack>
       ) : (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          {fmtNum(filtered.length)} فاکتور{q ? ` (از ${fmtNum(sorted.length)})` : ""} — مجموع: {fmtToman(total)}
+          {fmtNum(totalCount)} فاکتور — مجموع: {fmtToman(totalAmount)}
         </Typography>
       )}
 
@@ -419,7 +432,7 @@ export default function Invoices() {
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
-            {filtered.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 10 : 9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای این جستجو یافت نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}</TableCell></TableRow>}
+            {data.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 10 : 9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای این جستجو یافت نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>
@@ -460,16 +473,16 @@ export default function Invoices() {
               </Box>
             </Box>
           ))}
-          {filtered.length === 0 && (
+          {data.length === 0 && (
             <Typography align="center" color="text.secondary" variant="body2" sx={{ py: 5 }}>
               {q ? "نتیجه‌ای برای این جستجو یافت نشد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}
             </Typography>
           )}
         </Stack>
         )}
-        {filtered.length > rowsPerPage && (
+        {totalCount > rowsPerPage && (
           <TablePagination
-            component="div" count={filtered.length} page={page}
+            component="div" count={totalCount} page={page}
             onPageChange={(_, p) => setPage(p)}
             rowsPerPage={rowsPerPage} rowsPerPageOptions={[25, 50, 100]}
             onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}

@@ -120,6 +120,9 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Pagination totals ride a response header; without exposing it the DEV cross-origin
+    # SPA (vite on :5173) can't read it. Same-origin production is unaffected.
+    expose_headers=["X-Total-Count", "X-Total-Amount-Toman", "X-Paid-Amount-Toman"],
 )
 
 # Illegal invoice state transitions (B03) surface as a clean 400 with a Persian message.

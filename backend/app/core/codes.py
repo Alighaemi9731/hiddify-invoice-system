@@ -37,3 +37,29 @@ def invoice_code(invoice_id: int) -> str:
 def payment_code(payment_id: int) -> str:
     """Stable 8-digit public tracking number for a payment id (the «شمارهٔ پیگیری»)."""
     return str(_code(payment_id, _MULT_PAYMENT))
+
+
+# Modular inverses of the multipliers (mult · inv ≡ 1 mod span) — they exist because the
+# multipliers are coprime to _SPAN. Used to decode a pasted public code back to the row
+# id for server-side search (the code is not stored anywhere).
+_INV_INVOICE = pow(_MULT_INVOICE, -1, _SPAN)
+_INV_PAYMENT = pow(_MULT_PAYMENT, -1, _SPAN)
+
+
+def _decode(code: int | str, inv_mult: int) -> int | None:
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return None
+    if not (_BASE <= c < _BASE + _SPAN):
+        return None
+    n = ((c - _BASE) * inv_mult) % _SPAN
+    return n or None  # id 0 never exists
+
+
+def decode_invoice_code(code: int | str) -> int | None:
+    return _decode(code, _INV_INVOICE)
+
+
+def decode_payment_code(code: int | str) -> int | None:
+    return _decode(code, _INV_PAYMENT)

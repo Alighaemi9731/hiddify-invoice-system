@@ -6,6 +6,8 @@ import asyncio
 import datetime as dt
 import os
 
+from fastapi import Response
+
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/resellersearch.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
@@ -46,6 +48,7 @@ def test_exact_match_ranks_first_within_limit(tmp_path):
         await s.commit()
 
         rows = await resellers_api.list_resellers(
+            Response(),
             panel_id=None, q="ali", include_owners=False, registered=None,
             top_level_only=False, limit=5, offset=0, session=s)
         names = [r.name for r in rows]

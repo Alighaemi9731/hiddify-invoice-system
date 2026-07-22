@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.codes import invoice_code
+from app.core.codes import decode_invoice_code, invoice_code
 from app.core.db import get_session
 from app.core.security import get_current_subject
 from app.models import (
@@ -54,7 +55,29 @@ _SORT_COLUMNS = {
     "usage": Invoice.usage_gb,
     "date": Invoice.period_start,
     "created": Invoice.created_at,
+    # UI column ids (the SPA sends its SortTh ids directly so header clicks sort the
+    # WHOLE dataset server-side, not just the fetched page).
+    "amount_toman": Invoice.amount_toman,
+    "usage_gb": Invoice.usage_gb,
+    "reseller_name": Reseller.name,
+    "panel_key": Panel.key,
+    "status": Invoice.status,
+    "period_label": Invoice.period_start,
+    "created_at": Invoice.created_at,
 }
+
+
+def _ascii_digits(s: str) -> str:
+    """Normalize Persian/Arabic digits to ASCII so a hand-typed «۱۲۳» matches."""
+    out = []
+    for ch in s:
+        if "\u06f0" <= ch <= "\u06f9":       # Persian ۰-۹
+            out.append(chr(ord(ch) - 0x06F0 + ord("0")))
+        elif "\u0660" <= ch <= "\u0669":     # Arabic ٠-٩
+            out.append(chr(ord(ch) - 0x0660 + ord("0")))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _to_out(
@@ -129,35 +152,67 @@ async def discard_drafts(
 
 @router.get("", response_model=list[InvoiceOut])
 async def list_invoices(
+    response: Response,
     period: str | None = None,
     panel_id: int | None = None,
     reseller_id: int | None = None,
     status: InvoiceStatus | None = None,
+    q: str | None = Query(None, description="search: invoice number or reseller name"),
     sort: str = Query("amount"),
     order: str = Query("desc"),
     limit: int = Query(200, le=2000),
-    offset: int = 0,
+    offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> list[InvoiceOut]:
-    q = (
+    """Server-side pagination: the full filtered count is returned in `X-Total-Count`
+    (additive header — the response body/contract is unchanged) so the SPA pages the
+    dataset on the server instead of downloading it whole."""
+    filters: list[ColumnElement[bool]] = []
+    if period:
+        filters.append(Invoice.period_label == period)
+    if panel_id is not None:
+        filters.append(Invoice.panel_id == panel_id)
+    if reseller_id is not None:
+        filters.append(Invoice.reseller_id == reseller_id)
+    if status is not None:
+        filters.append(Invoice.status == status)
+    if isinstance(q, str) and q.strip():
+        needle = _ascii_digits(q.strip())
+        ors: list[ColumnElement[bool]] = [Reseller.name.ilike(f"%{q.strip()}%")]
+        if needle.isdigit():
+            decoded = decode_invoice_code(needle)  # the public 8-digit «شماره فاکتور»
+            if decoded is not None:
+                ors.append(Invoice.id == decoded)
+        filters.append(or_(*ors))
+
+    total, total_amount = (
+        await session.execute(
+            select(func.count(), func.coalesce(func.sum(Invoice.amount_toman), 0))
+            .select_from(Invoice)
+            .join(Reseller, Invoice.reseller_id == Reseller.id)
+            .join(Panel, Invoice.panel_id == Panel.id)
+            .where(*filters)
+        )
+    ).one()
+    response.headers["X-Total-Count"] = str(total)
+    # Whole-filtered-set money sum for the list header (the page alone can't compute it).
+    response.headers["X-Total-Amount-Toman"] = str(int(total_amount))
+
+    query = (
         select(Invoice, Reseller.name, Panel.key, Reseller.bot_chat_id, BotUser.username)
         .join(Reseller, Invoice.reseller_id == Reseller.id)
         .join(Panel, Invoice.panel_id == Panel.id)
         .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
+        .where(*filters)
     )
-    if period:
-        q = q.where(Invoice.period_label == period)
-    if panel_id is not None:
-        q = q.where(Invoice.panel_id == panel_id)
-    if reseller_id is not None:
-        q = q.where(Invoice.reseller_id == reseller_id)
-    if status is not None:
-        q = q.where(Invoice.status == status)
-
     col = _SORT_COLUMNS.get(sort, Invoice.amount_toman)
-    q = q.order_by(col.asc() if order == "asc" else col.desc()).limit(limit).offset(offset)
-
-    rows = (await session.execute(q)).all()
+    # Deterministic tiebreaker: equal sort values must not shuffle rows across pages.
+    query = (
+        query.order_by(col.asc() if order == "asc" else col.desc(), Invoice.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = (await session.execute(query)).all()
     return [_to_out(inv, name, key, chat_id, username) for inv, name, key, chat_id, username in rows]
 
 

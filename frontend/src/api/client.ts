@@ -317,6 +317,26 @@ export const deferInvoice = (id: number, body: { deferred_until: string | null; 
 export const bulkDeferInvoices = (body: { ids: number[]; deferred_until: string | null; defer_note?: string }) =>
   api.post(`/api/invoices/bulk-defer`, body).then((r) => r.data as { done: number; skipped: { id: number; reason: string }[] });
 
+// ---- server-side pagination (Wave 3 / B4) ----
+// List endpoints return one page + the FULL filtered count in the X-Total-Count header.
+export interface Paged<T> { rows: T[]; total: number; totalAmount?: number; paidAmount?: number }
+async function pagedGet<T>(url: string, params: any, signal?: AbortSignal): Promise<Paged<T>> {
+  const r = await api.get(url, { params, signal });
+  const rows = r.data as T[];
+  const t = parseInt(String((r.headers as any)?.["x-total-count"] ?? ""), 10);
+  const a = parseInt(String((r.headers as any)?.["x-total-amount-toman"] ?? ""), 10);
+  const pd = parseInt(String((r.headers as any)?.["x-paid-amount-toman"] ?? ""), 10);
+  return { rows, total: Number.isFinite(t) ? t : rows.length,
+           totalAmount: Number.isFinite(a) ? a : undefined,
+           paidAmount: Number.isFinite(pd) ? pd : undefined };
+}
+export const listInvoicesPaged = (params: any = {}, signal?: AbortSignal) =>
+  pagedGet<InvoiceListItem>("/api/invoices", params, signal);
+export const listPaymentsPaged = (params: any = {}, signal?: AbortSignal) =>
+  pagedGet<any>("/api/payments", params, signal);
+export const getFinancialHistoryPaged = (params: any = {}, signal?: AbortSignal) =>
+  pagedGet<any>("/api/reports/financial-history", params, signal);
+
 // ---- payments ----
 export const listPayments = (params: any = {}) =>
   api.get("/api/payments", { params }).then((r) => r.data);
