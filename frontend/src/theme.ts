@@ -1,5 +1,6 @@
 import type { PaletteMode } from "@mui/material";
 import { createTheme, alpha } from "@mui/material/styles";
+import { CHROME_BLUR, CHROME_SIDEBAR_BG, CHROME_SIDEBAR_BORDER, TIER2_BLUR } from "./themeTokens";
 
 // Minimal frosted-noise SVG — micro-texture on glass surfaces.
 const NOISE =
@@ -30,7 +31,7 @@ export function makeTheme(mode: PaletteMode) {
 
   // Tier-2: floating overlays (Apple nav/dialog style)
   const floatBg   = isDark ? "rgba(28,28,30,0.82)"  : "rgba(255,255,255,0.88)";
-  const floatBlur = "blur(40px) saturate(180%)";
+  const floatBlur = TIER2_BLUR;
 
   // Apple uses minimal shadows — border defines the element, not a heavy drop
   const glassShadow = isDark
@@ -255,14 +256,16 @@ export function makeTheme(mode: PaletteMode) {
           root: { backgroundColor: isDark ? "rgba(0,0,0,0.50)" : "rgba(0,0,0,0.20)" },
         },
       },
+      // Mobile drawer = the same chrome glass as the desktop sidebar, so the one
+      // sidebar renders identically on both form factors.
       MuiDrawer: {
         styleOverrides: {
           paper: {
-            backdropFilter: "blur(40px) saturate(180%)",
-            WebkitBackdropFilter: "blur(40px) saturate(180%)",
-            backgroundColor: isDark ? "rgba(28,28,30,0.88)" : "rgba(255,255,255,0.88)",
+            backdropFilter: CHROME_BLUR,
+            WebkitBackdropFilter: CHROME_BLUR,
+            backgroundColor: isDark ? CHROME_SIDEBAR_BG.dark : CHROME_SIDEBAR_BG.light,
             backgroundImage: glassBgImage,
-            borderInlineStart: `1px solid ${glassBorder}`,
+            borderInlineStart: `1px solid ${isDark ? CHROME_SIDEBAR_BORDER.dark : CHROME_SIDEBAR_BORDER.light}`,
           },
         },
       },
@@ -433,8 +436,8 @@ export function makeTheme(mode: PaletteMode) {
             transition: "background-color .18s",
             "&.Mui-selected": {
               fontWeight: 700,
-              backdropFilter: "blur(20px) saturate(180%)",
-              WebkitBackdropFilter: "blur(20px) saturate(180%)",
+              backdropFilter: TIER2_BLUR,
+              WebkitBackdropFilter: TIER2_BLUR,
               backgroundColor: isDark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.80)",
               boxShadow: isDark
                 ? "0 0 0 0.5px rgba(255,255,255,0.12), 0 2px 8px rgba(0,0,0,0.40)"

@@ -148,7 +148,7 @@ tiers; `text.disabled` is MUI-derived (used e.g. `src/components/TelegramLink.ts
 | Top-light gloss `glassInner` | `linear-gradient(175deg, rgba(255,255,255,0.70) 0%, rgba(255,255,255,0) 50%)` | (omitted in dark — noise only) | `src/theme.ts:61-67` |
 | `nestedCardBg` (row-card inside a Card) | `rgba(255,255,255,0.48)` | `#232326` (solid) | `src/theme.ts:578-585` |
 | `resp-table` mobile row-card bg | `rgba(255,255,255,0.72)` | `rgba(36,36,38,0.94)` | `src/theme.ts:187` |
-| Drawer paper | `rgba(255,255,255,0.88)` | `rgba(28,28,30,0.88)`, `blur(40px) saturate(180%)` | `src/theme.ts:258-268` |
+| Drawer paper (= chrome recipe since `v1.100.5`/C16) | `rgba(255,255,255,.55)` | `rgba(28,28,30,.50)`, `blur(48px) saturate(220%) brightness(1.03)`, border `glass.chrome.sidebarBorder` | `src/theme.ts` MuiDrawer block, via `src/themeTokens.ts` |
 | AppBar | `rgba(255,255,255,0.80)` | `rgba(0,0,0,0.60)`, `blur(40px) saturate(180%)`, noise, ring `0 0 0 0.5px` | `src/theme.ts:270-283` |
 | BottomNav | `rgba(255,255,255,0.86)` | `rgba(0,0,0,0.72)`, `blur(40px) saturate(180%)` | `src/components/BottomNav.tsx:38-41` |
 | Desktop sidebar (admin & portal) | `rgba(255,255,255,.55)` | `rgba(9,11,20,.50)`, `blur(48px) saturate(220%) brightness(1.03)` | `src/components/Layout.tsx:245-253`, `src/portal/PortalLayout.tsx:186-191` |
@@ -400,7 +400,7 @@ AppBar `elevation={0}` `src/components/Layout.tsx:288`).
 | Settings glass | `blur(28px) saturate(200%) brightness(1.02)` | Settings section + sidebar Paper | `src/pages/Settings.tsx:506,623` |
 | Tier‑1 dark | `blur(20px) saturate(140%)` | cards & resp-table row-cards (dark) | `src/theme.ts:29,188` |
 | Tier‑1 light | `blur(40px) saturate(180%)` | cards & resp-table row-cards (light) | `src/theme.ts:29,188` |
-| Tab/nav selected | `blur(20px) saturate(180%)` / `blur(16px) saturate(180%)` | selected Tab / selected nav item | `src/theme.ts:436-437`, `src/components/Layout.tsx:76-77` |
+| Nav selected *(Tab selected resolved to tier‑2 in `v1.100.5`)* | `blur(16px) saturate(180%)` | selected nav item (→ DS03) | `src/components/Layout.tsx:76-77` |
 | Small controls | `blur(16px) saturate(180%)`, `blur(12px) saturate(160%)`, `blur(12px) saturate(180%)`, `saturate(180%) blur(14px)` | captcha box, captcha refresh, SegmentedTabs, Settings header | `src/pages/Login.tsx:272,303`, `src/components/SegmentedTabs.tsx:34`, `src/pages/Settings.tsx:605` |
 
 Nine distinct recipes for one material → §5-C5 designates the canonical set.
@@ -951,7 +951,9 @@ Phase‑2 work-list.
   must treat Login's values as an allowed local override, not spread them further.
   Rationale: (a) theme wins generally; the deviation is confined to one pre-auth
   screen and visually intentional (M58 redesign).
-- **C5 — Nine blur/saturate recipes for one material.**
+- **C5 — Nine blur/saturate recipes for one material.** *(Partially resolved
+  `v1.100.5`/DS01: the theme.ts sites — Tab-selected 20/180 → tier‑2, `floatBlur`
+  spelling → `TIER2_BLUR` — are done; remaining component/page sites land in DS03.)*
   Variants: see §2.10 (48/220/1.03, 48/220/1.04, 40/180, 28/200/1.02, 20/180, 20/140,
   16/180, 12/160-180, 14/180).
   **Canonical set:** tier‑1 `blur(40px) saturate(180%)` light / `blur(20px)
@@ -1017,12 +1019,13 @@ Phase‑2 work-list.
   pages sx‑3 = 42px (`src/pages/Help.tsx:259`, `src/portal/pages/Help.tsx:189`) — the
   theme's `!important` actually wins at runtime, so the sx is dead styling.
   **Canonical:** 14px (rule a). Phase 3: delete the dead overrides.
-- **C16 — Drawer paper vs desktop sidebar glass.** The same sidebar renders with theme
-  Drawer glass on mobile (`rgba(28,28,30,0.88)`, blur 40/180, `src/theme.ts:258-268`)
-  and the chrome recipe on desktop (`rgba(9,11,20,.50)`, blur 48/220,
-  `Layout.tsx:245-253`). **Canonical:** the chrome recipe with the §2.2 neutral dark
-  tint (C2) for both renderings; theme's Drawer override should converge in Phase 3.
-  Rationale: (b)+(c) — the desktop chrome is the reference look of both layouts.
+- **C16 — Drawer paper vs desktop sidebar glass.** **RESOLVED `v1.100.5` (DS01).**
+  The theme's MuiDrawer paper now uses the chrome recipe with the neutral dark tint
+  via `src/themeTokens.ts` (`CHROME_BLUR`, `CHROME_SIDEBAR_BG`,
+  `CHROME_SIDEBAR_BORDER`), guarded by `src/test/theme-contract.test.ts`. The desktop
+  sidebars' own dark tint (`rgba(9,11,20,.50)`, still navy) converges in DS04/C2.
+  Original finding: mobile drawer rendered `rgba(28,28,30,0.88)` + blur 40/180 while
+  desktop rendered the chrome recipe — the same sidebar, two looks.
 - **C17 — AppBar double styling.** Theme paints the AppBar glass
   (`src/theme.ts:270-283`) while Layout also passes `color="transparent"` +
   `elevation={0}` (`Layout.tsx:288`, `src/portal/PortalLayout.tsx:219`).
@@ -1103,11 +1106,12 @@ Phase 1):*
 
 ### 5.2 Gaps (real absences — recorded, not invented)
 
-- **G1 — No token module.** Every value in §2 is inline at point of use; there is no
-  exported constants file (the old `CHART_COLORS` mentioned in project history no
-  longer exists — today's nearest equivalent is `RANK_COLORS`,
-  `src/pages/Dashboard.tsx:33`). `design-tokens.json` fills the documentation side;
-  a code-side module is a Phase‑3 decision.
+- **G1 — No token module.** *(Being resolved — D1 approved 2026-07-23, amended:
+  `src/themeTokens.ts` was created in `v1.100.5`/DS01 with the constants that batch
+  consumes; each subsequent batch extends it; DS08 completes the sweep.)* Originally:
+  every value in §2 was inline at point of use (the old `CHART_COLORS` mentioned in
+  project history no longer exists — nearest equivalent `RANK_COLORS`,
+  `src/pages/Dashboard.tsx:33`).
 - **G2 — No authored disabled/error-input states.** Disabled controls and
   field-level error styling rely on MUI defaults everywhere (only `error={…}` flags
   are set, e.g. `src/pages/Setup.tsx:111`).
