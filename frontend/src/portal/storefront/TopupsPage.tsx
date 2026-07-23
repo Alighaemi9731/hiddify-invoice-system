@@ -539,7 +539,7 @@ function TabLabel({ text, count }: { text: string; count: number }) {
         <Box
           component="span"
           sx={{
-            bgcolor: "error.main", color: "error.contrastText", borderRadius: 999,
+            bgcolor: "error.main", color: "error.contrastText", borderRadius: 980,
             px: 0.9, minWidth: 20, textAlign: "center", fontSize: 12, fontWeight: 800, lineHeight: "20px",
           }}
         >

@@ -106,7 +106,7 @@ export default function StorefrontDashboardPage() {
                         <LinearProgress
                           variant="determinate"
                           value={Math.max(3, Math.round((p.amount_toman / bestRevenue) * 100))}
-                          sx={{ height: 8, borderRadius: 4, mt: 0.6 }}
+                          sx={{ mt: 0.6 }}
                         />
                       </Box>
                     ))}

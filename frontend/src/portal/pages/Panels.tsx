@@ -94,7 +94,7 @@ export default function PortalPanels() {
                 <Card sx={{ height: "100%" }}>
                   <CardContent>
                     <Stack direction="row" alignItems="center" spacing={1.2} sx={{ mb: 1.5 }}>
-                      <Box sx={{ width: 36, height: 36, borderRadius: 2, display: "grid", placeItems: "center", bgcolor: "action.hover", color: "primary.main" }}>
+                      <Box sx={{ width: 31, height: 31, borderRadius: 2, display: "grid", placeItems: "center", bgcolor: "action.hover", color: "primary.main" }}>
                         <DnsIcon fontSize="small" />
                       </Box>
                       <Box sx={{ minWidth: 0 }}>

@@ -3,8 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  Card,
-  CardContent,
   Chip,
   Grid,
   Skeleton,
@@ -26,6 +24,7 @@ import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
 import { chartTooltip } from "../components/chartTooltip";
+import { SectionCard, EmptyState } from "../portal/ui";
 import { invoiceStatusColor } from "../themeTokens";
 import { CountUp, Reveal } from "../components/motion";
 import { fmtGb, fmtNum, fmtToman, INVOICE_STATUS_FA } from "../format";
@@ -55,57 +54,6 @@ function MetricDetail({
         {children}
       </Typography>
     </Stack>
-  );
-}
-
-function SectionCard({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <Card sx={{ height: "100%", overflow: "hidden" }}>
-      <Box
-        sx={{
-          px: { xs: 2, sm: 2.5 },
-          py: 1.8,
-          borderBottom: 1,
-          borderColor: "divider",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1.5,
-        }}
-      >
-        <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-          {title}
-        </Typography>
-        {action}
-      </Box>
-      <CardContent sx={{ p: { xs: 2, sm: 2.5 }, "&:last-child": { pb: { xs: 2, sm: 2.5 } } }}>
-        {children}
-      </CardContent>
-    </Card>
-  );
-}
-
-function EmptyState({ children }: { children: ReactNode }) {
-  return (
-    <Box
-      sx={{
-        minHeight: 210,
-        display: "grid",
-        placeItems: "center",
-        color: "text.secondary",
-        textAlign: "center",
-      }}
-    >
-      <Typography variant="body2">{children}</Typography>
-    </Box>
   );
 }
 
@@ -383,7 +331,7 @@ export default function Dashboard() {
                               sx={{
                                 mt: 1,
                                 height: 9,
-                                borderRadius: 99,
+                                borderRadius: 980,
                                 bgcolor: alpha(theme.palette.text.secondary, 0.11),
                                 display: "flex",
                                 justifyContent: "flex-end",
@@ -396,7 +344,7 @@ export default function Dashboard() {
                                 transition={{ duration: 0.65, delay: 0.15 + index * 0.06, ease: EASE }}
                                 style={{
                                   height: "100%",
-                                  borderRadius: 99,
+                                  borderRadius: 980,
                                   background: `linear-gradient(90deg, ${alpha(color, 0.72)}, ${color})`,
                                 }}
                               />
@@ -521,8 +469,8 @@ export default function Dashboard() {
                           >
                             <Box
                               sx={{
-                                width: 30,
-                                height: 30,
+                                width: 31,
+                                height: 31,
                                 borderRadius: 2,
                                 display: "grid",
                                 placeItems: "center",
@@ -545,7 +493,7 @@ export default function Dashboard() {
                             <Box
                               sx={{
                                 height: 8,
-                                borderRadius: 99,
+                                borderRadius: 980,
                                 bgcolor: alpha(theme.palette.text.secondary, 0.11),
                                 display: "flex",
                                 justifyContent: "flex-end",
@@ -556,7 +504,7 @@ export default function Dashboard() {
                                 sx={{
                                   width: `${width}%`,
                                   height: "100%",
-                                  borderRadius: 99,
+                                  borderRadius: 980,
                                   bgcolor: color,
                                 }}
                               />

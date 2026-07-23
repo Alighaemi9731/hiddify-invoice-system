@@ -173,7 +173,7 @@ function CampaignRow({ job, onTrack }: { job: BroadcastJob; onTrack: () => void 
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
           ارسال‌شده {fmtNum(job.sent)} · مسدود {fmtNum(job.blocked)} · ناموفق {fmtNum(job.failed)} · باقی {fmtNum(job.pending)} از {fmtNum(job.total)}
         </Typography>
-        <LinearProgress variant="determinate" value={done} sx={{ mt: 1, borderRadius: 1 }} />
+        <LinearProgress variant="determinate" value={done} sx={{ mt: 1 }} />
         <Button size="small" sx={{ mt: 1 }} onClick={onTrack}>جزئیات و مدیریت</Button>
       </CardContent>
     </Card>

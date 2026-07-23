@@ -186,7 +186,7 @@ function HelpSection({ s }: { s: Section }) {
   return (
     <Accordion
       disableGutters defaultExpanded
-      sx={{ mb: 1, borderRadius: 3, "&:before": { display: "none" }, overflow: "hidden" }}
+      sx={{ mb: 1, "&:before": { display: "none" }, overflow: "hidden" }}
     >
       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
         <Stack direction="row" spacing={1.25} alignItems="center">

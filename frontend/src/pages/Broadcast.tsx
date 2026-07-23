@@ -310,9 +310,9 @@ export default function Broadcast() {
                 {migPreview.unregistered ? ` • ${fmtNum(migPreview.unregistered)} بدون ربات (پیام دریافت نمی‌کنند)` : ""}.
                 <Box sx={{ mt: 1, fontSize: 13 }}>
                   <Box sx={{ mt: 0.5 }}>🟢 نمونهٔ آدرسِ جدید:</Box>
-                  <Box component="code" sx={{ display: "block", direction: "ltr", textAlign: "left", wordBreak: "break-all", fontFamily: "monospace", color: "success.main" }}>{migPreview.sample_new_link}</Box>
+                  <Box component="code" dir="ltr" sx={{ display: "block", wordBreak: "break-all", fontFamily: "monospace", color: "success.main" }}>{migPreview.sample_new_link}</Box>
                   <Box sx={{ mt: 0.5 }}>🔵 نمونهٔ آدرسِ قبلی:</Box>
-                  <Box component="code" sx={{ display: "block", direction: "ltr", textAlign: "left", wordBreak: "break-all", fontFamily: "monospace", color: "text.secondary" }}>{migPreview.sample_previous_link}</Box>
+                  <Box component="code" dir="ltr" sx={{ display: "block", wordBreak: "break-all", fontFamily: "monospace", color: "text.secondary" }}>{migPreview.sample_previous_link}</Box>
                 </Box>
               </>) : "این پنل «دامنهٔ قبلی» ندارد؛ ابتدا در صفحهٔ «پنل‌ها» با «انتقال دامنه» یا بخشِ «دامنه‌های قبلی» آن را ثبت کنید."}
             </Alert>

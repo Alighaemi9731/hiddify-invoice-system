@@ -25,7 +25,7 @@ function StatusPill({
         gap: 0.7,
         px: 1.1,
         py: 0.55,
-        borderRadius: 99,
+        borderRadius: 980,
         color: muted ? "text.secondary" : color,
         bgcolor: (theme) => alpha(color, muted ? 0.05 : theme.palette.mode === "dark" ? 0.16 : 0.09),
         border: "1px solid",

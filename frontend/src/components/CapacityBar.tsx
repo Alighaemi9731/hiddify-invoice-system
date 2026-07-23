@@ -21,7 +21,7 @@ export default function CapacityBar({ used, max }: { used: number; max?: number 
         </Box>
         <LinearProgress
           variant="determinate" value={hasLimit ? pct : 0} color={color}
-          sx={{ height: 6, borderRadius: 3, opacity: hasLimit ? 1 : 0.3 }}
+          sx={{ opacity: hasLimit ? 1 : 0.3 }}
         />
       </Box>
     </Tooltip>

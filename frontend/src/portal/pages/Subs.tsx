@@ -40,7 +40,7 @@ function CapMeter({ sub }: { sub: PortalSub }) {
         </Typography>
         <Typography variant="caption" color={`${color}.main`}>{fmtNum(pct)}٪</Typography>
       </Stack>
-      <LinearProgress variant="determinate" value={pct} color={color} sx={{ height: 7, borderRadius: 3 }} />
+      <LinearProgress variant="determinate" value={pct} color={color} />
     </Box>
   );
 }

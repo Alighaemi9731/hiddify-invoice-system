@@ -618,9 +618,8 @@ counters may use `sx={{ fontWeight: 700/750 }}` (`src/pages/Dashboard.tsx:368,43
 Switch: `padding 8`, track radius 11, opacity .28 light / .35 dark
 (`src/theme.ts:538-543`). LinearProgress: height 6, radius 4, track per §2.3
 (`src/theme.ts:544-552`); CapacityBar overrides height 6 / radius 3; portal Subs 7/3;
-storefront plan bars 8/4 (`src/components/CapacityBar.tsx:24`,
-`src/portal/pages/Subs.tsx:42`,
-`src/portal/storefront/StorefrontDashboardPage.tsx:109`) → §5-C12.
+storefront plan bars 8/4 — all removed in DS07; every LinearProgress now inherits the theme geometry
+(§5-C12 resolved).
 
 ### 3.10 CapacityBar (`src/components/CapacityBar.tsx`)
 
@@ -963,13 +962,11 @@ Phase‑2 work-list.
   note), login hero 1.04 (→ chrome) and captcha 16/180 + 12/160 (→ tier‑2).
   Original variants: 48/220/1.03, 48/220/1.04, 40/180, 28/200/1.02, 20/180, 20/140,
   16/180, 12/160-180, 14/180.
-- **C6 — Four spellings of "pill".**
-  Variants: `"50px"` (inputs/segmented/LiveRate), `980` (buttons/chips), `99`
-  (StatusPill/meters), `999` (badges) — §2.8.
-  **Canonical:** keep **two**: `980` for interactive controls (theme, rule a) and
-  `"50px"` for input-height pills (theme, rule a). `99` and `999` normalize to `980`
-  in Phase 3 (pure spelling — all four exceed the box height, so rendering is
-  identical). Recorded so enforcement doesn't flag them as different intents.
+- **C6 — Four spellings of "pill".** **RESOLVED (DS07):** two spellings remain —
+  `980` for controls/badges/meters (the `99`/`999` sites were normalized:
+  StatusPill, four Dashboard meter tracks/fills, StorefrontShell + Topups badges)
+  and `"50px"` for input-height pills. Rendering identical (all pills exceeded
+  half-box height).
 - **C7 — "Icon tile" has 6 ad-hoc size/radius variants.**
   Variants: 31px/sx‑2 (nav chips, `Layout.tsx:180-182`), 30px/sx‑2 (rank,
   `Dashboard.tsx:531-534`), 36px/sx‑2 (portal panels, `portal/pages/Panels.tsx:95`),
@@ -979,7 +976,8 @@ Phase‑2 work-list.
   **Canonical:** three sizes — 31/sx‑2 (inline/nav), 44/`"14px"` (card-level,
   StatCard's), 56/sx‑3 (hero) — chosen by (b) frequency within each role; 40px logo
   tiles stay as the brand-block size (b). The `"10px"` login radius folds into C4's
-  exception.
+  exception. **RESOLVED (DS07):** the two stragglers converged to 31px (Dashboard
+  rank tiles 30→31, portal Panels tile 36→31).
 - **C8 — Invoice-status colors encoded twice.** **RESOLVED `v1.100.6` (DS02).**
   Donut fills now come from `invoiceStatusColor(palette, status)` and StatusPills from
   `statusPillColors(palette)` (both in `src/themeTokens.ts`, test-guarded) — one
@@ -1009,18 +1007,25 @@ Phase‑2 work-list.
   *(added v1.1)* default-height/radius sx‑1 = 14px
   (`src/portal/storefront/StorefrontCampaignsPage.tsx:175`).
   **Canonical:** theme 6/radius 4 for LinearProgress-based bars (rule a); the
-  hand-rolled dashboard meters keep 8–9/99 as a distinct "meter" component (b).
+  hand-rolled dashboard meters keep 8–9px tracks as a distinct "meter" component (b),
+  now radius-980-spelled per C6. **RESOLVED (DS07):** all four LinearProgress
+  overrides deleted (CapacityBar, portal Subs, storefront plan bars, campaigns
+  progress) — the theme provides 6px/4px; guarded by
+  `src/test/capacity-bar.test.tsx`.
 - **C13 — `SectionCard` and `EmptyState` duplicated** in
   `src/pages/Dashboard.tsx:65-114` and `src/portal/ui.tsx:4-31` (near-identical).
   **Canonical:** `src/portal/ui.tsx` as the shared home (it is already imported
-  portal-wide); admin Dashboard should consume it in Phase 3. Rule (c).
+  portal-wide). **RESOLVED (DS07):** the admin Dashboard's local copies were deleted
+  and it imports `SectionCard`/`EmptyState` from `../portal/ui`.
 - **C14 — Empty-state min-heights differ:** 210 (Dashboard) vs 180 (portal ui).
-  **Canonical:** 180 (rule b — the shared component). Table-cell empties (`py 4/5`)
-  are a separate, sanctioned compact form.
+  **Canonical:** 180. **RESOLVED (DS07)** via C13 — Dashboard now uses the shared
+  `EmptyState` (180). Table-cell empties (`py 4/5`) remain the sanctioned compact
+  form.
 - **C15 — Accordion radius:** theme `14px !important` (`src/theme.ts:516`) vs Help
   pages sx‑3 = 42px (`src/pages/Help.tsx:259`, `src/portal/pages/Help.tsx:189`) — the
-  theme's `!important` actually wins at runtime, so the sx is dead styling.
-  **Canonical:** 14px (rule a). Phase 3: delete the dead overrides.
+  theme's `!important` actually wins at runtime, so the sx was dead styling.
+  **Canonical:** 14px (rule a). **RESOLVED (DS07):** both dead overrides deleted —
+  zero rendered change.
 - **C16 — Drawer paper vs desktop sidebar glass.** **RESOLVED `v1.100.5` (DS01).**
   The theme's MuiDrawer paper now uses the chrome recipe with the neutral dark tint
   via `src/themeTokens.ts` (`CHROME_BLUR`, `CHROME_SIDEBAR_BG`,
@@ -1103,6 +1108,8 @@ Phase 1):*
   CSS transform (§4.2 rule 3). **Canonical:** the `dir="ltr"` attribute (+ drop the
   `textAlign`/`direction` sx keys). Rationale: rule (b) — the attribute is the
   app-wide mechanism — and mechanism correctness under the RTL pipeline.
+  **RESOLVED (DS07):** both boxes now use `dir="ltr"`; the link previews render
+  truly LTR for the first time.
 
 ### 5.2 Gaps (real absences — recorded, not invented)
 

@@ -408,7 +408,7 @@
       "note": "§5-C2/G4 RESOLVED (DS04, D4): shared chartTooltip(theme) helper consumed by all three chart builders; legacy navy values removed.",
       "source": "src/components/chartTooltip.ts"
     },
-    "htmlMeterBars": { "trackHeightPx": "8-9", "trackColor": "alpha(text.secondary, 0.11)", "radius": 99, "fill": "linear-gradient(90deg, alpha(color,0.72), color)", "source": "src/pages/Dashboard.tsx:390-411,553-570" }
+    "htmlMeterBars": { "trackHeightPx": "8-9", "trackColor": "alpha(text.secondary, 0.11)", "radius": 980, "fill": "linear-gradient(90deg, alpha(color,0.72), color)", "note": "§5-C6 resolved (DS07): radius normalized from 99", "source": "src/pages/Dashboard.tsx meter bars" }
   },
   "componentDefaults": {
     "buttonPaddingInline": { "default": 20, "small": 14, "large": 28, "source": "src/theme.ts:344,366-367" },
@@ -420,9 +420,9 @@
     "tablePagination": { "rowsPerPageOptions": [25, 50, 100], "source": "src/components/TablePager.tsx:27" },
     "tableSortIconOpacity": { "value": 0.4, "source": "src/theme.ts:423" },
     "statusPillDotPx": { "value": 7, "source": "src/pages/resellers/ResellerIdentity.tsx:38" },
-    "countBadge": { "radius": 999, "minWidth": 20, "fontSize": 12, "fontWeight": 800, "lineHeight": "20px", "note": "radius normalizes to 980 per §5-C6", "source": "src/portal/storefront/StorefrontShell.tsx:126-143" },
+    "countBadge": { "radius": 980, "minWidth": 20, "fontSize": 12, "fontWeight": 800, "lineHeight": "20px", "note": "§5-C6 resolved (DS07): normalized from 999", "source": "src/portal/storefront/StorefrontShell.tsx" },
     "qrBlock": { "bg": "#fff", "sizePx": 132, "level": "M", "source": "src/portal/PayDialog.tsx:17-25" },
-    "emptyStateMinHeight": { "value": 180, "note": "canonical per §5-C14; Dashboard ships 210", "source": "src/portal/ui.tsx:27" },
+    "emptyStateMinHeight": { "value": 180, "note": "§5-C14 resolved (DS07): Dashboard consumes the shared portal/ui EmptyState", "source": "src/portal/ui.tsx:27" },
     "notificationsPopoverWidth": { "value": 340, "max": "92vw", "source": "src/portal/NotificationsBell.tsx:53" },
     "compactSelectPy": { "value": "7px !important", "roles": "size=small Select vertical padding — PeriodPicker + inline table filters", "source": "src/components/PeriodPicker.tsx:29" },
     "tooltipPadding": { "block": 6, "inline": 10, "source": "src/theme.ts:467-468" },
