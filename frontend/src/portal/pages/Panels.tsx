@@ -13,8 +13,10 @@ import { DataState } from "../../components/DataState";
 import { useToast, errMsg } from "../../components/Toast";
 import CapacityBar from "../../components/CapacityBar";
 import { SectionCard } from "../ui";
+import { useXsFullScreen } from "../../responsive";
 
 export default function PortalPanels() {
+  const xsFull = useXsFullScreen();
   const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["portal-panels"],
     queryFn: portalPanels,
@@ -129,7 +131,7 @@ export default function PortalPanels() {
         )}
       </DataState>
 
-      <Dialog open={!!reqRow} onClose={busy ? undefined : () => setReqRow(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!reqRow} onClose={busy ? undefined : () => setReqRow(null)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <DialogTitle sx={{ fontWeight: 800 }}>درخواستِ افزایشِ ظرفیت — {reqRow?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>

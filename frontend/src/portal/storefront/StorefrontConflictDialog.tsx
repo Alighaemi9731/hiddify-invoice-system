@@ -1,4 +1,5 @@
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from "@mui/material";
+import { useXsFullScreen } from "../../responsive";
 
 export default function StorefrontConflictDialog({
   open,
@@ -15,8 +16,9 @@ export default function StorefrontConflictDialog({
   onReload: () => void;
   onReapply: () => void;
 }) {
+  const xsFull = useXsFullScreen();
   return (
-    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="xs" fullWidth>
+    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="xs" fullWidth fullScreen={xsFull}>
       <DialogTitle>اطلاعات فروشگاه تغییر کرده است</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary">

@@ -14,6 +14,7 @@ import {
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { AudienceSegment, BroadcastCreateResult, BroadcastJob, Versioned } from "./types";
 import { useIdempotentMutation } from "./mutation";
+import { useXsFullScreen } from "../../responsive";
 
 const SEGMENT_FA: Record<AudienceSegment, string> = {
   all: "همهٔ مشتری‌ها",
@@ -182,6 +183,7 @@ function CampaignRow({ job, onTrack }: { job: BroadcastJob; onTrack: () => void 
 function CampaignProgressDialog({
   shopId, jobId, onClose, onChanged,
 }: { shopId: number; jobId: number; onClose: () => void; onChanged: () => void }) {
+  const xsFull = useXsFullScreen();
   const queryClient = useQueryClient();
   const jobQuery = useQuery({
     queryKey: storefrontQueryKeys.broadcast(shopId, jobId),
@@ -204,7 +206,7 @@ function CampaignProgressDialog({
   const cancellable = job && (job.status === "queued" || job.status === "running");
 
   return (
-    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
       <DialogTitle>کمپین #{fmtNum(jobId)}</DialogTitle>
       <DialogContent dividers>
         <DataState isLoading={jobQuery.isLoading} isError={jobQuery.isError} rows={2}

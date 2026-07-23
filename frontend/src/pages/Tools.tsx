@@ -19,9 +19,11 @@ import {
 } from "../api/client";
 import { errMsg, useToast } from "../components/Toast";
 import { fmtGb, fmtNum, fmtDate, fmtDateTime } from "../format";
+import { useXsFullScreen } from "../responsive";
 
 // ── Section 1: remove a mistaken end-user from billing ────────────────────────
 function RemoveUserTool() {
+  const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
   const [input, setInput] = useState("");
@@ -72,7 +74,7 @@ function RemoveUserTool() {
 
         {term && (
           <Box sx={{ overflowX: "auto" }}>
-            <Table size="small">
+            <Table size="small" className="resp-table">
               <TableHead>
                 <TableRow>
                   <TableCell>نام</TableCell>
@@ -121,7 +123,7 @@ function RemoveUserTool() {
         )}
       </CardContent>
 
-      <Dialog open={!!delRow} onClose={() => setDelRow(null)} fullWidth maxWidth="xs">
+      <Dialog open={!!delRow} onClose={() => setDelRow(null)} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {delRow && (
           <>
             <DialogTitle>حذفِ کاربر — {delRow.name || delRow.user_uuid.slice(-8)}</DialogTitle>
@@ -154,6 +156,7 @@ function RemoveUserTool() {
 
 // ── Section 2: disconnect a reseller's Telegram binding ───────────────────────
 function UnbindTelegramTool() {
+  const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
   const [input, setInput] = useState("");
@@ -204,7 +207,7 @@ function UnbindTelegramTool() {
 
         {term && (
           <Box sx={{ overflowX: "auto" }}>
-            <Table size="small">
+            <Table size="small" className="resp-table">
               <TableHead>
                 <TableRow>
                   <TableCell>نام</TableCell>
@@ -239,7 +242,7 @@ function UnbindTelegramTool() {
         )}
       </CardContent>
 
-      <Dialog open={!!unbindRow} onClose={() => setUnbindRow(null)} fullWidth maxWidth="xs">
+      <Dialog open={!!unbindRow} onClose={() => setUnbindRow(null)} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {unbindRow && (
           <>
             <DialogTitle>قطع اتصالِ تلگرام — {unbindRow.name}</DialogTitle>
@@ -272,6 +275,7 @@ function UnbindTelegramTool() {
 
 // ── Section 3: cascade-delete an admin (reseller) from the Hiddify panel ──────
 function DeleteAdminTool() {
+  const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
   const [input, setInput] = useState("");
@@ -329,7 +333,7 @@ function DeleteAdminTool() {
 
         {term && (
           <Box sx={{ overflowX: "auto" }}>
-            <Table size="small">
+            <Table size="small" className="resp-table">
               <TableHead>
                 <TableRow>
                   <TableCell>نام</TableCell>
@@ -367,7 +371,7 @@ function DeleteAdminTool() {
         )}
       </CardContent>
 
-      <Dialog open={!!delRow} onClose={() => setDelRow(null)} fullWidth maxWidth="xs">
+      <Dialog open={!!delRow} onClose={() => setDelRow(null)} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {delRow && (
           <>
             <DialogTitle>حذفِ کاملِ ادمین — {delRow.name}</DialogTitle>
@@ -400,6 +404,7 @@ function DeleteAdminTool() {
 
 // ── Section 4: recover users a panel backup-rollback removed ──────────────────
 function RecoverUsersTool() {
+  const xsFull = useXsFullScreen();
   const { node: toast, show } = useToast();
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [lookback, setLookback] = useState(2);
@@ -507,7 +512,7 @@ function RecoverUsersTool() {
                   {c.drop_size > 0 && <Typography variant="caption" color="text.secondary">افتِ شمارشِ پنل: {fmtNum(c.drop_size)}</Typography>}
                 </Stack>
                 <Box sx={{ overflowX: "auto" }}>
-                <Table size="small">
+                <Table size="small" className="resp-table">
                   <TableHead><TableRow>
                     <TableCell padding="checkbox">
                       <Checkbox size="small"
@@ -567,7 +572,7 @@ function RecoverUsersTool() {
           </Alert>
         )}
 
-        <Dialog open={confirm} onClose={() => setConfirm(false)}>
+        <Dialog open={confirm} onClose={() => setConfirm(false)} fullWidth maxWidth="xs" fullScreen={xsFull}>
           <DialogTitle>تأییدِ بازیابی</DialogTitle>
           <DialogContent>
             <Typography>

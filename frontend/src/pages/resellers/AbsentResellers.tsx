@@ -27,9 +27,11 @@ import { useToast } from "../../components/Toast";
 import { useDialogState } from "../../hooks/useDialogState";
 import { useToastMutation } from "../../hooks/useToastMutation";
 import { fmtDate, fmtNum } from "../../format";
+import { useXsFullScreen } from "../../responsive";
 
 // ── Absent resellers (removed from the panel, row still lingering) ────────────
 export default function AbsentResellers({ panelId }: { panelId: string }) {
+  const xsFull = useXsFullScreen();
   const { node: toastNode, show } = useToast();
   const confirmDlg = useDialogState<AbsentReseller>();
   const [page, setPage] = useState(0);
@@ -114,7 +116,7 @@ export default function AbsentResellers({ panelId }: { panelId: string }) {
         </>
       )}
 
-      <Dialog open={confirmDlg.open} onClose={confirmDlg.close} fullWidth maxWidth="xs">
+      <Dialog open={confirmDlg.open} onClose={confirmDlg.close} fullWidth maxWidth="xs" fullScreen={xsFull}>
         {confirmRow && (<>
           <DialogTitle>حذف نمایندهٔ غایب — {confirmRow.name}</DialogTitle>
           <DialogContent>

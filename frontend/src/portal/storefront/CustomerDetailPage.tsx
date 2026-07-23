@@ -30,6 +30,7 @@ import type {
 import {
   commandRecoveryMessage, isNotFound, isVersionConflict, rateLimitRetryAfter, useIdempotentMutation,
 } from "./mutation";
+import { useXsFullScreen } from "../../responsive";
 
 const ORDER_STATUS_FA: Record<string, string> = {
   pending: "در انتظار",
@@ -76,6 +77,7 @@ type Confirm =
 type LiveEntry = { result?: OrderRefreshResult; retryAfter?: number; error?: boolean };
 
 export default function CustomerDetailPage() {
+  const xsFull = useXsFullScreen();
   const { shop } = useOutletContext<StorefrontOutletContext>();
   const params = useParams();
   const customerId = Number(params.customerId);
@@ -430,6 +432,7 @@ export default function CustomerDetailPage() {
         onClose={() => !command.isPending && setConfirmAction(null)}
         maxWidth="xs"
         fullWidth
+        fullScreen={xsFull}
       >
         <DialogTitle>{confirmTitle(confirmAction)}</DialogTitle>
         <DialogContent>
@@ -787,6 +790,7 @@ const MSG_MAX = 4000;
 function DirectMessageDialog({
   shopId, customerId, onClose,
 }: { shopId: number; customerId: number; onClose: () => void }) {
+  const xsFull = useXsFullScreen();
   const [text, setText] = useState("");
   const [sent, setSent] = useState(false);
   const mut = useIdempotentMutation<Versioned<DirectMessageResult>, { text: string }>(
@@ -799,7 +803,7 @@ function DirectMessageDialog({
       ?.response?.data?.detail?.code === "rate_limited";
 
   return (
-    <Dialog open onClose={() => !mut.isPending && onClose()} maxWidth="xs" fullWidth>
+    <Dialog open onClose={() => !mut.isPending && onClose()} maxWidth="xs" fullWidth fullScreen={xsFull}>
       <DialogTitle>ارسال پیام به مشتری</DialogTitle>
       <DialogContent>
         {sent ? (

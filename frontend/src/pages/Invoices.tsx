@@ -40,6 +40,7 @@ import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
 import { nestedCardBg } from "../theme";
 import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActionsMenu";
 import { downloadCsv } from "../csv";
+import { TABLE_SCROLL_BOUND } from "../themeTokens";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
 // Delivered-but-unpaid states money is collected against (mirrors the backend state machine).
@@ -395,8 +396,8 @@ export default function Invoices() {
 
       <Card>
         {!isMobile ? (
-        <TableContainer sx={{ maxHeight: "calc(100vh - 300px)" }}>
-        <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 980 }}>
+        <TableContainer sx={{ maxHeight: TABLE_SCROLL_BOUND }}>
+        <Table size="small" stickyHeader sx={{ minWidth: 980 }}>
           <TableHead>
             <TableRow>
               <TableCell padding="checkbox">

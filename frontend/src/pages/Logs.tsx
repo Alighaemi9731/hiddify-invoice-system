@@ -10,6 +10,7 @@ import { DataState } from "../components/DataState";
 import { TablePager } from "../components/TablePager";
 import SegmentedTabs from "../components/SegmentedTabs";
 import { fmtDate } from "../format";
+import { TABLE_SCROLL_BOUND } from "../themeTokens";
 
 const DELIV_STATUS: any = { sent: ["ارسال‌شده", "success"], failed: ["ناموفق", "error"], blocked: ["مسدود", "error"], unmatched: ["بدون ربات", "warning"] };
 const KIND_FA: any = { invoice: "فاکتور", reminder1: "یادآوری ۱", reminder2: "یادآوری ۲", warning: "اخطار", payment_ack: "تأیید پرداخت", generic: "عمومی" };
@@ -56,7 +57,7 @@ export default function Logs() {
       {tab === 0 && (
         <DataState isLoading={dq.isLoading} isError={dq.isError} onRetry={dq.refetch}>
         <Card>
-          <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 260px)" } }}>
+          <TableContainer sx={{ maxHeight: { xs: "none", sm: TABLE_SCROLL_BOUND } }}>
             <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 640 } }}>
               <TableHead><TableRow>
                 <TableCell>نماینده</TableCell><TableCell>نوع</TableCell><TableCell>وضعیت</TableCell>
@@ -87,7 +88,7 @@ export default function Logs() {
       {tab === 1 && (
         <DataState isLoading={aq.isLoading} isError={aq.isError} onRetry={aq.refetch}>
         <Card>
-          <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 260px)" } }}>
+          <TableContainer sx={{ maxHeight: { xs: "none", sm: TABLE_SCROLL_BOUND } }}>
             <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 640 } }}>
               <TableHead><TableRow>
                 <TableCell>نماینده</TableCell><TableCell>اقدام</TableCell><TableCell>وضعیت</TableCell>

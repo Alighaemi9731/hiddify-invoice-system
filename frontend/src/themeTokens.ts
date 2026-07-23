@@ -75,3 +75,6 @@ export const statusPillColors = (palette: Palette) => ({
   enforced: palette.error.main,
   frozen: palette.mode === "light" ? palette.warning.dark : palette.warning.main,
 });
+
+/** Desktop table scroll bound under the page header (§5-C20, D14-confirmed). */
+export const TABLE_SCROLL_BOUND = "calc(100vh - 300px)";

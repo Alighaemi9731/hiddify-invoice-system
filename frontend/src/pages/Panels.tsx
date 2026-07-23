@@ -16,6 +16,7 @@ import { useToast } from "../components/Toast";
 import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { fmtNum, fmtDateTime } from "../format";
+import { useXsFullScreen } from "../responsive";
 
 const EMPTY = { key: "", name: "", host: "", proxy_path: "", owner_uuid: "", admin_api_key: "", enabled: true, host_aliases: [] as string[] };
 
@@ -45,6 +46,7 @@ function parsePanelLink(raw: string): null | { host: string; proxy_path: string;
 }
 
 export default function Panels() {
+  const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node, show } = useToast();
   const { data = [], isLoading } = useQuery({
@@ -212,7 +214,7 @@ export default function Panels() {
         </Table>
       </Card>
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm" fullScreen={xsFull}>
         <DialogTitle>{form.id ? "ویرایش پنل" : "افزودن پنل"}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>

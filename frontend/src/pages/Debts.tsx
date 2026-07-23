@@ -8,6 +8,7 @@ import { useSort, SortTh } from "../components/sortable";
 import { DataState } from "../components/DataState";
 import { TablePager } from "../components/TablePager";
 import { fmtToman, fmtNum } from "../format";
+import { TABLE_SCROLL_BOUND } from "../themeTokens";
 
 export default function Debts() {
   const { data = [], isLoading, isError, refetch } = useQuery({ queryKey: ["debts"], queryFn: getDebts });
@@ -25,7 +26,7 @@ export default function Debts() {
       </Typography>
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
-        <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 220px)" } }}>
+        <TableContainer sx={{ maxHeight: { xs: "none", sm: TABLE_SCROLL_BOUND } }}>
           <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 720 } }}>
             <TableHead>
               <TableRow>

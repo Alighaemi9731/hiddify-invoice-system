@@ -10,6 +10,7 @@ import {
   GLOSS_NAV_SELECTED,
   SIDEBAR_AMBIENT,
   SIDEBAR_WIDTH,
+  TABLE_SCROLL_BOUND,
   TIER1_BLUR,
   TIER2_BG,
   TIER2_BLUR,
@@ -56,6 +57,10 @@ describe("themeTokens spec pinning", () => {
     expect(GLOSS_NAV_CHIP).toBe(
       "linear-gradient(145deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 60%)",
     );
+  });
+
+  it("table scroll bound is the single D14-confirmed token (C20/DS06)", () => {
+    expect(TABLE_SCROLL_BOUND).toBe("calc(100vh - 300px)");
   });
 });
 

@@ -29,6 +29,7 @@ import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActi
 import { useXsFullScreen } from "../responsive";
 import { downloadCsv } from "../csv";
 import { MONEY_KEYS } from "../queryKeys";
+import { TABLE_SCROLL_BOUND } from "../themeTokens";
 
 const COLOR: any = { pending: "warning", confirmed: "success", rejected: "error" };
 
@@ -248,8 +249,8 @@ export default function Payments() {
         // Fixed (viewport-based) height, not maxHeight: the card fills the page even when there
         // are only a few payments (maxHeight lets it shrink to the rows, leaving a gap below).
         // Rows sit at the top; the table scrolls INTERNALLY and the page stays put.
-        <TableContainer sx={{ height: { xs: "auto", md: "calc(100vh - 180px)" } }}>
-        <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: 1120 }}>
+        <TableContainer sx={{ maxHeight: { xs: "none", md: TABLE_SCROLL_BOUND } }}>
+        <Table size="small" stickyHeader sx={{ minWidth: 1120 }}>
           <TableHead>
             <TableRow>
               <SortTh id="id" label="#" sortKey={key} dir={dir} onSort={toggle} />

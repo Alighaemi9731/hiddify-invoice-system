@@ -17,6 +17,7 @@ import { Dir, SortTh } from "../../components/sortable";
 import { fmtNum } from "../../format";
 import { ConnectionStatus, EnforcementStatus, ResellerIdentity } from "./ResellerIdentity";
 import { VisibleTreeRow } from "./useResellerTree";
+import { TABLE_SCROLL_BOUND } from "../../themeTokens";
 
 function ResellerTableRow({
   reseller,
@@ -113,7 +114,7 @@ export default function ResellerTable({
   canAddSwitch: (reseller: ResellerRow) => ReactNode;
 }) {
   return (
-    <TableContainer sx={{ maxHeight: { xs: "none", md: "calc(100vh - 320px)" } }}>
+    <TableContainer sx={{ maxHeight: { xs: "none", md: TABLE_SCROLL_BOUND } }}>
       <Table size="small" stickyHeader sx={{ minWidth: 1080 }}>
         <TableHead>
           <TableRow>

@@ -10,6 +10,7 @@ import PeriodPicker from "../components/PeriodPicker";
 import { TablePager } from "../components/TablePager";
 import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 import { DataState } from "../components/DataState";
+import { TABLE_SCROLL_BOUND } from "../themeTokens";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
 
@@ -48,7 +49,7 @@ export default function Sales() {
       </Stack>
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
-        <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 240px)" } }}>
+        <TableContainer sx={{ maxHeight: { xs: "none", sm: TABLE_SCROLL_BOUND } }}>
         <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 640 } }}>
           <TableHead>
             <TableRow>

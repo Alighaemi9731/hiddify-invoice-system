@@ -22,6 +22,7 @@ import EChart from "../../components/EChart";
 import { dailyTrendOption } from "../dailyTrend";
 import { fmtGb, fmtNum, fmtToman } from "../../format";
 import { EmptyState } from "../ui";
+import { useXsFullScreen } from "../../responsive";
 
 const BUMP_CHIPS = [50, 100, 200, 500];
 
@@ -74,6 +75,7 @@ function SubDailyChart({ subId }: { subId: number }) {
 }
 
 export default function PortalSubs() {
+  const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node: toast, show } = useToast();
   const { data = [], isLoading, isError, refetch } = useQuery({
@@ -270,7 +272,7 @@ export default function PortalSubs() {
       </Menu>
 
       {/* GB cap dialog */}
-      <Dialog open={!!capSub} onClose={busy ? undefined : () => setCapSub(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!capSub} onClose={busy ? undefined : () => setCapSub(null)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <DialogTitle sx={{ fontWeight: 800 }}>سقف حجم ماهانه — {capSub?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
@@ -287,7 +289,7 @@ export default function PortalSubs() {
       </Dialog>
 
       {/* Bump capacity dialog */}
-      <Dialog open={!!bumpSub} onClose={busy ? undefined : () => setBumpSub(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!bumpSub} onClose={busy ? undefined : () => setBumpSub(null)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <DialogTitle sx={{ fontWeight: 800 }}>افزایش ظرفیت — {bumpSub?.name}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>

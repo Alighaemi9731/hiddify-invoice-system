@@ -18,6 +18,7 @@ import {
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { CreditCode, CreditCreateBody, CreditKind, CreditUpdateBody, Versioned } from "./types";
 import { isNotFound, useIdempotentMutation } from "./mutation";
+import { useXsFullScreen } from "../../responsive";
 
 type FormState = {
   code: string;
@@ -192,6 +193,7 @@ function CreditFormDialog({
   onClose: () => void;
   onDone: (message: string) => void;
 }) {
+  const xsFull = useXsFullScreen();
   const locked = !!editing && editing.used_count > 0; // after any redemption: only enabled + expiry
   const [form, setForm] = useState<FormState>(() => (editing ? {
     code: editing.code,
@@ -246,7 +248,7 @@ function CreditFormDialog({
   };
 
   return (
-    <Dialog open onClose={() => !busy && onClose()} maxWidth="xs" fullWidth>
+    <Dialog open onClose={() => !busy && onClose()} maxWidth="xs" fullWidth fullScreen={xsFull}>
       <DialogTitle>{editing ? "ویرایش کد" : "کد جدید"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
@@ -317,6 +319,7 @@ function CreditFormDialog({
 }
 
 function CreditUsageDialog({ shopId, code, onClose }: { shopId: number; code: CreditCode; onClose: () => void }) {
+  const xsFull = useXsFullScreen();
   const usageQuery = useQuery({
     queryKey: storefrontQueryKeys.creditUsage(shopId, code.id),
     queryFn: () => getCreditUsage(shopId, code.id),
@@ -333,7 +336,7 @@ function CreditUsageDialog({ shopId, code, onClose }: { shopId: number; code: Cr
   const usage = usageQuery.data;
 
   return (
-    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
       <DialogTitle>آمار کد <span dir="ltr">{code.code}</span></DialogTitle>
       <DialogContent dividers>
         <DataState isLoading={usageQuery.isLoading} isError={usageQuery.isError} rows={2}

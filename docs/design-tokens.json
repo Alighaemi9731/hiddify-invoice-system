@@ -388,7 +388,7 @@
     "bottomNavHeight": { "value": 60, "source": "src/components/BottomNav.tsx:48" },
     "authCardMaxWidths": { "login": 520, "setupWizard": 480, "setupSuccess": 460, "portalEntry": 420, "source": "src/pages/Login.tsx:154; src/pages/Setup.tsx:93,56; src/portal/PortalEntry.tsx:129" },
     "spacingUnitPx": { "value": 8, "source": "MUI default (not overridden)" },
-    "tableScrollBound": { "value": "calc(100vh - 300px)", "source": "src/pages/Invoices.tsx:398" },
+    "tableScrollBound": { "value": "calc(100vh - 300px)", "note": "§5-C20 resolved (DS06/D14): TABLE_SCROLL_BOUND in src/themeTokens.ts, consumed by all eight desktop tables (Payments switched height:→maxHeight:)", "source": "src/themeTokens.ts TABLE_SCROLL_BOUND" },
     "zIndex": { "ambient": -1, "sidebarGlow": 0, "sidebarContent": 1, "loginZones": 2, "settingsStickyHeader": 3, "bottomNav": "theme.zIndex.appBar", "source": "src/theme.ts:156; src/components/Layout.tsx:129,133; src/pages/Login.tsx:145; src/pages/Settings.tsx:601; src/components/BottomNav.tsx:35" }
   },
   "charts": {

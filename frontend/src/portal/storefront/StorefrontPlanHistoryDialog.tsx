@@ -4,6 +4,7 @@ import { DataState } from "../../components/DataState";
 import { fmtDateTime, fmtNum, fmtToman } from "../../format";
 import { getStorefrontPlanHistory, storefrontQueryKeys } from "./api";
 import type { StorefrontPlan } from "./types";
+import { useXsFullScreen } from "../../responsive";
 
 export default function StorefrontPlanHistoryDialog({
   shopId,
@@ -14,6 +15,7 @@ export default function StorefrontPlanHistoryDialog({
   plan: StorefrontPlan | null;
   onClose: () => void;
 }) {
+  const xsFull = useXsFullScreen();
   const query = useQuery({
     queryKey: storefrontQueryKeys.planHistory(shopId, plan?.id || 0),
     queryFn: () => getStorefrontPlanHistory(shopId, plan!.id),
@@ -21,7 +23,7 @@ export default function StorefrontPlanHistoryDialog({
   });
 
   return (
-    <Dialog open={!!plan} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={!!plan} onClose={onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
       <DialogTitle>تاریخچهٔ پلن {plan?.title || `#${plan?.id || ""}`}</DialogTitle>
       <DialogContent>
         <DataState isLoading={query.isLoading} isError={query.isError} rows={4} onRetry={() => query.refetch()}>

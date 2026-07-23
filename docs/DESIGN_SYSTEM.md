@@ -938,8 +938,9 @@ Phase‑2 work-list.
   **Canonical:** explicit cards (pattern A) for action-heavy list pages; `resp-table`
   (pattern B) for simple/read-only or in-dialog tables. Rationale: (b) every major
   list page that was redesigned uses pattern A; (c) pattern A is the newer
-  "resellers pattern" (comment `src/pages/Invoices.tsx:440`). The redundant
-  `resp-table` class on pattern-A tables is harmless but should be dropped in Phase 3.
+  "resellers pattern" (comment `src/pages/Invoices.tsx:440`). *(DS06: the two
+  redundant classes on the pattern-A Invoices/Payments desktop tables were dropped —
+  entry RESOLVED.)*
 - **C4 — Login page deviates from the control system.**
   Variants: fields height 58 / radius `"14px"` / placeholder-only / explicit RTL
   inputProps (`src/pages/Login.tsx:27-41`) vs theme pill inputs with labels
@@ -1049,18 +1050,14 @@ Phase‑2 work-list.
 *Entries C20–C24 were added in v1.1 by the Phase‑2 audit (new deviations not caught in
 Phase 1):*
 
-- **C20 — Table scroll-bound variants** *(added v1.1)*. One intent ("bound the desktop
-  table under the page header") spelled seven ways:
-  `calc(100vh - 300px)` (`src/pages/Invoices.tsx:398` — the tokenized value),
-  `- 320px` (`src/pages/resellers/ResellerTable.tsx:116`), `- 260px` ×3
-  (`src/pages/FinancialHistory.tsx:85`, `src/pages/Logs.tsx:59,90`), `- 240px`
-  (`src/pages/Sales.tsx:51`), `- 220px` (`src/pages/Debts.tsx:28`), and `- 180px` via
-  **`height:`** instead of `maxHeight:` (`src/pages/Payments.tsx:251` — also fixes
-  height vs max-height semantics). **Canonical:** the already-tokenized
-  `maxHeight: calc(100vh - 300px)` (`design-tokens.json layout.tableScrollBound`),
-  responsive form `{ xs: "none", md/sm: … }` kept where the table renders on xs.
-  Rationale: rule (a) — the doc/JSON designated 300 in v1.0; a single token beats
-  per-page tuning (max-height only scrolls earlier, it never clips).
+- **C20 — Table scroll-bound variants** *(added v1.1)*. **RESOLVED (DS06, per
+  confirmed D14):** all eight desktop tables consume `TABLE_SCROLL_BOUND =
+  "calc(100vh - 300px)"` from `src/themeTokens.ts` (test-pinned); responsive
+  `{ xs: "none", sm|md: … }` forms kept; `src/pages/Payments.tsx` also switched
+  from `height:` to `maxHeight:` (the −120px max-height change was acknowledged in
+  the sign-off). Original variants: 300 (Invoices), 320 (ResellerTable), 260 ×3
+  (FinancialHistory, Logs ×2), 240 (Sales), 220 (Debts), 180-via-`height:`
+  (Payments).
 - **C21 — Dialogs missing the xs-fullscreen convention** *(added v1.1)*. §3.5's
   `fullScreen={useXsFullScreen()}` convention holds in the admin money flows
   (Invoices ×3, Payments, EditReseller, BumpLimits, PayDialog) but **21 dialog roots
@@ -1075,9 +1072,10 @@ Phase 1):*
   `src/portal/storefront/StorefrontCampaignsPage.tsx:207`,
   `src/portal/storefront/CustomerDetailPage.tsx:428,802`,
   `src/portal/storefront/StorefrontCreditsPage.tsx:249,336`.
-  **Canonical:** the §3.5 convention (rule b — it is the documented pattern of the
-  primary flows). Fix = add `fullScreen={useXsFullScreen()}` (+ missing
-  `fullWidth maxWidth="xs"` on Tools:570).
+  **RESOLVED (DS06):** all 21 roots now carry `fullScreen={useXsFullScreen()}`
+  (18 containing components gained the hook; Tools' confirm dialog also gained
+  `fullWidth maxWidth="xs"`). Gate re-grep: zero `<Dialog …>` roots without
+  `fullScreen` remain in `src`.
 - **C22 — Page-title anatomy split (admin vs portal)** *(added v1.1)*. 10 of 14 admin
   pages have **no in-page title** (the AppBar label is the title); every portal page
   renders an in-page `h5` **in addition to** the AppBar label (census in §4.1).
@@ -1090,10 +1088,11 @@ Phase 1):*
   `Box overflowX:"auto"`), `src/portal/pages/Invoices.tsx:53-54` and
   `src/portal/pages/Payments.tsx:65-66` (wrapped in `Card overflowX:"auto"`),
   `src/pages/Broadcast.tsx:240-241,388-389` (bounded preview boxes, `maxHeight
-  320/360`). **Canonical:** pattern B (`className="resp-table"`) — these are exactly
-  the "simple/read-only" tables C3 designates it for. The Broadcast preview boxes are
-  borderline-acceptable as-is (bounded in-dialog-style previews); converting them is
-  optional and must be visually verified below 600px.
+  320/360`). **RESOLVED (DS06):** all eight tables carry `className="resp-table"`,
+  and `src/portal/PortalLayout.tsx` now mounts `useResponsiveTableLabels()` (the
+  functional prerequisite — labels were previously admin-only). The Broadcast
+  preview boxes were included; if the <600px visual check shows them degraded inside
+  their bounded scroll boxes, dropping those two classes is the sanctioned rollback.
 - **C24 — LTR display via sx `direction` instead of the `dir` attribute** *(added
   v1.1)*. `src/pages/Broadcast.tsx:313,315` set
   `sx={{ direction: "ltr", textAlign: "left", … }}` on link-preview `code` boxes. All

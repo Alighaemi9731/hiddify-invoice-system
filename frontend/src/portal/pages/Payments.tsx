@@ -63,7 +63,7 @@ export default function PortalPayments() {
           <Card><EmptyState>هنوز پرداختی ثبت نکرده‌اید.</EmptyState></Card>
         ) : (
           <Card sx={{ overflowX: "auto" }}>
-            <Table size="small">
+            <Table size="small" className="resp-table">
               <TableHead>
                 <TableRow>
                   <TableCell>پیگیری</TableCell>

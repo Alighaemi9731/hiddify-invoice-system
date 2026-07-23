@@ -23,6 +23,7 @@ import type {
   TopupListItem, TopupMethod, TopupStatus, Versioned,
 } from "./types";
 import { commandRecoveryMessage, isConflict, isNotFound, useIdempotentMutation } from "./mutation";
+import { useXsFullScreen } from "../../responsive";
 
 const TOPUP_STATUS_FA: Record<string, string> = {
   pending: "در انتظار",
@@ -71,6 +72,7 @@ type PendingCommand =
   | { type: "bulk"; body: BulkDecisionBody };
 
 export default function TopupsPage() {
+  const xsFull = useXsFullScreen();
   const { shop } = useOutletContext<StorefrontOutletContext>();
   const queryClient = useQueryClient();
 
@@ -367,7 +369,7 @@ export default function TopupsPage() {
       </DataState>
 
       {/* single-row decision */}
-      <Dialog open={!!active} onClose={() => !busy && setActive(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!active} onClose={() => !busy && setActive(null)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <DialogTitle>{decisionTitle(active)}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>{decisionBody(active)}</DialogContentText>
@@ -405,7 +407,7 @@ export default function TopupsPage() {
       </Dialog>
 
       {/* bulk decision */}
-      <Dialog open={!!bulkAction} onClose={() => !busy && setBulkAction(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!bulkAction} onClose={() => !busy && setBulkAction(null)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <DialogTitle>{bulkAction?.decision === "reject" ? "رد گروهی شارژها" : "تأیید گروهی شارژها"}</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: bulkAction?.decision === "reject" ? 2 : 0 }}>
@@ -437,7 +439,7 @@ export default function TopupsPage() {
       </Dialog>
 
       {/* bulk results */}
-      <Dialog open={!!bulkResult} onClose={() => setBulkResult(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!bulkResult} onClose={() => setBulkResult(null)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <DialogTitle>نتیجهٔ بررسی گروهی</DialogTitle>
         <DialogContent>
           {bulkResult && (
@@ -635,6 +637,7 @@ function TopupRow({
 function TopupDetailDialog({
   shopId, topup, onClose,
 }: { shopId: number; topup: TopupListItem; onClose: () => void }) {
+  const xsFull = useXsFullScreen();
   const detailQuery = useQuery({
     queryKey: storefrontQueryKeys.topup(shopId, topup.id),
     queryFn: () => getTopup(shopId, topup.id),
@@ -659,7 +662,7 @@ function TopupDetailDialog({
   const { requested, credited, corrected } = amountView(topup);
 
   return (
-    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
       <DialogTitle>جزئیات شارژ #{fmtNum(topup.id)}</DialogTitle>
       <DialogContent dividers>
         <Stack spacing={1.25}>

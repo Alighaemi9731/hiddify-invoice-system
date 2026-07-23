@@ -12,6 +12,7 @@ import PeriodPicker from "../components/PeriodPicker";
 import { DataState } from "../components/DataState";
 import { TablePager } from "../components/TablePager";
 import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
+import { TABLE_SCROLL_BOUND } from "../themeTokens";
 
 const STATUS_COLOR: any = {
   draft: "default", sent: "info", paid: "success", overdue: "warning",
@@ -82,7 +83,7 @@ export default function FinancialHistory() {
       </Stack>
       <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
-        <TableContainer sx={{ maxHeight: { xs: "none", sm: "calc(100vh - 260px)" } }}>
+        <TableContainer sx={{ maxHeight: { xs: "none", sm: TABLE_SCROLL_BOUND } }}>
           <Table size="small" stickyHeader className="resp-table" sx={{ minWidth: { sm: 720 } }}>
             <TableHead>
               <TableRow>

@@ -23,6 +23,7 @@ import StorefrontPlanHistoryDialog from "./StorefrontPlanHistoryDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { StorefrontPlan, StorefrontPlanDraft, Versioned } from "./types";
 import { commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
+import { useXsFullScreen } from "../../responsive";
 
 type PlanCommand =
   | { type: "create"; draft: StorefrontPlanDraft; etag?: string }
@@ -34,6 +35,7 @@ type PlanCommand =
 const EMPTY_DRAFT: StorefrontPlanDraft = { title: "", gb: 1, days: 30, price_toman: 0 };
 
 export default function StorefrontPlansPage() {
+  const xsFull = useXsFullScreen();
   const { shop } = useOutletContext<StorefrontOutletContext>();
   const queryClient = useQueryClient();
   const queryKey = storefrontQueryKeys.plans(shop.id);
@@ -194,7 +196,7 @@ export default function StorefrontPlansPage() {
         )}
       </DataState>
 
-      <Dialog open={formOpen} onClose={() => !command.isPending && setFormOpen(false)} maxWidth="xs" fullWidth>
+      <Dialog open={formOpen} onClose={() => !command.isPending && setFormOpen(false)} maxWidth="xs" fullWidth fullScreen={xsFull}>
         <Box component="form" onSubmit={submit}>
           <DialogTitle>{editing ? "ویرایش پلن" : "ساخت پلن"}</DialogTitle>
           <DialogContent>

@@ -238,7 +238,7 @@ export default function Broadcast() {
           {report && (
             <Collapse in={showList} unmountOnExit>
               <Box sx={{ mb: 2, maxHeight: 320, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 2 }}>
-                <Table size="small" stickyHeader>
+                <Table size="small" stickyHeader className="resp-table">
                   <TableHead>
                     <TableRow><TableCell>نماینده</TableCell><TableCell>پنل</TableCell><TableCell>وضعیت</TableCell></TableRow>
                   </TableHead>
@@ -386,7 +386,7 @@ export default function Broadcast() {
           {hvData && hvRows.length > 0 && (
             <Collapse in={hvShow} unmountOnExit>
               <Box sx={{ mb: 2, maxHeight: 360, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 2 }}>
-                <Table size="small" stickyHeader>
+                <Table size="small" stickyHeader className="resp-table">
                   <TableHead>
                     <TableRow>
                       <TableCell>کاربر</TableCell><TableCell>پنل</TableCell>

@@ -51,7 +51,7 @@ export default function PortalInvoices() {
           <Card><EmptyState>هنوز فاکتوری برای شما صادر نشده است.</EmptyState></Card>
         ) : (
           <Card sx={{ overflowX: "auto" }}>
-            <Table size="small">
+            <Table size="small" className="resp-table">
               <TableHead>
                 <TableRow>
                   <TableCell>شماره</TableCell>

@@ -21,6 +21,7 @@ import DarkModeIcon from "@mui/icons-material/esm/DarkModeOutlined";
 import LightModeIcon from "@mui/icons-material/esm/LightModeOutlined";
 import { usePortalAuth } from "./PortalAuthContext";
 import { useColorMode } from "../colorMode";
+import { useResponsiveTableLabels } from "../responsive";
 import {
   CHROME_BLUR,
   CHROME_SIDEBAR_BG,
@@ -61,6 +62,7 @@ export default function PortalLayout() {
   const { mode, toggle } = useColorMode();
   const primary = theme.palette.primary.main;
   const storefronts = useQuery({ queryKey: storefrontQueryKeys.all, queryFn: listStorefronts });
+  useResponsiveTableLabels();
   const visibleNav = NAV.filter((item) => !item.storefront || !!storefronts.data?.length);
   const isSelected = (to: string) => to === "/portal"
     ? loc.pathname === to
