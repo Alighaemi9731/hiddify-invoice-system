@@ -223,7 +223,7 @@ export default function Panels() {
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
               label="لینک پنل را اینجا بچسبانید (تکمیل خودکار فیلدها)"
-              dir="ltr"
+              inputProps={{ dir: "ltr" }}
               value={link}
               onChange={(e) => applyLink(e.target.value)}
               placeholder="https://host/proxy_path/owner_uuid/admin/adminuser/"

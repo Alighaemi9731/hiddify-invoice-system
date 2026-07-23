@@ -93,6 +93,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm test -- --run
+      - run: npm run lint:design
       - run: npm run build
 
   deploy-scripts:

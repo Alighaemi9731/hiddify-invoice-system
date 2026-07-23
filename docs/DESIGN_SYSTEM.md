@@ -1,6 +1,10 @@
 # Design System — سامانه مدیریت و فاکتور نمایندگان
 
-**Version 1.0 — 2026-07-22.** Extracted verbatim from the code at `v1.100.4`.
+**Version 2.0 — "standardized", 2026-07-23.** v1.0 was extracted verbatim from the
+code at `v1.100.4`; the DS01–DS09 standardization program then made the code conform
+to it (§5 records every resolution). Since DS09, conformance is machine-enforced:
+`frontend/scripts/design-lint.mjs` (`npm run lint:design`, run in CI) fails on any
+styling value not present in `docs/design-tokens.json`.
 This document is the **single source of truth for every UI decision** in `frontend/`.
 It describes what the code does today — nothing here is invented. Every value carries a
 `file:line` citation (paths relative to `frontend/` unless prefixed). Where the code
@@ -558,6 +562,8 @@ Format: anatomy → states → exact tokens. Components inherit §2 unless noted
 - **Select:** `paddingBlock 7px`, `paddingInlineStart 16px`; icon in §2.3 color with
   `transform .18s` (`src/theme.ts:286-300`); compact `size="small"` +
   `py: 7px !important` in PeriodPicker (`src/components/PeriodPicker.tsx:27-30`).
+- **Disabled/error states:** MUI defaults are canonical (D2) — no custom styling;
+  set only the `error`/`disabled` props.
 - **RTL/LTR rule:** see §4.2 (hard rule). Login uses placeholder-only fields, height
   58, radius `"14px"`, explicit `inputProps={{ dir: "rtl", textAlign right }}`
   (`src/pages/Login.tsx:27-41`) → logged deviation §5-C4.
@@ -900,6 +906,9 @@ follows the number («تومان»), tracked identifiers prefixed «#».
 
 ## §5 Conflict log & gaps
 
+*(Program complete — every entry below is resolved, closed-by-design, or deferred
+by owner decision; the DS09 lint enforces the end state.)*
+
 Canonical-selection rules, in order: **(a)** `theme.ts` wins over ad-hoc styling;
 **(b)** otherwise the most frequently used value; **(c)** otherwise the most recent
 intent. Every entry below lists variants → canonical → rationale. This section is the
@@ -907,8 +916,7 @@ Phase‑2 work-list.
 
 ### 5.1 Conflicts
 
-- **C1 — Violet remnants vs Apple-blue system.** **RESOLVED (DS05, release
-  pending).** Both sidebars consume the shared `SIDEBAR_AMBIENT` blue token
+- **C1 — Violet remnants vs Apple-blue system.** **RESOLVED `v1.100.7` (DS05).** Both sidebars consume the shared `SIDEBAR_AMBIENT` blue token
   (`src/themeTokens.ts`, test-pinned to contain no `139,92,246`); the storefront
   StatCard accent `#7c5cff` became `#0ea5e9` (the sibling portal-dashboard set's
   established 4th accent). `#8b5cf6` as the *Tools nav categorical color* (§2.4)
@@ -960,7 +968,7 @@ Phase‑2 work-list.
   note), login hero 1.04 (→ chrome) and captcha 16/180 + 12/160 (→ tier‑2).
   Original variants: 48/220/1.03, 48/220/1.04, 40/180, 28/200/1.02, 20/180, 20/140,
   16/180, 12/160-180, 14/180.
-- **C6 — Four spellings of "pill".** **RESOLVED (DS07):** two spellings remain —
+- **C6 — Four spellings of "pill".** **RESOLVED `v1.100.7` (DS07):** two spellings remain —
   `980` for controls/badges/meters (the `99`/`999` sites were normalized:
   StatusPill, four Dashboard meter tracks/fills, StorefrontShell + Topups badges)
   and `"50px"` for input-height pills. Rendering identical (all pills exceeded
@@ -974,7 +982,7 @@ Phase‑2 work-list.
   **Canonical:** three sizes — 31/sx‑2 (inline/nav), 44/`"14px"` (card-level,
   StatCard's), 56/sx‑3 (hero) — chosen by (b) frequency within each role; 40px logo
   tiles stay as the brand-block size (b). The `"10px"` login radius folds into C4's
-  exception. **RESOLVED (DS07):** the two stragglers converged to 31px (Dashboard
+  exception. **RESOLVED `v1.100.7` (DS07):** the two stragglers converged to 31px (Dashboard
   rank tiles 30→31, portal Panels tile 36→31).
 - **C8 — Invoice-status colors encoded twice.** **RESOLVED `v1.100.6` (DS02).**
   Donut fills now come from `invoiceStatusColor(palette, status)` and StatusPills from
@@ -987,7 +995,7 @@ Phase‑2 work-list.
 - **C9 — `src/pages/Sales.tsx:14` STATUS_COLOR lacks `canceled`.** **RESOLVED
   `v1.100.6` (DS02):** the map now declares the full 6 states
   (`canceled: "default"`), matching `src/pages/Invoices.tsx:44`.
-- **C10 — Admin vs portal chrome drift.** **RESOLVED (DS05, release pending).**
+- **C10 — Admin vs portal chrome drift.** **RESOLVED `v1.100.7` (DS05).**
   Both layouts share `SIDEBAR_WIDTH = 256`; the portal `navItemSx` is byte-identical
   to admin's (verified by diff in the batch gate) and the icon chips carry the same
   gloss/spring/rim treatment (source shapes differ — admin `.join()` array vs portal
@@ -1006,23 +1014,23 @@ Phase‑2 work-list.
   (`src/portal/storefront/StorefrontCampaignsPage.tsx:175`).
   **Canonical:** theme 6/radius 4 for LinearProgress-based bars (rule a); the
   hand-rolled dashboard meters keep 8–9px tracks as a distinct "meter" component (b),
-  now radius-980-spelled per C6. **RESOLVED (DS07):** all four LinearProgress
+  now radius-980-spelled per C6. **RESOLVED `v1.100.7` (DS07):** all four LinearProgress
   overrides deleted (CapacityBar, portal Subs, storefront plan bars, campaigns
   progress) — the theme provides 6px/4px; guarded by
   `src/test/capacity-bar.test.tsx`.
 - **C13 — `SectionCard` and `EmptyState` duplicated** in
   `src/pages/Dashboard.tsx:65-114` and `src/portal/ui.tsx:4-31` (near-identical).
   **Canonical:** `src/portal/ui.tsx` as the shared home (it is already imported
-  portal-wide). **RESOLVED (DS07):** the admin Dashboard's local copies were deleted
+  portal-wide). **RESOLVED `v1.100.7` (DS07):** the admin Dashboard's local copies were deleted
   and it imports `SectionCard`/`EmptyState` from `../portal/ui`.
 - **C14 — Empty-state min-heights differ:** 210 (Dashboard) vs 180 (portal ui).
-  **Canonical:** 180. **RESOLVED (DS07)** via C13 — Dashboard now uses the shared
+  **Canonical:** 180. **RESOLVED `v1.100.7` (DS07)** via C13 — Dashboard now uses the shared
   `EmptyState` (180). Table-cell empties (`py 4/5`) remain the sanctioned compact
   form.
 - **C15 — Accordion radius:** theme `14px !important` (`src/theme.ts:516`) vs Help
   pages sx‑3 = 42px (`src/pages/Help.tsx:259`, `src/portal/pages/Help.tsx:189`) — the
   theme's `!important` actually wins at runtime, so the sx was dead styling.
-  **Canonical:** 14px (rule a). **RESOLVED (DS07):** both dead overrides deleted —
+  **Canonical:** 14px (rule a). **RESOLVED `v1.100.7` (DS07):** both dead overrides deleted —
   zero rendered change.
 - **C16 — Drawer paper vs desktop sidebar glass.** **RESOLVED `v1.100.5` (DS01).**
   The theme's MuiDrawer paper now uses the chrome recipe with the neutral dark tint
@@ -1053,7 +1061,7 @@ Phase‑2 work-list.
 *Entries C20–C24 were added in v1.1 by the Phase‑2 audit (new deviations not caught in
 Phase 1):*
 
-- **C20 — Table scroll-bound variants** *(added v1.1)*. **RESOLVED (DS06, per
+- **C20 — Table scroll-bound variants** *(added v1.1)*. **RESOLVED `v1.100.7` (DS06, per
   confirmed D14):** all eight desktop tables consume `TABLE_SCROLL_BOUND =
   "calc(100vh - 300px)"` from `src/themeTokens.ts` (test-pinned); responsive
   `{ xs: "none", sm|md: … }` forms kept; `src/pages/Payments.tsx` also switched
@@ -1075,7 +1083,7 @@ Phase 1):*
   `src/portal/storefront/StorefrontCampaignsPage.tsx:207`,
   `src/portal/storefront/CustomerDetailPage.tsx:428,802`,
   `src/portal/storefront/StorefrontCreditsPage.tsx:249,336`.
-  **RESOLVED (DS06):** all 21 roots now carry `fullScreen={useXsFullScreen()}`
+  **RESOLVED `v1.100.7` (DS06):** all 21 roots now carry `fullScreen={useXsFullScreen()}`
   (18 containing components gained the hook; Tools' confirm dialog also gained
   `fullWidth maxWidth="xs"`). Gate re-grep: zero `<Dialog …>` roots without
   `fullScreen` remain in `src`.
@@ -1091,7 +1099,7 @@ Phase 1):*
   `Box overflowX:"auto"`), `src/portal/pages/Invoices.tsx:53-54` and
   `src/portal/pages/Payments.tsx:65-66` (wrapped in `Card overflowX:"auto"`),
   `src/pages/Broadcast.tsx:240-241,388-389` (bounded preview boxes, `maxHeight
-  320/360`). **RESOLVED (DS06):** all eight tables carry `className="resp-table"`,
+  320/360`). **RESOLVED `v1.100.7` (DS06):** all eight tables carry `className="resp-table"`,
   and `src/portal/PortalLayout.tsx` now mounts `useResponsiveTableLabels()` (the
   functional prerequisite — labels were previously admin-only). The Broadcast
   preview boxes were included; if the <600px visual check shows them degraded inside
@@ -1106,18 +1114,19 @@ Phase 1):*
   CSS transform (§4.2 rule 3). **Canonical:** the `dir="ltr"` attribute (+ drop the
   `textAlign`/`direction` sx keys). Rationale: rule (b) — the attribute is the
   app-wide mechanism — and mechanism correctness under the RTL pipeline.
-  **RESOLVED (DS07):** both boxes now use `dir="ltr"`; the link previews render
+  **RESOLVED `v1.100.7` (DS07):** both boxes now use `dir="ltr"`; the link previews render
   truly LTR for the first time.
 - **C25 — `dir` on a TextField root** *(added during DS08)*.
   `src/pages/Panels.tsx` panel-link paste field passes `dir="ltr"` on the TextField
   itself (multi-line JSX — the Phase‑2 single-line grep missed it), which flips its
   label/helperText too, violating the §4.2 hard rule (`inputProps={{ dir: "ltr" }}`
-  only — the M34 lesson). **Canonical:** move to `inputProps`. Scheduled for DS09's
-  close-out sweep.
+  only — the M34 lesson). **Canonical:** move to `inputProps`. **RESOLVED `v1.100.7` (DS09):**
+  the field now uses `inputProps={{ dir: "ltr" }}`; its label/helperText render RTL
+  again.
 
 ### 5.2 Gaps (real absences — recorded, not invented)
 
-- **G1 — No token module.** **RESOLVED (DS01→DS08, per amended D1).**
+- **G1 — No token module.** **RESOLVED `v1.100.5`→`v1.100.7` (DS01→DS08, per amended D1).**
   `src/themeTokens.ts` now holds every shared §2 constant: glass tiers + chrome
   recipe (DS01/03/04), status-color mappings (DS02), sidebar ambient/width + nav
   glosses (DS05), table scroll bound (DS06), and — completing the sweep in DS08 —
@@ -1125,40 +1134,42 @@ Phase 1):*
   `GLOSS_STATCARD_TILE`, all consumed byte-identically (theme.ts transitions/
   keyframe strings are token-composed; the framer EASE duplicate in Dashboard is
   gone). Everything is pinned by `src/test/theme-contract.test.ts`.
-- **G2 — No authored disabled/error-input states.** Disabled controls and
-  field-level error styling rely on MUI defaults everywhere (only `error={…}` flags
-  are set, e.g. `src/pages/Setup.tsx:111`).
-- **G3 — Portal has no BottomNav** on phones (admin does); portal phone users only get
-  the drawer (`src/portal/PortalLayout.tsx:205-216`).
+- **G2 — No authored disabled/error-input states.** **CLOSED doc-only (D2, DS09 `v1.100.7`):** MUI defaults ARE the canonical disabled/error states (recorded in §3.2);
+  only `error={…}` flags are set (e.g. `src/pages/Setup.tsx:111`).
+- **G3 — Portal has no BottomNav** on phones (admin does). **DEFERRED (D3,
+  2026-07-23):** feature work, not conformance; the portal drawer suffices. Stays in
+  the plan's §G future-ideas appendix.
 - **G4 — No shared ECharts theme.** **RESOLVED `v1.100.6` (DS04, per approved D4):**
   `src/components/chartTooltip.ts` now provides the shared tooltip surface consumed
   by all three chart builders; axis/font declarations remain per-builder by design
   (they already read the theme directly).
-- **G5 — No z-index scale** beyond MUI defaults + the ad-hoc 0/1/2/3 layers (§2.12).
-- **G6 — No written type ramp:** the 500–850 weight ladder and the px size vocabulary
-  (§2.7) exist only by convention; intermediate weights (650/750/850) render only if
-  the variable font serves them (it does — weights 100–900, `index.html:36`).
+- **G5 — No z-index scale.** **CLOSED doc-only (D5, DS09 `v1.100.7`):** MUI defaults + the
+  documented −1/0/1/2/3 layers (§2.12) are the standard; the lint enforces the set.
+- **G6 — No written type ramp.** **CLOSED doc-only (D6, DS09 `v1.100.7`):** §2.7's ladder and
+  size vocabulary ARE the written standard, and the lint enforces both sets.
 - **G7 — Palette duplications** (`info` ≡ `primary`; light `secondary` ≡ light
-  `warning` `#ff9500`) mean those semantic slots are indistinguishable in light mode.
-- **G8 — Third datetime format.** **RESOLVED (DS08, per approved D8):** the
+  `warning` `#ff9500`). **CLOSED doc-only (D7, DS09 `v1.100.7`):** kept and documented as
+  intentional Apple-palette facts.
+- **G8 — Third datetime format.** **RESOLVED `v1.100.7` (DS08, per approved D8):** the
   Settings rate timestamp now renders via the existing `fmtDateTime` (Tehran,
   §4.3). Safe because the backend writes timezone-aware UTC isoformat
   (`backend/app/services/rates.py` uses `datetime.now(timezone.utc).isoformat()`),
   which `new Date()` parses correctly.
-- **G9 — `frontend/placeholder.html`.** **RESOLVED (DS08, per approved D9):**
+- **G9 — `frontend/placeholder.html`.** **RESOLVED `v1.100.7` (DS08, per approved D9):**
   deleted, along with its dead `.dockerignore` entry. (Was a pre-M7 dev artifact
   with retired slate colors, never served by production builds.)
-- **G10 — Focus-visible on custom clickables.** **RESOLVED (DS08, per approved
+- **G10 — Focus-visible on custom clickables.** **RESOLVED `v1.100.7` (DS08, per approved
   D10):** the two copy rows (`src/portal/PayDialog.tsx` CopyRow,
   `src/portal/pages/Panels.tsx` link box) carry `tabIndex={0}` + `role="group"`, so
   the global `:focus-visible` ring reaches them; the inner copy buttons were already
   focusable.
-- **G11 — No empty-state illustration/iconography standard** — text-only today (§3.14).
+- **G11 — No empty-state illustration standard.** **CLOSED doc-only (D11, DS09 `v1.100.7`):**
+  text-only IS the standard (§3.14).
 - **G12 — `src/pages/Debts.tsx` connection chip.** **RESOLVED `v1.100.6` (DS02, per
   approved D12):** «بدون ربات» is now `color="default"` + `variant="outlined"`,
   matching the muted-pill severity for the same state. Originally it used `error`
   while the resellers pages used a muted grey StatusPill.
-- **G13 — Loading-state coverage is incomplete** *(added v1.1)*. **RESOLVED (DS08,
+- **G13 — Loading-state coverage is incomplete** *(added v1.1)*. **RESOLVED `v1.100.7` (DS08,
   per approved D13):** the three search Tools tables wrap in
   `DataState isLoading/isError/onRetry` (skeleton per search), the recover tool and
   both Broadcast result tables show a `DataState` skeleton while their mutations are
@@ -1189,7 +1200,14 @@ Phase 1):*
 3. The §5 conflict log is the authoritative Phase‑2 audit input and the Phase‑3
    standardization work-list; resolving an entry means updating both code and this doc
    (move the entry to a "resolved" note with the release number).
-4. Doc version: **1.1**, 2026-07-23. v1.0 extracted 2026-07-22 against `v1.100.4`
+3b. **Enforcement:** `frontend/scripts/design-lint.mjs` (`npm run lint:design`, run in
+   the CI frontend job) is the §5 enforcement mechanism. Its color allowlist is
+   harvested from `docs/design-tokens.json` at lint time; its structured vocabularies
+   (radii, sizes, weights, z-index, blur trio, scroll bound) mirror §2. Extending any
+   allowlist requires a doc-first token addition here + in the JSON — a code-only
+   change cannot pass CI.
+4. Doc version: **2.0 "standardized"**, 2026-07-23 (DS09). v1.1 was the Phase‑2
+   audit errata; v1.0 extracted 2026-07-22 against `v1.100.4`
    (frontend at commit `78179b6`); v1.1 is the Phase‑2 audit errata — §4.1 corrected
    (page-title anatomy), §4.3 crypto-digit rule added, §5 extended with C20–C24 and the
    C12 sx‑1 variant, and `design-tokens.json` extended with 14 entries (E1–E14) that §2
