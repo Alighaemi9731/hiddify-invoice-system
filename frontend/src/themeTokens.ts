@@ -36,6 +36,23 @@ export const CHROME_SIDEBAR_BORDER = {
   dark: "rgba(255,255,255,.10)",
 } as const;
 
+/** Desktop sidebar width — admin and portal alike (§5-C10). */
+export const SIDEBAR_WIDTH = 256;
+
+/** Sidebar top ambient glow — Apple blue, one per mode (§5-C1). */
+export const SIDEBAR_AMBIENT = {
+  light: "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.18) 0%, transparent 70%)",
+  dark: "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent 70%)",
+} as const;
+
+/** Specular gloss for the selected nav item surface. */
+export const GLOSS_NAV_SELECTED =
+  "linear-gradient(175deg,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 60%)";
+
+/** Specular gloss for the 31px nav icon chips. */
+export const GLOSS_NAV_CHIP =
+  "linear-gradient(145deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 60%)";
+
 /** Invoice status → palette color, for chart fills and legends (§5-C8). */
 export const invoiceStatusColor = (palette: Palette, status: string): string =>
   (

@@ -6,6 +6,10 @@ import {
   CHROME_BLUR,
   CHROME_SIDEBAR_BG,
   CHROME_SIDEBAR_BORDER,
+  GLOSS_NAV_CHIP,
+  GLOSS_NAV_SELECTED,
+  SIDEBAR_AMBIENT,
+  SIDEBAR_WIDTH,
   TIER1_BLUR,
   TIER2_BG,
   TIER2_BLUR,
@@ -35,6 +39,23 @@ describe("themeTokens spec pinning", () => {
   it("matches tier-1 blur and tier-2 bg (DS03)", () => {
     expect(TIER1_BLUR).toEqual({ light: "blur(40px) saturate(180%)", dark: "blur(20px) saturate(140%)" });
     expect(TIER2_BG).toEqual({ light: "rgba(255,255,255,0.88)", dark: "rgba(28,28,30,0.82)" });
+  });
+
+  it("chrome parity tokens are Apple blue, never violet (C1/C10, DS05)", () => {
+    expect(SIDEBAR_WIDTH).toBe(256);
+    expect(SIDEBAR_AMBIENT.dark).toBe(
+      "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent 70%)",
+    );
+    expect(SIDEBAR_AMBIENT.light).toBe(
+      "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.18) 0%, transparent 70%)",
+    );
+    expect(SIDEBAR_AMBIENT.dark).not.toContain("139,92,246");
+    expect(GLOSS_NAV_SELECTED).toBe(
+      "linear-gradient(175deg,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 60%)",
+    );
+    expect(GLOSS_NAV_CHIP).toBe(
+      "linear-gradient(145deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 60%)",
+    );
   });
 });
 

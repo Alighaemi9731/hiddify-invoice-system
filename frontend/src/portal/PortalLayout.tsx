@@ -21,14 +21,23 @@ import DarkModeIcon from "@mui/icons-material/esm/DarkModeOutlined";
 import LightModeIcon from "@mui/icons-material/esm/LightModeOutlined";
 import { usePortalAuth } from "./PortalAuthContext";
 import { useColorMode } from "../colorMode";
-import { CHROME_BLUR, CHROME_SIDEBAR_BG, CHROME_SIDEBAR_BORDER } from "../themeTokens";
+import {
+  CHROME_BLUR,
+  CHROME_SIDEBAR_BG,
+  CHROME_SIDEBAR_BORDER,
+  GLOSS_NAV_CHIP,
+  GLOSS_NAV_SELECTED,
+  SIDEBAR_AMBIENT,
+  SIDEBAR_WIDTH,
+  TIER2_BLUR,
+} from "../themeTokens";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { PageTransition } from "../components/motion";
 import NotificationsBell from "./NotificationsBell";
 import { useQuery } from "@tanstack/react-query";
 import { listStorefronts, storefrontQueryKeys } from "./storefront/api";
 
-const WIDTH = 248;
+const WIDTH = SIDEBAR_WIDTH;
 
 const NAV = [
   { to: "/portal", label: "داشبورد", icon: <DashboardIcon />, color: "#0071e3" },
@@ -66,13 +75,19 @@ export default function PortalLayout() {
     my: 0.3,
     py: 0.7,
     color: selected ? "text.primary" : "text.secondary",
+    backdropFilter: selected ? TIER2_BLUR : "none",
+    WebkitBackdropFilter: selected ? TIER2_BLUR : "none",
     "& .MuiListItemIcon-root": { minWidth: 40 },
     "&.Mui-selected": {
       backgroundColor: isDark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.60)",
+      backgroundImage: GLOSS_NAV_SELECTED,
       boxShadow: isDark
         ? "inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)"
         : "inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(0,0,0,.18)",
       border: isDark ? "1px solid rgba(255,255,255,.10)" : "1px solid rgba(255,255,255,.78)",
+      "&:hover": {
+        backgroundColor: isDark ? "rgba(255,255,255,.10)" : "rgba(255,255,255,.76)",
+      },
       "&::before": {
         content: '""',
         position: "absolute",
@@ -88,6 +103,7 @@ export default function PortalLayout() {
     "&:hover:not(.Mui-selected)": {
       backgroundColor: isDark ? "rgba(255,255,255,.05)" : "rgba(255,255,255,.38)",
     },
+    "&:hover .nav-icon": { transform: "scale(1.14) rotate(-3deg)" },
     transition: "background-color .18s, box-shadow .18s, border .18s",
   });
 
@@ -98,9 +114,7 @@ export default function PortalLayout() {
         sx={{
           position: "absolute",
           inset: 0,
-          background: isDark
-            ? "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent 70%)"
-            : "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.18) 0%, transparent 70%)",
+          background: isDark ? SIDEBAR_AMBIENT.dark : SIDEBAR_AMBIENT.light,
           pointerEvents: "none",
           zIndex: 0,
         }}
@@ -143,14 +157,17 @@ export default function PortalLayout() {
               >
                 <ListItemIcon>
                   <Box
+                    className="nav-icon"
                     sx={{
                       width: 31, height: 31, borderRadius: 2,
                       display: "grid", placeItems: "center",
                       color: item.color,
                       bgcolor: alpha(item.color, isDark ? 0.22 : 0.14),
+                      backgroundImage: GLOSS_NAV_CHIP,
                       boxShadow: selected
-                        ? `0 0 0 1px ${alpha(item.color, 0.5)}, 0 4px 12px -4px ${alpha(item.color, 0.55)}`
+                        ? `0 0 0 1px ${alpha(item.color, 0.5)}, 0 4px 12px -4px ${alpha(item.color, 0.55)}, inset 0 1px 0 rgba(255,255,255,.32)`
                         : "inset 0 1px 0 rgba(255,255,255,.18)",
+                      transition: "transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .15s",
                       "& svg": { fontSize: 19 },
                     }}
                   >

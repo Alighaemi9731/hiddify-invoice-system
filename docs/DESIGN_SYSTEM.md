@@ -260,8 +260,8 @@ sent→`info.main`, overdue→`warning.main`, enforced→`error.main`, fallback�
 **StatCard accents in use:** admin dashboard `#0071e3`, `#0ea5e9`, `#10b981`, `#f43f5e`
 (`src/pages/Dashboard.tsx:325,332,339,346`); portal dashboard `#10b981`, `#0071e3`,
 `#f43f5e`, `#0ea5e9` (`src/portal/pages/Dashboard.tsx:139,146,153,160`); storefront
-`#10b981`, `#7c5cff` (legacy violet → §5-C1), `#0071e3`, `#f43f5e`
-(`src/portal/storefront/StorefrontDashboardPage.tsx:65,69,74,79`). StatCard default
+`#10b981`, `#0ea5e9` (was violet `#7c5cff` — fixed DS05/§5-C1), `#0071e3`, `#f43f5e`
+(`src/portal/storefront/StorefrontDashboardPage.tsx`). StatCard default
 accent `#0071e3` (`src/components/StatCard.tsx:6`).
 
 **Brand-external color:** Telegram icon `#229ED9` (`src/components/TelegramLink.tsx:32`).
@@ -457,8 +457,9 @@ login zones `2` (`Login.tsx:145,394`), Settings sticky header `3`
   `up("md")` desktop sidebar (2×, `src/components/Layout.tsx:59`), `down("sm")` →
   full-screen dialogs (`src/responsive.ts:5-8`). Raw CSS mobile query
   `@media (max-width:599.95px)` (`src/theme.ts:176`).
-- Layout constants: admin sidebar **256px** (`src/components/Layout.tsx:37`), portal
-  sidebar **248px** (`src/portal/PortalLayout.tsx:30`) → §5-C10; Settings side nav
+- Layout constants: sidebar **256px** for BOTH apps via `SIDEBAR_WIDTH`
+  (`src/themeTokens.ts`, consumed by `src/components/Layout.tsx` +
+  `src/portal/PortalLayout.tsx` — §5-C10 resolved DS05); Settings side nav
   240px sticky top 80 (`src/pages/Settings.tsx:623`); content padding
   `p: { xs: 2, md: 3 }` (16/24px) + mobile bottom clearance
   `calc(76px + env(safe-area-inset-bottom))` (`src/components/Layout.tsx:314`,
@@ -478,11 +479,11 @@ login zones `2` (`Login.tsx:145,394`), Settings sticky header `3`
 
 ### 2.15 Ambient backgrounds (beyond the body glow)
 
-- Sidebar top glow — admin: `radial-gradient(ellipse 120% 80% at 50% 0%,
-  rgba(139,92,246,.28) 0%, transparent 70%)` dark / same at `rgba(139,92,246,.20)`
-  light (`src/components/Layout.tsx:120-131`) — **legacy violet**, conflicts with the
-  portal blue `rgba(0,113,227,.26)` dark / `rgba(0,113,227,.18)` light
-  (`src/portal/PortalLayout.tsx:95-106`) → §5-C1 (blue is canonical).
+- Sidebar top glow — **one token since DS05 (§5-C1 resolved):** both layouts consume
+  `SIDEBAR_AMBIENT` from `src/themeTokens.ts` — Apple blue
+  `radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent
+  70%)` dark / `rgba(0,113,227,.18)` light. The admin violet (`rgba(139,92,246,…)`)
+  is gone.
 - Portal entry/login page wash: `radial-gradient(ellipse 80% 60% at 70% 0%,
   rgba(0,113,227,.14) 0%, transparent 60%)` (`src/portal/PortalEntry.tsx:125-126`,
   `src/portal/PortalLogin.tsx:81-82`).
@@ -689,9 +690,12 @@ Tooltip `{pct}% پر شده` / «بدون سقف».
   (`insetInlineStart 4, top/bottom 9`); hover scales icon 1.14 rotate −3°
   (`src/components/Layout.tsx:69-233`). Mobile: right-anchored temporary Drawer, same
   content, width 256 (`src/components/Layout.tsx:274-284`).
-- **Sidebar (portal):** same structure at 248px, blue ambient, **no** backdrop-filter
-  on selected items, no icon-chip gloss/hover-scale, no version footer
-  (`src/portal/PortalLayout.tsx:61-191`) → drift vs admin §5-C10.
+- **Sidebar (portal):** full parity with admin since DS05 (§5-C10) — 256px via
+  `SIDEBAR_WIDTH`, byte-identical `navItemSx` (selected backdrop-filter + gloss +
+  selected-hover + hover icon scale), icon chips with `GLOSS_NAV_CHIP` + spring
+  transition + selected rim inset (`src/portal/PortalLayout.tsx`). Deliberate
+  remaining differences: no version footer (portal API exposes no version endpoint —
+  N/A) and no BottomNav (D3 deferred).
 - **BottomNav (admin, phones):** fixed, glass, top divider, height 60, safe-area pb;
   4 tabs + «بیشتر» (opens drawer), labels 11 (`src/components/BottomNav.tsx`). Portal
   has none → §5-G3.
@@ -906,17 +910,13 @@ Phase‑2 work-list.
 
 ### 5.1 Conflicts
 
-- **C1 — Violet remnants vs Apple-blue system.**
-  Variants: admin sidebar ambient `rgba(139,92,246,.28|.20)`
-  (`src/components/Layout.tsx:126-127`) vs portal sidebar ambient
-  `rgba(0,113,227,.26|.18)` (`src/portal/PortalLayout.tsx:101-102`); storefront
-  StatCard accent `#7c5cff`
-  (`src/portal/storefront/StorefrontDashboardPage.tsx:69`).
-  **Canonical:** the blue ambient (`rgba(0,113,227,…)`) and blue-family StatCard
-  accents. Rationale: (a) theme.ts's ambient/identity is Apple blue and its comment
-  says "no colored blobs … one very faint brand glow" (`src/theme.ts:89-93`); (c) the
-  portal implementation is the newer copy of the same component. Note: `#8b5cf6` as the
-  *Tools nav categorical color* (§2.4) is NOT a conflict — categorical ≠ ambient.
+- **C1 — Violet remnants vs Apple-blue system.** **RESOLVED (DS05, release
+  pending).** Both sidebars consume the shared `SIDEBAR_AMBIENT` blue token
+  (`src/themeTokens.ts`, test-pinned to contain no `139,92,246`); the storefront
+  StatCard accent `#7c5cff` became `#0ea5e9` (the sibling portal-dashboard set's
+  established 4th accent). `#8b5cf6` as the *Tools nav categorical color* (§2.4)
+  remains — categorical ≠ ambient, never a conflict. Original variants: admin violet
+  ambient `rgba(139,92,246,.28|.20)` vs the portal blue.
 - **C2 — Legacy navy palette remnants (pre-Apple theme).** **RESOLVED `v1.100.6`
   (DS03 removed the Settings-header bg; DS04 swept everything else).** The
   navy-kill re-grep (`14,16,32 | 11,13,25 | 9,11,20 | 22,26,43 | 30,40,100 |
@@ -990,11 +990,14 @@ Phase‑2 work-list.
 - **C9 — `src/pages/Sales.tsx:14` STATUS_COLOR lacks `canceled`.** **RESOLVED
   `v1.100.6` (DS02):** the map now declares the full 6 states
   (`canceled: "default"`), matching `src/pages/Invoices.tsx:44`.
-- **C10 — Admin vs portal chrome drift.**
-  Sidebar width 256 (`Layout.tsx:37`) vs 248 (`PortalLayout.tsx:30`); portal nav items
-  lack the selected backdrop-filter, icon gloss, hover scale, and version footer
-  (§3.13). **Canonical:** the admin implementation (richer, rule b — it is the primary
-  surface and the superset); width 256. Portal alignment is Phase‑3 work.
+- **C10 — Admin vs portal chrome drift.** **RESOLVED (DS05, release pending).**
+  Both layouts share `SIDEBAR_WIDTH = 256`; the portal `navItemSx` is byte-identical
+  to admin's (verified by diff in the batch gate) and the icon chips carry the same
+  gloss/spring/rim treatment (source shapes differ — admin `.join()` array vs portal
+  template literal — but the rendered CSS is identical). The version-footer clause is
+  closed as **N/A**: the portal API exposes no version endpoint and backend additions
+  are outside this program. Original finding: width 256 vs 248 + missing selected
+  backdrop-filter/gloss/hover-scale on portal.
 - **C11 — Two brand-gradient end colors.** In-app tiles end at `#0071e3`
   (`Layout.tsx:144` etc.); the favicon/manifest icon ends at `#0064d2`
   (`public/favicon.svg`). **Canonical:** `#5ab5ff → #0071e3` in-app; the icon's darker

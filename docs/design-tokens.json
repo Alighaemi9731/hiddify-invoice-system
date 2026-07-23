@@ -40,8 +40,8 @@
     "sidebarAmbient": {
       "light": "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.18) 0%, transparent 70%)",
       "dark": "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(0,113,227,.26) 0%, transparent 70%)",
-      "note": "Canonical per §5-C1 (blue); admin Layout still ships the violet variant.",
-      "source": "src/portal/PortalLayout.tsx:100-102"
+      "note": "§5-C1 resolved (DS05): both layouts consume SIDEBAR_AMBIENT from src/themeTokens.ts; the admin violet variant is gone.",
+      "source": "src/themeTokens.ts SIDEBAR_AMBIENT; consumed by src/components/Layout.tsx + src/portal/PortalLayout.tsx"
     },
     "brandGradient": { "value": "linear-gradient(145deg, #5ab5ff 0%, #0071e3 100%)", "source": "src/components/Layout.tsx:144" },
     "portalAuthWash": { "value": "radial-gradient(ellipse 80% 60% at 70% 0%, rgba(0,113,227,.14) 0%, transparent 60%)", "source": "src/portal/PortalEntry.tsx:125-126" },
@@ -49,7 +49,8 @@
       "navChip": "linear-gradient(145deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 60%)",
       "statCardTile": "linear-gradient(145deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 60%)",
       "navSelected": "linear-gradient(175deg,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 60%)",
-      "source": "src/components/Layout.tsx:81,187; src/components/StatCard.tsx:56"
+      "note": "navChip/navSelected are GLOSS_NAV_CHIP/GLOSS_NAV_SELECTED in src/themeTokens.ts since DS05, consumed by both layouts",
+      "source": "src/themeTokens.ts; src/components/StatCard.tsx:56"
     },
     "iconAssetGradient": { "value": "#5ab5ff → #0064d2", "note": "favicon/manifest icon only (§5-C11)", "source": "public/favicon.svg" },
     "telegram": { "value": "#229ED9", "source": "src/components/TelegramLink.tsx:32" },
@@ -380,7 +381,7 @@
   "layout": {
     "breakpoints": { "value": "MUI defaults (xs 0, sm 600, md 900, lg 1200, xl 1536)", "source": "src/theme.ts:103 (not overridden)" },
     "mobileCssQuery": { "value": "@media (max-width:599.95px)", "source": "src/theme.ts:176" },
-    "sidebarWidth": { "value": 256, "note": "canonical per §5-C10; portal currently 248", "source": "src/components/Layout.tsx:37" },
+    "sidebarWidth": { "value": 256, "note": "§5-C10 resolved (DS05): SIDEBAR_WIDTH in src/themeTokens.ts, consumed by both layouts", "source": "src/themeTokens.ts SIDEBAR_WIDTH" },
     "settingsSideNavWidth": { "value": 240, "source": "src/pages/Settings.tsx:623" },
     "contentPadding": { "value": "p {xs:2, md:3} (16/24px)", "source": "src/components/Layout.tsx:314" },
     "mobileBottomClearance": { "value": "calc(76px + env(safe-area-inset-bottom))", "source": "src/components/Layout.tsx:314" },

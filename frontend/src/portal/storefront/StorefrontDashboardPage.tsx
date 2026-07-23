@@ -66,7 +66,7 @@ export default function StorefrontDashboardPage() {
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <StatCard label="فروش این ماه" value={fmtToman(month)} sub={monthSub}
-                        icon={<ShoppingCartIcon />} color="#7c5cff" />
+                        icon={<ShoppingCartIcon />} color="#0ea5e9" />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <StatCard label="سرویس‌های فعال" value={fmtNum(active)}

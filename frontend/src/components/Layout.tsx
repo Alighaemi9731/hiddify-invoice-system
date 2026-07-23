@@ -33,9 +33,18 @@ import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
 import { PageTransition } from "./motion";
 import { useResponsiveTableLabels } from "../responsive";
-import { CHROME_BLUR, CHROME_SIDEBAR_BG, CHROME_SIDEBAR_BORDER, TIER2_BLUR } from "../themeTokens";
+import {
+  CHROME_BLUR,
+  CHROME_SIDEBAR_BG,
+  CHROME_SIDEBAR_BORDER,
+  GLOSS_NAV_CHIP,
+  GLOSS_NAV_SELECTED,
+  SIDEBAR_AMBIENT,
+  SIDEBAR_WIDTH,
+  TIER2_BLUR,
+} from "../themeTokens";
 
-const WIDTH = 256;
+const WIDTH = SIDEBAR_WIDTH;
 
 const NAV = [
   { to: "/", label: "داشبورد", icon: <DashboardIcon />, color: "#0071e3" },
@@ -79,7 +88,7 @@ export default function Layout() {
     "& .MuiListItemIcon-root": { minWidth: 40 },
     "&.Mui-selected": {
       backgroundColor: isDark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.60)",
-      backgroundImage: "linear-gradient(175deg,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 60%)",
+      backgroundImage: GLOSS_NAV_SELECTED,
       boxShadow: isDark
         ? "inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)"
         : "inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(0,0,0,.18)",
@@ -123,9 +132,7 @@ export default function Layout() {
         sx={{
           position: "absolute",
           inset: 0,
-          background: isDark
-            ? "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(139,92,246,.28) 0%, transparent 70%)"
-            : "radial-gradient(ellipse 120% 80% at 50% 0%, rgba(139,92,246,.20) 0%, transparent 70%)",
+          background: isDark ? SIDEBAR_AMBIENT.dark : SIDEBAR_AMBIENT.light,
           pointerEvents: "none",
           zIndex: 0,
         }}
@@ -185,7 +192,7 @@ export default function Layout() {
                       placeItems: "center",
                       color: item.color,
                       bgcolor: alpha(item.color, isDark ? 0.22 : 0.14),
-                      backgroundImage: "linear-gradient(145deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 60%)",
+                      backgroundImage: GLOSS_NAV_CHIP,
                       boxShadow: selected
                         ? [
                             `0 0 0 1px ${alpha(item.color, 0.50)}`,
