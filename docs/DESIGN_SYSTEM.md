@@ -151,13 +151,13 @@ tiers; `text.disabled` is MUI-derived (used e.g. `src/components/TelegramLink.ts
 | Drawer paper (= chrome recipe since `v1.100.5`/C16) | `rgba(255,255,255,.55)` | `rgba(28,28,30,.50)`, `blur(48px) saturate(220%) brightness(1.03)`, border `glass.chrome.sidebarBorder` | `src/theme.ts` MuiDrawer block, via `src/themeTokens.ts` |
 | AppBar | `rgba(255,255,255,0.80)` | `rgba(0,0,0,0.60)`, `blur(40px) saturate(180%)`, noise, ring `0 0 0 0.5px` | `src/theme.ts:270-283` |
 | BottomNav | `rgba(255,255,255,0.86)` | `rgba(0,0,0,0.72)`, `blur(40px) saturate(180%)` | `src/components/BottomNav.tsx:38-41` |
-| Desktop sidebar (admin & portal) | `rgba(255,255,255,.55)` | `rgba(9,11,20,.50)`, `blur(48px) saturate(220%) brightness(1.03)` | `src/components/Layout.tsx:245-253`, `src/portal/PortalLayout.tsx:186-191` |
+| Desktop sidebar (admin & portal — chrome tokens since DS04) | `rgba(255,255,255,.55)` | `rgba(28,28,30,.50)`, `CHROME_BLUR` | `src/themeTokens.ts` via `sidebarGlassSx` in `src/components/Layout.tsx` + `src/portal/PortalLayout.tsx` |
 | Tooltip | `rgba(255,255,255,0.92)` | `rgba(28,28,30,0.92)`, `blur(40px) saturate(180%)`, noise | `src/theme.ts:461-481` |
 | Snackbar | `rgba(255,255,255,0.88)` | `rgba(28,28,30,0.88)`, `blur(40px) saturate(180%)` | `src/theme.ts:495-509` |
 | Modal backdrop | `rgba(0,0,0,0.20)` | `rgba(0,0,0,0.50)` | `src/theme.ts:253-257` |
 | Settings section/sidebar Paper glass (tier‑1 since DS03) | `TIER1_BLUR` mode split on `Paper variant="outlined"` | | `src/pages/Settings.tsx` renderSection + side-nav Paper |
 | Settings sticky header (tier‑2 since DS03) | `TIER2_BG` + `TIER2_BLUR` (light `rgba(255,255,255,0.88)`) | dark `rgba(28,28,30,0.82)` | `src/pages/Settings.tsx` sticky header (its light shadow stays navy → §5-C2/DS04) |
-| Login hero card | light `rgba(255,255,255,0.62)` / dark `rgba(11,13,25,0.55)`, `CHROME_BLUR` (since DS03), radius `24px` | | `src/pages/Login.tsx:150-185` (dark tint legacy navy → §5-C2) |
+| Login hero card | light `rgba(255,255,255,0.62)` / dark `rgba(28,28,30,0.55)` (neutralized DS04), `CHROME_BLUR` (since DS03), radius `24px` | | `src/pages/Login.tsx:150-185` |
 
 ### 2.3 Color — component-state tints (the alpha-tint vocabulary)
 
@@ -273,9 +273,9 @@ accent `#0071e3` (`src/components/StatCard.tsx:6`).
 
 | Token | Light | Dark | Source |
 |---|---|---|---|
-| Tooltip bg | `rgba(255,255,255,0.88)` | `rgba(14,16,32,0.88)` | `src/pages/Dashboard.tsx:150-154`, `src/portal/dailyTrend.ts:18-22`, `src/portal/monthlyTrend.ts:19-23` (dark value + border/text are legacy navy → §5-C2) |
-| Tooltip border | `rgba(200,210,255,0.55)` | `rgba(255,255,255,0.14)` | same lines |
-| Tooltip text | `#334155` | `#e2e8f0` | same lines |
+| Tooltip bg (via `chartTooltip(theme)` since DS04/D4) | `rgba(255,255,255,0.88)` | `rgba(28,28,30,0.92)` | `src/components/chartTooltip.ts` — consumed by Dashboard + dailyTrend + monthlyTrend (§5-C2/G4 resolved) |
+| Tooltip border | `rgba(0,0,0,0.05)` | `rgba(255,255,255,0.14)` | `src/components/chartTooltip.ts` |
+| Tooltip text | `theme.palette.text.primary` (both modes) | | `src/components/chartTooltip.ts` |
 | Chart font | `"Vazirmatn, sans-serif"` | | `src/pages/Dashboard.tsx:32`, `src/portal/dailyTrend.ts:5`, `src/portal/monthlyTrend.ts:5` |
 | Axis label color / size | `theme.palette.text.secondary`, 11px (9px compact) | | `src/pages/Dashboard.tsx:183,190`, `src/portal/dailyTrend.ts:41,49` |
 | Axis line | `alpha(text.secondary, 0.25)` | | `src/pages/Dashboard.tsx:181` |
@@ -379,7 +379,7 @@ The composite glass shadows (ring + depth + specular rim):
 | Alert rim | `inset 0 1px 0 rgba(255,255,255,0.90)` | `inset 0 1px 0 rgba(255,255,255,0.06)` | `src/theme.ts:489-491` |
 | Contained-primary button | `0 4px 14px alpha(primary,0.40)`; hover `0 6px 20px alpha(primary,0.55)` | same | `src/theme.ts:349-352` |
 | Tabs indicator glow | `0 0 8px 1px alpha(primary,0.50)` | same | `src/theme.ts:455` |
-| Nav item selected | `inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(30,40,100,.18)` (light; navy tint → §5-C2) | `inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)` | `src/components/Layout.tsx:82-84`, `src/portal/PortalLayout.tsx:71-73` |
+| Nav item selected | `inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(0,0,0,.18)` (neutralized DS04) | `inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)` | `src/components/Layout.tsx:82-84`, `src/portal/PortalLayout.tsx:71-73` |
 | Nav accent bar glow | `0 0 8px 2px alpha(primary,0.42)` | same | `src/components/Layout.tsx:98` |
 | Icon chip selected | `0 0 0 1px alpha(c,0.50), 0 4px 12px -4px alpha(c,0.55), inset 0 1px 0 rgba(255,255,255,.32)`; resting `inset 0 1px 0 rgba(255,255,255,.18)` | same | `src/components/Layout.tsx:188-194` |
 | Logo tile | `0 6px 18px -6px rgba(0,113,227,.55), inset 0 1.5px 0 rgba(255,255,255,.40)` | same | `src/components/Layout.tsx:145-148`, `src/pages/Login.tsx:408`, `src/portal/PortalLayout.tsx:115` |
@@ -387,10 +387,10 @@ The composite glass shadows (ring + depth + specular rim):
 | StatCard hover | `0 10px 28px -12px alpha(accent,0.45)` light / `0 8px 26px -10px alpha(accent,0.5)` dark | | `src/components/StatCard.tsx:18-20` |
 | SegmentedTabs selected | `inset 0 1px 0 rgba(255,255,255,.92)` + `0 2px 10px -4px alpha(primary,.30)` | `inset 0 1px 0 rgba(255,255,255,.16)` + `0 2px 10px -4px alpha(primary,.45)` | `src/components/SegmentedTabs.tsx:69-74` |
 | Captcha box / refresh button (login) | box bg `rgba(255,255,255,0.92)` both modes, border `rgba(255,255,255,.80)`, rim `inset 0 1px 0 rgba(255,255,255,.96)`; refresh border `rgba(255,255,255,.72)`, bg `rgba(255,255,255,.42)` → hover `rgba(255,255,255,.70)` | refresh border `rgba(255,255,255,.12)`, box border `rgba(255,255,255,.14)`, bg `rgba(255,255,255,.04)` → hover `rgba(255,255,255,.08)` | `src/pages/Login.tsx:262-314` |
-| Login hero card | light `0 32px 80px -24px rgba(30,40,100,.26), inset 0 1.5px 0 rgba(255,255,255,.98), inset 0 -1px 0 rgba(0,0,0,.04), 0 0 0 0.5px rgba(200,210,255,.35)`; dark `0 32px 80px -24px rgba(0,0,0,.88), inset 0 1.5px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(0,0,0,.18), 0 0 0 0.5px rgba(255,255,255,.07)` | | `src/pages/Login.tsx:169-182` (navy tints → §5-C2) |
-| Settings header | light `0 8px 24px -16px rgba(31,38,80,.22)` / dark `0 8px 24px -14px rgba(0,0,0,.65)` | | `src/pages/Settings.tsx:608-609` (navy tint → §5-C2) |
+| Login hero card | light `0 32px 80px -24px rgba(0,0,0,.26), inset 0 1.5px 0 rgba(255,255,255,.98), inset 0 -1px 0 rgba(0,0,0,.04), 0 0 0 0.5px rgba(0,0,0,0.08)` (neutralized DS04); dark `0 32px 80px -24px rgba(0,0,0,.88), inset 0 1.5px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(0,0,0,.18), 0 0 0 0.5px rgba(255,255,255,.07)` | | `src/pages/Login.tsx:169-182` |
+| Settings header | light `0 8px 24px -16px rgba(0,0,0,.22)` (neutralized DS04) / dark `0 8px 24px -14px rgba(0,0,0,.65)` | | `src/pages/Settings.tsx` sticky header |
 | Sidebar inner edge | light `inset -1px 0 0 rgba(255,255,255,.60)` / dark `inset -1px 0 0 rgba(255,255,255,.05)` | | `src/components/Layout.tsx:250-252` |
-| Login illustration | `filter: drop-shadow(0 28px 30px rgba(35,69,108,.14))` | | `src/pages/Login.tsx:431` (navy tint → §5-C2) |
+| Login illustration | `filter: drop-shadow(0 28px 30px rgba(0,0,0,.14))` (neutralized DS04) | | `src/pages/Login.tsx:431` |
 
 MUI elevation shadows are suppressed where glass applies (`disableElevation` buttons
 `src/theme.ts:338`, `Paper backgroundImage: none` + `elevation0` `src/theme.ts:228-233`,
@@ -422,8 +422,8 @@ Special cases: light-mode "white borders" on chrome — sidebar
 underline `rgba(0,113,227,0.14)` light / `rgba(41,151,255,0.18)` dark
 (`src/theme.ts:398`); mobile tree emphasis `borderInlineStartWidth: 3` in
 `primary.main` (`ResellerMobileCard.tsx:36-37`); notification edge `3px solid` severity
-color (`NotificationsBell.tsx:68`); QR border `rgba(120,130,170,0.28)`
-(`AccountBackup.tsx:262`, legacy navy → §5-C2); resp-table inner row divider
+color (`NotificationsBell.tsx:68`); QR border `rgba(0,0,0,0.12)`
+(`AccountBackup.tsx:262`, neutralized DS04); resp-table inner row divider
 `rgba(0,0,0|255,255,255,0.06)` (`src/theme.ts:195`).
 
 ### 2.12 Z-index
@@ -917,23 +917,17 @@ Phase‑2 work-list.
   says "no colored blobs … one very faint brand glow" (`src/theme.ts:89-93`); (c) the
   portal implementation is the newer copy of the same component. Note: `#8b5cf6` as the
   *Tools nav categorical color* (§2.4) is NOT a conflict — categorical ≠ ambient.
-- **C2 — Legacy navy palette remnants (pre-Apple theme).**
-  Variants: ECharts dark tooltip `rgba(14,16,32,0.88)` + text `#e2e8f0`/`#334155` +
-  light border `rgba(200,210,255,0.55)` (`src/pages/Dashboard.tsx:150-154`,
-  `src/portal/dailyTrend.ts:18-22`, `src/portal/monthlyTrend.ts:19-23`); login card
-  dark `rgba(11,13,25,0.55)` (`src/pages/Login.tsx:160`); sidebar dark
-  `rgba(9,11,20,.50)` (`src/components/Layout.tsx:248`,
-  `src/portal/PortalLayout.tsx:189`); Settings header dark `rgba(22,26,43,.62)`
-  (`src/pages/Settings.tsx:604` — *already removed by DS03's tier‑2 header
-  conversion; DS04 skips this line*); navy-tinted light shadows `rgba(30,40,100,.18/.26)`
-  (`src/components/Layout.tsx:84`, `src/pages/Login.tsx:178`),
-  `rgba(31,38,80,.22)` (`src/pages/Settings.tsx:609`), `rgba(35,69,108,.14)`
-  (`src/pages/Login.tsx:431`); QR border `rgba(120,130,170,0.28)`
-  (`src/pages/AccountBackup.tsx:262`).
-  **Canonical:** the `#1c1c1e`-family greys of §2.2 for dark surfaces (tooltip ≙
-  Tooltip token `rgba(28,28,30,0.92)`), theme `text` tiers for chart text, and
-  neutral-black shadow tints. Rationale: (a) theme.ts defines the equivalent tokens;
-  the navy values predate the Apple rebuild.
+- **C2 — Legacy navy palette remnants (pre-Apple theme).** **RESOLVED `v1.100.6`
+  (DS03 removed the Settings-header bg; DS04 swept everything else).** The
+  navy-kill re-grep (`14,16,32 | 11,13,25 | 9,11,20 | 22,26,43 | 30,40,100 |
+  31,38,80 | 35,69,108 | 120,130,170 | 200,210,255 | #e2e8f0 | #334155`) returns **0**
+  in `src/`. Applied targets: chart tooltips → the shared `chartTooltip(theme)`
+  helper (glass Tooltip surface + `text.primary`, `src/components/chartTooltip.ts`);
+  login dark card → `rgba(28,28,30,0.55)`; both desktop sidebars → the chrome tokens
+  (`CHROME_SIDEBAR_BG.dark = rgba(28,28,30,.50)`); light shadows/ring/drop-shadow →
+  neutral black at the same alphas (`0,0,0,.18/.26/.22/.14` + ring `0,0,0,0.08`);
+  QR border → `rgba(0,0,0,0.12)`. Original variants and their sites are preserved in
+  the v1.1 history of this entry (git).
 - **C3 — Two mobile table→card mechanisms.**
   Variants: global `resp-table` CSS + auto labels (`src/theme.ts:176-204`,
   `src/responsive.ts:19-51`) vs explicit `isMobile` card branches with `nestedCardBg`
@@ -958,7 +952,7 @@ Phase‑2 work-list.
   Rationale: (a) theme wins generally; the deviation is confined to one pre-auth
   screen and visually intentional (M58 redesign).
 - **C5 — Nine blur/saturate recipes for one material.** **RESOLVED (DS01 `v1.100.5`
-  + DS03, release pending).** The canonical trio — tier‑1 mode split, tier‑2
+  + DS03 `v1.100.6`).** The canonical trio — tier‑1 mode split, tier‑2
   `blur(40px) saturate(180%)`, chrome `blur(48px) saturate(220%) brightness(1.03)` —
   is now the only set in `src/` (recipe census: 3 distinct recipes; drift re-grep 0),
   exported as `TIER1_BLUR`/`TIER2_BLUR`/`CHROME_BLUR` in `src/themeTokens.ts` and
@@ -1121,8 +1115,10 @@ Phase 1):*
   are set, e.g. `src/pages/Setup.tsx:111`).
 - **G3 — Portal has no BottomNav** on phones (admin does); portal phone users only get
   the drawer (`src/portal/PortalLayout.tsx:205-216`).
-- **G4 — No shared ECharts theme:** each chart file re-declares font/tooltip/axis
-  (three copies today, §2.6).
+- **G4 — No shared ECharts theme.** **RESOLVED `v1.100.6` (DS04, per approved D4):**
+  `src/components/chartTooltip.ts` now provides the shared tooltip surface consumed
+  by all three chart builders; axis/font declarations remain per-builder by design
+  (they already read the theme directly).
 - **G5 — No z-index scale** beyond MUI defaults + the ad-hoc 0/1/2/3 layers (§2.12).
 - **G6 — No written type ramp:** the 500–850 weight ladder and the px size vocabulary
   (§2.7) exist only by convention; intermediate weights (650/750/850) render only if

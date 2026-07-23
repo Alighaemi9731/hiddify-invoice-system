@@ -607,7 +607,7 @@ export default function Settings() {
           WebkitBackdropFilter: TIER2_BLUR,
           border: "1px solid", borderColor: "divider",
           boxShadow: (t) => t.palette.mode === "dark"
-            ? "0 8px 24px -14px rgba(0,0,0,.65)" : "0 8px 24px -16px rgba(31,38,80,.22)",
+            ? "0 8px 24px -14px rgba(0,0,0,.65)" : "0 8px 24px -16px rgba(0,0,0,.22)",
         }}>
         <Box>
           <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>تنظیمات سامانه</Typography>

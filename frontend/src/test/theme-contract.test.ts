@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PaletteMode } from "@mui/material";
 import { makeTheme } from "../theme";
+import { chartTooltip } from "../components/chartTooltip";
 import {
   CHROME_BLUR,
   CHROME_SIDEBAR_BG,
@@ -105,6 +106,24 @@ describe("semantic status colors come from the palette (C8/DS02)", () => {
     expect(colors.frozen).toBe(p.warning.main);
     expect(colors.muted).toBe(p.text.secondary);
     expect(colors.enforced).toBe(p.error.main);
+  });
+});
+
+describe("chart tooltips use the glass surface + theme text (C2/DS04, D4)", () => {
+  it("light mode", () => {
+    const t = makeTheme("light");
+    const tip = chartTooltip(t);
+    expect(tip.backgroundColor).toBe("rgba(255,255,255,0.88)");
+    expect(tip.borderColor).toBe("rgba(0,0,0,0.05)");
+    expect(tip.textStyle.color).toBe(t.palette.text.primary);
+    expect(tip.textStyle.fontFamily).toBe("Vazirmatn, sans-serif");
+  });
+  it("dark mode uses the neutral #1c1c1e-family surface, not legacy navy", () => {
+    const t = makeTheme("dark");
+    const tip = chartTooltip(t);
+    expect(tip.backgroundColor).toBe("rgba(28,28,30,0.92)");
+    expect(tip.borderColor).toBe("rgba(255,255,255,0.14)");
+    expect(tip.textStyle.color).toBe(t.palette.text.primary);
   });
 });
 

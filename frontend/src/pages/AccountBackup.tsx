@@ -259,7 +259,7 @@ export default function AccountBackup() {
               </Typography>
               <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
                 <img src={setup.qr} alt="کد QR تأیید دو مرحله‌ای" width={170} height={170}
-                  style={{ border: "1px solid rgba(120,130,170,0.28)", borderRadius: 8 }} />
+                  style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8 }} />
                 <Box>
                   <Typography variant="caption" color="text.secondary">کلید ورود دستی:</Typography>
                   <Typography dir="ltr" sx={{ fontFamily: "monospace", wordBreak: "break-all", mb: 2 }}>{setup.secret}</Typography>

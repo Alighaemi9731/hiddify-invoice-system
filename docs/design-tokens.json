@@ -134,7 +134,7 @@
     "chrome": {
       "blur": "blur(48px) saturate(220%) brightness(1.03)",
       "sidebarBg": { "light": "rgba(255,255,255,.55)", "dark": "rgba(9,11,20,.50)" },
-      "sidebarBgNote": "Dark tint is legacy navy (§5-C2); target family is rgba(28,28,30,…).",
+      "sidebarBgNote": "§5-C2 resolved (DS04): both desktop sidebars consume CHROME_SIDEBAR_BG/BORDER/BLUR from src/themeTokens.ts; dark tint is the neutral rgba(28,28,30,.50).",
       "sidebarBorder": { "light": "rgba(255,255,255,.75)", "dark": "rgba(255,255,255,.10)" },
       "appBarBg": { "light": "rgba(255,255,255,0.80)", "dark": "rgba(0,0,0,0.60)" },
       "appBarBlur": "blur(40px) saturate(180%)",
@@ -322,8 +322,8 @@
     "statCardHover": { "light": "0 10px 28px -12px alpha(accent,0.45)", "dark": "0 8px 26px -10px alpha(accent,0.5)", "source": "src/components/StatCard.tsx:18-20" },
     "navItemSelected": {
       "dark": "inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)",
-      "lightRim": "inset 0 1px 0 rgba(255,255,255,.96)",
-      "note": "light depth tint rgba(30,40,100,.18) is legacy navy → §5-C2; neutral target set in DS04",
+      "light": "inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(0,0,0,.18)",
+      "note": "light depth neutralized by DS04 (§5-C2 resolved)",
       "source": "src/components/Layout.tsx:82-84"
     },
     "iconChip": {
@@ -334,8 +334,9 @@
     "portalEntryLogo": { "value": "0 8px 22px -8px rgba(0,113,227,.6)", "source": "src/portal/PortalEntry.tsx:137" },
     "settingsHeader": {
       "dark": "0 8px 24px -14px rgba(0,0,0,.65)",
-      "note": "light value rgba(31,38,80,.22) is legacy navy → §5-C2",
-      "source": "src/pages/Settings.tsx:608-609"
+      "light": "0 8px 24px -16px rgba(0,0,0,.22)",
+      "note": "light value neutralized by DS04 (§5-C2 resolved)",
+      "source": "src/pages/Settings.tsx sticky header"
     },
     "sidebarInnerEdge": { "light": "inset -1px 0 0 rgba(255,255,255,.60)", "dark": "inset -1px 0 0 rgba(255,255,255,.05)", "source": "src/components/Layout.tsx:250-252" }
   },
@@ -400,9 +401,11 @@
     "barMaxWidth": { "daily": 18, "compact": 12, "monthly": 34, "source": "src/pages/Dashboard.tsx:198; src/portal/dailyTrend.ts:56; src/portal/monthlyTrend.ts:55" },
     "donut": { "radius": ["66%", "84%"], "itemBorderRadius": 7, "itemBorderWidth": 3, "itemBorderColor": "background.paper", "source": "src/pages/Dashboard.tsx:230-240" },
     "tooltip": {
-      "canonical": { "bg": { "light": "rgba(255,255,255,0.92)", "dark": "rgba(28,28,30,0.92)" }, "textColor": "theme text tiers" },
-      "note": "Canonical = the glass Tooltip token per §5-C2; charts currently ship legacy navy values (rgba(14,16,32,0.88), #e2e8f0/#334155, rgba(200,210,255,0.55)).",
-      "source": "canonical src/theme.ts:471-479; current src/pages/Dashboard.tsx:150-154"
+      "bg": { "light": "rgba(255,255,255,0.88)", "dark": "rgba(28,28,30,0.92)" },
+      "border": { "light": "rgba(0,0,0,0.05)", "dark": "rgba(255,255,255,0.14)" },
+      "textColor": "theme.palette.text.primary (both modes)",
+      "note": "§5-C2/G4 RESOLVED (DS04, D4): shared chartTooltip(theme) helper consumed by all three chart builders; legacy navy values removed.",
+      "source": "src/components/chartTooltip.ts"
     },
     "htmlMeterBars": { "trackHeightPx": "8-9", "trackColor": "alpha(text.secondary, 0.11)", "radius": 99, "fill": "linear-gradient(90deg, alpha(color,0.72), color)", "source": "src/pages/Dashboard.tsx:390-411,553-570" }
   },
@@ -428,7 +431,7 @@
     "manifest": { "backgroundColor": "#000000", "themeColor": "#0071e3", "dir": "rtl", "display": "standalone", "source": "public/site.webmanifest:6-10" },
     "metaThemeColor": { "light": "#f5f5f7", "dark": "#000000", "source": "index.html:18-20; src/main.tsx:24-28" },
     "favicon": { "value": "receipt glyph, rx14/64 tile, gradient #5ab5ff→#0064d2, gloss rgba(255,255,255,0.28)→0, paper rgba(255,255,255,0.95), lines #0071e3 @ 0.7/0.35, badge #0071e3", "source": "public/favicon.svg" },
-    "loginIllustration": { "value": "public/login.svg — licensed artwork; internal palette excluded from tokens; only contract is drop-shadow(0 28px 30px rgba(35,69,108,.14))", "source": "src/pages/Login.tsx:431" }
+    "loginIllustration": { "value": "public/login.svg — licensed artwork; internal palette excluded from tokens; only contract is drop-shadow(0 28px 30px rgba(0,0,0,.14)) (neutralized DS04)", "source": "src/pages/Login.tsx:431" }
   },
   "dataDisplayRules": {
     "displayDates": { "value": "Jalali via toLocaleDateString(fa-IR)", "source": "src/format.ts:15-22" },

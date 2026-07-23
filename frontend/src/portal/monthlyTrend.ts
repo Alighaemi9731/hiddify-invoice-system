@@ -1,5 +1,6 @@
 import type { Theme } from "@mui/material/styles";
 import { alpha } from "@mui/material/styles";
+import { chartTooltip } from "../components/chartTooltip";
 import { fmtNum, fmtToman } from "../format";
 
 const FONT = "Vazirmatn, sans-serif";
@@ -16,11 +17,7 @@ export function monthlyTrendOption(theme: Theme, rows: MonthlyRow[]) {
   const fmtAxisToman = (v: number) =>
     v >= 1_000_000 ? `${fmtNum(Math.round(v / 1_000_000))}م`
       : v >= 1_000 ? `${fmtNum(Math.round(v / 1_000))}هزار` : fmtNum(v);
-  const tooltip = {
-    backgroundColor: isDark ? "rgba(14,16,32,0.88)" : "rgba(255,255,255,0.88)",
-    borderColor: isDark ? "rgba(255,255,255,0.14)" : "rgba(200,210,255,0.55)",
-    textStyle: { color: isDark ? "#e2e8f0" : "#334155", fontFamily: FONT },
-  };
+  const tooltip = chartTooltip(theme);
   return {
     textStyle: { fontFamily: FONT },
     grid: { left: 4, right: 10, top: 18, bottom: 2, containLabel: true },

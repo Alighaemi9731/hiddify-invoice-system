@@ -158,7 +158,7 @@ export default function Login() {
             backdropFilter: CHROME_BLUR,
             WebkitBackdropFilter: CHROME_BLUR,
             backgroundColor: (t) =>
-              t.palette.mode === "dark" ? "rgba(11,13,25,0.55)" : "rgba(255,255,255,0.62)",
+              t.palette.mode === "dark" ? "rgba(28,28,30,0.55)" : "rgba(255,255,255,0.62)",
             backgroundImage: (t) =>
               t.palette.mode === "dark"
                 ? "linear-gradient(175deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,.01) 40%,rgba(0,0,0,.06) 100%)"
@@ -176,10 +176,10 @@ export default function Login() {
                     "0 0 0 0.5px rgba(255,255,255,.07)",
                   ].join(", ")
                 : [
-                    "0 32px 80px -24px rgba(30,40,100,.26)",
+                    "0 32px 80px -24px rgba(0,0,0,.26)",
                     "inset 0 1.5px 0 rgba(255,255,255,.98)",
                     "inset 0 -1px 0 rgba(0,0,0,.04)",
-                    "0 0 0 0.5px rgba(200,210,255,.35)",
+                    "0 0 0 0.5px rgba(0,0,0,0.08)",
                   ].join(", "),
             p: { xs: 3, sm: 4.5 },
             animation: "glassIn .55s cubic-bezier(.22,1,.36,1) both",
@@ -429,7 +429,7 @@ export default function Login() {
             top: "55%",
             transform: "translateY(-50%)",
             objectFit: "contain",
-            filter: "drop-shadow(0 28px 30px rgba(35,69,108,.14))",
+            filter: "drop-shadow(0 28px 30px rgba(0,0,0,.14))",
           }}
         />
       </Box>

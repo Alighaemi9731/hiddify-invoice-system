@@ -21,6 +21,7 @@ import DarkModeIcon from "@mui/icons-material/esm/DarkModeOutlined";
 import LightModeIcon from "@mui/icons-material/esm/LightModeOutlined";
 import { usePortalAuth } from "./PortalAuthContext";
 import { useColorMode } from "../colorMode";
+import { CHROME_BLUR, CHROME_SIDEBAR_BG, CHROME_SIDEBAR_BORDER } from "../themeTokens";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { PageTransition } from "../components/motion";
 import NotificationsBell from "./NotificationsBell";
@@ -70,7 +71,7 @@ export default function PortalLayout() {
       backgroundColor: isDark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.60)",
       boxShadow: isDark
         ? "inset 0 1px 0 rgba(255,255,255,.14), 0 2px 12px -6px rgba(0,0,0,.45)"
-        : "inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(30,40,100,.18)",
+        : "inset 0 1px 0 rgba(255,255,255,.96), 0 2px 12px -6px rgba(0,0,0,.18)",
       border: isDark ? "1px solid rgba(255,255,255,.10)" : "1px solid rgba(255,255,255,.78)",
       "&::before": {
         content: '""',
@@ -184,10 +185,10 @@ export default function PortalLayout() {
   );
 
   const sidebarGlassSx = {
-    backdropFilter: "blur(48px) saturate(220%) brightness(1.03)",
-    WebkitBackdropFilter: "blur(48px) saturate(220%) brightness(1.03)",
-    backgroundColor: isDark ? "rgba(9,11,20,.50)" : "rgba(255,255,255,.55)",
-    borderInlineStart: `1px solid ${isDark ? "rgba(255,255,255,.10)" : "rgba(255,255,255,.75)"}`,
+    backdropFilter: CHROME_BLUR,
+    WebkitBackdropFilter: CHROME_BLUR,
+    backgroundColor: isDark ? CHROME_SIDEBAR_BG.dark : CHROME_SIDEBAR_BG.light,
+    borderInlineStart: `1px solid ${isDark ? CHROME_SIDEBAR_BORDER.dark : CHROME_SIDEBAR_BORDER.light}`,
   };
 
   return (

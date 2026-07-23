@@ -25,6 +25,7 @@ import { getDashboard, getSalesByDay } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
+import { chartTooltip } from "../components/chartTooltip";
 import { invoiceStatusColor } from "../themeTokens";
 import { CountUp, Reveal } from "../components/motion";
 import { fmtGb, fmtNum, fmtToman, INVOICE_STATUS_FA } from "../format";
@@ -142,11 +143,7 @@ export default function Dashboard() {
   const maxPanelSales = Math.max(...panelData.map((item) => item.amount_toman), 1);
   const maxResellerSales = Math.max(...topResellers.map((item) => item.amount_toman), 1);
 
-  const tooltip = {
-    backgroundColor: isDark ? "rgba(14,16,32,0.88)" : "rgba(255,255,255,0.88)",
-    borderColor: isDark ? "rgba(255,255,255,0.14)" : "rgba(200,210,255,0.55)",
-    textStyle: { color: isDark ? "#e2e8f0" : "#334155", fontFamily: FONT },
-  };
+  const tooltip = chartTooltip(theme);
   // Compact Toman for the y-axis (full amount stays in the tooltip).
   const fmtAxisToman = (v: number) =>
     v >= 1_000_000 ? `${fmtNum(Math.round(v / 1_000_000))}م`
