@@ -5,6 +5,8 @@ import {
   CHROME_BLUR,
   CHROME_SIDEBAR_BG,
   CHROME_SIDEBAR_BORDER,
+  TIER1_BLUR,
+  TIER2_BG,
   TIER2_BLUR,
   invoiceStatusColor,
   statusPillColors,
@@ -28,6 +30,23 @@ describe("themeTokens spec pinning", () => {
     expect(CHROME_SIDEBAR_BG).toEqual({ light: "rgba(255,255,255,.55)", dark: "rgba(28,28,30,.50)" });
     expect(CHROME_SIDEBAR_BORDER).toEqual({ light: "rgba(255,255,255,.75)", dark: "rgba(255,255,255,.10)" });
   });
+
+  it("matches tier-1 blur and tier-2 bg (DS03)", () => {
+    expect(TIER1_BLUR).toEqual({ light: "blur(40px) saturate(180%)", dark: "blur(20px) saturate(140%)" });
+    expect(TIER2_BG).toEqual({ light: "rgba(255,255,255,0.88)", dark: "rgba(28,28,30,0.82)" });
+  });
+});
+
+describe("theme consumes the tier tokens (DS03)", () => {
+  for (const mode of MODES) {
+    it(`tier-1 Card blur and tier-2 Menu surface in ${mode} mode`, () => {
+      const card = overrides(mode, "MuiCard", "root");
+      expect(card.backdropFilter).toBe(TIER1_BLUR[mode]);
+      const menu = overrides(mode, "MuiMenu", "paper");
+      expect(menu.backgroundColor).toBe(TIER2_BG[mode]);
+      expect(menu.backdropFilter).toBe(TIER2_BLUR);
+    });
+  }
 });
 
 describe("MuiDrawer paper = chrome glass (C16)", () => {

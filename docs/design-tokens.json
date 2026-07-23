@@ -346,8 +346,8 @@
       "tier2": "blur(40px) saturate(180%)",
       "chrome": "blur(48px) saturate(220%) brightness(1.03)"
     },
-    "note": "All other in-code recipes (28/200/1.02, 48/220/1.04, 20/180, 16/180, 14/180, 12/160-180) are drift → §5-C5.",
-    "source": "src/theme.ts:29,33; src/components/Layout.tsx:246"
+    "note": "§5-C5 RESOLVED (DS01+DS03): the trio is the ONLY set in code, exported as TIER1_BLUR/TIER2_BLUR/CHROME_BLUR (+ TIER2_BG) in src/themeTokens.ts and pinned by src/test/theme-contract.test.ts. Historical drift removed: 28/200/1.02, 48/220/1.04, 20/180, 16/180, 14/180, 12/160-180.",
+    "source": "src/themeTokens.ts; src/theme.ts; src/components/Layout.tsx"
   },
   "motion": {
     "easeStandard": { "value": "cubic-bezier(.22,1,.36,1)", "source": "src/components/motion.tsx:5" },

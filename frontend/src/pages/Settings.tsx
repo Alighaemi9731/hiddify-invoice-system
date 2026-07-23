@@ -5,6 +5,7 @@ import {
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
+import { TIER1_BLUR, TIER2_BG, TIER2_BLUR } from "../themeTokens";
 import SmartToyIcon from "@mui/icons-material/esm/SmartToy";
 import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import SellIcon from "@mui/icons-material/esm/Sell";
@@ -503,8 +504,8 @@ export default function Settings() {
     return (
       <Paper variant="outlined" sx={{
         p: { xs: 2, sm: 3 },
-        backdropFilter: "blur(28px) saturate(200%) brightness(1.02)",
-        WebkitBackdropFilter: "blur(28px) saturate(200%) brightness(1.02)",
+        backdropFilter: (t) => t.palette.mode === "dark" ? TIER1_BLUR.dark : TIER1_BLUR.light,
+        WebkitBackdropFilter: (t) => t.palette.mode === "dark" ? TIER1_BLUR.dark : TIER1_BLUR.light,
       }}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
           {sec.icon}
@@ -600,10 +601,10 @@ export default function Settings() {
         sx={{
           position: "sticky", top: 0, zIndex: 3, mb: 2, py: 1.25, px: 2, gap: 1.5, flexWrap: "wrap",
           borderRadius: 3,
-          // frosted glass (shows the ambient colour through) instead of a flat grey rectangle
-          bgcolor: (t) => t.palette.mode === "dark" ? "rgba(22,26,43,.62)" : "rgba(255,255,255,.58)",
-          backdropFilter: "saturate(180%) blur(14px)",
-          WebkitBackdropFilter: "saturate(180%) blur(14px)",
+          // frosted tier-2 glass (shows the ambient colour through) instead of a flat grey rectangle
+          bgcolor: (t) => t.palette.mode === "dark" ? TIER2_BG.dark : TIER2_BG.light,
+          backdropFilter: TIER2_BLUR,
+          WebkitBackdropFilter: TIER2_BLUR,
           border: "1px solid", borderColor: "divider",
           boxShadow: (t) => t.palette.mode === "dark"
             ? "0 8px 24px -14px rgba(0,0,0,.65)" : "0 8px 24px -16px rgba(31,38,80,.22)",
@@ -620,7 +621,7 @@ export default function Settings() {
       </Stack>
 
       <Box sx={{ display: "flex", flexDirection: compact ? "column" : "row", gap: 2, alignItems: "flex-start" }}>
-        <Paper variant="outlined" sx={{ flexShrink: 0, width: compact ? "100%" : 240, position: compact ? "static" : "sticky", top: 80, overflow: "hidden", backdropFilter: "blur(28px) saturate(200%) brightness(1.02)", WebkitBackdropFilter: "blur(28px) saturate(200%) brightness(1.02)" }}>
+        <Paper variant="outlined" sx={{ flexShrink: 0, width: compact ? "100%" : 240, position: compact ? "static" : "sticky", top: 80, overflow: "hidden", backdropFilter: (t) => t.palette.mode === "dark" ? TIER1_BLUR.dark : TIER1_BLUR.light, WebkitBackdropFilter: (t) => t.palette.mode === "dark" ? TIER1_BLUR.dark : TIER1_BLUR.light }}>
           <Tabs
             orientation={compact ? "horizontal" : "vertical"}
             variant={compact ? "scrollable" : "standard"}

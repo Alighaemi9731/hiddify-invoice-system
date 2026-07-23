@@ -1,6 +1,13 @@
 import type { PaletteMode } from "@mui/material";
 import { createTheme, alpha } from "@mui/material/styles";
-import { CHROME_BLUR, CHROME_SIDEBAR_BG, CHROME_SIDEBAR_BORDER, TIER2_BLUR } from "./themeTokens";
+import {
+  CHROME_BLUR,
+  CHROME_SIDEBAR_BG,
+  CHROME_SIDEBAR_BORDER,
+  TIER1_BLUR,
+  TIER2_BG,
+  TIER2_BLUR,
+} from "./themeTokens";
 
 // Minimal frosted-noise SVG — micro-texture on glass surfaces.
 const NOISE =
@@ -27,10 +34,10 @@ export function makeTheme(mode: PaletteMode) {
   // top specular rim; sidebar/AppBar/dialogs keep the FULL translucent glass (separate tokens).
   const glassBg     = isDark ? "rgba(28,28,30,0.90)" : "rgba(255,255,255,0.78)";
   const glassBorder = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.05)";
-  const glassBlur   = isDark ? "blur(20px) saturate(140%)" : "blur(40px) saturate(180%)";
+  const glassBlur   = isDark ? TIER1_BLUR.dark : TIER1_BLUR.light;
 
   // Tier-2: floating overlays (Apple nav/dialog style)
-  const floatBg   = isDark ? "rgba(28,28,30,0.82)"  : "rgba(255,255,255,0.88)";
+  const floatBg   = isDark ? TIER2_BG.dark : TIER2_BG.light;
   const floatBlur = TIER2_BLUR;
 
   // Apple uses minimal shadows — border defines the element, not a heavy drop
@@ -186,8 +193,8 @@ export function makeTheme(mode: PaletteMode) {
               border: `1px solid ${glassBorder}`,
               // Near-opaque in dark (same haze fix as the explicit mobile row-cards); reduced blur.
               backgroundColor: isDark ? "rgba(36,36,38,0.94)" : "rgba(255,255,255,0.72)",
-              backdropFilter: isDark ? "blur(20px) saturate(140%)" : "blur(40px) saturate(180%)",
-              WebkitBackdropFilter: isDark ? "blur(20px) saturate(140%)" : "blur(40px) saturate(180%)",
+              backdropFilter: isDark ? TIER1_BLUR.dark : TIER1_BLUR.light,
+              WebkitBackdropFilter: isDark ? TIER1_BLUR.dark : TIER1_BLUR.light,
             },
             ".resp-table td": {
               display: "flex", alignItems: "center", justifyContent: "space-between",

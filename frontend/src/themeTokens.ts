@@ -5,8 +5,21 @@
 // imports at most) so theme.ts and components can consume it freely.
 import type { Palette } from "@mui/material/styles";
 
+/** Tier-1 "content surface" blur — Cards, Accordions, resp-table row-cards, Settings
+ * papers. Dark mode deliberately blurs less (anti-haze, see theme.ts rationale). */
+export const TIER1_BLUR = {
+  light: "blur(40px) saturate(180%)",
+  dark: "blur(20px) saturate(140%)",
+} as const;
+
 /** Tier-2 "floating overlay" blur — Menu/Popover/Dialog/AppBar/Tooltip/Snackbar. */
 export const TIER2_BLUR = "blur(40px) saturate(180%)";
+
+/** Tier-2 "floating overlay" surface tint. */
+export const TIER2_BG = {
+  light: "rgba(255,255,255,0.88)",
+  dark: "rgba(28,28,30,0.82)",
+} as const;
 
 /** Chrome blur — desktop sidebars and (since DS01) the mobile Drawer. */
 export const CHROME_BLUR = "blur(48px) saturate(220%) brightness(1.03)";

@@ -155,9 +155,9 @@ tiers; `text.disabled` is MUI-derived (used e.g. `src/components/TelegramLink.ts
 | Tooltip | `rgba(255,255,255,0.92)` | `rgba(28,28,30,0.92)`, `blur(40px) saturate(180%)`, noise | `src/theme.ts:461-481` |
 | Snackbar | `rgba(255,255,255,0.88)` | `rgba(28,28,30,0.88)`, `blur(40px) saturate(180%)` | `src/theme.ts:495-509` |
 | Modal backdrop | `rgba(0,0,0,0.20)` | `rgba(0,0,0,0.50)` | `src/theme.ts:253-257` |
-| Settings section/sidebar Paper glass | `blur(28px) saturate(200%) brightness(1.02)` on `Paper variant="outlined"` | | `src/pages/Settings.tsx:504-508,623` |
-| Settings sticky header | `rgba(255,255,255,.58)` / dark `rgba(22,26,43,.62)`, `saturate(180%) blur(14px)` | | `src/pages/Settings.tsx:600-610` (dark tint is legacy navy → §5-C2) |
-| Login hero card | light `rgba(255,255,255,0.62)` / dark `rgba(11,13,25,0.55)`, `blur(48px) saturate(220%) brightness(1.04)`, radius `24px` | | `src/pages/Login.tsx:150-185` (dark tint legacy navy → §5-C2) |
+| Settings section/sidebar Paper glass (tier‑1 since DS03) | `TIER1_BLUR` mode split on `Paper variant="outlined"` | | `src/pages/Settings.tsx` renderSection + side-nav Paper |
+| Settings sticky header (tier‑2 since DS03) | `TIER2_BG` + `TIER2_BLUR` (light `rgba(255,255,255,0.88)`) | dark `rgba(28,28,30,0.82)` | `src/pages/Settings.tsx` sticky header (its light shadow stays navy → §5-C2/DS04) |
+| Login hero card | light `rgba(255,255,255,0.62)` / dark `rgba(11,13,25,0.55)`, `CHROME_BLUR` (since DS03), radius `24px` | | `src/pages/Login.tsx:150-185` (dark tint legacy navy → §5-C2) |
 
 ### 2.3 Color — component-state tints (the alpha-tint vocabulary)
 
@@ -398,18 +398,17 @@ AppBar `elevation={0}` `src/components/Layout.tsx:288`).
 
 ### 2.10 Blur / saturation tiers
 
+*(Rewritten by DS01/DS03 — §5-C5 resolved. The canonical trio is now the ONLY set in
+code, exported from `src/themeTokens.ts` and pinned by `src/test/theme-contract.test.ts`.)*
+
 | Tier | Recipe | Used by | Source |
 |---|---|---|---|
-| Chrome | `blur(48px) saturate(220%) brightness(1.03)` | desktop sidebars | `src/components/Layout.tsx:246`, `src/portal/PortalLayout.tsx:187` |
-| Hero | `blur(48px) saturate(220%) brightness(1.04)` | login card | `src/pages/Login.tsx:157` |
-| Tier‑2 / chrome-flat | `blur(40px) saturate(180%)` | Menu, Popover, Dialog, Drawer, AppBar, Tooltip, Alert, Snackbar, BottomNav | `src/theme.ts:33,261,273,469,485,498`, `src/components/BottomNav.tsx:38` |
-| Settings glass | `blur(28px) saturate(200%) brightness(1.02)` | Settings section + sidebar Paper | `src/pages/Settings.tsx:506,623` |
-| Tier‑1 dark | `blur(20px) saturate(140%)` | cards & resp-table row-cards (dark) | `src/theme.ts:29,188` |
-| Tier‑1 light | `blur(40px) saturate(180%)` | cards & resp-table row-cards (light) | `src/theme.ts:29,188` |
-| Nav selected *(Tab selected resolved to tier‑2 in `v1.100.5`)* | `blur(16px) saturate(180%)` | selected nav item (→ DS03) | `src/components/Layout.tsx:76-77` |
-| Small controls | `blur(16px) saturate(180%)`, `blur(12px) saturate(160%)`, `blur(12px) saturate(180%)`, `saturate(180%) blur(14px)` | captcha box, captcha refresh, SegmentedTabs, Settings header | `src/pages/Login.tsx:272,303`, `src/components/SegmentedTabs.tsx:34`, `src/pages/Settings.tsx:605` |
+| Chrome `CHROME_BLUR` | `blur(48px) saturate(220%) brightness(1.03)` | desktop sidebars, mobile Drawer (DS01), login hero card (DS03) | `src/themeTokens.ts`; `src/components/Layout.tsx`, `src/portal/PortalLayout.tsx`, `src/pages/Login.tsx` |
+| Tier‑2 `TIER2_BLUR` | `blur(40px) saturate(180%)` | Menu, Popover, Dialog, AppBar, Tooltip, Alert, Snackbar, BottomNav, selected Tab (DS01), selected nav item, SegmentedTabs, Settings sticky header, login captcha box + refresh (DS03) | `src/themeTokens.ts`; theme + component sites |
+| Tier‑1 `TIER1_BLUR` | light `blur(40px) saturate(180%)` / dark `blur(20px) saturate(140%)` | Cards, Accordions, resp-table row-cards, Settings section + side-nav Papers (DS03) | `src/themeTokens.ts`; `src/theme.ts` glassBlur + resp-table, `src/pages/Settings.tsx` |
 
-Nine distinct recipes for one material → §5-C5 designates the canonical set.
+Historical drift (removed): hero `…brightness(1.04)`, Settings `28/200/1.02` and
+`14/180`, nav/captcha `16/180`, SegmentedTabs `12/180`, refresh `12/160`, Tab `20/180`.
 Every `backdropFilter` is paired with `WebkitBackdropFilter`.
 
 ### 2.11 Borders & dividers
@@ -925,7 +924,8 @@ Phase‑2 work-list.
   dark `rgba(11,13,25,0.55)` (`src/pages/Login.tsx:160`); sidebar dark
   `rgba(9,11,20,.50)` (`src/components/Layout.tsx:248`,
   `src/portal/PortalLayout.tsx:189`); Settings header dark `rgba(22,26,43,.62)`
-  (`src/pages/Settings.tsx:604`); navy-tinted light shadows `rgba(30,40,100,.18/.26)`
+  (`src/pages/Settings.tsx:604` — *already removed by DS03's tier‑2 header
+  conversion; DS04 skips this line*); navy-tinted light shadows `rgba(30,40,100,.18/.26)`
   (`src/components/Layout.tsx:84`, `src/pages/Login.tsx:178`),
   `rgba(31,38,80,.22)` (`src/pages/Settings.tsx:609`), `rgba(35,69,108,.14)`
   (`src/pages/Login.tsx:431`); QR border `rgba(120,130,170,0.28)`
@@ -957,17 +957,17 @@ Phase‑2 work-list.
   must treat Login's values as an allowed local override, not spread them further.
   Rationale: (a) theme wins generally; the deviation is confined to one pre-auth
   screen and visually intentional (M58 redesign).
-- **C5 — Nine blur/saturate recipes for one material.** *(Partially resolved
-  `v1.100.5`/DS01: the theme.ts sites — Tab-selected 20/180 → tier‑2, `floatBlur`
-  spelling → `TIER2_BLUR` — are done; remaining component/page sites land in DS03.)*
-  Variants: see §2.10 (48/220/1.03, 48/220/1.04, 40/180, 28/200/1.02, 20/180, 20/140,
-  16/180, 12/160-180, 14/180).
-  **Canonical set:** tier‑1 `blur(40px) saturate(180%)` light / `blur(20px)
-  saturate(140%)` dark; tier‑2 `blur(40px) saturate(180%)`; chrome `blur(48px)
-  saturate(220%) brightness(1.03)`. Everything else (Settings 28/200/1.02, login 1.04,
-  captcha 16/180 & 12/160, SegmentedTabs 12/180, Settings header 14/180) is drift to
-  converge. Rationale: (a) the tiers are theme.ts's; chrome is the shared
-  sidebar recipe used by both layouts (b).
+- **C5 — Nine blur/saturate recipes for one material.** **RESOLVED (DS01 `v1.100.5`
+  + DS03, release pending).** The canonical trio — tier‑1 mode split, tier‑2
+  `blur(40px) saturate(180%)`, chrome `blur(48px) saturate(220%) brightness(1.03)` —
+  is now the only set in `src/` (recipe census: 3 distinct recipes; drift re-grep 0),
+  exported as `TIER1_BLUR`/`TIER2_BLUR`/`CHROME_BLUR` in `src/themeTokens.ts` and
+  test-pinned. DS03 converged: nav-selected 16/180, SegmentedTabs 12/180, Settings
+  papers 28/200/1.02 (→ tier‑1) + header 14/180 (→ tier‑2, incl. its bg → `TIER2_BG`,
+  which also removed the C2 navy `rgba(22,26,43,.62)` per the DS03/DS04 coordination
+  note), login hero 1.04 (→ chrome) and captcha 16/180 + 12/160 (→ tier‑2).
+  Original variants: 48/220/1.03, 48/220/1.04, 40/180, 28/200/1.02, 20/180, 20/140,
+  16/180, 12/160-180, 14/180.
 - **C6 — Four spellings of "pill".**
   Variants: `"50px"` (inputs/segmented/LiveRate), `980` (buttons/chips), `99`
   (StatusPill/meters), `999` (badges) — §2.8.

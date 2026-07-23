@@ -33,6 +33,7 @@ import ErrorBoundary from "./ErrorBoundary";
 import BottomNav from "./BottomNav";
 import { PageTransition } from "./motion";
 import { useResponsiveTableLabels } from "../responsive";
+import { TIER2_BLUR } from "../themeTokens";
 
 const WIDTH = 256;
 
@@ -73,8 +74,8 @@ export default function Layout() {
     my: 0.3,
     py: 0.7,
     color: selected ? "text.primary" : "text.secondary",
-    backdropFilter: selected ? "blur(16px) saturate(180%)" : "none",
-    WebkitBackdropFilter: selected ? "blur(16px) saturate(180%)" : "none",
+    backdropFilter: selected ? TIER2_BLUR : "none",
+    WebkitBackdropFilter: selected ? TIER2_BLUR : "none",
     "& .MuiListItemIcon-root": { minWidth: 40 },
     "&.Mui-selected": {
       backgroundColor: isDark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.60)",

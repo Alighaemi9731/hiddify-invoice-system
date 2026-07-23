@@ -20,6 +20,7 @@ import VisibilityOutlinedIcon from "@mui/icons-material/esm/VisibilityOutlined";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { useAuth } from "../auth/AuthContext";
 import { getCaptcha, login, passkeyLoginBegin, passkeyLoginComplete } from "../api/client";
+import { CHROME_BLUR, TIER2_BLUR } from "../themeTokens";
 
 const passkeySupported =
   typeof window !== "undefined" && !!window.PublicKeyCredential;
@@ -154,8 +155,8 @@ export default function Login() {
             maxWidth: 520,
             minWidth: 0,
             borderRadius: "24px",
-            backdropFilter: "blur(48px) saturate(220%) brightness(1.04)",
-            WebkitBackdropFilter: "blur(48px) saturate(220%) brightness(1.04)",
+            backdropFilter: CHROME_BLUR,
+            WebkitBackdropFilter: CHROME_BLUR,
             backgroundColor: (t) =>
               t.palette.mode === "dark" ? "rgba(11,13,25,0.55)" : "rgba(255,255,255,0.62)",
             backgroundImage: (t) =>
@@ -269,8 +270,8 @@ export default function Login() {
                     overflow: "hidden",
                     border: (t) => `1px solid ${t.palette.mode === "dark" ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.80)"}`,
                     borderRadius: "14px",
-                    backdropFilter: "blur(16px) saturate(180%)",
-                    WebkitBackdropFilter: "blur(16px) saturate(180%)",
+                    backdropFilter: TIER2_BLUR,
+                    WebkitBackdropFilter: TIER2_BLUR,
                     backgroundColor: "rgba(255,255,255,0.92)",
                     boxShadow: "inset 0 1px 0 rgba(255,255,255,.96)",
                     colorScheme: "light",
@@ -300,8 +301,8 @@ export default function Login() {
                       flex: "0 0 auto",
                       border: (t) => `1px solid ${t.palette.mode === "dark" ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.72)"}`,
                       borderRadius: "14px",
-                      backdropFilter: "blur(12px) saturate(160%)",
-                      WebkitBackdropFilter: "blur(12px) saturate(160%)",
+                      backdropFilter: TIER2_BLUR,
+                      WebkitBackdropFilter: TIER2_BLUR,
                       backgroundColor: (t) => t.palette.mode === "dark" ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.42)",
                       color: "text.secondary",
                       "&:hover": {

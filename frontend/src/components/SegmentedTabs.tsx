@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { Box, Tab, Tabs } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
+import { TIER2_BLUR } from "../themeTokens";
 
 export interface TabDef {
   label: string;
@@ -31,8 +32,8 @@ export default function SegmentedTabs({ value, onChange, tabs, fullWidth }: Prop
         borderColor: "divider",
         borderRadius: "50px",
         bgcolor: isDark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.55)",
-        backdropFilter: "blur(12px) saturate(180%)",
-        WebkitBackdropFilter: "blur(12px) saturate(180%)",
+        backdropFilter: TIER2_BLUR,
+        WebkitBackdropFilter: TIER2_BLUR,
         width: fullWidth ? "100%" : "fit-content",
         maxWidth: "100%",   // never exceed the viewport → the Tabs scroller handles overflow
         overflow: "hidden", // clip to the rounded pill; horizontal scroll lives on the scroller
