@@ -1,6 +1,7 @@
 import { MouseEvent, ReactNode } from "react";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { alpha, useTheme } from "@mui/material/styles";
+import { statusPillColors } from "../../themeTokens";
 import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
 import KeyboardArrowLeftIcon from "@mui/icons-material/esm/KeyboardArrowLeft";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
@@ -42,17 +43,19 @@ function StatusPill({
 }
 
 export function ConnectionStatus({ connected }: { connected: boolean }) {
+  const colors = statusPillColors(useTheme().palette);
   return connected ? (
-    <StatusPill color="#10b981">متصل</StatusPill>
+    <StatusPill color={colors.active}>متصل</StatusPill>
   ) : (
-    <StatusPill color="#94a3b8" muted>متصل نیست</StatusPill>
+    <StatusPill color={colors.muted} muted>متصل نیست</StatusPill>
   );
 }
 
 export function EnforcementStatus({ state }: { state: string }) {
-  if (state === "enforced") return <StatusPill color="#f43f5e">مسدود</StatusPill>;
-  if (state === "frozen") return <StatusPill color="#f59e0b">محدود</StatusPill>;
-  return <StatusPill color="#10b981">فعال</StatusPill>;
+  const colors = statusPillColors(useTheme().palette);
+  if (state === "enforced") return <StatusPill color={colors.enforced}>مسدود</StatusPill>;
+  if (state === "frozen") return <StatusPill color={colors.frozen}>محدود</StatusPill>;
+  return <StatusPill color={colors.active}>فعال</StatusPill>;
 }
 
 export function ResellerIdentity({

@@ -42,7 +42,7 @@ export default function Debts() {
                 <TableRow key={d.reseller_id} hover>
                   <TableCell>{d.reseller_name}</TableCell>
                   <TableCell>{d.panel_key}</TableCell>
-                  <TableCell>{d.bot_registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" color="error" label="بدون ربات" />}</TableCell>
+                  <TableCell>{d.bot_registered ? <Chip size="small" color="success" label="متصل" /> : <Chip size="small" color="default" variant="outlined" label="بدون ربات" />}</TableCell>
                   <TableCell>{fmtNum(d.invoices_count)}</TableCell>
                   <TableCell>{fmtToman(d.outstanding_toman)}</TableCell>
                   <TableCell dir="ltr">{d.oldest_period}</TableCell>

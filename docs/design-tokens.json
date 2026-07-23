@@ -78,23 +78,24 @@
       "source": "src/pages/Dashboard.tsx:33 (RANK_COLORS)"
     },
     "statusPill": {
-      "active": "#10b981",
-      "muted": "#94a3b8",
-      "enforced": "#f43f5e",
-      "frozen": "#f59e0b",
+      "mechanism": "statusPillColors(palette) in src/themeTokens.ts — palette-derived since v1.100.6 (§5-C8 resolved)",
+      "active": "success.dark (light mode) / success.main (dark mode)",
+      "muted": "text.secondary",
+      "enforced": "error.main",
+      "frozen": "warning.dark (light mode) / warning.main (dark mode)",
+      "contrastRule": "light mode uses the MUI-computed .dark variants because the pill renders 12px/750 text in the color itself",
       "bgAlpha": { "light": 0.09, "dark": 0.16, "muted": 0.05 },
       "borderAlpha": { "light": 0.22, "dark": 0.34, "muted": 0.12 },
-      "note": "Current pill tints; convergence with semantic palette tracked as §5-C8.",
-      "source": "src/pages/resellers/ResellerIdentity.tsx:9-55"
+      "source": "src/themeTokens.ts statusPillColors; consumed in src/pages/resellers/ResellerIdentity.tsx"
     },
     "invoiceStatusDonut": {
-      "paid": "#34d399",
-      "sent": "#60a5fa",
-      "overdue": "#f7a928",
-      "enforced": "#fb7185",
-      "fallback": "#94a3b8",
-      "note": "Current chart tints; convergence tracked as §5-C8.",
-      "source": "src/pages/Dashboard.tsx:34-39,136"
+      "mechanism": "invoiceStatusColor(palette, status) in src/themeTokens.ts — palette-derived since v1.100.6 (§5-C8 resolved)",
+      "paid": "success.main",
+      "sent": "info.main",
+      "overdue": "warning.main",
+      "enforced": "error.main",
+      "fallback": "text.secondary",
+      "source": "src/themeTokens.ts invoiceStatusColor; consumed in src/pages/Dashboard.tsx statusData"
     }
   },
   "statusChipMaps": {

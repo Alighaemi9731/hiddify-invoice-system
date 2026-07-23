@@ -230,7 +230,7 @@ the palette in §2.1):
 
 | Domain | Mapping | Source |
 |---|---|---|
-| Invoice status | draft→`default`, sent→`info`, paid→`success`, overdue→`warning`, enforced→`error`, canceled→`default` | `src/pages/Invoices.tsx:44`, `src/pages/FinancialHistory.tsx:16-19`, `src/portal/pages/Invoices.tsx:12-19`; `src/pages/Sales.tsx:14` (map lacks `canceled` → §5-C9) |
+| Invoice status | draft→`default`, sent→`info`, paid→`success`, overdue→`warning`, enforced→`error`, canceled→`default` | `src/pages/Invoices.tsx:44`, `src/pages/FinancialHistory.tsx:16-19`, `src/portal/pages/Invoices.tsx:12-19`, `src/pages/Sales.tsx:14` (completed in DS02 — §5-C9 resolved) |
 | Payment status | pending→`warning`, confirmed→`success`, rejected→`error` | `src/pages/Payments.tsx:33` |
 | Panel sync | ok→`success`, error→`error`, unknown→`info`, disabled→`warning` | `src/pages/Panels.tsx:156-159` |
 | Delivery log | sent→`success`, failed/blocked→`error`, unmatched→`warning` | `src/pages/Logs.tsx:14` |
@@ -240,13 +240,19 @@ the palette in §2.1):
 | Storefront campaign | completed→`success`, canceled→`warning`, running→`info`, else `default` | `src/portal/storefront/StorefrontCampaignsPage.tsx:27-28` |
 | Portal notification severity | info/success/warning/error → same palette color, rendered as a 3px inline-start edge + `alpha(color, 0.05)` bg | `src/portal/NotificationsBell.tsx:13-15,66-68` |
 
-**StatusPill** (resellers) uses raw hexes: connected/active `#10b981`, disconnected
-(muted) `#94a3b8`, enforced `#f43f5e`, frozen `#f59e0b`
-(`src/pages/resellers/ResellerIdentity.tsx:46-55`).
+**StatusPill** (resellers) is palette-derived since DS02 (`v1.100.6`):
+`statusPillColors(palette)` in `src/themeTokens.ts` — active → `success`,
+muted → `text.secondary`, enforced → `error.main`, frozen → `warning`; light mode
+uses the MUI-computed `.dark` variants of success/warning because the pill renders
+12px/750 text in the color itself (contrast on light glass). Pill alphas (§3.14)
+unchanged. Consumed by `src/pages/resellers/ResellerIdentity.tsx` (ConnectionStatus /
+EnforcementStatus).
 
-**Dashboard donut** invoice-status hexes: paid `#34d399`, sent `#60a5fa`, overdue
-`#f7a928`, enforced `#fb7185`, fallback `#94a3b8`
-(`src/pages/Dashboard.tsx:34-39,136`). These shadow the semantic palette → §5-C8.
+**Dashboard donut** is palette-derived since DS02 (`v1.100.6`):
+`invoiceStatusColor(palette, status)` in `src/themeTokens.ts` — paid→`success.main`,
+sent→`info.main`, overdue→`warning.main`, enforced→`error.main`, fallback→
+`text.secondary`. Guarded by `src/test/theme-contract.test.ts`. (Historical hexes
+`#34d399/#60a5fa/#f7a928/#fb7185/#94a3b8` were removed — §5-C8.)
 
 **Ranking bars** `RANK_COLORS = ["#0071e3", "#30d158", "#ff9500", "#32ade6", "#bf5af2"]`
 (`src/pages/Dashboard.tsx:33`) — the app's categorical chart palette, in order.
@@ -979,19 +985,17 @@ Phase‑2 work-list.
   StatCard's), 56/sx‑3 (hero) — chosen by (b) frequency within each role; 40px logo
   tiles stay as the brand-block size (b). The `"10px"` login radius folds into C4's
   exception.
-- **C8 — Invoice-status colors encoded twice.**
-  Variants: semantic Chip maps (§2.5, palette-driven) vs Dashboard donut hexes
-  `#34d399/#60a5fa/#f7a928/#fb7185/#94a3b8` (`src/pages/Dashboard.tsx:34-39,136`) vs
-  StatusPill hexes `#10b981/#94a3b8/#f43f5e/#f59e0b`
-  (`src/pages/resellers/ResellerIdentity.tsx:46-55`) — three different greens
-  (`#28cd41|#30d158` vs `#34d399` vs `#10b981`) all meaning "good".
-  **Canonical:** the palette semantic colors (§2.1) are the meaning-bearing set
-  (rule a). The donut/pill hexes are documented as the current chart/pill tints and
-  queued for convergence in Phase 2/3 (they were chosen for softness over glass —
-  any change must keep contrast on both canvases).
-- **C9 — `src/pages/Sales.tsx:14` STATUS_COLOR lacks `canceled`** (renders
-  `undefined` → default styling by accident, not by declaration). Canonical: the full
-  6-state map (`src/pages/Invoices.tsx:44`). Rule (b).
+- **C8 — Invoice-status colors encoded twice.** **RESOLVED `v1.100.6` (DS02).**
+  Donut fills now come from `invoiceStatusColor(palette, status)` and StatusPills from
+  `statusPillColors(palette)` (both in `src/themeTokens.ts`, test-guarded) — one
+  semantic set, the §2.1 palette. The contrast caveat was honored by using the
+  MUI-computed `success.dark`/`warning.dark` for light-mode 12px pill text (mechanism-
+  canonical, no invented hex). Original finding: three different greens
+  (`#28cd41|#30d158` palette vs `#34d399` donut vs `#10b981` pill) all meant "good";
+  the donut/pill hexes shadowed the palette.
+- **C9 — `src/pages/Sales.tsx:14` STATUS_COLOR lacks `canceled`.** **RESOLVED
+  `v1.100.6` (DS02):** the map now declares the full 6 states
+  (`canceled: "default"`), matching `src/pages/Invoices.tsx:44`.
 - **C10 — Admin vs portal chrome drift.**
   Sidebar width 256 (`Layout.tsx:37`) vs 248 (`PortalLayout.tsx:30`); portal nav items
   lack the selected backdrop-filter, icon gloss, hover scale, and version footer
@@ -1133,9 +1137,10 @@ Phase 1):*
   elements; custom `Box`-as-button rows (e.g. copy rows) have no keyboard affordance
   of their own.
 - **G11 — No empty-state illustration/iconography standard** — text-only today (§3.14).
-- **G12 — `src/pages/Debts.tsx` connection chip** uses `error` for «بدون ربات» while
-  the resellers pages use a muted grey StatusPill for the same fact
-  (`src/pages/Debts.tsx:45` vs `ResellerIdentity.tsx:48`) — same state, two severities.
+- **G12 — `src/pages/Debts.tsx` connection chip.** **RESOLVED `v1.100.6` (DS02, per
+  approved D12):** «بدون ربات» is now `color="default"` + `variant="outlined"`,
+  matching the muted-pill severity for the same state. Originally it used `error`
+  while the resellers pages used a muted grey StatusPill.
 - **G13 — Loading-state coverage is incomplete** *(added v1.1)*. The `DataState`
   skeleton pattern (§3.14) is used by Debts/Sales/Logs/FinancialHistory/Payments and
   all portal/storefront lists, but `src/pages/Tools.tsx`, `src/pages/Broadcast.tsx`

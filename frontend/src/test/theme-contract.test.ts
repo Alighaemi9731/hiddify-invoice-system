@@ -6,6 +6,8 @@ import {
   CHROME_SIDEBAR_BG,
   CHROME_SIDEBAR_BORDER,
   TIER2_BLUR,
+  invoiceStatusColor,
+  statusPillColors,
 } from "../themeTokens";
 
 // Contract tests for DESIGN_SYSTEM.md §2 / design-tokens.json — the theme must equal
@@ -51,6 +53,40 @@ describe("selected Tab = tier-2 blur (C5 theme site)", () => {
       expect(selected.WebkitBackdropFilter).toBe(TIER2_BLUR);
     });
   }
+});
+
+describe("semantic status colors come from the palette (C8/DS02)", () => {
+  for (const mode of MODES) {
+    it(`invoiceStatusColor maps every status to the ${mode} palette`, () => {
+      const p = makeTheme(mode).palette;
+      expect(invoiceStatusColor(p, "paid")).toBe(p.success.main);
+      expect(invoiceStatusColor(p, "sent")).toBe(p.info.main);
+      expect(invoiceStatusColor(p, "overdue")).toBe(p.warning.main);
+      expect(invoiceStatusColor(p, "enforced")).toBe(p.error.main);
+      expect(invoiceStatusColor(p, "anything-else")).toBe(p.text.secondary);
+    });
+  }
+
+  it("statusPillColors uses the darker computed variants for 12px text on light glass", () => {
+    const p = makeTheme("light").palette;
+    const colors = statusPillColors(p);
+    expect(colors.active).toBe(p.success.dark);
+    expect(colors.frozen).toBe(p.warning.dark);
+    expect(colors.muted).toBe(p.text.secondary);
+    expect(colors.enforced).toBe(p.error.main);
+    // MUI must actually have computed the variants from the canonical mains.
+    expect(p.success.dark).toBeTruthy();
+    expect(p.success.dark).not.toBe(p.success.main);
+  });
+
+  it("statusPillColors uses the canonical mains in dark mode", () => {
+    const p = makeTheme("dark").palette;
+    const colors = statusPillColors(p);
+    expect(colors.active).toBe(p.success.main);
+    expect(colors.frozen).toBe(p.warning.main);
+    expect(colors.muted).toBe(p.text.secondary);
+    expect(colors.enforced).toBe(p.error.main);
+  });
 });
 
 describe("tier-2 overlays are untouched by the DS01 refactor", () => {

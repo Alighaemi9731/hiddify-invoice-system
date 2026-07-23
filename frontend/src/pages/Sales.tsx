@@ -11,7 +11,7 @@ import { TablePager } from "../components/TablePager";
 import { fmtToman, fmtGb, fmtNum, INVOICE_STATUS_FA } from "../format";
 import { DataState } from "../components/DataState";
 
-const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error" };
+const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
 
 export default function Sales() {
   const [period, setPeriod] = useState(currentPeriod());

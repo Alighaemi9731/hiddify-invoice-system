@@ -25,18 +25,13 @@ import { getDashboard, getSalesByDay } from "../api/client";
 import StatCard, { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
+import { invoiceStatusColor } from "../themeTokens";
 import { CountUp, Reveal } from "../components/motion";
 import { fmtGb, fmtNum, fmtToman, INVOICE_STATUS_FA } from "../format";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 const FONT = "Vazirmatn, sans-serif";
 const RANK_COLORS = ["#0071e3", "#30d158", "#ff9500", "#32ade6", "#bf5af2"];
-const STATUS_COLORS: Record<string, string> = {
-  paid: "#34d399",
-  sent: "#60a5fa",
-  overdue: "#f7a928",
-  enforced: "#fb7185",
-};
 const STATUS_ORDER = ["paid", "sent", "overdue", "enforced"];
 
 function formatPercent(value: number) {
@@ -133,7 +128,7 @@ export default function Dashboard() {
     .map((item) => ({
       ...item,
       label: INVOICE_STATUS_FA[item.status] || item.status,
-      color: STATUS_COLORS[item.status] || "#94a3b8",
+      color: invoiceStatusColor(theme.palette, item.status),
     }));
 
   const periodInvoices = data?.period_invoices || 0;
