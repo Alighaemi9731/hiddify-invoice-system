@@ -18,6 +18,7 @@ import {
   listPanels, recoveryCandidates, recoveryRestore, RecoveryPanel, RecoveryResult,
 } from "../api/client";
 import { errMsg, useToast } from "../components/Toast";
+import { DataState } from "../components/DataState";
 import { fmtGb, fmtNum, fmtDate, fmtDateTime } from "../format";
 import { useXsFullScreen } from "../responsive";
 
@@ -30,7 +31,7 @@ function RemoveUserTool() {
   const [term, setTerm] = useState("");
   const [delRow, setDelRow] = useState<ToolsEndUser | null>(null);
 
-  const { data = [], isFetching } = useQuery({
+  const { data = [], isFetching, isError, refetch } = useQuery({
     queryKey: ["tools-endusers", term],
     queryFn: () => searchEndUsers(term),
     enabled: term.length > 0,
@@ -73,6 +74,7 @@ function RemoveUserTool() {
         </Stack>
 
         {term && (
+          <DataState isLoading={isFetching} isError={isError} rows={4} onRetry={refetch}>
           <Box sx={{ overflowX: "auto" }}>
             <Table size="small" className="resp-table">
               <TableHead>
@@ -120,6 +122,7 @@ function RemoveUserTool() {
               </TableBody>
             </Table>
           </Box>
+          </DataState>
         )}
       </CardContent>
 
@@ -163,7 +166,7 @@ function UnbindTelegramTool() {
   const [term, setTerm] = useState("");
   const [unbindRow, setUnbindRow] = useState<ResellerRow | null>(null);
 
-  const { data = [], isFetching } = useQuery({
+  const { data = [], isFetching, isError, refetch } = useQuery({
     queryKey: ["tools-resellers", term],
     queryFn: () => listResellers({ q: term, registered: true }),
     enabled: term.length > 0,
@@ -206,6 +209,7 @@ function UnbindTelegramTool() {
         </Stack>
 
         {term && (
+          <DataState isLoading={isFetching} isError={isError} rows={4} onRetry={refetch}>
           <Box sx={{ overflowX: "auto" }}>
             <Table size="small" className="resp-table">
               <TableHead>
@@ -239,6 +243,7 @@ function UnbindTelegramTool() {
               </TableBody>
             </Table>
           </Box>
+          </DataState>
         )}
       </CardContent>
 
@@ -282,7 +287,7 @@ function DeleteAdminTool() {
   const [term, setTerm] = useState("");
   const [delRow, setDelRow] = useState<ResellerRow | null>(null);
 
-  const { data = [], isFetching } = useQuery({
+  const { data = [], isFetching, isError, refetch } = useQuery({
     queryKey: ["tools-del-resellers", term],
     queryFn: () => listResellers({ q: term }),
     enabled: term.length > 0,
@@ -332,6 +337,7 @@ function DeleteAdminTool() {
         </Stack>
 
         {term && (
+          <DataState isLoading={isFetching} isError={isError} rows={4} onRetry={refetch}>
           <Box sx={{ overflowX: "auto" }}>
             <Table size="small" className="resp-table">
               <TableHead>
@@ -368,6 +374,7 @@ function DeleteAdminTool() {
               </TableBody>
             </Table>
           </Box>
+          </DataState>
         )}
       </CardContent>
 
@@ -485,6 +492,8 @@ function RecoverUsersTool() {
             ۲) بررسیِ کاربرانِ گم‌شده
           </Button>
         </Stack>
+
+        {detect.isPending && <DataState isLoading rows={3}><Box /></DataState>}
 
         {result && totalLost === 0 && (
           <Alert severity="success">هیچ کاربرِ گم‌شده‌ای در بازهٔ انتخابی پیدا نشد. ✅</Alert>

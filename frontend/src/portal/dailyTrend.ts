@@ -1,9 +1,10 @@
 import type { Theme } from "@mui/material/styles";
 import { alpha } from "@mui/material/styles";
 import { chartTooltip } from "../components/chartTooltip";
+import { CHART_FONT } from "../themeTokens";
 import { fmtNum, fmtToman } from "../format";
 
-const FONT = "Vazirmatn, sans-serif";
+const FONT = CHART_FONT;
 
 export interface DailyRow { day: number; date: string; amount_toman: number }
 

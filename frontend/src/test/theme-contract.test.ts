@@ -3,13 +3,18 @@ import type { PaletteMode } from "@mui/material";
 import { makeTheme } from "../theme";
 import { chartTooltip } from "../components/chartTooltip";
 import {
+  CHART_FONT,
   CHROME_BLUR,
   CHROME_SIDEBAR_BG,
   CHROME_SIDEBAR_BORDER,
+  EASE_ENTRANCE,
+  ENTRANCE_BEZIER,
   GLOSS_NAV_CHIP,
   GLOSS_NAV_SELECTED,
+  GLOSS_STATCARD_TILE,
   SIDEBAR_AMBIENT,
   SIDEBAR_WIDTH,
+  SPRING_BEZIER,
   TABLE_SCROLL_BOUND,
   TIER1_BLUR,
   TIER2_BG,
@@ -61,6 +66,23 @@ describe("themeTokens spec pinning", () => {
 
   it("table scroll bound is the single D14-confirmed token (C20/DS06)", () => {
     expect(TABLE_SCROLL_BOUND).toBe("calc(100vh - 300px)");
+  });
+
+  it("motion + chart + gloss constants are centralized (G1 sweep, DS08)", () => {
+    expect(EASE_ENTRANCE).toEqual([0.22, 1, 0.36, 1]);
+    expect(ENTRANCE_BEZIER).toBe("cubic-bezier(.22,1,.36,1)");
+    expect(SPRING_BEZIER).toBe("cubic-bezier(.34,1.56,.64,1)");
+    expect(CHART_FONT).toBe("Vazirmatn, sans-serif");
+    expect(GLOSS_STATCARD_TILE).toBe(
+      "linear-gradient(145deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 60%)",
+    );
+    // The theme's spring transitions must be composed from the token.
+    const button = makeTheme("light").components as Record<string, any>;
+    expect(button.MuiButton.styleOverrides.root.transition).toBe(
+      `transform .14s ${SPRING_BEZIER}, opacity .2s, background-color .2s`,
+    );
+    const tip = chartTooltip(makeTheme("light"));
+    expect(tip.textStyle.fontFamily).toBe(CHART_FONT);
   });
 });
 

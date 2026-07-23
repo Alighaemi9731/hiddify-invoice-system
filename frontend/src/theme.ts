@@ -7,6 +7,8 @@ import {
   TIER1_BLUR,
   TIER2_BG,
   TIER2_BLUR,
+  ENTRANCE_BEZIER,
+  SPRING_BEZIER,
 } from "./themeTokens";
 
 // Minimal frosted-noise SVG — micro-texture on glass surfaces.
@@ -176,7 +178,7 @@ export function makeTheme(mode: PaletteMode) {
           },
 
           ".MuiTableBody-root .MuiTableRow-root": {
-            animation: "rowIn .36s cubic-bezier(.22,1,.36,1) both",
+            animation: `rowIn .36s ${ENTRANCE_BEZIER} both`,
           },
           ...rowStagger,
 
@@ -352,7 +354,7 @@ export function makeTheme(mode: PaletteMode) {
             textTransform: "none",
             fontWeight: 600,
             paddingInline: 20,
-            transition: "transform .14s cubic-bezier(.34,1.56,.64,1), opacity .2s, background-color .2s",
+            transition: `transform .14s ${SPRING_BEZIER}, opacity .2s, background-color .2s`,
             "&:hover":  { transform: "translateY(-1px)", opacity: 0.90 },
             "&:active": { transform: "translateY(0) scale(.97)" },
           },
@@ -534,7 +536,7 @@ export function makeTheme(mode: PaletteMode) {
         styleOverrides: {
           root: {
             borderRadius: 10,
-            transition: "transform .14s cubic-bezier(.34,1.56,.64,1), background-color .2s",
+            transition: `transform .14s ${SPRING_BEZIER}, background-color .2s`,
             "&:hover":  { transform: "scale(1.10)" },
             "&:active": { transform: "scale(.94)" },
           },

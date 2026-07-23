@@ -235,7 +235,7 @@
     "fontFamily": { "value": "Vazirmatn, system-ui, -apple-system, sans-serif", "source": "src/theme.ts:122" },
     "fontFace": { "value": "Vazirmatn variable woff2, weight 100-900, font-display swap, self-hosted + preloaded", "source": "index.html:25-42" },
     "monospaceRule": { "value": "fontFamily \"monospace\" + dir ltr for identifiers (invoice numbers, TXIDs, UUIDs, links, secrets)", "source": "src/pages/Invoices.tsx:424" },
-    "chartFontFamily": { "value": "Vazirmatn, sans-serif", "source": "src/pages/Dashboard.tsx:32" },
+    "chartFontFamily": { "value": "Vazirmatn, sans-serif", "note": "CHART_FONT in src/themeTokens.ts since DS08", "source": "src/themeTokens.ts" },
     "headings": {
       "h4": { "fontWeight": 700, "letterSpacing": "-.02em" },
       "h5": { "fontWeight": 700, "letterSpacing": "-.015em" },
@@ -352,8 +352,8 @@
     "source": "src/themeTokens.ts; src/theme.ts; src/components/Layout.tsx"
   },
   "motion": {
-    "easeStandard": { "value": "cubic-bezier(.22,1,.36,1)", "source": "src/components/motion.tsx:5" },
-    "easeSpring": { "value": "cubic-bezier(.34,1.56,.64,1)", "source": "src/theme.ts:345" },
+    "easeStandard": { "value": "cubic-bezier(.22,1,.36,1)", "note": "EASE_ENTRANCE/ENTRANCE_BEZIER in src/themeTokens.ts since DS08 (G1 sweep)", "source": "src/themeTokens.ts" },
+    "easeSpring": { "value": "cubic-bezier(.34,1.56,.64,1)", "note": "SPRING_BEZIER in src/themeTokens.ts since DS08", "source": "src/themeTokens.ts" },
     "durationsSec": {
       "micro": [0.14, 0.15, 0.18, 0.2],
       "rowEntrance": 0.36,

@@ -276,7 +276,7 @@ accent `#0071e3` (`src/components/StatCard.tsx:6`).
 | Tooltip bg (via `chartTooltip(theme)` since DS04/D4) | `rgba(255,255,255,0.88)` | `rgba(28,28,30,0.92)` | `src/components/chartTooltip.ts` — consumed by Dashboard + dailyTrend + monthlyTrend (§5-C2/G4 resolved) |
 | Tooltip border | `rgba(0,0,0,0.05)` | `rgba(255,255,255,0.14)` | `src/components/chartTooltip.ts` |
 | Tooltip text | `theme.palette.text.primary` (both modes) | | `src/components/chartTooltip.ts` |
-| Chart font | `"Vazirmatn, sans-serif"` | | `src/pages/Dashboard.tsx:32`, `src/portal/dailyTrend.ts:5`, `src/portal/monthlyTrend.ts:5` |
+| Chart font | `CHART_FONT` (= `"Vazirmatn, sans-serif"`) in `src/themeTokens.ts` (DS08) | | consumed by Dashboard, dailyTrend, monthlyTrend, chartTooltip |
 | Axis label color / size | `theme.palette.text.secondary`, 11px (9px compact) | | `src/pages/Dashboard.tsx:183,190`, `src/portal/dailyTrend.ts:41,49` |
 | Axis line | `alpha(text.secondary, 0.25)` | | `src/pages/Dashboard.tsx:181` |
 | Grid split line | `theme.palette.divider` | | `src/pages/Dashboard.tsx:193` |
@@ -437,8 +437,8 @@ login zones `2` (`Login.tsx:145,394`), Settings sticky header `3`
 
 | Token | Value | Source |
 |---|---|---|
-| Standard ease `EASE` | `cubic-bezier(.22,1,.36,1)` | `src/components/motion.tsx:5`, `src/pages/Dashboard.tsx:31`, keyframe rows `src/theme.ts:171`, login card `src/pages/Login.tsx:184` |
-| Spring (overshoot) | `cubic-bezier(.34,1.56,.64,1)` | buttons `src/theme.ts:345`, icon buttons `src/theme.ts:527`, nav icon hover `src/components/Layout.tsx:195` |
+| Standard ease | `EASE_ENTRANCE` tuple + `ENTRANCE_BEZIER` string (= `cubic-bezier(.22,1,.36,1)`) in `src/themeTokens.ts` (DS08) | consumed by motion.tsx, Dashboard, theme keyframes, Login |
+| Spring (overshoot) | `SPRING_BEZIER` (= `cubic-bezier(.34,1.56,.64,1)`) in `src/themeTokens.ts` (DS08) | theme buttons/icon-buttons, both layouts' nav-icon transitions |
 | Micro state transitions | `.14s` (button/icon transform), `.15s` (input shadow/border, row bg, ListItemButton), `.18s` (tab/nav bg, select icon), `.2s` (card shadow, bg-color, misc `"0.2s"` `Settings.tsx:582`) | `src/theme.ts:224,297,317,345,412,433,527,535`, `src/components/Layout.tsx:105` |
 | Row entrance | `rowIn .36s` both + stagger `i*28ms` for rows 1–14 | `src/theme.ts:96-101,161-173` |
 | Page entrance | fade+rise 14px, `.4s` EASE (`PageTransition`); `Reveal` 16px `.45s` (+delay) | `src/components/motion.tsx:12-22,47-57` |
@@ -525,8 +525,7 @@ login zones `2` (`Login.tsx:145,394`), Settings sticky header `3`
   (greys/gold `#f3d257` family) is **artwork, not design tokens** — excluded from the
   token set by rule. Its only styling contract is the drop-shadow applied at
   `src/pages/Login.tsx:431`.
-- `frontend/placeholder.html` is a pre-M7 build placeholder using retired slate colors
-  (`#0f172a`, `#1e293b`, `#e2e8f0`, `#fbbf24`) — not part of the shipped UI (§5-G9).
+- `frontend/placeholder.html` — deleted in DS08 (§5-G9 resolved).
 
 ---
 
@@ -824,8 +823,7 @@ Desktop table scroll bound: `maxHeight: calc(100vh - 300px)`
   USDT/crypto amounts render LTR inline `<b dir="ltr">` (`src/pages/Payments.tsx:379-401`)
   and, when formatted, use **ASCII digits via `toLocaleString("en-US")`** (crypto values
   are identifiers-adjacent, never Persian-digit: `src/portal/PayDialog.tsx:173,185,197`).
-  Deviation: Settings shows a raw ISO-UTC timestamp (`src/pages/Settings.tsx:542-544`)
-  → §5-G8.
+  (The former Settings raw-ISO-UTC deviation was resolved in DS08 → §5-G8.)
 - Identifiers («#N» tracking, 8-digit invoice numbers) stay ASCII in monospace;
   search inputs accept Persian digits (normalized server-side, comments
   `src/pages/Invoices.tsx:77-79`, `src/pages/Payments.tsx:45-47`).
@@ -1110,15 +1108,23 @@ Phase 1):*
   app-wide mechanism — and mechanism correctness under the RTL pipeline.
   **RESOLVED (DS07):** both boxes now use `dir="ltr"`; the link previews render
   truly LTR for the first time.
+- **C25 — `dir` on a TextField root** *(added during DS08)*.
+  `src/pages/Panels.tsx` panel-link paste field passes `dir="ltr"` on the TextField
+  itself (multi-line JSX — the Phase‑2 single-line grep missed it), which flips its
+  label/helperText too, violating the §4.2 hard rule (`inputProps={{ dir: "ltr" }}`
+  only — the M34 lesson). **Canonical:** move to `inputProps`. Scheduled for DS09's
+  close-out sweep.
 
 ### 5.2 Gaps (real absences — recorded, not invented)
 
-- **G1 — No token module.** *(Being resolved — D1 approved 2026-07-23, amended:
-  `src/themeTokens.ts` was created in `v1.100.5`/DS01 with the constants that batch
-  consumes; each subsequent batch extends it; DS08 completes the sweep.)* Originally:
-  every value in §2 was inline at point of use (the old `CHART_COLORS` mentioned in
-  project history no longer exists — nearest equivalent `RANK_COLORS`,
-  `src/pages/Dashboard.tsx:33`).
+- **G1 — No token module.** **RESOLVED (DS01→DS08, per amended D1).**
+  `src/themeTokens.ts` now holds every shared §2 constant: glass tiers + chrome
+  recipe (DS01/03/04), status-color mappings (DS02), sidebar ambient/width + nav
+  glosses (DS05), table scroll bound (DS06), and — completing the sweep in DS08 —
+  `EASE_ENTRANCE`/`ENTRANCE_BEZIER`, `SPRING_BEZIER`, `CHART_FONT`,
+  `GLOSS_STATCARD_TILE`, all consumed byte-identically (theme.ts transitions/
+  keyframe strings are token-composed; the framer EASE duplicate in Dashboard is
+  gone). Everything is pinned by `src/test/theme-contract.test.ts`.
 - **G2 — No authored disabled/error-input states.** Disabled controls and
   field-level error styling rely on MUI defaults everywhere (only `error={…}` flags
   are set, e.g. `src/pages/Setup.tsx:111`).
@@ -1134,24 +1140,29 @@ Phase 1):*
   the variable font serves them (it does — weights 100–900, `index.html:36`).
 - **G7 — Palette duplications** (`info` ≡ `primary`; light `secondary` ≡ light
   `warning` `#ff9500`) mean those semantic slots are indistinguishable in light mode.
-- **G8 — Third datetime format:** Settings shows raw ISO-UTC
-  (`src/pages/Settings.tsx:542-544`) alongside the Jalali/Tehran rules of §4.3.
-- **G9 — `frontend/placeholder.html`** still carries pre-theme slate colors (dev-only
-  artifact, never served by the production build).
-- **G10 — Focus-visible on custom clickables:** the global ring covers native
-  elements; custom `Box`-as-button rows (e.g. copy rows) have no keyboard affordance
-  of their own.
+- **G8 — Third datetime format.** **RESOLVED (DS08, per approved D8):** the
+  Settings rate timestamp now renders via the existing `fmtDateTime` (Tehran,
+  §4.3). Safe because the backend writes timezone-aware UTC isoformat
+  (`backend/app/services/rates.py` uses `datetime.now(timezone.utc).isoformat()`),
+  which `new Date()` parses correctly.
+- **G9 — `frontend/placeholder.html`.** **RESOLVED (DS08, per approved D9):**
+  deleted, along with its dead `.dockerignore` entry. (Was a pre-M7 dev artifact
+  with retired slate colors, never served by production builds.)
+- **G10 — Focus-visible on custom clickables.** **RESOLVED (DS08, per approved
+  D10):** the two copy rows (`src/portal/PayDialog.tsx` CopyRow,
+  `src/portal/pages/Panels.tsx` link box) carry `tabIndex={0}` + `role="group"`, so
+  the global `:focus-visible` ring reaches them; the inner copy buttons were already
+  focusable.
 - **G11 — No empty-state illustration/iconography standard** — text-only today (§3.14).
 - **G12 — `src/pages/Debts.tsx` connection chip.** **RESOLVED `v1.100.6` (DS02, per
   approved D12):** «بدون ربات» is now `color="default"` + `variant="outlined"`,
   matching the muted-pill severity for the same state. Originally it used `error`
   while the resellers pages used a muted grey StatusPill.
-- **G13 — Loading-state coverage is incomplete** *(added v1.1)*. The `DataState`
-  skeleton pattern (§3.14) is used by Debts/Sales/Logs/FinancialHistory/Payments and
-  all portal/storefront lists, but `src/pages/Tools.tsx`, `src/pages/Broadcast.tsx`
-  and `src/pages/Panels.tsx` render their tables with no loading skeleton at all
-  (0 `DataState`/`Skeleton` usages; census 2026-07-23). Recorded — adopting DataState
-  there is a gap resolution, not a token fix.
+- **G13 — Loading-state coverage is incomplete** *(added v1.1)*. **RESOLVED (DS08,
+  per approved D13):** the three search Tools tables wrap in
+  `DataState isLoading/isError/onRetry` (skeleton per search), the recover tool and
+  both Broadcast result tables show a `DataState` skeleton while their mutations are
+  pending, and the Panels table card wraps in `DataState` with its query flags.
 
 ### 5.3 Top 5 worst inconsistencies (Phase‑2 preview)
 

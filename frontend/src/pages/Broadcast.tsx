@@ -13,6 +13,7 @@ import NotificationsActiveIcon from "@mui/icons-material/esm/NotificationsActive
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels, highVolumeUsers, highVolumeWarn } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
+import { DataState } from "../components/DataState";
 import { telegramHref } from "../components/TelegramLink";
 import { fmtNum, fmtToman } from "../format";
 
@@ -235,6 +236,7 @@ export default function Broadcast() {
             </Alert>
           )}
 
+          {preview.isPending && <DataState isLoading rows={3}><Box /></DataState>}
           {report && (
             <Collapse in={showList} unmountOnExit>
               <Box sx={{ mb: 2, maxHeight: 320, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 2 }}>
@@ -383,6 +385,7 @@ export default function Broadcast() {
             </Alert>
           )}
 
+          {hvCheck.isPending && <DataState isLoading rows={3}><Box /></DataState>}
           {hvData && hvRows.length > 0 && (
             <Collapse in={hvShow} unmountOnExit>
               <Box sx={{ mb: 2, maxHeight: 360, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 2 }}>

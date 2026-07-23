@@ -20,7 +20,7 @@ import VisibilityOutlinedIcon from "@mui/icons-material/esm/VisibilityOutlined";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { useAuth } from "../auth/AuthContext";
 import { getCaptcha, login, passkeyLoginBegin, passkeyLoginComplete } from "../api/client";
-import { CHROME_BLUR, TIER2_BLUR } from "../themeTokens";
+import { CHROME_BLUR, ENTRANCE_BEZIER, TIER2_BLUR } from "../themeTokens";
 
 const passkeySupported =
   typeof window !== "undefined" && !!window.PublicKeyCredential;
@@ -182,7 +182,7 @@ export default function Login() {
                     "0 0 0 0.5px rgba(0,0,0,0.08)",
                   ].join(", "),
             p: { xs: 3, sm: 4.5 },
-            animation: "glassIn .55s cubic-bezier(.22,1,.36,1) both",
+            animation: `glassIn .55s ${ENTRANCE_BEZIER} both`,
           }}
         >
           <Typography

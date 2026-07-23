@@ -1,5 +1,6 @@
 import { Card, CardContent, Typography, Box, Stack } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { GLOSS_STATCARD_TILE } from "../themeTokens";
 import { ReactNode } from "react";
 
 export default function StatCard({
@@ -53,7 +54,7 @@ export default function StatCard({
               display: "grid",
               placeItems: "center",
               bgcolor: alpha(color, 0.15),
-              backgroundImage: "linear-gradient(145deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 60%)",
+              backgroundImage: GLOSS_STATCARD_TILE,
               border: `1px solid ${alpha(color, 0.25)}`,
               boxShadow: [
                 `inset 0 1px 0 rgba(255,255,255,.38)`,

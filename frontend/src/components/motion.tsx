@@ -1,8 +1,9 @@
 import { motion, animate } from "framer-motion";
+import { EASE_ENTRANCE } from "../themeTokens";
 import { ReactNode, useEffect, useState } from "react";
 
 // A soft, slightly-overshooting ease used across all entrances.
-const EASE = [0.22, 1, 0.36, 1] as const;
+const EASE = EASE_ENTRANCE;
 
 /**
  * Enter-only page transition. Keyed on the route path by the caller so the SPA
@@ -36,7 +37,7 @@ export function CountUp({
   useEffect(() => {
     if (reduce) { setVal(to); return; }
     const controls = animate(0, to, {
-      duration, ease: [0.22, 1, 0.36, 1], onUpdate: (v) => setVal(v),
+      duration, ease: EASE, onUpdate: (v) => setVal(v),
     });
     return () => controls.stop();
   }, [to, duration, reduce]);

@@ -25,12 +25,12 @@ import PeriodPicker from "../components/PeriodPicker";
 import EChart from "../components/EChart";
 import { chartTooltip } from "../components/chartTooltip";
 import { SectionCard, EmptyState } from "../portal/ui";
-import { invoiceStatusColor } from "../themeTokens";
+import { CHART_FONT, EASE_ENTRANCE, invoiceStatusColor } from "../themeTokens";
 import { CountUp, Reveal } from "../components/motion";
 import { fmtGb, fmtNum, fmtToman, INVOICE_STATUS_FA } from "../format";
 
-const EASE = [0.22, 1, 0.36, 1] as const;
-const FONT = "Vazirmatn, sans-serif";
+const EASE = EASE_ENTRANCE;
+const FONT = CHART_FONT;
 const RANK_COLORS = ["#0071e3", "#30d158", "#ff9500", "#32ade6", "#bf5af2"];
 const STATUS_ORDER = ["paid", "sent", "overdue", "enforced"];
 

@@ -13,6 +13,7 @@ import {
   listPanels, createPanel, updatePanel, deletePanel, syncPanel, syncAllPanels, testPanel,
 } from "../api/client";
 import { useToast } from "../components/Toast";
+import { DataState } from "../components/DataState";
 import { useToastMutation } from "../hooks/useToastMutation";
 import { useSort, SortTh } from "../components/sortable";
 import { fmtNum, fmtDateTime } from "../format";
@@ -49,7 +50,7 @@ export default function Panels() {
   const xsFull = useXsFullScreen();
   const qc = useQueryClient();
   const { node, show } = useToast();
-  const { data = [], isLoading } = useQuery({
+  const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["panels"], queryFn: listPanels,
     // While any panel is still syncing (status "unknown"), poll so its chip flips to
     // موفق/خطا on its own once the background sync finishes — no manual refresh needed.
@@ -175,6 +176,7 @@ export default function Panels() {
           <Button variant="contained" onClick={() => edit()}>افزودن پنل</Button>
         </Stack>
       </Stack>
+      <DataState isLoading={isLoading} isError={isError} onRetry={refetch}>
       <Card>
         <Table className="resp-table">
           <TableHead>
@@ -213,6 +215,7 @@ export default function Panels() {
           </TableBody>
         </Table>
       </Card>
+      </DataState>
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm" fullScreen={xsFull}>
         <DialogTitle>{form.id ? "ویرایش پنل" : "افزودن پنل"}</DialogTitle>

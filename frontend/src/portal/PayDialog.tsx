@@ -30,6 +30,8 @@ function CopyRow({ label, value, show }: { label: string; value: string; show: (
       <Typography variant="caption" color="text.secondary">{label}</Typography>
       <Box
         dir="ltr"
+        tabIndex={0}
+        role="group"
         sx={{
           mt: 0.3, p: 1, borderRadius: 2, bgcolor: "action.hover",
           fontFamily: "monospace", fontSize: 13, wordBreak: "break-all",

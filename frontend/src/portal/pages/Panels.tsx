@@ -105,6 +105,8 @@ export default function PortalPanels() {
 
                     <Box
                       dir="ltr"
+                      tabIndex={0}
+                      role="group"
                       sx={{
                         p: 1.2, borderRadius: 2, bgcolor: "action.hover",
                         fontFamily: "monospace", fontSize: 12.5, wordBreak: "break-all",

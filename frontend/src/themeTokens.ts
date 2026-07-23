@@ -78,3 +78,17 @@ export const statusPillColors = (palette: Palette) => ({
 
 /** Desktop table scroll bound under the page header (§5-C20, D14-confirmed). */
 export const TABLE_SCROLL_BOUND = "calc(100vh - 300px)";
+
+/** Standard entrance ease — framer tuple + its CSS bezier spelling. */
+export const EASE_ENTRANCE = [0.22, 1, 0.36, 1] as const;
+export const ENTRANCE_BEZIER = "cubic-bezier(.22,1,.36,1)";
+
+/** Overshoot spring bezier for presses/hovers. */
+export const SPRING_BEZIER = "cubic-bezier(.34,1.56,.64,1)";
+
+/** Chart text family — the ECharts canvas cannot inherit CSS fonts. */
+export const CHART_FONT = "Vazirmatn, sans-serif";
+
+/** Specular gloss for the 44px StatCard icon tiles. */
+export const GLOSS_STATCARD_TILE =
+  "linear-gradient(145deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 60%)";

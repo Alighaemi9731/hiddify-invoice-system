@@ -30,6 +30,7 @@ import {
   GLOSS_NAV_SELECTED,
   SIDEBAR_AMBIENT,
   SIDEBAR_WIDTH,
+  SPRING_BEZIER,
   TIER2_BLUR,
 } from "../themeTokens";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -169,7 +170,7 @@ export default function PortalLayout() {
                       boxShadow: selected
                         ? `0 0 0 1px ${alpha(item.color, 0.5)}, 0 4px 12px -4px ${alpha(item.color, 0.55)}, inset 0 1px 0 rgba(255,255,255,.32)`
                         : "inset 0 1px 0 rgba(255,255,255,.18)",
-                      transition: "transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .15s",
+                      transition: `transform .2s ${SPRING_BEZIER}, box-shadow .15s`,
                       "& svg": { fontSize: 19 },
                     }}
                   >

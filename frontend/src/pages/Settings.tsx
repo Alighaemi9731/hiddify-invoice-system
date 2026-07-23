@@ -6,6 +6,7 @@ import {
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { TIER1_BLUR, TIER2_BG, TIER2_BLUR } from "../themeTokens";
+import { fmtDateTime } from "../format";
 import SmartToyIcon from "@mui/icons-material/esm/SmartToy";
 import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import SellIcon from "@mui/icons-material/esm/Sell";
@@ -539,7 +540,7 @@ export default function Settings() {
                 : <Chip color="warning" size="small" icon={<InfoOutlinedIcon />} label="نرخ آنلاین هنوز دریافت نشده" />}
               {byKey["toman_per_usdt_auto_at"]?.value && (
                 <Typography variant="caption" color="text.secondary" dir="ltr">
-                  {String(byKey["toman_per_usdt_auto_at"].value).replace("T", " ").slice(0, 16)} UTC
+                  {fmtDateTime(String(byKey["toman_per_usdt_auto_at"].value))}
                 </Typography>
               )}
               {!!getVal("pay_ton_enabled") && (
