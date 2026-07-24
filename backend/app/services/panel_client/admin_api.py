@@ -27,6 +27,60 @@ class UserLimitError(RuntimeError):
     """Raised when the panel rejects a create because the admin's max_users is reached."""
 
 
+def _tag_attr(tag: str, name: str) -> str | None:
+    m = re.search(rf'\b{name}\s*=\s*["\']([^"\']*)["\']', tag, re.I)
+    return m.group(1) if m else None
+
+
+def _scrape_edit_form_fields(html_text: str) -> dict[str, str]:
+    """Mirror a Flask-Admin edit <form>: return every current field value so we can resend it
+    verbatim. Isolates the form block that carries `new_password` (the admin edit form), then reads
+    inputs (skipping submit/button/file; a checkbox/radio only when `checked`), the selected <option>
+    of each <select>, and each <textarea>'s body. Injecting one field into this mirror is the safest
+    way to submit the form without inventing values that could overwrite name/limits/uuid."""
+    block = None
+    for m in re.finditer(r"<form\b[^>]*>(.*?)</form>", html_text, re.S | re.I):
+        if "new_password" in m.group(1):
+            block = m.group(1)
+            break
+    if block is None:
+        return {}
+    fields: dict[str, str] = {}
+    for tag in re.finditer(r"<input\b[^>]*?>", block, re.I):
+        t = tag.group(0)
+        name = _tag_attr(t, "name")
+        if not name:
+            continue
+        typ = (_tag_attr(t, "type") or "text").lower()
+        if typ in ("submit", "button", "image", "file", "reset"):
+            continue
+        if typ in ("checkbox", "radio"):
+            if re.search(r"\bchecked\b", t, re.I):
+                fields[name] = html.unescape(_tag_attr(t, "value") or "y")
+            continue
+        fields[name] = html.unescape(_tag_attr(t, "value") or "")
+    for sm in re.finditer(
+        r'<select\b[^>]*?\bname\s*=\s*["\']([^"\']+)["\'][^>]*?>(.*?)</select>', block, re.S | re.I
+    ):
+        name, body = sm.group(1), sm.group(2)
+        opt = re.search(
+            r'<option\b[^>]*?\bselected\b[^>]*?\bvalue\s*=\s*["\']([^"\']*)["\']', body, re.I
+        ) or re.search(
+            r'<option\b[^>]*?\bvalue\s*=\s*["\']([^"\']*)["\'][^>]*?\bselected\b', body, re.I
+        )
+        if opt is None:
+            opt = re.search(r'<option\b[^>]*?\bvalue\s*=\s*["\']([^"\']*)["\']', body, re.I)
+        if opt is not None:
+            fields[name] = html.unescape(opt.group(1))
+    for tm in re.finditer(
+        r'<textarea\b[^>]*?\bname\s*=\s*["\']([^"\']+)["\'][^>]*?>(.*?)</textarea>',
+        block,
+        re.S | re.I,
+    ):
+        fields[tm.group(1)] = html.unescape(tm.group(2))
+    return fields
+
+
 @dataclass(frozen=True)
 class RenewUserTarget:
     """Absolute, replayable panel state for one storefront renewal."""
@@ -386,6 +440,62 @@ class AdminApiClient(PanelClient):
             {"max_users": max_users, "max_active_users": max_active_users},
             api_key=api_key,
         )
+
+    async def set_admin_password(  # noqa: ANN001
+        self, panel, admin_uuid: str, password: str, *, api_key: str | None = None
+    ) -> None:
+        """Set an admin's LOGIN password via Hiddify's own Flask-Admin edit form.
+
+        Hiddify's v2 REST API exposes NO password field (verified against `PatchAdminSchema`), so —
+        exactly like `_user_bulk_action` does for bulk enable/disable — we drive the panel's own
+        authenticated web form. Setting a non-empty password matters for enforcement: Hiddify's auth
+        rejects UUID-link login when `account.password != ""`, so a suspended reseller can no longer
+        open their panel via their UUID link and re-enable their own users. Restore sets it back.
+
+        The form is submitted by MIRRORING it: we GET the edit page and resend every field the panel
+        rendered verbatim, injecting only `new_password`. This never invents a value, so it cannot
+        clobber the admin's name / limits / uuid / mode even if Hiddify reshuffles the form. Auth uses
+        the panel's super-admin key (default header) so it can edit any sub-admin. Best-effort — the
+        caller wraps this; a failure is logged, never fatal to the suspend/restore."""
+        headers = self._headers(panel, api_key)
+        headers["User-Agent"] = "invoice-system-admin-lockout/1"
+        list_url = f"{panel.proxy_base}/admin/admin/"
+        async with httpx.AsyncClient(
+            timeout=max(self.timeout, 120.0), follow_redirects=False, headers=headers
+        ) as client:
+            # 1) Resolve the Flask-Admin numeric row id by searching the admin list by uuid (the
+            #    list is `column_searchable_list = ["name", "uuid"]`, so uuid search is exact).
+            search = await client.get(list_url, params={"search": admin_uuid})
+            if search.status_code >= 400:
+                raise RuntimeError(f"admin list {search.status_code}: {search.text[:200]}")
+            ids = re.findall(r'/admin/admin/edit/\?[^"\']*?\bid=(\d+)', search.text)
+            unique_ids = sorted(set(ids))
+            if not unique_ids:
+                raise RuntimeError(f"admin {admin_uuid} not found in list")
+            if len(unique_ids) > 1:
+                # Ambiguous → fail closed rather than risk editing the wrong admin.
+                raise RuntimeError(f"admin {admin_uuid} search returned {len(unique_ids)} rows")
+            row_id = unique_ids[0]
+
+            # 2) GET the edit form and mirror every field, then inject the new password.
+            edit_url = f"{list_url}edit/"
+            page = await client.get(edit_url, params={"id": row_id})
+            if page.status_code >= 400:
+                raise RuntimeError(f"admin edit page {page.status_code}: {page.text[:200]}")
+            fields = _scrape_edit_form_fields(page.text)
+            if "new_password" not in fields and "csrf_token" not in fields:
+                raise RuntimeError("admin edit form not recognized (no csrf/new_password)")
+            fields["new_password"] = password
+
+            resp = await client.post(edit_url, params={"id": row_id}, data=fields)
+            # Flask-Admin redirects (3xx) to the list on success; a validation error re-renders the
+            # form (200) with an error alert. Treat a 200 carrying an error marker as a failure.
+            if resp.status_code >= 400:
+                raise RuntimeError(f"admin edit POST {resp.status_code}: {resp.text[:200]}")
+            if resp.status_code < 300 and re.search(
+                r'alert-danger|is-invalid|has-error', resp.text, re.I
+            ):
+                raise RuntimeError("admin edit POST rejected (form validation error)")
 
     async def delete_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None

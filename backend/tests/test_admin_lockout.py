@@ -1,0 +1,195 @@
+"""Admin-login lockout: setting a Hiddify admin's panel password via the Flask-Admin edit form
+(the REST API has no password field), and the enforcement helper that applies it to a subtree while
+never touching the panel owner. See M-note: password lockout closes the "suspended reseller re-enables
+their own users via their still-valid UUID link" hole."""
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+
+from app.services import enforcement
+from app.services.panel_client import admin_api
+
+
+class _Response:
+    def __init__(self, status_code: int, *, text: str = "") -> None:
+        self.status_code = status_code
+        self.text = text
+
+
+def _panel():
+    return SimpleNamespace(
+        key="test",
+        owner_uuid="owner-key",
+        admin_api_key=None,
+        admin_api_base="https://panel.example/proxy/api/v2/admin",
+        proxy_base="https://panel.example/proxy",
+    )
+
+
+_EDIT_FORM = """
+<html><body>
+<form method="get" action="/proxy/admin/admin/"><input name="search" value=""></form>
+<form method="post" action="/proxy/admin/admin/edit/?id=42">
+  <input name="csrf_token" value="tok&amp;123">
+  <input name="name" value="NOrouzi">
+  <input name="uuid" value="5836db89-8bcd-4c9c-8e2b-cbc484696382">
+  <input name="max_users" value="500">
+  <input name="max_active_users" value="0">
+  <input type="checkbox" name="can_add_admin" value="y" checked>
+  <select name="mode">
+    <option value="super_admin">super</option>
+    <option value="admin" selected>admin</option>
+    <option value="agent">agent</option>
+  </select>
+  <textarea name="comment">hello</textarea>
+  <input type="password" name="new_password" value="">
+  <input type="submit" value="Save">
+</form>
+</body></html>
+"""
+
+
+def test_scrape_edit_form_mirrors_every_field():
+    f = admin_api._scrape_edit_form_fields(_EDIT_FORM)
+    assert f["csrf_token"] == "tok&123"          # HTML-unescaped
+    assert f["name"] == "NOrouzi"
+    assert f["uuid"] == "5836db89-8bcd-4c9c-8e2b-cbc484696382"
+    assert f["max_users"] == "500"
+    assert f["max_active_users"] == "0"
+    assert f["can_add_admin"] == "y"             # checked → included
+    assert f["mode"] == "admin"                  # the selected option
+    assert f["comment"] == "hello"
+    assert "new_password" in f
+
+
+def test_scrape_omits_unchecked_checkbox_and_submit():
+    html = (
+        '<form><input name="csrf_token" value="t">'
+        '<input type="checkbox" name="can_add_admin" value="y">'  # unchecked
+        '<input type="submit" name="save" value="Save">'
+        '<input name="new_password" value=""></form>'
+    )
+    f = admin_api._scrape_edit_form_fields(html)
+    assert "can_add_admin" not in f              # unchecked → omitted (would flip it off if sent "")
+    assert "save" not in f                       # submit button never resent
+    assert f["csrf_token"] == "t"
+
+
+def test_set_admin_password_mirrors_form_and_injects_password(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["headers"] = kwargs.get("headers", {})
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params=None):
+            if url.endswith("/admin/admin/"):          # search
+                captured["search"] = params
+                return _Response(200, text='<a href="/proxy/admin/admin/edit/?id=42">edit</a>')
+            captured["edit_get"] = (url, params)         # edit form GET
+            return _Response(200, text=_EDIT_FORM)
+
+        async def post(self, url, params=None, data=None):
+            captured["post"] = (url, params, data)
+            return _Response(302)                        # success → redirect to list
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    asyncio.run(
+        admin_api.AdminApiClient().set_admin_password(
+            _panel(), "5836db89-8bcd-4c9c-8e2b-cbc484696382", "blocked-node"
+        )
+    )
+
+    assert captured["search"] == {"search": "5836db89-8bcd-4c9c-8e2b-cbc484696382"}
+    url, params, data = captured["post"]
+    assert url == "https://panel.example/proxy/admin/admin/edit/"
+    assert params == {"id": "42"}
+    # The password is injected, and the rest of the form is echoed verbatim (no clobber).
+    assert data["new_password"] == "blocked-node"
+    assert data["name"] == "NOrouzi" and data["max_users"] == "500"
+    assert data["csrf_token"] == "tok&123"
+    assert captured["headers"]["Hiddify-API-Key"] == "owner-key"   # super-admin edits any sub-admin
+
+
+def test_set_admin_password_ambiguous_search_fails_closed(monkeypatch):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, params=None):
+            return _Response(
+                200,
+                text='<a href="/proxy/admin/admin/edit/?id=42">a</a>'
+                     '<a href="/proxy/admin/admin/edit/?id=43">b</a>',
+            )
+        async def post(self, url, params=None, data=None):
+            raise AssertionError("must not POST when the target admin is ambiguous")
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    err = None
+    try:
+        asyncio.run(admin_api.AdminApiClient().set_admin_password(_panel(), "u", "pw"))
+    except RuntimeError as exc:
+        err = exc
+    assert err is not None and "returned 2 rows" in str(err)
+
+
+def test_set_admin_password_form_validation_error_raises(monkeypatch):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, params=None):
+            if url.endswith("/admin/admin/"):
+                return _Response(200, text='<a href="/proxy/admin/admin/edit/?id=42">e</a>')
+            return _Response(200, text=_EDIT_FORM)
+        async def post(self, url, params=None, data=None):
+            return _Response(200, text='<div class="alert-danger">Should be a valid uuid</div>')
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    err = None
+    try:
+        asyncio.run(admin_api.AdminApiClient().set_admin_password(_panel(), "u", "pw"))
+    except RuntimeError as exc:
+        err = exc
+    assert err is not None and "validation" in str(err)
+
+
+def test_apply_admin_passwords_skips_owner_and_survives_failures(monkeypatch):
+    calls = []
+
+    class FakePw:
+        async def set_admin_password(self, panel, admin_uuid, password, *, api_key=None):
+            calls.append((admin_uuid, password))
+            if admin_uuid == "boom":
+                raise RuntimeError("panel form changed")
+
+    monkeypatch.setattr(enforcement, "AdminApiClient", lambda *a, **k: FakePw())
+
+    panel = SimpleNamespace(owner_uuid="OWNER", admin_api_key=None)
+    admins = [
+        SimpleNamespace(admin_uuid="OWNER", is_owner=True),    # the super-admin → never touched
+        SimpleNamespace(admin_uuid="sub1", is_owner=False),
+        SimpleNamespace(admin_uuid="boom", is_owner=False),    # one failure must not abort the rest
+        SimpleNamespace(admin_uuid="sub2", is_owner=False),
+        SimpleNamespace(admin_uuid="sub1", is_owner=False),    # duplicate → applied once
+    ]
+    res = asyncio.run(enforcement._apply_admin_passwords(None, panel, admins, "123"))
+
+    touched = [u for u, _ in calls]
+    assert "OWNER" not in touched                 # owner login never changed
+    assert touched.count("sub1") == 1             # deduped
+    assert res == {"ok": 2, "failed": 1}          # sub1, sub2 ok; boom failed

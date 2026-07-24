@@ -283,6 +283,15 @@ DEFS: list[SettingDef] = [
     # suspensions/restores run in parallel; each panel stays sequential (never hammered).
     SettingDef("enforcement_panel_concurrency", 6, False, "dunning"),
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
+    # Admin panel-login lockout on full suspension. Hiddify's UUID-link login is refused once an
+    # admin has a non-empty password, so on a FULL suspend we also set every suspended admin's
+    # (subtree) Flask-Admin password to `enforcement_lock_password` — this kills their existing
+    # UUID link so they cannot log in and bulk-re-enable their own users. On restore/payment the
+    # password is set back to `enforcement_restore_password`. OFF by default; NOT applied on freeze
+    # (freeze intentionally keeps existing users online, so login-lockout isn't wanted there).
+    SettingDef("enforcement_admin_lockout_enabled", False, False, "dunning"),
+    SettingDef("enforcement_lock_password", "blocked-node", False, "dunning"),
+    SettingDef("enforcement_restore_password", "123", False, "dunning"),
     # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
     # so a stale, never-reviewed proof can't shield a debt forever. Default 7.
     SettingDef("pending_payment_hold_days", 7, False, "dunning"),

@@ -86,6 +86,46 @@ async def _set_admin_limits(
     await client.set_admin_limits(panel, admin.admin_uuid, mu, mau)
 
 
+async def _apply_admin_passwords(
+    session: AsyncSession, panel, admins: list[Reseller], password: str  # noqa: ANN001
+) -> dict:
+    """Best-effort: set the Flask-Admin login password of each admin in `admins` (via the panel's
+    own edit form — Hiddify's REST API has no password field). NEVER touches the panel owner /
+    super-admin (that would lock the operator + our API out). Never raises: a per-admin failure is
+    logged and counted, so a flaky password write never fails the surrounding suspend/restore.
+
+    Setting a non-empty password revokes the admin's UUID-link login (Hiddify refuses UUID auth once
+    `password != ""`), which is what stops a suspended debtor re-enabling their own users; restoring
+    a known password (default "123") gives it back."""
+    client = AdminApiClient()
+    owner_uuid = (getattr(panel, "owner_uuid", "") or "").lower()
+    api_owner = (getattr(panel, "admin_api_key", "") or "").lower()
+    out = {"ok": 0, "failed": 0}
+    seen: set[str] = set()
+    for admin in admins:
+        uuid_l = (admin.admin_uuid or "").lower()
+        if not uuid_l or uuid_l in seen:
+            continue
+        seen.add(uuid_l)
+        if admin.is_owner or uuid_l in (owner_uuid, api_owner):
+            continue  # never lock the panel owner / our own API identity
+        try:
+            await client.set_admin_password(panel, admin.admin_uuid, password)
+            out["ok"] += 1
+        except Exception:  # noqa: BLE001 — best-effort; the panel form may be unreachable/changed
+            log.warning("set_admin_password failed for admin %s", admin.admin_uuid, exc_info=True)
+            out["failed"] += 1
+    return out
+
+
+async def _lockout_config(session: AsyncSession) -> tuple[bool, str, str]:
+    """(enabled, lock_password, restore_password) for the admin-login lockout feature."""
+    enabled = bool(await settings_service.get(session, "enforcement_admin_lockout_enabled", False))
+    lock_pw = str(await settings_service.get(session, "enforcement_lock_password", "blocked-node"))
+    restore_pw = str(await settings_service.get(session, "enforcement_restore_password", "123"))
+    return enabled, lock_pw, restore_pw
+
+
 async def _enabled_users(
     session: AsyncSession, panel_id: int, admin_uuids: set[str]
 ) -> list[EndUserSnapshot]:
@@ -1254,6 +1294,20 @@ async def _process_enforcement_action(
         return {"restore_queued": 1, "patched_users": result["patched_users"],
                 "patched_admins": result["patched_admins"]}
 
+    # ── Admin-login lockout (full suspend only) ──────────────────────────────
+    # After users are disabled and admin limits zeroed, revoke the suspended admins' panel login by
+    # setting a password on each (subtree). A re-assert is users-only (empty admin set) and must not
+    # trigger this. Best-effort, gated by the owner setting, and never fails the suspension.
+    if not is_reassert and admins_planned and not progress.get("password_locked"):
+        enabled, lock_pw, _restore_pw = await _lockout_config(session)
+        if enabled and lock_pw:
+            res = await _apply_admin_passwords(session, panel, descendants, lock_pw)
+            progress["password_locked"] = True
+            log.info(
+                "Admin lockout for reseller %s: %d locked, %d failed",
+                reseller.name, res["ok"], res["failed"],
+            )
+
     reseller.enforcement_state = EnforcementState.enforced
     action.status = EnforcementActionStatus.done
     action.error = None
@@ -1404,6 +1458,20 @@ async def _process_restore_action(
     ):
         result["failed"] = 1
         return result
+
+    # ── Restore admin logins ─────────────────────────────────────────────────
+    # Give each restored admin its normal panel password back (default "123"). Skip descendants that
+    # are INDEPENDENTLY enforced/frozen — they must stay locked. Best-effort, gated by the setting.
+    if not progress.get("password_restored"):
+        enabled, _lock_pw, restore_pw = await _lockout_config(session)
+        if enabled and restore_pw:
+            targets = [d for d in descendants if d.admin_uuid not in independently_enforced]
+            res = await _apply_admin_passwords(session, panel, targets, restore_pw)
+            progress["password_restored"] = True
+            log.info(
+                "Admin login restore for reseller %s: %d reset, %d failed",
+                reseller.name, res["ok"], res["failed"],
+            )
 
     # ── Finalize ─────────────────────────────────────────────────────────────
     reseller.enforcement_state = EnforcementState.active
