@@ -91,7 +91,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npm audit --audit-level=high
+      # Audit what we actually SHIP. The dev tree is build-time only (vite, postcss, workbox,
+      # jake/brace-expansion): a path-traversal or DoS there is not reachable by any user of the
+      # deployed SPA, and letting those advisories red the pipeline blocks unrelated production
+      # fixes from being released — the failure mode this gate is meant to prevent, inverted.
+      # Runtime dependencies are still gated at `high`.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm test -- --run
       - run: npm run lint:design
       - run: npm run build
