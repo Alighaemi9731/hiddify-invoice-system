@@ -22,7 +22,7 @@ from app.models import (
     StorefrontOrder,
     StorefrontPlan,
 )
-from app.services import storefront_ops, storefront_wallet
+from app.services import enforcement, storefront_ops, storefront_wallet
 from app.services.panel_client.admin_api import AdminApiClient
 from app.services.storefront_provision import _customer_lock, _lease_active
 
@@ -111,6 +111,11 @@ async def renew(
         # command itself refuse a foreign shop means no caller can act cross-tenant with a bare id.
         if expected_sf_id is not None and sf.id != expected_sf_id:
             return SubResult(False, "not_found")
+        # A renewal PATCHes the panel user with `enable: True` (see RenewUserTarget.body), so a
+        # suspended branch must not renew: it would resurrect a disabled user and leave no
+        # enforcement trace. Checked before any durable operation/debit is created.
+        if await enforcement.suspended_branch_root(s, reseller) is not None:
+            return SubResult(False, "suspended")
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
@@ -377,6 +382,11 @@ async def set_enabled(
         sf, customer, reseller, panel = await _panel_ctx(s, order)
         if expected_sf_id is not None and (sf is None or sf.id != expected_sf_id):
             return SubResult(False, "not_found")
+        # A RESUME re-enables a panel user, so it must never run while the owning branch is
+        # suspended — that is precisely how a suspended reseller's shop put users back online with
+        # no enforcement record. Pausing stays allowed: it only ever takes a user OFF.
+        if enabled and await enforcement.suspended_branch_root(s, reseller) is not None:
+            return SubResult(False, "suspended")
         uuid, api_key = order.panel_user_uuid, (reseller.admin_uuid if reseller else None)
         panel_id = panel.id if panel else None
     if not (panel_id and uuid):

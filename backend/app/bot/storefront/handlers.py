@@ -7,6 +7,7 @@ All money is manual: the admin confirms each top-up and sets the credited Toman 
 """
 from __future__ import annotations
 
+import contextlib
 import html
 import logging
 import secrets
@@ -40,6 +41,7 @@ from app.models import (
     StorefrontWalletTxn,
 )
 from app.services import (
+    enforcement,
     settings_service,
     storefront,
     storefront_admin,
@@ -435,6 +437,65 @@ async def _sf_ban_msg_mw(handler, event, data):  # noqa: ANN001, ANN202
     if bot is not None and user is not None and await _is_banned(bot, user):
         await event.answer(rtl("دسترسیِ شما مسدود شده است."))
         return None
+    return await handler(event, data)
+
+
+# ── suspension gate (the shop is closed while its reseller is suspended) ──────
+
+_SUSPENDED_CUSTOMER = (
+    "🛠 فروشگاه موقتاً در دسترس نیست.\n"
+    "سرویس‌های فعالِ شما محفوظ است و چیزی از بین نمی‌رود؛ فقط تا اطلاع بعدی امکانِ خرید، تمدید و "
+    "تغییر وضعیت وجود ندارد.\n"
+    "لطفاً کمی بعد دوباره تلاش کنید یا با پشتیبانی در تماس باشید. از شکیباییِ شما سپاسگزاریم."
+)
+_SUSPENDED_ADMIN = (
+    "⛔️ پنلِ شما در سامانه مسدود شده و به همین دلیل رباتِ فروشگاهیِ شما موقتاً از کار افتاده است.\n"
+    "تا زمانِ رفعِ مسدودی، مشتریانِ شما نمی‌توانند خرید، تمدید یا فعال‌سازی انجام دهند و پیامِ "
+    "«در دسترس نبودنِ موقت» می‌بینند.\n"
+    "برای بازگشتِ سرویس، فاکتورِ باز خود را پرداخت کنید یا با پشتیبانی تماس بگیرید."
+)
+
+
+async def _suspended(bot: Bot, user) -> bool | None:  # noqa: ANN001
+    """True when this shop's reseller (or an ancestor) is suspended, None when it isn't.
+
+    Returns the ADMIN-vs-customer distinction via `_suspension_is_admin` below. Fails OPEN on any
+    error: a transient DB blip must not close a healthy shop."""
+    try:
+        async with SessionLocal() as s:
+            sf, reseller, is_admin = await _resolve(s, bot, user)
+            if sf is None:
+                return None
+            if await enforcement.suspended_branch_root(s, reseller) is None:
+                return None
+            return bool(is_admin)
+    except Exception:  # noqa: BLE001
+        log.warning("storefront suspension check failed", exc_info=True)
+        return None
+
+
+@storefront_router.callback_query.outer_middleware
+async def _sf_suspended_cb_mw(handler, event, data):  # noqa: ANN001, ANN202
+    bot, user = data.get("bot"), getattr(event, "from_user", None)
+    if bot is not None and user is not None:
+        is_admin = await _suspended(bot, user)
+        if is_admin is not None:
+            await event.answer("فروشگاه موقتاً در دسترس نیست.", show_alert=True)
+            with contextlib.suppress(Exception):
+                await event.message.answer(
+                    rtl(_SUSPENDED_ADMIN if is_admin else _SUSPENDED_CUSTOMER))
+            return None
+    return await handler(event, data)
+
+
+@storefront_router.message.outer_middleware
+async def _sf_suspended_msg_mw(handler, event, data):  # noqa: ANN001, ANN202
+    bot, user = data.get("bot"), getattr(event, "from_user", None)
+    if bot is not None and user is not None:
+        is_admin = await _suspended(bot, user)
+        if is_admin is not None:
+            await event.answer(rtl(_SUSPENDED_ADMIN if is_admin else _SUSPENDED_CUSTOMER))
+            return None
     return await handler(event, data)
 
 

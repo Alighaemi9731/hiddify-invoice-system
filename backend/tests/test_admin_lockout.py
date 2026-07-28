@@ -181,15 +181,17 @@ def test_apply_admin_passwords_skips_owner_and_survives_failures(monkeypatch):
 
     panel = SimpleNamespace(owner_uuid="OWNER", admin_api_key=None)
     admins = [
-        SimpleNamespace(admin_uuid="OWNER", is_owner=True),    # the super-admin → never touched
-        SimpleNamespace(admin_uuid="sub1", is_owner=False),
-        SimpleNamespace(admin_uuid="boom", is_owner=False),    # one failure must not abort the rest
-        SimpleNamespace(admin_uuid="sub2", is_owner=False),
-        SimpleNamespace(admin_uuid="sub1", is_owner=False),    # duplicate → applied once
+        SimpleNamespace(admin_uuid="OWNER", is_owner=True, name="owner"),  # super-admin → untouched
+        SimpleNamespace(admin_uuid="sub1", is_owner=False, name="Sub One"),
+        SimpleNamespace(admin_uuid="boom", is_owner=False, name="Boom"),   # failure must not abort
+        SimpleNamespace(admin_uuid="sub2", is_owner=False, name="Sub Two"),
+        SimpleNamespace(admin_uuid="sub1", is_owner=False, name="Sub One"),  # duplicate → once
     ]
     res = asyncio.run(enforcement._apply_admin_passwords(None, panel, admins, "123"))
 
     touched = [u for u, _ in calls]
     assert "OWNER" not in touched                 # owner login never changed
     assert touched.count("sub1") == 1             # deduped
-    assert res == {"ok": 2, "failed": 1}          # sub1, sub2 ok; boom failed
+    assert res["ok"] == 2 and res["failed"] == 1  # sub1, sub2 ok; boom failed
+    # The failing admin is NAMED so the owner alert can say who kept their panel login.
+    assert res["failed_names"] == ["Boom"]

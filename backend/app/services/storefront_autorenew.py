@@ -219,6 +219,31 @@ def _post_fire_msg(label: str | None) -> str:
     )
 
 
+async def _suspended_bot_ids(session: AsyncSession, bots: list[StorefrontBot]) -> set[int]:
+    """Storefront-bot ids whose owning reseller branch is under a live suspension. Fails OPEN (empty
+    set) so a lookup error can't stop legitimate renewals for every shop."""
+    try:
+        from app.models import Reseller
+        from app.services import enforcement
+
+        blocked: set[int] = set()
+        checked: dict[int, bool] = {}
+        for sf_bot in bots:
+            if sf_bot.id in blocked:
+                continue
+            cached = checked.get(sf_bot.reseller_id)
+            if cached is None:
+                reseller = await session.get(Reseller, sf_bot.reseller_id)
+                cached = await enforcement.suspended_branch_root(session, reseller) is not None
+                checked[sf_bot.reseller_id] = cached
+            if cached:
+                blocked.add(sf_bot.id)
+        return blocked
+    except Exception:  # noqa: BLE001
+        log.warning("autorenew suspension filter failed", exc_info=True)
+        return set()
+
+
 def _fire_due(remaining_gb: float | None, days_left: int | None,
               fire_gb: float, fire_days: int) -> bool:
     """Near-exhaustion: under the volume margin, OR within the days margin. Either alone triggers."""
@@ -273,6 +298,11 @@ async def sweep(
         snaps = await _load_snaps(s, rows)
         held = await _held_hold_ids(s, [o.autorenew_hold_txn_id for o, _c, _b in rows])
         today = tehran_today()
+        # Shops whose reseller branch is suspended fire nothing: a renewal PATCHes the panel user
+        # with `enable: True`, so an unattended sweep would quietly put a suspended debtor's users
+        # back online. The arm is LEFT INTACT (not disarmed, the customer's hold is untouched) — once
+        # the reseller pays and is restored, the next sweep fires it normally.
+        suspended_bots = await _suspended_bot_ids(s, [b for _o, _c, b in rows])
         work: list[tuple[int, str | None, str, int, int]] = []  # order_id, label, token, chat, bot_id
         for order, customer, sf_bot in rows:
             counts["checked"] += 1
@@ -281,6 +311,9 @@ async def sweep(
             if order.autorenew_hold_txn_id not in held:
                 await disarm_quietly(s, order.id)
                 counts["backstop_cleared"] += 1
+                continue
+            if sf_bot.id in suspended_bots:
+                counts["skipped"] += 1
                 continue
             snap = snaps.get((order.panel_id, order.panel_user_uuid or ""))
             remaining_gb = None

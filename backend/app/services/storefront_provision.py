@@ -38,6 +38,21 @@ log = logging.getLogger("bot.storefront")
 _ACTIVE = ("provisioned", "disabled")
 
 
+async def _branch_suspended(session: AsyncSession, sf: StorefrontBot) -> bool:
+    """True when this shop's owning reseller (or an ancestor) is under a live suspension.
+
+    Imported lazily: `enforcement` imports the panel client and would otherwise close an import
+    cycle through this module. Fails OPEN — a lookup blip must not close a healthy shop."""
+    try:
+        from app.services import enforcement
+
+        reseller = await session.get(Reseller, sf.reseller_id)
+        return await enforcement.suspended_branch_root(session, reseller) is not None
+    except Exception:  # noqa: BLE001
+        log.warning("storefront suspension check failed for bot %s", sf.id, exc_info=True)
+        return False
+
+
 def _lease_active(lease_expires_at: dt.datetime | None, now: dt.datetime) -> bool:
     """True if a provisioning lease is still in the future (F5). Normalizes a naive value to UTC —
     SQLite reads DateTime(timezone=True) back as naive, so a bare `>=` against an aware `now` raises."""
@@ -272,6 +287,13 @@ async def purchase(
                 await storefront_ops.finalize(s, op, "failed")
                 await s.commit()
                 return PurchaseResult(False, reason="plan_gone")
+            # A suspended branch must not sell: creating an enabled panel user under a reseller whose
+            # subtree we just disabled reopens the very access enforcement took away. Refused before
+            # the wallet is charged, so the customer is never billed for a shop that cannot deliver.
+            if await _branch_suspended(s, sf):
+                await storefront_ops.finalize(s, op, "failed")
+                await s.commit()
+                return PurchaseResult(False, reason="suspended")
             price = int(plan.price_toman)
             bal = int(storefront_wallet.balance(customer))
             if bal < price:
@@ -378,6 +400,10 @@ async def claim_trial(
             sf = await s.get(StorefrontBot, sf_id)
             if sf is None or not sf.free_trial_enabled:
                 return PurchaseResult(False, reason="disabled")
+            # Same rule as a paid buy: a suspended branch provisions nothing. Checked BEFORE the
+            # one-time trial flag is consumed, so a refused attempt doesn't burn the customer's trial.
+            if await _branch_suspended(s, sf):
+                return PurchaseResult(False, reason="suspended")
             stmt = select(StorefrontCustomer).where(StorefrontCustomer.id == customer_id)
             try:
                 stmt = stmt.with_for_update()

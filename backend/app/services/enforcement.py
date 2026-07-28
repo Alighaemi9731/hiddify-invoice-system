@@ -100,7 +100,7 @@ async def _apply_admin_passwords(
     client = AdminApiClient()
     owner_uuid = (getattr(panel, "owner_uuid", "") or "").lower()
     api_owner = (getattr(panel, "admin_api_key", "") or "").lower()
-    out = {"ok": 0, "failed": 0}
+    out: dict = {"ok": 0, "failed": 0, "failed_names": []}
     seen: set[str] = set()
     for admin in admins:
         uuid_l = (admin.admin_uuid or "").lower()
@@ -115,7 +115,65 @@ async def _apply_admin_passwords(
         except Exception:  # noqa: BLE001 — best-effort; the panel form may be unreachable/changed
             log.warning("set_admin_password failed for admin %s", admin.admin_uuid, exc_info=True)
             out["failed"] += 1
+            out["failed_names"].append(admin.name or admin.admin_uuid)
     return out
+
+
+async def _notify_lockout_failures(
+    session: AsyncSession, reseller: Reseller, result: dict, *, locking: bool
+) -> None:
+    """Tell the owner which admins kept their panel login. A silent log line is not enough here: the
+    whole point of the lockout is that a suspended reseller CANNOT get back into their panel, so a
+    partial failure means the suspension looks complete while the debtor can still walk in and
+    bulk-enable their users. Best-effort; never raises into the worker."""
+    if not result.get("failed"):
+        return
+    try:
+        from app.services import owner_notify
+
+        who = owner_notify.user_link(reseller)
+        names = "، ".join(str(n) for n in (result.get("failed_names") or [])[:10])
+        if locking:
+            text = (
+                f"⚠️ قفلِ ورودِ پنل برای {result['failed']} ادمین از زیرمجموعهٔ {who} انجام نشد.\n"
+                f"ادمین‌ها: {names}\n"
+                "این ادمین‌ها هنوز می‌توانند وارد پنل هیدیفای شوند و کاربران خود را دوباره فعال "
+                "کنند. لطفاً رمزشان را دستی تغییر دهید."
+            )
+        else:
+            text = (
+                f"⚠️ بازگرداندنِ رمزِ ورودِ پنل برای {result['failed']} ادمین از زیرمجموعهٔ {who} "
+                f"انجام نشد.\nادمین‌ها: {names}\n"
+                "این ادمین‌ها هنوز با رمزِ دورهٔ مسدودی قفل‌اند و نمی‌توانند وارد پنل شوند؛ "
+                "لطفاً رمزشان را دستی تنظیم کنید."
+            )
+        await owner_notify.notify_owner(session, text, html=True)
+    except Exception:  # noqa: BLE001
+        log.warning("lockout failure notification failed", exc_info=True)
+
+
+async def _notify_zero_capture(
+    session: AsyncSession, reseller: Reseller, admin_uuids: list[str]
+) -> None:
+    """Tell the owner that an admin's real limits could not be captured (already 0/0, no snapshot),
+    so a later restore has nothing to hand back and the value must be set manually."""
+    if not admin_uuids:
+        return
+    try:
+        from app.services import owner_notify
+
+        who = owner_notify.user_link(reseller)
+        await owner_notify.notify_owner(
+            session,
+            f"⚠️ هنگام مسدودسازی {who}، سقفِ واقعیِ {len(admin_uuids)} ادمین قابل ثبت نبود: روی پنل "
+            "از قبل صفر بود و هیچ نسخهٔ پشتیبانی هم موجود نیست.\n"
+            "برای جلوگیری از بازگرداندنِ اشتباهِ «صفر»، مقدار صفر ذخیره نشد؛ یعنی هنگام رفعِ مسدودی "
+            "سقفِ این ادمین‌ها باید دستی تنظیم شود.\n"
+            f"شناسه‌ها: {'، '.join(admin_uuids[:10])}",
+            html=True,
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("zero-capture notification failed", exc_info=True)
 
 
 async def _lockout_config(session: AsyncSession) -> tuple[bool, str, str]:
@@ -210,6 +268,120 @@ async def _has_due_invoice(session: AsyncSession, reseller_id: int) -> bool:
         )
     ).scalars().all()
     return any(not (inv.deferred_until and inv.deferred_until > today) for inv in invoices)
+
+
+_LIVE_ACTION_STATUSES = (
+    EnforcementActionStatus.planned,
+    EnforcementActionStatus.partial,
+    EnforcementActionStatus.done,
+    EnforcementActionStatus.failed,
+)
+# How many recent live actions `queue_restore` scans to find one that carries real limits. A
+# re-assert is queued at most once per daily sweep, so this covers weeks of re-assertion.
+_RESTORE_SOURCE_SCAN = 50
+
+
+# Sentinel returned by the limits worker when an admin reads 0/0 with no recovery snapshot: the
+# restriction needs no write, but 0 must NOT be recorded as its real limit (see the guard below).
+_ZERO_CAPTURE = "__zero_capture__"
+
+
+def _is_reassert(action: EnforcementAction) -> bool:
+    """A users-only re-assertion (`reassert_enforced`): carries no admin limits by design."""
+    return bool((action.snapshot or {}).get("reassert"))
+
+
+def _applied_users(action: EnforcementAction) -> dict[str, str]:
+    """The users this action actually disabled on the panel (`{user_uuid: owner_admin_uuid}`).
+
+    Uses the committed progress rather than the planned set, so a partial run only hands the restore
+    the users it really touched. Users the panel reported as absent are excluded."""
+    snapshot = action.snapshot or {}
+    users = dict(snapshot.get("users") or {})
+    progress = snapshot.get("progress") or {}
+    done = set(progress.get("users_done") or [])
+    missing = set(progress.get("users_missing") or [])
+    if done:
+        return {u: o for u, o in users.items() if u in done and u not in missing}
+    if action.status == EnforcementActionStatus.done:
+        return {u: o for u, o in users.items() if u not in missing}
+    return {}
+
+
+async def _independently_restricted(
+    session: AsyncSession, reseller: Reseller, descendants: list[Reseller]
+) -> set[str]:
+    """Descendant admin_uuids whose restriction comes from their OWN action, not this cascade.
+
+    A descendant suspended as part of an ancestor's subtree owns no action of its own — the work
+    lives on the ancestor's row — so only descendants that hold a live (non-reverted) suspend/freeze
+    action are treated as independently restricted and left alone by the ancestor's restore."""
+    candidates = [
+        d for d in descendants
+        if d.id != reseller.id and d.enforcement_state != EnforcementState.active
+    ]
+    if not candidates:
+        return set()
+    owners = set(
+        (
+            await session.execute(
+                select(EnforcementAction.reseller_id).where(
+                    EnforcementAction.reseller_id.in_([d.id for d in candidates]),
+                    EnforcementAction.action.in_(
+                        [EnforcementActionType.disable_users, EnforcementActionType.freeze]
+                    ),
+                    EnforcementAction.dry_run.is_(False),
+                    EnforcementAction.status.in_(list(_LIVE_ACTION_STATUSES)),
+                )
+            )
+        ).scalars().all()
+    )
+    return {d.admin_uuid for d in candidates if d.id in owners}
+
+
+async def _enforced_ancestor(session: AsyncSession, reseller: Reseller) -> Reseller | None:
+    """The nearest ancestor reseller that is currently `enforced`, if any.
+
+    A sub-reseller inside a suspended subtree must not be independently un-suspended (a parent's
+    «unfreeze», or a payment landing on the sub) while the debt that suspended the whole branch is
+    still unpaid. Walks `parent_admin_uuid` within the panel, stopping at the panel owner, with a
+    cycle guard (a corrupt hierarchy must never spin)."""
+    rows = (
+        await session.execute(select(Reseller).where(Reseller.panel_id == reseller.panel_id))
+    ).scalars().all()
+    by_uuid = {(r.admin_uuid or "").lower(): r for r in rows}
+    seen: set[str] = {(reseller.admin_uuid or "").lower()}
+    current = reseller
+    while current is not None and current.parent_admin_uuid:
+        key = (current.parent_admin_uuid or "").lower()
+        if not key or key in seen:
+            return None
+        seen.add(key)
+        parent = by_uuid.get(key)
+        if parent is None or parent.is_owner or parent.id == current.id:
+            return None
+        if parent.enforcement_state == EnforcementState.enforced:
+            return parent
+        current = parent
+    return None
+
+
+async def suspended_branch_root(
+    session: AsyncSession, reseller: Reseller | None
+) -> Reseller | None:
+    """The reseller itself, or its nearest suspended ancestor, when this branch is under a live
+    suspension — else None. THE central "is this reseller cut off?" question.
+
+    Exists because every storefront path (customer resume/renew/buy, one-shot auto-renew, the durable
+    reconciler) wrote to the panel with a hardcoded `enable=True` and never asked whether the owning
+    reseller was suspended. A suspended debtor's shop could therefore keep putting users back online
+    — invisibly, since those writes create no EnforcementAction. Ancestor-aware: a sub-reseller's
+    shop is equally cut off when the branch above it is the one in debt."""
+    if reseller is None:
+        return None
+    if reseller.enforcement_state == EnforcementState.enforced:
+        return reseller
+    return await _enforced_ancestor(session, reseller)
 
 
 async def _queued_snapshot(session: AsyncSession, reseller: Reseller) -> dict:
@@ -662,6 +834,20 @@ async def _run_admin_limits(
                     real_mau = admin.max_active_users_snapshot
                 if real_mu is None or real_mau is None:
                     return admin_uuid, "current admin limits could not be captured", None
+                # POISONED-CAPTURE GUARD. A fully zeroed live read with no recovery snapshot behind
+                # it is not a real limit — it is an admin already zeroed by an earlier restriction
+                # whose snapshot was lost. Storing 0/0 as "the real limits" makes every later restore
+                # hand back 0, leaving the reseller online but unable to create a single user, and it
+                # is self-perpetuating: each suspend re-captures the zero it just wrote. Re-zeroing
+                # is a no-op anyway, so skip the write, preserve any existing snapshot, and report it
+                # instead of recording the bogus value.
+                if (
+                    not real_mu
+                    and not real_mau
+                    and not admin.max_users_snapshot
+                    and not admin.max_active_users_snapshot
+                ):
+                    return admin_uuid, _ZERO_CAPTURE, None
                 lim: dict = {"max_users": real_mu, "max_active_users": real_mau}
                 try:
                     # Freeze keeps max_active_users (existing users stay online); full suspend zeros both.
@@ -707,6 +893,18 @@ async def _run_admin_limits(
             done_admins.add(admin_uuid)
             if admin_uuid not in progress["admins_missing"]:
                 progress["admins_missing"].append(admin_uuid)
+        elif error == _ZERO_CAPTURE:
+            # Already at 0/0 with nothing to restore from: the restriction is applied (nothing to
+            # write), but no limits are recorded. Tracked so the owner can be told the real values
+            # are unknown for this admin and must be set by hand.
+            done_admins.add(admin_uuid)
+            zero_capture = progress.setdefault("admins_zero_capture", [])
+            if admin_uuid not in zero_capture:
+                zero_capture.append(admin_uuid)
+            log.warning(
+                "admin %s is already at max_users=0/max_active_users=0 with no recovery snapshot; "
+                "not recording 0 as its real limits", admin_uuid,
+            )
         else:
             admin_attempts[admin_uuid] = admin_attempts.get(admin_uuid, 0) + 1
             failed_admins[admin_uuid] = error
@@ -918,6 +1116,16 @@ async def queue_restore(
     reason: str = "manual",
 ) -> EnforcementAction | None:
     """Queue an exact, resumable restore and cancel any still-running suspension."""
+    # A sub-reseller inside a still-suspended subtree must not be re-opened on its own: the branch is
+    # off because an ANCESTOR's invoice is unpaid, and lifting one node would put its users back
+    # online while the debt stands. The ancestor's own restore cascades down to it instead.
+    blocking = await _enforced_ancestor(session, reseller)
+    if blocking is not None:
+        log.info(
+            "restore refused for reseller %s: ancestor %s (%s) is still suspended",
+            reseller.id, blocking.name, blocking.id,
+        )
+        return None
     existing = (
         await session.execute(
             select(EnforcementAction)
@@ -953,7 +1161,7 @@ async def queue_restore(
             await session.commit()
         return existing
 
-    source = (
+    candidates = (
         await session.execute(
             select(EnforcementAction)
             .where(
@@ -964,31 +1172,47 @@ async def queue_restore(
                     [EnforcementActionType.disable_users, EnforcementActionType.freeze]
                 ),
                 EnforcementAction.dry_run.is_(False),
-                EnforcementAction.status.in_(
-                    [
-                        EnforcementActionStatus.planned,
-                        EnforcementActionStatus.partial,
-                        EnforcementActionStatus.done,
-                        EnforcementActionStatus.failed,
-                    ]
-                ),
+                EnforcementAction.status.in_(list(_LIVE_ACTION_STATUSES)),
             )
             .order_by(EnforcementAction.created_at.desc(), EnforcementAction.id.desc())
-            .limit(1)
+            .limit(_RESTORE_SOURCE_SCAN)
             # Serialize against the queue worker: its row lock is held between chunk commits,
             # so this read waits for the freshest committed progress before copying it (the
             # residual one-chunk window is handled by _merge_into_pending_restore).
             .with_for_update()
         )
-    ).scalar_one_or_none()
-    if source is None:
+    ).scalars().all()
+    if not candidates:
         return None
+
+    # PICKING THE SOURCE. A re-assert (`reassert_enforced`) is deliberately users-only — `admins: []`,
+    # `limits: {}` — so it never re-captures the already-zeroed limits. Taking the newest action
+    # blindly therefore picked the re-assert and produced the failure observed in production: the
+    # restore re-enabled every user, restored NO limits, and then NULLed `max_users_snapshot` —
+    # leaving the reseller online but unable to create a single user, with the only record of their
+    # real limits destroyed. So the SOURCE is the newest action that actually carries limits; every
+    # NEWER re-assert is ABSORBED instead, contributing the users it disabled to this restore.
+    source = next((a for a in candidates if not _is_reassert(a)), None)
+    absorbed: list[EnforcementAction] = []
+    if source is None:
+        source = candidates[0]  # only re-asserts survive (source pruned) → snapshot fallback below
+    else:
+        absorbed = list(candidates[: candidates.index(source)])
+
+    absorbed_users: dict[str, str] = {}
+    for extra in absorbed:
+        absorbed_users.update(_applied_users(extra))
+
+    def _revert_absorbed() -> None:
+        for extra in absorbed:
+            extra.status = EnforcementActionStatus.reverted
 
     source_snapshot = deepcopy(source.snapshot or {})
     source_progress = _progress(source_snapshot)
 
     if source.status == EnforcementActionStatus.planned:
         source.status = EnforcementActionStatus.reverted
+        _revert_absorbed()
         await session.commit()
         return None
 
@@ -1013,18 +1237,36 @@ async def queue_restore(
         admins = [uuid for uuid in admins if uuid in completed_admins]
         limits = {uuid: limits[uuid] for uuid in admins if uuid in limits}
         source.status = EnforcementActionStatus.reverted
-        if not users_map and not admins:
+        if not users_map and not admins and not absorbed_users:
+            _revert_absorbed()
             await session.commit()
             return None
     elif not admins:
+        # No admin list on the source (a re-assert-only fallback, or a suspend whose limits phase
+        # never ran). Include subtree admins that still hold a recovery snapshot so the restore's
+        # limits phase can recover from `max_users_snapshot` instead of restoring nothing at all.
         descendants = await _bundle(session, reseller)
-        admins = [d.admin_uuid for d in descendants if d.admin_uuid in limits]
+        admins = [
+            d.admin_uuid
+            for d in descendants
+            if d.admin_uuid in limits
+            or d.max_users_snapshot is not None
+            or d.max_active_users_snapshot is not None
+        ]
+
+    # Users disabled by the absorbed re-asserts are exactly the ones the debtor turned back on and
+    # we turned off again — they must be re-enabled by this restore too.
+    for user_uuid, owner_uuid in absorbed_users.items():
+        users_map.setdefault(user_uuid, owner_uuid)
 
     snapshot: dict = {
         "limits": limits,
         "admins": admins,
         "users": users_map,
         "source_action_id": source.id,
+        # Re-asserts folded into this restore; reverted alongside the source at finalize so a stale
+        # `done` re-assert can never become the source of a LATER restore.
+        "absorbed_action_ids": [a.id for a in absorbed],
         "require_no_due": require_no_due,
         "reason": reason,
         "progress": {
@@ -1307,8 +1549,29 @@ async def _process_enforcement_action(
                 "Admin lockout for reseller %s: %d locked, %d failed",
                 reseller.name, res["ok"], res["failed"],
             )
+            await _notify_lockout_failures(session, reseller, res, locking=True)
+
+    # An admin whose real limits could not be captured needs the owner's attention BEFORE the restore
+    # that will have nothing to hand back — report it at suspend time, once per action.
+    if not progress.get("zero_capture_notified"):
+        zero_capture = list(progress.get("admins_zero_capture") or [])
+        if zero_capture:
+            await _notify_zero_capture(session, reseller, zero_capture)
+            progress["zero_capture_notified"] = True
 
     reseller.enforcement_state = EnforcementState.enforced
+    # Mark the cascade: a descendant whose users were disabled and whose limits were zeroed IS
+    # suspended, and the database must say so — otherwise the panel shows it «active», the storefront
+    # guard lets its shop keep selling, and its own «unfreeze» could quietly re-open a branch of a
+    # suspended tree. Only descendants that were actually processed are marked, and an already
+    # restricted one keeps its own (frozen/enforced) state and its own recovery snapshot.
+    for descendant in descendants:
+        if descendant.id == reseller.id:
+            continue
+        if descendant.admin_uuid not in done_admins:
+            continue
+        if descendant.enforcement_state == EnforcementState.active:
+            descendant.enforcement_state = EnforcementState.enforced
     action.status = EnforcementActionStatus.done
     action.error = None
     progress["phase"] = "done"
@@ -1389,15 +1652,13 @@ async def _process_restore_action(
     client = AdminApiClient()
     descendants = await _bundle(session, reseller)
     by_uuid = {d.admin_uuid: d for d in descendants}
-    # A descendant that is INDEPENDENTLY frozen/suspended (its own enforcement_state != active,
-    # set by a separate action — e.g. its parent froze it) must NOT be re-opened by THIS
-    # reseller's restore: doing so would lift a limit the descendant is meant to keep and would
-    # destroy its recovery snapshot. Exclude such descendants from the limit-restore order and
-    # preserve their snapshots at finalize. (The root itself is always restored.)
-    independently_enforced = {
-        d.admin_uuid for d in descendants
-        if d.id != reseller.id and d.enforcement_state != EnforcementState.active
-    }
+    # A descendant that is INDEPENDENTLY frozen/suspended (by its OWN action — e.g. its parent froze
+    # it) must NOT be re-opened by THIS reseller's restore: doing so would lift a limit the
+    # descendant is meant to keep and would destroy its recovery snapshot. Independence is decided by
+    # whether the descendant owns a live action, NOT by its state alone: a cascade-suspended
+    # descendant now also carries `enforced` (so the panel and the storefront guard can see it), and
+    # judging by state would make the root's own restore skip its entire subtree.
+    independently_enforced = await _independently_restricted(session, reseller, descendants)
     limits: dict[str, dict] = dict(snapshot.get("limits") or {})
     # Top-down (root → leaf): parent quotas restored first so children's quota
     # is meaningful as soon as they get it back.
@@ -1472,6 +1733,7 @@ async def _process_restore_action(
                 "Admin login restore for reseller %s: %d reset, %d failed",
                 reseller.name, res["ok"], res["failed"],
             )
+            await _notify_lockout_failures(session, reseller, res, locking=False)
 
     # ── Finalize ─────────────────────────────────────────────────────────────
     reseller.enforcement_state = EnforcementState.active
@@ -1480,8 +1742,19 @@ async def _process_restore_action(
         # NOT restored above and still needs its snapshot to be lifted by its own action.
         if descendant.admin_uuid in independently_enforced:
             continue
+        # Clear the recovery snapshot ONLY for admins whose limits this restore actually re-applied.
+        # Clearing it unconditionally destroyed the real max_users of every admin a restore had not
+        # touched (the source carried no limits) — after which the next suspend captured the panel's
+        # zero as the "real" limit and every later restore handed back 0. The snapshot is the last
+        # copy of that number: keep it until it has demonstrably been put back.
+        if descendant.admin_uuid not in done_admins:
+            continue
         descendant.max_users_snapshot = None
         descendant.max_active_users_snapshot = None
+        # Suspended-by-cascade descendants go back to `active` with the root (see the suspend
+        # finalize). An independently restricted one was skipped above and keeps its own state.
+        if descendant.id != reseller.id:
+            descendant.enforcement_state = EnforcementState.active
 
     from app.models import Invoice
     from app.models.enums import InvoiceStatus
@@ -1502,6 +1775,12 @@ async def _process_restore_action(
         src = await session.get(EnforcementAction, int(source_id))
         if src is not None:
             src.status = EnforcementActionStatus.reverted
+    # Re-asserts folded into this restore are spent too — leaving them `done` would let one become
+    # the source of a later restore, which is exactly the users-only-source failure being fixed.
+    for absorbed_id in snapshot.get("absorbed_action_ids") or []:
+        absorbed = await session.get(EnforcementAction, int(absorbed_id))
+        if absorbed is not None and absorbed.status != EnforcementActionStatus.reverted:
+            absorbed.status = EnforcementActionStatus.reverted
 
     action.status = EnforcementActionStatus.done
     action.error = None
