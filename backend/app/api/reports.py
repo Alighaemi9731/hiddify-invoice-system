@@ -4,9 +4,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from collections import defaultdict
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from app.schemas.reports import (
     DebtRow,
     DeliveryLogRow,
     EnforcementActionRow,
+    HighVolumeDeleteResult,
+    HighVolumeDeleteRow,
     PanelSalesRow,
     SalesByDayRow,
     SalesRow,
@@ -406,6 +409,43 @@ async def high_volume_users_warn(
     if reachable:
         background.add_task(_high_volume_warn_bg, reachable, texts, unregistered)
     return {"status": "started", "total": len(reachable), "unregistered": unregistered}
+
+
+class HighVolumeDeleteBody(BaseModel):
+    # Capped because every id costs two panel round-trips plus a share of a heavy CSRF page load;
+    # the UI chunks well below this, so the cap is a backstop against a runaway request.
+    snapshot_ids: Annotated[list[int], Field(min_length=1, max_length=200)]
+    threshold: float | None = None   # the same box as the list; the service floors it
+
+
+@router.post("/high-volume-users/delete", response_model=HighVolumeDeleteResult)
+async def high_volume_users_delete(
+    body: HighVolumeDeleteBody, session: AsyncSession = Depends(get_session)
+) -> HighVolumeDeleteResult:
+    """Delete the given high-volume end-users on their Hiddify panel and purge them from billing.
+
+    Panel first, then a per-user verification, then the local rows — so a row is only ever dropped
+    once the panel is proven to no longer hold that user, and ANY panel failure purges nothing.
+    Issued invoices and the financial ledger are untouched: only future computation changes, so the
+    period's draft must be re-issued to reflect it."""
+    from app.services import high_volume as hv
+
+    th = await _resolve_threshold(session, body.threshold)
+    res = await hv.delete_high_volume_users(
+        session, snapshot_ids=body.snapshot_ids, threshold=th)
+    return HighVolumeDeleteResult(
+        deleted=res.deleted, already_absent=res.already_absent, purged=res.purged,
+        skipped=res.skipped, failed=res.failed, meters_deleted=res.meters_deleted,
+        rows=[
+            HighVolumeDeleteRow(
+                snapshot_id=r.snapshot_id,
+                user_uuid=(r.user_uuid or "")[:8],   # truncated, exactly like the list row
+                name=r.name, panel_key=r.panel_key,
+                status=r.status.value, purged=r.purged, error=r.error,
+            )
+            for r in res.rows
+        ],
+    )
 
 
 @router.get("/sales-by-day", response_model=list[SalesByDayRow])

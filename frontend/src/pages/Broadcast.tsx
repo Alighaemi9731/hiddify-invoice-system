@@ -3,6 +3,7 @@ import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem, Select,
   Chip, Divider, Table, TableBody, TableCell, TableHead, TableRow, Collapse,
   FormControlLabel, Switch, Link, Tooltip, IconButton, ListSubheader,
+  Dialog, DialogTitle, DialogContent, DialogActions, Checkbox, CircularProgress,
 } from "@mui/material";
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
 import CleaningServicesIcon from "@mui/icons-material/esm/CleaningServices";
@@ -10,8 +11,10 @@ import GroupIcon from "@mui/icons-material/esm/Group";
 import PublicIcon from "@mui/icons-material/esm/Public";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import NotificationsActiveIcon from "@mui/icons-material/esm/NotificationsActive";
+import DeleteForeverIcon from "@mui/icons-material/esm/DeleteForever";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels, highVolumeUsers, highVolumeWarn } from "../api/client";
+import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels, highVolumeUsers, highVolumeWarn, highVolumeDelete } from "../api/client";
+import type { HighVolumeDeleteResult, HighVolumeDeleteRow } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { DataState } from "../components/DataState";
 import { telegramHref } from "../components/TelegramLink";
@@ -50,6 +53,22 @@ const AUDIENCE_GROUPS = [...new Set(AUDIENCES.map((a) => a.group))];
 
 const STATUS_FA: Record<string, string> = {
   sent: "ارسال شد", blocked: "مسدود کرده", failed: "ناموفق", unregistered: "بدون ربات", pending: "—",
+};
+
+// Outcome of the high-volume delete, per user (mirrors services.end_user_delete.DeleteStatus).
+// Everything except the first two means the local rows were deliberately KEPT.
+const HV_DEL_FA: Record<string, string> = {
+  deleted: "از پنل حذف و از سامانه پاک شد",
+  already_absent: "از قبل روی پنل نبود؛ از سامانه پاک شد",
+  owner_mismatch: "روی پنل هست ولی دیگر متعلق به این نماینده نیست — پاک نشد",
+  lookup_failed: "خطا در ارتباط با پنل — چیزی پاک نشد",
+  delete_failed: "حذف از پنل ناموفق بود — چیزی پاک نشد",
+  verify_failed: "حذف از پنل تأیید نشد — چیزی پاک نشد",
+  skipped_low_quota: "حجمش کمتر از حدِ مجازِ این ابزار است — رد شد",
+  skipped_no_owner: "نمایندهٔ سازنده‌اش مشخص نیست — رد شد",
+  skipped_storefront: "سرویسِ فروخته‌شدهٔ فروشگاه است؛ از بخشِ فروشگاه اقدام کنید",
+  panel_unavailable: "پنلِ این کاربر در دسترس نیست",
+  not_found: "این کاربر دیگر در سامانه نیست",
 };
 const STATUS_COLOR: Record<string, any> = {
   sent: "success", blocked: "warning", failed: "error", unregistered: "default", pending: "default",
@@ -146,6 +165,42 @@ export default function Broadcast() {
     onError: (e) => show(errMsg(e), "error"),
   });
   const hvRows = hvData?.rows || [];
+
+  // Delete a mistaken user from the panel AND from billing. One row = single, N = the whole table.
+  const [hvDelTargets, setHvDelTargets] = useState<any[] | null>(null);
+  const [hvDelAck, setHvDelAck] = useState(false);   // bulk-only "I understand" gate
+  const [hvDelResult, setHvDelResult] = useState<HighVolumeDeleteResult | null>(null);
+  const hvDelete = useMutation({
+    // Sent in small sequential chunks: each user costs two panel round-trips plus a share of a
+    // heavy CSRF page load, so one big request would sit near the proxy's read timeout.
+    mutationFn: async (rows: any[]) => {
+      const ids = rows.map((r) => r.snapshot_id);
+      const acc: HighVolumeDeleteResult = {
+        deleted: 0, already_absent: 0, purged: 0, skipped: 0, failed: 0,
+        meters_deleted: 0, rows: [],
+      };
+      for (let i = 0; i < ids.length; i += 25) {
+        const r = await highVolumeDelete({ snapshot_ids: ids.slice(i, i + 25), ...hvParams() });
+        acc.deleted += r.deleted; acc.already_absent += r.already_absent;
+        acc.purged += r.purged; acc.skipped += r.skipped; acc.failed += r.failed;
+        acc.meters_deleted += r.meters_deleted; acc.rows.push(...r.rows);
+      }
+      return acc;
+    },
+    onSuccess: (r) => {
+      setHvDelResult(r);
+      setHvDelTargets(null);
+      setHvDelAck(false);
+      show(
+        `${fmtNum(r.purged)} کاربر از سابقهٔ سامانه پاک شد` +
+        (r.failed ? ` — ${fmtNum(r.failed)} ناموفق` : "") +
+        (r.skipped ? ` — ${fmtNum(r.skipped)} رد شد` : ""),
+        r.failed ? "warning" : "success",
+      );
+      hvCheck.mutate();   // re-read from the server rather than trusting a local splice
+    },
+    onError: (e) => show(errMsg(e), "error"),
+  });
 
   // ── «اعلامِ آدرسِ جدیدِ پنل» (personalized per-reseller links) ──
   const [migPanelId, setMigPanelId] = useState("");
@@ -371,7 +426,7 @@ export default function Broadcast() {
             </Select>
             <FormControlLabel control={<Switch checked={hvThisMonth} onChange={(e) => { setHvThisMonth(e.target.checked); setHvData(null); }} />} label="فقط ماهِ جاری" />
             <Button variant="outlined" startIcon={<GroupIcon />} disabled={hvCheck.isPending}
-              onClick={() => hvCheck.mutate()}>بررسی / نمایش</Button>
+              onClick={() => { setHvDelResult(null); hvCheck.mutate(); }}>بررسی / نمایش</Button>
           </Stack>
 
           {hvData && (
@@ -395,14 +450,14 @@ export default function Broadcast() {
                       <TableCell>کاربر</TableCell><TableCell>پنل</TableCell>
                       <TableCell>حجم (گیگابایت)</TableCell><TableCell>مبلغِ تقریبی</TableCell>
                       <TableCell>تاریخِ ساخت</TableCell><TableCell>نمایندهٔ اصلی</TableCell>
-                      <TableCell align="center">هشدار</TableCell>
+                      <TableCell align="center">عملیات</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {hvRows.map((r: any, i: number) => {
                       const href = telegramHref(r.root_username, r.root_bot_chat_id);
                       return (
-                        <TableRow key={`${r.panel_key}-${r.user_uuid}-${i}`} hover>
+                        <TableRow key={r.snapshot_id ?? `${r.panel_key}-${r.user_uuid}-${i}`} hover>
                           <TableCell>
                             {r.name || "—"}
                             <Typography variant="caption" color="text.secondary" display="block" dir="ltr">{r.user_uuid}</Typography>
@@ -420,11 +475,18 @@ export default function Broadcast() {
                           <TableCell>
                             {href ? <Link href={href} target="_blank" rel="noopener noreferrer">{r.root_name}</Link> : r.root_name}
                           </TableCell>
-                          <TableCell align="center">
-                            <Tooltip title={r.root_bot_chat_id ? "هشدار به این نماینده" : "این نماینده در ربات ثبت نشده"}>
-                              <span><IconButton size="small" color="warning" disabled={!r.root_bot_chat_id || hvWarnOne.isPending}
-                                onClick={() => hvWarnOne.mutate(r.root_reseller_id)}><NotificationsActiveIcon fontSize="small" /></IconButton></span>
-                            </Tooltip>
+                          <TableCell align="center" data-label="">
+                            <Stack direction="row" spacing={0.5} justifyContent="center">
+                              <Tooltip title={r.root_bot_chat_id ? "هشدار به این نماینده" : "این نماینده در ربات ثبت نشده"}>
+                                <span><IconButton size="small" color="warning" disabled={!r.root_bot_chat_id || hvWarnOne.isPending}
+                                  onClick={() => hvWarnOne.mutate(r.root_reseller_id)}><NotificationsActiveIcon fontSize="small" /></IconButton></span>
+                              </Tooltip>
+                              <Tooltip title={r.from_deleted ? "پاک‌سازی از سامانه" : "حذف از پنل و سامانه"}>
+                                <span><IconButton size="small" color="error" disabled={hvDelete.isPending}
+                                  onClick={() => { setHvDelTargets([r]); setHvDelAck(true); }}>
+                                  <DeleteForeverIcon fontSize="small" /></IconButton></span>
+                              </Tooltip>
+                            </Stack>
                           </TableCell>
                         </TableRow>
                       );
@@ -432,16 +494,104 @@ export default function Broadcast() {
                   </TableBody>
                 </Table>
               </Box>
-              <Button variant="contained" color="warning" startIcon={<NotificationsActiveIcon />}
-                disabled={hvWarnAll.isPending}
-                onClick={() => {
-                  const admins = new Set(hvRows.map((r: any) => r.root_reseller_id)).size;
-                  if (window.confirm(`هشدار به ${fmtNum(admins)} نمایندهٔ اصلی ارسال شود؟`))
-                    hvWarnAll.mutate();
-                }}>ارسالِ هشدار به همهٔ نماینده‌های جدول</Button>
+              {hvDelResult && (
+                <Alert sx={{ mb: 2 }}
+                  severity={hvDelResult.failed ? "error" : hvDelResult.skipped ? "warning" : "success"}
+                  onClose={() => setHvDelResult(null)}>
+                  <Typography variant="body2">
+                    {fmtNum(hvDelResult.deleted)} کاربر از پنل حذف شد
+                    {hvDelResult.already_absent > 0 && <> — {fmtNum(hvDelResult.already_absent)} مورد از قبل روی پنل نبود</>}
+                    {" "}— {fmtNum(hvDelResult.purged)} مورد از سابقهٔ سامانه پاک شد
+                    {hvDelResult.failed > 0 && <> — {fmtNum(hvDelResult.failed)} ناموفق</>}
+                    {hvDelResult.skipped > 0 && <> — {fmtNum(hvDelResult.skipped)} رد شد</>}
+                  </Typography>
+                  {hvDelResult.purged > 0 && (
+                    <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+                      فاکتورهای صادرشده تغییر نکرده‌اند؛ برای اعمال روی این دوره، «صدور فاکتورهای دوره» را دوباره اجرا کنید.
+                    </Typography>
+                  )}
+                  {hvDelResult.rows.filter((x: HighVolumeDeleteRow) => !x.purged).length > 0 && (
+                    <Box sx={{ mt: 1 }}>
+                      {hvDelResult.rows.filter((x: HighVolumeDeleteRow) => !x.purged).map((x: HighVolumeDeleteRow) => (
+                        <Typography key={x.snapshot_id} variant="caption" display="block">
+                          • {x.name || x.user_uuid} — {HV_DEL_FA[x.status] || x.status}
+                          {x.error && <Typography component="span" variant="caption" color="text.secondary" dir="ltr"> ({x.error})</Typography>}
+                        </Typography>
+                      ))}
+                    </Box>
+                  )}
+                </Alert>
+              )}
+              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                <Button variant="contained" color="warning" startIcon={<NotificationsActiveIcon />}
+                  disabled={hvWarnAll.isPending}
+                  onClick={() => {
+                    const admins = new Set(hvRows.map((r: any) => r.root_reseller_id)).size;
+                    if (window.confirm(`هشدار به ${fmtNum(admins)} نمایندهٔ اصلی ارسال شود؟`))
+                      hvWarnAll.mutate();
+                  }}>ارسالِ هشدار به همهٔ نماینده‌های جدول</Button>
+                <Button variant="outlined" color="error" startIcon={<DeleteForeverIcon />}
+                  disabled={hvDelete.isPending || !hvRows.length}
+                  onClick={() => { setHvDelTargets(hvRows); setHvDelAck(false); }}>
+                  حذفِ همهٔ کاربرانِ جدول
+                </Button>
+              </Stack>
             </Collapse>
           )}
         </CardContent>
+
+        <Dialog open={!!hvDelTargets} onClose={() => hvDelete.isPending || setHvDelTargets(null)}
+          fullWidth maxWidth="xs">
+          {hvDelTargets && (() => {
+            const one = hvDelTargets.length === 1 ? hvDelTargets[0] : null;
+            const byPanel = hvDelTargets.reduce((m: Record<string, number>, r: any) => {
+              m[r.panel_key] = (m[r.panel_key] || 0) + 1; return m;
+            }, {});
+            return (
+              <>
+                <DialogTitle>
+                  {one ? `حذفِ کاربر — ${one.name || one.user_uuid}` : `حذفِ ${fmtNum(hvDelTargets.length)} کاربرِ جدول`}
+                </DialogTitle>
+                <DialogContent>
+                  {one ? (
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      کاربر با سهمیهٔ <b>{fmtNum(one.usage_limit_gb)}</b> گیگابایت روی پنلِ <b>{one.panel_key}</b>،
+                      نمایندهٔ <b>{one.root_name}</b>.
+                    </Typography>
+                  ) : (
+                    <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap" sx={{ mb: 1 }}>
+                      {Object.entries(byPanel).map(([k, n]) => (
+                        <Chip key={k} size="small" label={`${k}: ${fmtNum(n as number)}`} />
+                      ))}
+                    </Stack>
+                  )}
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    {one?.from_deleted
+                      ? "این کاربر روی پنل موجود نیست؛ فقط از سابقهٔ سامانه پاک می‌شود تا در فاکتور محاسبه نشود."
+                      : "ابتدا از پنلِ هیدیفای حذف می‌شود و تنها در صورتِ موفقیت، از سابقهٔ سامانه پاک می‌شود (هم سهمیه و هم مصرف/متره). اگر حذف از پنل انجام نشود، هیچ چیزی پاک نمی‌شود."}
+                  </Typography>
+                  <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
+                    ⚠️ این عملیات برگشت‌ناپذیر است؛ کاربر روی پنل حذف می‌شود.
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    فاکتورهای صادرشده تغییر نمی‌کنند؛ برای اعمال روی این دوره، «صدور فاکتورهای دوره» را دوباره اجرا کنید.
+                  </Typography>
+                  {!one && (
+                    <FormControlLabel sx={{ mt: 1 }}
+                      control={<Checkbox checked={hvDelAck} onChange={(e) => setHvDelAck(e.target.checked)} />}
+                      label="می‌دانم این عملیات برگشت‌ناپذیر است" />
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button disabled={hvDelete.isPending} onClick={() => setHvDelTargets(null)}>انصراف</Button>
+                  <Button variant="contained" color="error" disabled={!hvDelAck || hvDelete.isPending}
+                    startIcon={hvDelete.isPending ? <CircularProgress size={18} color="inherit" /> : <DeleteForeverIcon />}
+                    onClick={() => hvDelete.mutate(hvDelTargets)}>حذف</Button>
+                </DialogActions>
+              </>
+            );
+          })()}
+        </Dialog>
       </Card>
       {node}
     </Box>

@@ -88,3 +88,27 @@ class DashboardSummary(BaseModel):
     status_counts: list[StatusCount]
     sales_by_panel: list[PanelSalesRow]
     top_resellers: list[SalesRow]
+
+
+class HighVolumeDeleteRow(BaseModel):
+    """One end-user's outcome from the high-volume delete action.
+
+    `status` mirrors `services.end_user_delete.DeleteStatus`; `purged` says whether the local
+    billing rows were actually dropped (only ever true once the panel is proven clear)."""
+    snapshot_id: int
+    user_uuid: str            # truncated to 8 chars, like the list row
+    name: str
+    panel_key: str
+    status: str
+    purged: bool
+    error: str | None = None
+
+
+class HighVolumeDeleteResult(BaseModel):
+    deleted: int              # was on the panel, delete verified
+    already_absent: int       # had already been removed from the panel
+    purged: int               # local snapshot + meters dropped (billing stops)
+    skipped: int              # refused by a guard (low quota / no owner / live storefront order)
+    failed: int               # panel error → nothing was purged for these
+    meters_deleted: int
+    rows: list[HighVolumeDeleteRow]

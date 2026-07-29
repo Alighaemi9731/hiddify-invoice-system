@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BotUser, EndUserSnapshot, Panel, Reseller
-from app.services import invoicing, pricing
+from app.services import end_user_delete, invoicing, pricing
 from app.services.broadcast import Recipient
 from app.services.invoice_engine import (
     build_children_map,
@@ -25,6 +25,25 @@ from app.services.invoice_engine import (
     select_billable_roots,
 )
 from app.services.periods import current_month
+
+# Absolute floor for the delete action, independent of the threshold the owner types in the panel.
+# The threshold box is a display filter and may legitimately be lowered; this is the safety rail that
+# makes deleting an ordinary customer through the high-volume button structurally impossible.
+HIGH_VOLUME_DELETE_FLOOR_GB = 100.0
+
+
+async def delete_high_volume_users(
+    session: AsyncSession, *, snapshot_ids: list[int], threshold: float
+) -> end_user_delete.DeleteBatchResult:
+    """Delete the given high-volume end-users on their panels and purge them from billing.
+
+    The quota guard is the LARGER of the caller's threshold and `HIGH_VOLUME_DELETE_FLOOR_GB`, so a
+    stale tab or a mistaken id can never reach a normal-sized customer through this path."""
+    return await end_user_delete.delete_end_users(
+        session,
+        snapshot_ids,
+        min_usage_limit_gb=max(float(threshold), HIGH_VOLUME_DELETE_FLOOR_GB),
+    )
 
 
 def _iso(value: object) -> str:
@@ -114,6 +133,10 @@ async def high_volume_users(
             if root.bot_chat_id:
                 chat_ids.append(root.bot_chat_id)
             rows.append({
+                # The snapshot PK is the handle the owner-facing delete action works on: `user_uuid`
+                # below is deliberately truncated for display, so it can't identify a row.
+                "snapshot_id": u.id,
+                "panel_id": panel.id,
                 "user_uuid": (u.user_uuid or "")[:8],
                 "name": u.name or "",
                 "usage_limit_gb": gb,

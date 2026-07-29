@@ -155,3 +155,22 @@ def test_build_warnings_groups_per_root_and_counts_unregistered():
         # nothing persisted
         assert (await s.execute(select(func.count(DeliveryLog.id)))).scalar_one() == 0
     _run(body)
+
+
+def test_rows_expose_snapshot_id_and_keep_the_uuid_truncated():
+    """The delete action addresses rows by `snapshot_id`: the displayed uuid is deliberately cut to
+    8 chars, so it cannot identify a user and must never become the handle."""
+    async def body(s):
+        p = await _seed(s)
+        s.add(_user(p.id, "ROOT", 1000, THIS_MONTH, "byroot"))
+        await s.commit()
+
+        rows = await hv.high_volume_users(s, threshold=1000, this_month_only=True)
+        assert rows, "expected at least one high-volume row"
+        ids = set((await s.execute(select(EndUserSnapshot.id))).scalars().all())
+        for r in rows:
+            assert r["snapshot_id"] in ids
+            assert r["panel_id"] == p.id
+            assert len(r["user_uuid"]) <= 8
+
+    _run(body)

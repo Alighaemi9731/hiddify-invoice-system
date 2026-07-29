@@ -446,6 +446,20 @@ export const highVolumeUsers = (params: { threshold?: number; panel_id?: number;
   api.get("/api/reports/high-volume-users", { params }).then((r) => r.data);
 export const highVolumeWarn = (body: { threshold?: number; panel_id?: number; this_month_only?: boolean; root_reseller_ids?: number[] }) =>
   api.post("/api/reports/high-volume-users/warn", body).then((r) => r.data);
+export type HighVolumeDeleteRow = {
+  snapshot_id: number; user_uuid: string; name: string; panel_key: string;
+  status: string; purged: boolean; error: string | null;
+};
+export type HighVolumeDeleteResult = {
+  deleted: number; already_absent: number; purged: number;
+  skipped: number; failed: number; meters_deleted: number;
+  rows: HighVolumeDeleteRow[];
+};
+/** Deletes the users on their Hiddify panel, then purges them from billing. Panel failures purge
+ *  nothing. Long-running (two panel round-trips per user) — callers should send small batches. */
+export const highVolumeDelete = (body: { snapshot_ids: number[]; threshold?: number }) =>
+  api.post("/api/reports/high-volume-users/delete", body, { timeout: LONG_OP_MS })
+    .then((r) => r.data as HighVolumeDeleteResult);
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);
 export const setDomain = (domain: string, acme_email?: string) =>
   api.post("/api/ops/set-domain", { domain, acme_email }).then((r) => r.data);
