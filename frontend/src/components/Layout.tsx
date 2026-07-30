@@ -13,6 +13,7 @@ import ReceiptLongIcon from "@mui/icons-material/esm/ReceiptLong";
 import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import MoneyOffIcon from "@mui/icons-material/esm/MoneyOff";
 import BarChartIcon from "@mui/icons-material/esm/BarChart";
+import StorefrontIcon from "@mui/icons-material/esm/Storefront";
 import AccountBalanceIcon from "@mui/icons-material/esm/AccountBalance";
 import HistoryIcon from "@mui/icons-material/esm/History";
 import CampaignIcon from "@mui/icons-material/esm/Campaign";
@@ -55,6 +56,7 @@ const NAV = [
   { to: "/payments", label: "پرداخت‌ها", icon: <PaymentsIcon />, color: "#10b981" },
   { to: "/debts", label: "بدهی‌ها", icon: <MoneyOffIcon />, color: "#f43f5e" },
   { to: "/sales", label: "فروش نمایندگان", icon: <BarChartIcon />, color: "#30d158" },
+  { to: "/storefront-analytics", label: "آنالیز فروشگاه‌ها", icon: <StorefrontIcon />, color: "#bf5af2" },
   { to: "/financial-history", label: "تاریخچهٔ مالی", icon: <AccountBalanceIcon />, color: "#14b8a6" },
   { to: "/broadcast", label: "پیام همگانی", icon: <CampaignIcon />, color: "#ec4899" },
   { to: "/logs", label: "گزارش‌ها", icon: <HistoryIcon />, color: "#0891b2" },

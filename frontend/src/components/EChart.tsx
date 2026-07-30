@@ -1,14 +1,15 @@
 import { useEffect, useRef } from "react";
 import * as echarts from "echarts/core";
 import type { EChartsType } from "echarts/core";
-import { BarChart, PieChart } from "echarts/charts";
+import { BarChart, LineChart, PieChart } from "echarts/charts";
 import { GridComponent, TooltipComponent, LegendComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
 // Register only what the dashboard charts use — pulls in a fraction of full `echarts`,
-// roughly halving the (lazy) dashboard chunk.
+// roughly halving the (lazy) dashboard chunk. LineChart is here for the storefront-analytics
+// trend overlays (orders / new customers on top of the daily revenue bars).
 echarts.use([
-  BarChart, PieChart,
+  BarChart, LineChart, PieChart,
   GridComponent, TooltipComponent, LegendComponent,
   CanvasRenderer,
 ]);

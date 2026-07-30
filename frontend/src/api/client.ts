@@ -415,6 +415,72 @@ export interface DashboardSummary {
 export const getDashboard = (period?: string) =>
   api.get("/api/reports/dashboard", { params: { period } })
     .then((r) => r.data as DashboardSummary);
+
+// ---- storefront-bot analytics (fleet-wide, owner side) ----
+export interface SalesWindow {
+  gross_toman: number; reversals_toman: number; net_toman: number; orders: number;
+  purchase_count: number; purchase_toman: number;
+  renewal_count: number; renewal_toman: number;
+  unknown_count: number; unknown_toman: number;
+}
+export interface StorefrontShopRow {
+  shop_id: number; reseller_id: number; reseller_name: string; panel_key: string;
+  bot_username: string | null; enabled: boolean; status: string; shop_closed: boolean;
+  health_error_class: string | null; plans: number; customers: number; new_customers: number;
+  active_customers_30d: number; services_active: number; expiring_3d: number;
+  net_sales_toman: number; orders: number; today_net_toman: number;
+  wallet_liability_toman: number; pending_topups_count: number; pending_topups_toman: number;
+  last_sale_at: string | null; created_at: string | null;
+}
+export interface StorefrontAnalytics {
+  period: string; period_start: string; period_end: string; previous_period: string;
+  generated_at: string;
+  bots: {
+    total: number; enabled: number; disabled: number; active: number; errored: number;
+    closed: number; selling: number; without_plans: number; trial_enabled: number;
+    channel_locked: number; panel_unhealthy: number; new_in_period: number;
+    eligible_resellers: number;
+  };
+  customers: {
+    total: number; new_today: number; new_in_period: number; active_7d: number;
+    active_30d: number; banned: number; buyers_in_period: number;
+    repeat_buyers_in_period: number; wallet_liability_toman: number;
+    avg_order_toman: number; arppu_toman: number;
+  };
+  services: {
+    total: number; pending: number; provisioned: number; renewing: number; disabled: number;
+    failed: number; deleted: number; active: number; trials_active: number;
+    trials_in_period: number; expiring_3d: number; expiring_7d: number; expired: number;
+    high_usage: number; quota_gb: number; used_gb: number; autorenew_armed: number;
+  };
+  topups: {
+    pending_count: number; pending_toman: number; confirmed_count: number;
+    confirmed_toman: number; rejected_count: number;
+    by_method: { method: string; count: number; amount_toman: number }[];
+  };
+  credits: { redemptions: number; bonus_toman: number; active_codes: number };
+  operations: {
+    pending: number; in_progress: number; done: number; failed: number; reversed: number;
+    failed_24h: number;
+  };
+  trial: { trial_customers: number; converted_customers: number; rate: number | null };
+  sales_today: SalesWindow;
+  sales_yesterday: SalesWindow;
+  sales_7d: SalesWindow;
+  sales_30d: SalesWindow;
+  sales_period: SalesWindow;
+  sales_previous_period: SalesWindow;
+  daily: {
+    date: string; day: number; net_toman: number; orders: number;
+    new_customers: number; topups_toman: number;
+  }[];
+  top_plans: { gb: number; days: number; orders: number; amount_toman: number }[];
+  shops: StorefrontShopRow[];
+}
+
+export const getStorefrontAnalytics = (period?: string, refresh?: boolean) =>
+  api.get("/api/storefront-analytics", { params: { period, refresh: refresh || undefined } })
+    .then((r) => r.data as StorefrontAnalytics);
 export const getSalesByDay = (period?: string) =>
   api.get("/api/reports/sales-by-day", { params: { period } }).then((r) => r.data);
 export const getSales = (params: any = {}) => api.get("/api/reports/sales", { params }).then((r) => r.data);
