@@ -83,7 +83,11 @@ services:
     build: ../backend
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 512m
+    # 512m was NOT enough: the kernel OOM-killed this container every few hours (Jul 29–31, always
+    # ~520 MB anon-rss right on the cap) and each kill cut whatever job was mid-run — a backup, a
+    # delivery batch, an enforcement chunk. `docker inspect` hides it (`OOMKilled` reflects only the
+    # last exit) and the container comes back «healthy», so it stayed invisible for days.
+    mem_limit: 768m
     env_file: ../.env
     environment:
       POSTGRES_HOST: db
@@ -111,7 +115,9 @@ services:
     build: ../backend
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 512m
+    # One process polls the main bot AND every storefront bot (151 and growing), and it sat at
+    # 366/512 MB — close enough to the cap that one busy broadcast would OOM the WHOLE fleet.
+    mem_limit: 768m
     env_file: ../.env
     environment:
       POSTGRES_HOST: db

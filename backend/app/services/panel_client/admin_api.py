@@ -22,6 +22,13 @@ from app.services.panel_client.base import PanelClient, PanelData, parse_backup
 
 log = logging.getLogger("panel.admin_api")
 
+# Flask-Admin mounts each model view under the LOWERCASED MODEL CLASS NAME, and Hiddify registers
+# the admin view as `flaskadmin.add_view(AdminstratorAdmin(AdminUser, db.session))` — so the admin
+# list lives at `/admin/adminuser/`, NOT at `/admin/admin/` (that path 404s with a JSON body, which
+# is exactly how the lockout silently failed for every admin until 2026-07-31). The user list, by the
+# same rule, is `/admin/user/`. Verified against a live v12 panel + the upstream source.
+ADMIN_LIST_PATH = "/admin/adminuser/"
+
 
 class UserLimitError(RuntimeError):
     """Raised when the panel rejects a create because the admin's max_users is reached."""
@@ -459,7 +466,7 @@ class AdminApiClient(PanelClient):
         caller wraps this; a failure is logged, never fatal to the suspend/restore."""
         headers = self._headers(panel, api_key)
         headers["User-Agent"] = "invoice-system-admin-lockout/1"
-        list_url = f"{panel.proxy_base}/admin/admin/"
+        list_url = f"{panel.proxy_base}{ADMIN_LIST_PATH}"
         async with httpx.AsyncClient(
             timeout=max(self.timeout, 120.0), follow_redirects=False, headers=headers
         ) as client:
@@ -468,7 +475,7 @@ class AdminApiClient(PanelClient):
             search = await client.get(list_url, params={"search": admin_uuid})
             if search.status_code >= 400:
                 raise RuntimeError(f"admin list {search.status_code}: {search.text[:200]}")
-            ids = re.findall(r'/admin/admin/edit/\?[^"\']*?\bid=(\d+)', search.text)
+            ids = re.findall(rf'{ADMIN_LIST_PATH}edit/\?[^"\']*?\bid=(\d+)', search.text)
             unique_ids = sorted(set(ids))
             if not unique_ids:
                 raise RuntimeError(f"admin {admin_uuid} not found in list")
@@ -485,6 +492,12 @@ class AdminApiClient(PanelClient):
             fields = _scrape_edit_form_fields(page.text)
             if "new_password" not in fields and "csrf_token" not in fields:
                 raise RuntimeError("admin edit form not recognized (no csrf/new_password)")
+            # The form carries the admin's own uuid — the one identity Hiddify never renumbers. Refuse
+            # to POST a form that belongs to a DIFFERENT admin: a row id resolved from a list page is
+            # exactly the kind of indirection that once disabled 305 other resellers' users.
+            form_uuid = (fields.get("uuid") or "").strip().lower()
+            if form_uuid and form_uuid != admin_uuid.strip().lower():
+                raise RuntimeError(f"admin edit form is for another admin (row {row_id})")
             fields["new_password"] = password
 
             resp = await client.post(edit_url, params={"id": row_id}, data=fields)
