@@ -36,9 +36,62 @@ _EPS = 0.05  # ignore sub-50MB noise
 # re-sync, not abuse — so it must not be counted as consumption (that produced false overage).
 _RESET_FLOOR_GB = 5.0
 
+# Panel-rollback detection. Restoring a Hiddify backup onto another server (the owner's mid-month
+# server migrations) rewinds EVERY user's usage counter to the backup point. The counters then climb
+# back over the same GB the meter had already banked, so that stretch was billed twice: once as
+# consumption before the restore, once as "overage" while the panel caught up. It is one-directional
+# — the meter never credits a counter going backwards — so it can only ever over-bill the reseller.
+# Individual resets look identical per user, so the signal has to be PANEL-WIDE: many users' counters
+# dropping in the SAME sync is a restore, not a coincidence of resellers.
+# A restore hits EVERY reseller's users at once, whereas even scripted abuse belongs to one admin —
+# so requiring the drop to span several admins is the discriminator that lets the volume thresholds
+# stay low enough to actually catch a restore (only the users who consumed between backup and restore
+# move backwards, which can be a modest slice of a big panel).
+_ROLLBACK_MIN_USERS = 10          # never call a small panel's handful of real resets a rollback
+_ROLLBACK_RATIO = 0.05            # …at least this share of the panel's already-metered users…
+_ROLLBACK_MIN_ADMINS = 3          # …and spread across at least this many different resellers
+
 
 def period_of(d) -> str:
     return d.strftime("%Y-%m") if d else ""
+
+
+def detect_panel_rollback(users, existing: dict) -> int:  # noqa: ANN001
+    """Return how many users' counters went BACKWARDS in this sync, but only once the drop is
+    panel-wide enough to be a restored backup (0 otherwise).
+
+    A renewal legitimately drops the counter (start_date advances into a fresh cycle), so those are
+    excluded — otherwise the first sync after a busy renewal day would look like a restore. Only
+    users we have already metered count, since a first sighting has no previous value to fall from.
+    The drop must also span several DIFFERENT resellers: one reseller mass-resetting their own
+    customers is the abuse this meter exists to bill, not a restore, however many users it touches.
+    """
+    known = 0
+    dropped = 0
+    admins: set[str] = set()
+    for u in users:
+        s = existing.get(u.uuid)
+        if s is None or not bool(getattr(s, "meter_init", False)):
+            continue
+        known += 1
+        prev_used = float(s.current_usage_gb or 0)
+        new_used = float(u.current_usage_gb or 0)
+        if new_used + _EPS >= prev_used:
+            continue
+        prev_start = s.start_date
+        if u.start_date is not None and (prev_start is None or u.start_date > prev_start):
+            continue  # a renewal, not a rewind
+        dropped += 1
+        owner = getattr(u, "added_by_uuid", None) or getattr(s, "added_by_uuid", None)
+        if owner:
+            admins.add(str(owner))
+    if (
+        dropped >= _ROLLBACK_MIN_USERS
+        and dropped >= _ROLLBACK_RATIO * max(known, 1)
+        and len(admins) >= _ROLLBACK_MIN_ADMINS
+    ):
+        return dropped
+    return 0
 
 
 async def is_enabled(session: AsyncSession) -> bool:
@@ -93,6 +146,7 @@ def compute(
     added_by_uuid: str | None,
     name: str | None,
     period_label: str,
+    panel_rollback: bool = False,
 ) -> MeterUpdate:
     """PURE: read the current running state and return the new absolute values. Mutates nothing — the
     caller writes the result only on success (F10)."""
@@ -176,7 +230,15 @@ def compute(
             events.append(("edit_topup", round(add, 3)))
 
     # Consumption since last sync (reset-aware).
-    if new_used + _EPS >= prev_used:
+    if panel_rollback and new_used + _EPS < prev_used:
+        # The whole panel was restored from a backup: this counter did not "reset", it was REWOUND
+        # to an earlier point in the same cycle. Give back the rewound GB so the user can re-consume
+        # them without paying twice — the meter's banked consumption returns to exactly where it was
+        # once the counter climbs back, and only genuinely NEW usage beyond that is billed. Nothing
+        # is counted this step and it is not an abuse reset.
+        cons = max(0.0, cons - (prev_used - new_used))
+        dc = 0.0
+    elif new_used + _EPS >= prev_used:
         dc = new_used - prev_used          # normal forward consumption
     elif new_used <= _RESET_FLOOR_GB:
         # Usage dropped to ~0 while start_date stayed the same → a "renew-volume" reset (the

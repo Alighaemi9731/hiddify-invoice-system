@@ -13,6 +13,7 @@ from app.api import invoices as invoices_api  # noqa: E402
 from app.models import DeliveryLog, Invoice, Panel, Reseller  # noqa: E402
 from app.models.enums import DeliveryKind, DeliveryStatus, InvoiceStatus  # noqa: E402
 from app.schemas.invoice import BulkDefer  # noqa: E402
+from app.services.periods import today as tehran_today  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -141,3 +142,55 @@ def test_bulk_defer_clear_deadline(tmp_path):
         assert inv.deferred_until is None
 
     _run(body, tmp_path, "b2.db")
+
+
+def test_defer_to_today_resets_the_cycle_and_stays_payable(tmp_path):
+    """«مهلت = امروز» must mean «as if issued today»: the guard is `>= today`, not `> today`.
+
+    Under `>` a deadline of today only moved the dunning ANCHOR (dunning counts days from
+    `deferred_until`) while the old reminder/warning marks survived. Since each reminder kind is
+    sent at most once per invoice, the invoice then went silent for the whole new cycle and an
+    already-overdue one kept its status. Payability is a separate, strictly-future check, so today
+    must still be payable.
+    """
+    async def body(s):
+        r = await _seed(s)
+        today = tehran_today()   # the calendar the code uses; date.today() flakes in a UTC CI
+        inv = _inv(r.id, label="2026-06", status=InvoiceStatus.overdue)
+        s.add(inv)
+        await s.flush()
+        for kind in (DeliveryKind.reminder1, DeliveryKind.reminder2, DeliveryKind.warning):
+            s.add(DeliveryLog(reseller_id=r.id, invoice_id=inv.id, kind=kind,
+                              status=DeliveryStatus.sent))
+        await s.commit()
+
+        res = await invoices_api.bulk_defer(
+            BulkDefer(ids=[inv.id], deferred_until=today, defer_note=None), session=s)
+        assert res.done == 1
+        await s.refresh(inv)
+
+        assert inv.deferred_until == today
+        assert inv.status == InvoiceStatus.sent          # overdue → sent, a fresh cycle
+        left = (await s.execute(
+            __import__("sqlalchemy").select(DeliveryLog).where(DeliveryLog.invoice_id == inv.id)
+        )).scalars().all()
+        assert left == []                                 # stale reminders cleared → they re-fire
+        # Payability is `deferred_until > today`, so a deadline of today does NOT block payment.
+        assert not (inv.deferred_until and inv.deferred_until > today)
+
+    _run(body, tmp_path, "b4.db")
+
+
+def test_defer_to_tomorrow_still_blocks_payment(tmp_path):
+    """The other half of the rule: a FUTURE deadline keeps the invoice unpayable until that day."""
+    async def body(s):
+        r = await _seed(s)
+        tomorrow = tehran_today() + dt.timedelta(days=1)
+        inv = _inv(r.id, label="2026-07", status=InvoiceStatus.sent)
+        s.add(inv)
+        await s.commit()
+        await invoices_api.bulk_defer(
+            BulkDefer(ids=[inv.id], deferred_until=tomorrow, defer_note=None), session=s)
+        await s.refresh(inv)
+        assert inv.deferred_until > tehran_today()        # blocked by the payability guard
+    _run(body, tmp_path, "b5.db")

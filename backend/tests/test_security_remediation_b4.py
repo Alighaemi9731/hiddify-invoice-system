@@ -149,6 +149,16 @@ def test_f10_failed_sync_preserves_renewal_date_for_exact_retry(tmp_path, monkey
         try:
             from app.models import UsageMeter
             from app.services import metering, settings_service
+            from app.services.periods import today as tehran_today
+
+            # This exercise lives entirely inside the CURRENT billing month: `sync_panel` opens a
+            # meter for whatever period it runs in, and the renewal branch only banks the closing
+            # cycle when that cycle STARTED in the same period. Hard-coded July dates made the test
+            # pass only during July — on 2026-08-01 the sync opened an August meter beside the
+            # seeded July one and `scalar_one()` blew up on two rows.
+            month_start = tehran_today().replace(day=1)
+            renew_date = month_start + dt.timedelta(days=14)
+            period = month_start.strftime("%Y-%m")
             async with S() as s:
                 await settings_service.set_value(s, "metering_enabled", True)
                 panel = Panel(key="pr", host="h", proxy_path_enc=crypto.encrypt("x") or "",
@@ -158,16 +168,16 @@ def test_f10_failed_sync_preserves_renewal_date_for_exact_retry(tmp_path, monkey
                 pid = panel.id
                 s.add(EndUserSnapshot(
                     panel_id=pid, user_uuid="u1", added_by_uuid=_OWNER,
-                    usage_limit_gb=10, current_usage_gb=8, start_date=dt.date(2026, 7, 1),
+                    usage_limit_gb=10, current_usage_gb=8, start_date=month_start,
                     meter_init=True, meter_provisioned_gb=10, meter_consumed_gb=8))
                 s.add(UsageMeter(
-                    panel_id=pid, user_uuid="u1", period_label="2026-07",
+                    panel_id=pid, user_uuid="u1", period_label=period,
                     added_by_uuid=_OWNER, quota_added_gb=10, consumed_gb=8,
                     renew_used_gb=0, edit_renewal_gb=0, overage_gb=0, reset_count=0))
                 await s.commit()
 
             incoming = _user("u1", limit=10, used=1)
-            incoming.start_date = dt.date(2026, 7, 15)
+            incoming.start_date = renew_date
             real_compute = metering.compute
 
             def _boom(**kwargs):  # noqa: ANN003
@@ -179,7 +189,7 @@ def test_f10_failed_sync_preserves_renewal_date_for_exact_retry(tmp_path, monkey
             async with S() as s:
                 snap = (await s.execute(select(EndUserSnapshot).where(
                     EndUserSnapshot.user_uuid == "u1"))).scalar_one()
-                assert snap.start_date == dt.date(2026, 7, 1)
+                assert snap.start_date == month_start
                 assert float(snap.current_usage_gb) == 8
 
             monkeypatch.setattr(metering, "compute", real_compute)
@@ -187,13 +197,14 @@ def test_f10_failed_sync_preserves_renewal_date_for_exact_retry(tmp_path, monkey
                 await sync_service.sync_panel(s, await s.get(Panel, pid), data=_data([incoming]))
             async with S() as s:
                 meter = (await s.execute(select(UsageMeter).where(
-                    UsageMeter.user_uuid == "u1"))).scalar_one()
+                    UsageMeter.user_uuid == "u1",
+                    UsageMeter.period_label == period))).scalar_one()
                 snap = (await s.execute(select(EndUserSnapshot).where(
                     EndUserSnapshot.user_uuid == "u1"))).scalar_one()
                 assert float(meter.quota_added_gb) == 20
                 assert float(meter.renew_used_gb) == 8
                 assert float(snap.meter_consumed_gb) == 1
-                assert snap.start_date == dt.date(2026, 7, 15)
+                assert snap.start_date == renew_date
         finally:
             await engine.dispose()
     asyncio.run(go())

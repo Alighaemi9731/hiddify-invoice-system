@@ -364,7 +364,13 @@ async def _apply_defer(
     inv.deferred_until = deferred_until
     inv.defer_note = defer_note
 
-    if deferred_until and deferred_until > tehran_today():
+    # `>= today`, not `> today`: a deadline set to TODAY must reset the cycle exactly like any other
+    # deadline. Under `>` it only moved the dunning ANCHOR (dunning counts from `deferred_until`)
+    # while leaving the old reminder/warning marks in place — so the invoice went silent (each
+    # reminder kind is sent at most once per invoice) and the reseller was never chased again, while
+    # a suspended one stayed suspended. «مهلت = امروز» now means «as if issued today, payable today»:
+    # payability still uses a strict `> today`, so today itself stays payable.
+    if deferred_until and deferred_until >= tehran_today():
         # Wipe prior reminder/warning marks so the cycle starts fresh from the deadline.
         await session.execute(
             delete(DeliveryLog).where(
@@ -417,10 +423,12 @@ async def _apply_defer(
 async def defer_invoice(
     invoice_id: int, body: InvoiceDefer, session: AsyncSession = Depends(get_session)
 ) -> InvoiceOut:
-    """Set (or clear) a payment deadline. Setting a future deadline RESTARTS the whole
-    dunning cycle from that date: prior reminders are cleared so they re-fire, an
-    overdue invoice goes back to 'sent', and an already-suspended reseller is restored
-    for the new grace window. Other invoices and panel data are unaffected."""
+    """Set (or clear) a payment deadline. Setting a deadline of TODAY OR LATER restarts the whole
+    dunning cycle from that date: prior reminders are cleared so they re-fire, an overdue invoice
+    goes back to 'sent', and an already-suspended reseller is restored for the new grace window.
+    A deadline of today leaves the invoice payable immediately (payability blocks only a FUTURE
+    deadline); a past date only re-anchors the day count. Other invoices and panel data are
+    unaffected."""
     inv = await session.get(Invoice, invoice_id, with_for_update=True, populate_existing=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")

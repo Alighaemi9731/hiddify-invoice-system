@@ -201,6 +201,25 @@ async def _upsert_resellers(
             await session.delete(r)
 
 
+async def _notify_panel_rollback(session: AsyncSession, panel: Panel, users: int) -> None:  # noqa: ANN001
+    """Tell the owner that a panel's counters were rewound and metering absorbed it. Silent handling
+    would be worse than the old bug: the owner would have no way to tell a restore from a quiet month
+    of «no abuse detected». Best-effort — a notification failure must never break a sync."""
+    try:
+        from app.services import owner_notify
+
+        await owner_notify.notify_owner(
+            session,
+            f"♻️ پنل «{panel.key}»: مصرفِ {users} کاربر به عقب برگشت — احتمالاً بکاپ روی سرور "
+            "دیگری بازگردانی شده است.\n"
+            "شمارشگرِ مصرف برای همین کاربران بازتنظیم شد تا حجمی که قبلاً شمرده شده بود، هنگام "
+            "مصرفِ دوباره «مصرف مازاد» حساب نشود. کاری لازم نیست انجام دهید.",
+            html=False,
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("panel-rollback notification failed", exc_info=True)
+
+
 async def _upsert_users(
     session: AsyncSession, panel: Panel, data: PanelData, now: dt.datetime
 ) -> None:
@@ -218,6 +237,18 @@ async def _upsert_users(
     period_label = now.strftime("%Y-%m")
     metering_on = await metering.is_enabled(session)
     meters = await metering.load_period_meters(session, panel.id, period_label) if metering_on else {}
+
+    # A restored Hiddify backup (the owner's mid-month server migrations) rewinds every user's usage
+    # counter at once. Detect that BEFORE metering anything, so the rewound GB are handed back
+    # instead of being re-billed as "overage" while the panel climbs back to where it already was.
+    rolled_back = metering.detect_panel_rollback(data.users, existing) if metering_on else 0
+    if rolled_back:
+        log.warning(
+            "panel %s: usage counters rewound for %d users — treating this sync as a restored "
+            "backup (metering re-baselined, nothing billed for the recovered usage)",
+            panel.key, rolled_back,
+        )
+        await _notify_panel_rollback(session, panel, rolled_back)
 
     for u in data.users:
         s = existing.get(u.uuid)
@@ -242,7 +273,7 @@ async def _upsert_users(
                     prev_limit=float(s.usage_limit_gb or 0), prev_used=float(s.current_usage_gb or 0),
                     new_limit=float(u.usage_limit_gb or 0), new_used=float(u.current_usage_gb or 0),
                     start_date=u.start_date, added_by_uuid=u.added_by_uuid, name=u.name,
-                    period_label=period_label,
+                    period_label=period_label, panel_rollback=bool(rolled_back),
                 )
                 if is_new_meter:
                     session.add(meter)
