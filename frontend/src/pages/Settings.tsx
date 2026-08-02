@@ -50,6 +50,17 @@ type Section = {
   subs: Sub[];
 };
 
+// Pick an editor for an uncurated setting from the value the API returns, so the «متفرقه»
+// fallback still gets a switch for a boolean and a numeric input for a number instead of
+// turning every value into a free-text string on save.
+function inferFieldType(value: unknown): Field["type"] {
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number") return "number";
+  if (Array.isArray(value)) return "csv";
+  if (typeof value === "string" && value.length > 80) return "multiline";
+  return "text";
+}
+
 // Settings that are machine-managed, not user-editable — hidden from the panel entirely.
 const HIDDEN = new Set(["setup_done", "owner_chat_id", "toman_per_usdt_auto", "toman_per_usdt_auto_at", "ton_toman_auto", "avax_toman_auto", "last_backup_at", "scheduler_last_heartbeat", "error_digest_last_ts"]);
 
@@ -198,6 +209,12 @@ const SECTIONS: Section[] = [
           { key: "deleted_full_quota_over_gb", label: "سقفِ مصرفِ کاربرِ حذف‌شده برای فاکتورِ کاملِ حجم (گیگابایت)", type: "number", min: 0,
             help: "اگر نماینده کاربری را از پنل حذف کند: تا وقتی مصرفش زیرِ این مقدار باشد، فقط همان مصرف فاکتور می‌شود؛ اگر مصرفش به این مقدار یا بیشتر رسیده باشد، کلِّ حجمِ فروخته‌شده (مثلاً ۵۰ گیگابایت) فاکتور می‌شود — تا نماینده با حذفِ کانفیگ فقط بابتِ بخشِ مصرف‌شده پول ندهد. ۰ = غیرفعال (فقط مصرف). پیش‌فرض ۵." },
           { key: "excluded_usage_gb", label: "حجم‌های معاف اضافی (گیگابایت، با کاما)", help: "اندازه‌های دقیقی که نباید محاسبه شوند، جدا با کاما.", type: "csv", advanced: true },
+          { key: "storefront_monthly_fee_toman", label: "اجارهٔ ماهانهٔ ربات فروشگاهی (تومان)", type: "number", min: 0,
+            help: "مبلغی که هر ماه بابتِ داشتنِ ربات فروشگاهی به فاکتورِ نماینده اضافه می‌شود. فقط از نماینده‌ای گرفته می‌شود که ربات فروشگاهی‌اش واقعاً فعال است. ۰ = رایگان. برای هر نماینده جداگانه هم قابل تنظیم است («ویرایش نماینده»)." },
+          { key: "billing_max_snapshot_age_hours", label: "کهنگی مجازِ همگام‌سازی برای صدور فاکتور (ساعت)", type: "number", min: 0, max: 8760, advanced: true,
+            help: "اگر آخرین همگام‌سازیِ موفقِ یک پنل از این مقدار قدیمی‌تر باشد، آن پنل در صدور فاکتور نادیده گرفته می‌شود تا با دادهٔ کهنه فاکتور صادر نشود. ۰ = بدون محدودیت. پیش‌فرض ۲۶." },
+          { key: "high_volume_gb_threshold", label: "آستانهٔ «کاربران پرمصرف» (گیگابایت)", type: "number", min: 1, advanced: true,
+            help: "فقط برای گزارش: در فهرستِ «کاربران پرمصرف»، کاربرانی با حجمِ بیش از این مقدار نشان داده می‌شوند. روی فاکتور هیچ اثری ندارد. پیش‌فرض ۱۰۰۰." },
         ],
       },
     ],
@@ -220,6 +237,10 @@ const SECTIONS: Section[] = [
           { key: "rate_refresh_hours", label: "به‌روزرسانی نرخ آنلاین: هر چند ساعت", type: "number", min: 1, max: 24, when: (v) => v("rate_mode") === "auto" },
           { key: "log_retention_days", label: "نگه‌داری گزارش‌ها (روز)", type: "number", min: 7, max: 3650,
             help: "گزارش‌های قدیمی‌تر از این مدت (همگام‌سازی، ارسال پیام، و سوابق پایان‌یافتهٔ مسدودسازی) هر شبانه‌روز خودکار حذف می‌شوند تا دیتابیس سبک بماند. تاریخچهٔ مالی و فاکتورها هرگز حذف نمی‌شوند. پیش‌فرض ۹۰." },
+          { key: "meter_retention_months", label: "نگه‌داری شمارشگرهای مصرف (ماه)", type: "number", min: 0, max: 120, advanced: true,
+            help: "سوابقِ ماهانهٔ «متر مصرف» (مبنای محاسبهٔ مصرفِ مازاد و تمدید) قدیمی‌تر از این تعداد ماه پاک می‌شوند. ماهِ جاری همیشه می‌ماند. فاکتورها و تاریخچهٔ مالی حذف نمی‌شوند. ۰ = بدون پاک‌سازی. پیش‌فرض ۶." },
+          { key: "owner_data_retention_days", label: "نگه‌داری فایل‌ها و کاربرانِ بلااستفاده (روز)", type: "number", min: 0, max: 3650, advanced: true,
+            help: "تصویرِ رسیدهای پرداختِ بررسی‌شده، فایلِ PDF فاکتورها (که هر وقت لازم شد دوباره ساخته می‌شود) و کاربرانی که در ربات ثبت‌نام نکرده و مدت‌هاست غیرفعال‌اند، پس از این مدت پاک می‌شوند. فاکتورها، پرداخت‌ها و تاریخچهٔ مالی حذف نمی‌شوند. ۰ = غیرفعال. پیش‌فرض ۱۸۰." },
           { key: "daily_digest_enabled", label: "خلاصهٔ روزانه به تلگرام مالک",
             help: "هر روز یک پیامِ جمع‌بندی (آمار و سلامتِ سامانه) به چتِ خصوصیِ شما ارسال می‌شود." },
           { key: "daily_digest_hour", label: "ساعتِ خلاصهٔ روزانه", type: "number", min: 0, max: 23,
@@ -412,18 +433,36 @@ export default function Settings() {
   const getVal: Getter = (key) => (key in edits ? edits[key] : byKey[key]?.value);
   const dirtyCount = Object.keys(edits).length;
 
-  // Any non-hidden setting not covered by a curated field falls into a "متفرقه" section,
-  // so a newly-added backend setting is never silently lost from the panel.
+  // Any non-hidden setting not covered by a curated field falls into a "متفرقه" section, so a
+  // newly-added backend setting is never silently lost from the panel. This is a SAFETY NET, not
+  // a destination: a setting showing up here means it still needs a real label and a real home in
+  // SECTIONS above. Until someone does that, at least render it usably — a raw key with a text box
+  // is unreadable, and it silently broke editing for booleans and numbers (a switch saved as the
+  // string "true"). The type is inferred from the value the API returns.
   const sections = useMemo(() => {
     const covered = new Set<string>();
     SECTIONS.forEach((s) => s.subs.forEach((sub) => sub.fields.forEach((f) => covered.add(f.key))));
-    const leftover = data
+    const leftover: Field[] = data
       .filter((s: any) => !covered.has(s.key) && !HIDDEN.has(s.key))
-      .map((s: any) => ({ key: s.key, label: s.key }));
+      .map((s: any) => ({
+        key: s.key,
+        // key_like_this → «key like this»: still the key, but readable at a glance.
+        label: s.key.replace(/_/g, " "),
+        help: `کلید: ${s.key}`,
+        type: inferFieldType(s.value),
+        dir: typeof s.value === "string" ? ("ltr" as const) : undefined,
+      }));
     if (!leftover.length) return SECTIONS;
     return [
       ...SECTIONS,
-      { id: "misc", title: "متفرقه", icon: <TuneRoundedIcon fontSize="small" />, subs: [{ fields: leftover }] } as Section,
+      {
+        id: "misc",
+        title: "متفرقه",
+        icon: <TuneRoundedIcon fontSize="small" />,
+        description:
+          "تنظیم‌هایی که در سامانه وجود دارند ولی هنوز در بخش‌های بالا دسته‌بندی نشده‌اند — معمولاً قابلیت‌های تازه‌ای که به‌تازگی اضافه شده‌اند. اگر معنی یکی برایتان روشن نیست، بهتر است دست‌نخورده بماند.",
+        subs: [{ fields: leftover }],
+      } as Section,
     ];
   }, [data]);
 

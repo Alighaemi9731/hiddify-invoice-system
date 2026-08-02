@@ -186,7 +186,7 @@ def test_create_backup_refuses_a_preamble_only_dump_end_to_end(monkeypatch, tmp_
     from app.core.db import Base
 
     monkeypatch.setattr(backup, "_sqlite_path", lambda: None)          # take the Postgres branch
-    monkeypatch.setattr(backup, "_pg_dump", lambda: EMPTY_DB_DUMP.decode())
+    monkeypatch.setattr(backup, "_pg_dump_to_file", lambda dest: dest.write_bytes(EMPTY_DB_DUMP))
 
     async def run():
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'meta.db'}")
@@ -212,7 +212,7 @@ def test_create_backup_accepts_a_dump_that_covers_the_real_schema(monkeypatch, t
 
     good = _real_dump(set(Base.metadata.tables))
     monkeypatch.setattr(backup, "_sqlite_path", lambda: None)
-    monkeypatch.setattr(backup, "_pg_dump", lambda: good.decode())
+    monkeypatch.setattr(backup, "_pg_dump_to_file", lambda dest: dest.write_bytes(good))
 
     async def run():
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'ok.db'}")

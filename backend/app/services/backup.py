@@ -42,6 +42,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -59,6 +60,19 @@ from app.services import restart_signal, settings_service
 log = logging.getLogger("backup")
 
 BACKUP_DIR = Path("data/backups")
+# Archives are BUILT in a temp dir under BACKUP_DIR (same filesystem → atomic rename) and the
+# dir is removed as soon as the archive is delivered. The prefix is what identifies a dir left
+# behind by a process that died mid-build, so `_sweep_stale_temp_dirs` can reclaim it.
+_TMP_PREFIX = ".building-"
+# How many artifacts may sit on the data volume. Each local backup is a compressed zip (single
+# -digit MB); each pre-restore dump is UNCOMPRESSED SQL (~10x that). Both are kept deliberately
+# small: the newest plus ONE predecessor, so a fresh copy replaces the old one instead of the
+# folder growing forever, while a fallback still exists if the newest turns out to be unusable.
+_KEEP_LOCAL_BACKUPS = 2
+_KEEP_PRE_RESTORE_DUMPS = 2
+# Telegram refuses a bot document over 50 MB. Stay clear of the edge (multipart overhead, and
+# a backup that only just fits today would start failing silently next month).
+TELEGRAM_DOC_LIMIT_BYTES = 45 * 1024 * 1024
 
 # Upload / decompression guards (the owner is authenticated, but a corrupt or malicious
 # archive must not exhaust memory/disk). Backups are normally a few MB.
@@ -122,6 +136,116 @@ def _decrypt_archive(data: bytes, passphrase: str | None) -> bytes:
 
 
 # ------------------------------- create -------------------------------
+# A plain-format pg_dump names every object with these two prefixes. Scanning for the PREFIX
+# and reading the identifier that follows means ONE pass over the dump regardless of how many
+# tables we need to prove — the previous per-table `needle in sql` loop re-scanned the whole
+# dump ~40 times (O(tables x dump); seconds of CPU on a 100 MB dump, every 2 hours).
+_CREATE_PREFIX = b"CREATE TABLE public."
+_COPY_PREFIX = b"COPY public."
+# Longest prefix + Postgres' 63-byte identifier cap, rounded up: how much of the previous chunk
+# must be replayed so a marker straddling a chunk boundary is still seen exactly once.
+_SCAN_OVERLAP = 256
+_DUMP_CHUNK = 1 << 20
+
+
+def _collect_markers(chunk: bytes, created: set[str], copied: set[str]) -> None:
+    """Record every `CREATE TABLE public.<name>` / `COPY public.<name>` seen in one chunk."""
+    for prefix, sink in ((_CREATE_PREFIX, created), (_COPY_PREFIX, copied)):
+        pos = chunk.find(prefix)
+        while pos != -1:
+            start = pos + len(prefix)
+            end = start
+            while end < len(chunk) and (chunk[end] in _IDENT_BYTES):
+                end += 1
+            # A name that runs to the very end of the chunk may be truncated; the overlap replay
+            # re-reads it in full on the next chunk, so skipping it here loses nothing.
+            if end > start and end < len(chunk):
+                sink.add(chunk[start:end].decode("ascii", "replace"))
+            pos = chunk.find(prefix, max(end, pos + 1))
+
+
+_IDENT_BYTES = frozenset(
+    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+)
+
+
+def _scan_dump(chunks) -> tuple[bytes, int, set[str], set[str]]:  # noqa: ANN001
+    """One streaming pass over a dump. Returns (head, total_bytes, created, copied)."""
+    head = b""
+    total = 0
+    created: set[str] = set()
+    copied: set[str] = set()
+    tail = b""
+    for chunk in chunks:
+        if not chunk:
+            continue
+        total += len(chunk)
+        if len(head) < 200_000:
+            head += chunk[: 200_000 - len(head)]
+        _collect_markers(tail + chunk, created, copied)
+        tail = chunk[-_SCAN_OVERLAP:]
+    return head, total, created, copied
+
+
+def _validate_scan(
+    head: bytes,
+    total: int,
+    created: set[str],
+    copied: set[str],
+    *,
+    strict_tables: set[str] | None,
+    expect_settings: bool,
+) -> None:
+    """Apply the backup-honesty rules to the result of one `_scan_dump` pass. Shared by the
+    in-memory (restore) and streaming (create) validators so the two can never diverge."""
+    if total < 64:
+        raise BackupError("pg_dump خروجی خالی یا ناقص تولید کرد؛ پشتیبان معتبر ساخته نشد.")
+    if b"PostgreSQL database dump" not in head[:4096] and b"CREATE TABLE" not in head:
+        raise BackupError("خروجی pg_dump ساختار معتبری ندارد؛ پشتیبان لغو شد.")
+
+    if strict_tables:
+        missing = sorted(strict_tables - created)
+        if missing:
+            raise BackupError(
+                "پشتیبان ناقص است: جدول‌های زیر در خروجی pg_dump نیستند — "
+                f"{'، '.join(missing[:5])}"
+                + (f" و {len(missing) - 5} مورد دیگر" if len(missing) > 5 else "")
+                + ". پشتیبان لغو شد."
+            )
+        # alembic_version always has exactly one row, so its COPY block is the single most reliable
+        # proof that this dump carries DATA and not just a schema skeleton.
+        if "alembic_version" not in copied:
+            raise BackupError(
+                "پشتیبان بدون داده است (نسخهٔ مهاجرت دیتابیس در خروجی نیست)؛ پشتیبان لغو شد."
+            )
+        if expect_settings and "settings" not in copied:
+            raise BackupError(
+                "پشتیبان بدون داده است (تنظیمات در خروجی pg_dump نیست)؛ پشتیبان لغو شد."
+            )
+
+
+def _validate_dump_file(
+    path: Path,
+    *,
+    strict_tables: set[str] | None = None,
+    expect_settings: bool = False,
+) -> None:
+    """Same rules as `_validate_dump`, but streamed from disk so a multi-hundred-MB dump is
+    never held in memory. Used by the CREATE path (the dump is written straight to a file)."""
+
+    def _chunks():  # noqa: ANN202
+        with path.open("rb") as fh:
+            while True:
+                block = fh.read(_DUMP_CHUNK)
+                if not block:
+                    return
+                yield block
+
+    _validate_scan(
+        *_scan_dump(_chunks()), strict_tables=strict_tables, expect_settings=expect_settings
+    )
+
+
 def _validate_dump(
     sql: bytes,
     *,
@@ -144,36 +268,14 @@ def _validate_dump(
     We do not require COPY for every table — an empty table is perfectly legal — only for
     `alembic_version`, which by construction always holds exactly one row, and for `settings` when
     the caller has already read a non-empty settings table from the live database.
-    """
-    if not sql or len(sql) < 64:
-        raise BackupError("pg_dump خروجی خالی یا ناقص تولید کرد؛ پشتیبان معتبر ساخته نشد.")
-    head = sql[:4096]
-    if b"PostgreSQL database dump" not in head and b"CREATE TABLE" not in sql[:200_000]:
-        raise BackupError("خروجی pg_dump ساختار معتبری ندارد؛ پشتیبان لغو شد.")
 
-    if strict_tables:
-        missing = sorted(
-            name for name in strict_tables
-            if f"CREATE TABLE public.{name} ".encode() not in sql
-            and f"CREATE TABLE public.{name}(".encode() not in sql
-        )
-        if missing:
-            raise BackupError(
-                "پشتیبان ناقص است: جدول‌های زیر در خروجی pg_dump نیستند — "
-                f"{'، '.join(missing[:5])}"
-                + (f" و {len(missing) - 5} مورد دیگر" if len(missing) > 5 else "")
-                + ". پشتیبان لغو شد."
-            )
-        # alembic_version always has exactly one row, so its COPY block is the single most reliable
-        # proof that this dump carries DATA and not just a schema skeleton.
-        if b"COPY public.alembic_version " not in sql:
-            raise BackupError(
-                "پشتیبان بدون داده است (نسخهٔ مهاجرت دیتابیس در خروجی نیست)؛ پشتیبان لغو شد."
-            )
-        if expect_settings and b"COPY public.settings " not in sql:
-            raise BackupError(
-                "پشتیبان بدون داده است (تنظیمات در خروجی pg_dump نیست)؛ پشتیبان لغو شد."
-            )
+    This is the in-memory form, kept for the RESTORE path (which already holds the uploaded
+    archive's bytes). The create path uses `_validate_dump_file`; both share `_validate_scan`,
+    so the rules cannot drift apart.
+    """
+    _validate_scan(
+        *_scan_dump([sql]), strict_tables=strict_tables, expect_settings=expect_settings
+    )
 
 
 def _validate_sqlite(data: bytes) -> None:
@@ -181,10 +283,42 @@ def _validate_sqlite(data: bytes) -> None:
         raise BackupError("فایل دیتابیس SQLite معتبر نیست؛ پشتیبان لغو شد.")
 
 
-async def create_backup(
+def discard_temp_archive(path: Path) -> None:
+    """Delete an archive returned by `create_backup_file` together with its temp directory.
+    Safe to call twice, and never raises — cleanup must not mask the caller's own error."""
+    try:
+        parent = path.parent
+        if parent.name.startswith(_TMP_PREFIX) and parent.parent == BACKUP_DIR:
+            shutil.rmtree(parent, ignore_errors=True)
+        else:  # a caller passed a path we did not create — remove just the file
+            path.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        log.debug("temp archive cleanup failed for %s", path, exc_info=True)
+
+
+def _sweep_stale_temp_dirs() -> None:
+    """Remove temp build dirs left behind by a process killed mid-backup (the OOM case).
+    Without this the data volume would accumulate a full uncompressed dump per kill."""
+    cutoff = dt.datetime.now().timestamp() - 6 * 3600
+    for leftover in BACKUP_DIR.glob(f"{_TMP_PREFIX}*"):
+        try:
+            if leftover.is_dir() and leftover.stat().st_mtime < cutoff:
+                shutil.rmtree(leftover, ignore_errors=True)
+        except OSError:  # noqa: PERF203 - a vanished dir is exactly what we wanted
+            continue
+
+
+async def create_backup_file(
     session: AsyncSession, *, passphrase: str | None = None
-) -> tuple[bytes, str]:
-    """Build the backup ZIP in memory. Returns (zip_bytes, filename).
+) -> tuple[Path, str]:
+    """Build the backup archive ON DISK. Returns (path, filename).
+
+    The caller OWNS the returned file and must hand it to `discard_temp_archive` (or move it)
+    when finished. Nothing bigger than the COMPRESSED archive ever enters this process's
+    memory: pg_dump streams into a file, validation streams that file back in 1 MB blocks, and
+    zipfile copies it into the archive in small blocks. Only the optional passphrase envelope
+    (Fernet, which has no streaming API) loads the finished archive — which is the ~8 MB
+    compressed artifact, not the ~100 MB raw dump.
 
     Raises `BackupError` if a usable DB image cannot be produced (so a caller can never
     report a dump-less archive as a successful backup). When a `backup_passphrase` is
@@ -218,44 +352,75 @@ async def create_backup(
     # thread so the single-worker event loop keeps serving requests during the (scheduled
     # every-2h and manual) backup — previously this stalled every concurrent request.
     sqlite = _sqlite_path()
-
-    def _assemble() -> bytes:
-        db_member: tuple[str, bytes]
-        if sqlite is not None:
-            if not sqlite.exists():
-                raise BackupError("فایل دیتابیس یافت نشد؛ پشتیبان ساخته نشد.")
-            data = sqlite.read_bytes()
-            _validate_sqlite(data)
-            db_member = ("db.sqlite", data)
-        else:
-            dump = _pg_dump().encode("utf-8")
-            # STRICT on the create side only: prove the dump really covers this application's
-            # schema and carries data. `settings_rows` was already read from the live DB above,
-            # so if it is non-empty the dump must contain those rows too — that is what catches
-            # a pg_dump pointed at the wrong (or a freshly-created, empty) database.
-            from app.core.db import Base
-
-            _validate_dump(
-                dump,
-                strict_tables=set(Base.metadata.tables),
-                expect_settings=bool(settings_rows),
-            )
-            db_member = ("db.sql", dump)
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
-            z.writestr("settings.json", json.dumps(settings_dump, ensure_ascii=False, indent=2))
-            z.writestr(db_member[0], db_member[1])
-        out = buf.getvalue()
-        if passphrase:
-            out = _encrypt_archive(out, passphrase)
-        return out
-
-    raw = await asyncio.to_thread(_assemble)
-
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return raw, f"invoice-backup-{stamp}.zip"
+    name = f"invoice-backup-{stamp}.zip"
+
+    def _assemble() -> Path:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        _sweep_stale_temp_dirs()
+        # The temp dir lives INSIDE BACKUP_DIR (the mounted data volume) on purpose: the
+        # container's own filesystem is small, and building here means the finished archive can
+        # be moved to its final name with an atomic same-filesystem rename.
+        workdir = Path(tempfile.mkdtemp(prefix=_TMP_PREFIX, dir=BACKUP_DIR))
+        archive = workdir / name
+        try:
+            if sqlite is not None:
+                if not sqlite.exists():
+                    raise BackupError("فایل دیتابیس یافت نشد؛ پشتیبان ساخته نشد.")
+                # SQLite is the test/dev path only; the file is small and must be validated
+                # by magic bytes, so reading it is fine.
+                _validate_sqlite(sqlite.read_bytes()[: len(_SQLITE_MAGIC)])
+                db_source, arcname = sqlite, "db.sqlite"
+            else:
+                dump = workdir / "db.sql"
+                _pg_dump_to_file(dump)
+                # STRICT on the create side only: prove the dump really covers this application's
+                # schema and carries data. `settings_rows` was already read from the live DB above,
+                # so if it is non-empty the dump must contain those rows too — that is what catches
+                # a pg_dump pointed at the wrong (or a freshly-created, empty) database.
+                from app.core.db import Base
+
+                _validate_dump_file(
+                    dump,
+                    strict_tables=set(Base.metadata.tables),
+                    expect_settings=bool(settings_rows),
+                )
+                db_source, arcname = dump, "db.sql"
+
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+                z.writestr(
+                    "settings.json", json.dumps(settings_dump, ensure_ascii=False, indent=2)
+                )
+                z.write(db_source, arcname)   # streamed by zipfile; never fully in memory
+            if db_source.parent == workdir:
+                db_source.unlink(missing_ok=True)  # the dump is inside the zip now — free the disk
+            if passphrase:
+                # Fernet has no streaming API, so this DOES load the archive. That is the
+                # compressed artifact (single-digit MB), not the raw dump.
+                archive.write_bytes(_encrypt_archive(archive.read_bytes(), passphrase))
+            return archive
+        except Exception:
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise
+
+    path = await asyncio.to_thread(_assemble)
+    return path, name
+
+
+async def create_backup(
+    session: AsyncSession, *, passphrase: str | None = None
+) -> tuple[bytes, str]:
+    """Convenience wrapper that returns the archive's BYTES — for callers that genuinely need
+    them (the panel's direct download, tests). Bounded by the compressed archive size.
+
+    Prefer `create_backup_file` anywhere the archive is only going to be written or uploaded:
+    it never materialises the archive in memory at all."""
+    path, name = await create_backup_file(session, passphrase=passphrase)
+    try:
+        return path.read_bytes(), name
+    finally:
+        discard_temp_archive(path)
 
 
 def _pg_url() -> str:
@@ -263,25 +428,36 @@ def _pg_url() -> str:
     return boot.sqlalchemy_url.replace("+asyncpg", "")
 
 
-def _pg_dump() -> str:
-    """Run pg_dump and return the SQL text. Raises `BackupError` on any failure so the
-    caller never builds a dump-less archive."""
+def _pg_dump_to_file(dest: Path) -> None:
+    """Run pg_dump writing its SQL DIRECTLY into `dest`. Raises `BackupError` on any failure so
+    the caller never builds a dump-less archive.
+
+    Streaming to a file instead of returning the text is what keeps this process alive. The old
+    form used `capture_output=True, text=True`, which meant the whole dump existed as a Python
+    `str` — and because reseller/plan names are Persian, CPython widened the ENTIRE string to
+    2 bytes per character — and was then `.encode()`d back to bytes for the archive, so peak RSS
+    was ~3x the dump. On prod that repeatedly pushed the scheduler past its container memory cap
+    and the kernel OOM-killed it mid-job (Jul 29-31 2026, always on an even-hour tick, i.e. this
+    every-2h job). Nothing here now holds more than pg_dump's own pipe buffer.
+    """
     import subprocess
 
     try:
-        out = subprocess.run(
-            # --clean --if-exists so the dump drops+recreates objects on restore.
-            ["pg_dump", "--no-owner", "--clean", "--if-exists", "--dbname", _pg_url()],
-            capture_output=True, text=True, timeout=300,
-        )
+        with dest.open("wb") as fh:
+            out = subprocess.run(
+                # --clean --if-exists so the dump drops+recreates objects on restore.
+                ["pg_dump", "--no-owner", "--clean", "--if-exists", "--dbname", _pg_url()],
+                stdout=fh, stderr=subprocess.PIPE, timeout=300,
+            )
     except FileNotFoundError as exc:
         raise BackupError("ابزار pg_dump روی سرور یافت نشد؛ پشتیبان‌گیری ممکن نیست.") from exc
+    except BackupError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise BackupError(f"اجرای pg_dump ناموفق بود: {exc}") from exc
     if out.returncode != 0:
-        log.warning("pg_dump failed: %s", (out.stderr or "")[:300])
+        log.warning("pg_dump failed: %s", (out.stderr or b"")[:300])
         raise BackupError("pg_dump با خطا متوقف شد؛ پشتیبان ساخته نشد.")
-    return out.stdout
 
 
 _TERMINATE_SQL = (
@@ -319,18 +495,23 @@ def _restore_sql(sql: bytes) -> bytes:
 
 def _save_pre_restore_dump() -> Path | None:
     """Best-effort safety dump of the CURRENT database before a restore overwrites it,
-    so the prior state can be recovered manually if needed."""
-    try:
-        sql = _pg_dump()
-    except BackupError:
-        log.warning("could not take a pre-restore safety dump", exc_info=True)
-        return None
+    so the prior state can be recovered manually if needed.
+
+    Streamed straight to disk (never through memory) for the same reason as the backup path.
+    These are UNCOMPRESSED SQL — one is roughly ten times the size of a backup zip — so only
+    the latest `_KEEP_PRE_RESTORE_DUMPS` are kept; the old limit of 5 could sit on the data
+    volume indefinitely after a couple of restores."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     out = BACKUP_DIR / f"pre-restore-{stamp}.sql"
-    out.write_text(sql, encoding="utf-8")
-    # Keep only the latest few safety dumps.
-    for old in sorted(BACKUP_DIR.glob("pre-restore-*.sql"))[:-5]:
+    try:
+        _pg_dump_to_file(out)
+    except BackupError:
+        out.unlink(missing_ok=True)  # never leave a truncated dump that looks like a safety net
+        log.warning("could not take a pre-restore safety dump", exc_info=True)
+        return None
+    # Prune only AFTER a successful write, so a failed attempt never costs us an older good dump.
+    for old in sorted(BACKUP_DIR.glob("pre-restore-*.sql"))[:-_KEEP_PRE_RESTORE_DUMPS]:
         old.unlink(missing_ok=True)
     return out
 
@@ -384,13 +565,20 @@ async def mark_backup_done(session: AsyncSession) -> None:
 
 
 async def save_backup_to_disk(session: AsyncSession) -> Path:
+    """Keep the backup on the server's data volume. Used when Telegram delivery is impossible
+    (no owner chat, no bot) or refuses the file (too large).
+
+    The archive is built in a temp dir and MOVED into place, so a half-written file is never
+    visible under the real name. Only `_KEEP_LOCAL_BACKUPS` copies are retained — each new one
+    effectively replaces its predecessor rather than the folder growing without bound."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    data, name = await create_backup(session)
+    built, name = await create_backup_file(session)
     path = BACKUP_DIR / name
-    path.write_bytes(data)
-    # Keep only the latest 10 local copies.
-    backups = sorted(BACKUP_DIR.glob("invoice-backup-*.zip"))
-    for old in backups[:-10]:
+    try:
+        os.replace(built, path)          # atomic: same filesystem by construction
+    finally:
+        discard_temp_archive(built)      # removes the now-empty temp dir (no-op if moved)
+    for old in sorted(BACKUP_DIR.glob("invoice-backup-*.zip"))[:-_KEEP_LOCAL_BACKUPS]:
         old.unlink(missing_ok=True)
     return path
 

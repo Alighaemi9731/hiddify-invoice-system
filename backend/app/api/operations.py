@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import io
 import logging
 import os
 import signal
@@ -390,12 +389,27 @@ async def channel_guard_run(session: AsyncSession = Depends(get_session)) -> dic
 # ------------------------------- backup / restore -------------------------------
 @router.get("/backup/download")
 async def backup_download(session: AsyncSession = Depends(get_session)) -> StreamingResponse:
-    data, name = await backup_service.create_backup(session)
+    # Built on disk and streamed from there: a browser download must not cost the API process
+    # the whole archive in RAM (same reason the scheduler's auto-backup no longer does).
+    built, name = await backup_service.create_backup_file(session)
     # A manual panel download is a real backup the owner now holds → count it as the last backup.
     await backup_service.mark_backup_done(session)
+    size = built.stat().st_size
+
+    def _stream():  # noqa: ANN202
+        try:
+            with built.open("rb") as fh:
+                while chunk := fh.read(1 << 20):
+                    yield chunk
+        finally:
+            backup_service.discard_temp_archive(built)
+
     return StreamingResponse(
-        io.BytesIO(data), media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        _stream(), media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Content-Length": str(size),
+        },
     )
 
 

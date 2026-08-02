@@ -19,7 +19,7 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -88,6 +88,13 @@ class SF(StatesGroup):
     trial_days = State()       # admin sets free-trial duration; data: t_gb
     buy_name = State()         # customer names the config; data: buy_plan_id
     topup_amount = State()     # data: nothing yet
+    # The amount is captured and the flow is now PARKED on inline buttons (credit code? which
+    # payment method?). This must be a real state, not `None`: the re-dock middlewares treat
+    # active → None as "the flow ended" and re-show the customer menu — which begins with the
+    # shop's welcome text. Parking on `None` made that welcome pop up in the middle of a top-up,
+    # right after the customer sent the amount. Keeping a state also keeps the flow FSM-LOCKED,
+    # so a stray message gets the «✖️ انصراف» re-prompt instead of navigating away.
+    topup_choice = State()     # data: topup_amount, topup_code_id, topup_bonus
     topup_proof = State()      # data: amount, method
     confirm_amount = State()   # admin sets credited Toman; data: txn_id
     adjust_amount = State()    # admin manual wallet edit; data: customer_id, sign
@@ -106,6 +113,9 @@ class SF(StatesGroup):
     credit_code = State()
     credit_value = State()
     credit_maxbonus = State()
+    # Same «parked, not finished» role as `topup_choice`, for the wizard's inline-button steps
+    # (code type, per-customer limit). Clearing the state there re-showed the admin menu mid-wizard.
+    credit_choice = State()
     credit_mintopup = State()
     credit_maxuses = State()
     credit_percustomer = State()
@@ -1714,8 +1724,12 @@ async def sf_topup_start(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None
     await cb.answer()
 
 
-@storefront_router.message(SF.topup_amount, F.text)
+@storefront_router.message(StateFilter(SF.topup_amount, SF.topup_choice), F.text)
 async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Capture the top-up amount, then park on the inline buttons.
+
+    Also accepted from `topup_choice`, so a customer who mistyped can simply send the corrected
+    number instead of cancelling and starting the whole top-up again."""
     raw = _digits(message.text)
     if not raw.isdigit() or int(raw) <= 0:
         await message.answer(rtl("لطفاً یک مبلغِ معتبر (به تومان) وارد کنید."), reply_markup=kb.flow_cancel_kb())
@@ -1728,8 +1742,10 @@ async def sf_topup_amount(message: Message, state: FSMContext, bot: Bot) -> None
         has_codes = await storefront_credit.has_enabled_codes(s, sf.id)
         pay_kb = kb.pay_methods_kb(sf)
     await state.update_data(topup_amount=int(raw), topup_code_id=None, topup_bonus=0)
+    # PARK, never clear: `set_state(None)` here made the re-dock middleware think the top-up had
+    # finished and greet the customer with the shop's welcome text mid-flow.
+    await state.set_state(SF.topup_choice)
     if has_codes:  # offer the credit-code step (no dead-end when the shop has none)
-        await state.set_state(None)
         await message.answer(
             rtl(f"مبلغِ شارژ: {_toman(int(raw))} تومان\nاگر کدِ شارژ دارید، آن را وارد کنید:"),
             reply_markup=kb.topup_code_prompt_kb())
@@ -1746,7 +1762,9 @@ async def sf_topup_code_prompt(cb: CallbackQuery, state: FSMContext, bot: Bot) -
 
 @storefront_router.callback_query(F.data == "sftopnocode")
 async def sf_topup_nocode(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    await state.set_state(None)
+    # Stay PARKED (not None) — clearing here fired the callback re-dock middleware, which greeted
+    # the customer with the shop welcome text right after they tapped «کد ندارم».
+    await state.set_state(SF.topup_choice)
     async with SessionLocal() as s:
         sf, _r, _a = await _resolve(s, bot, cb.from_user)
     if sf is None:
@@ -1770,7 +1788,7 @@ async def sf_topup_code_entered(message: Message, state: FSMContext, bot: Bot) -
         q = await storefront_credit.quote(s, sf.id, code_str, topup_toman=amount, customer_id=customer.id)
         pay_kb = kb.pay_methods_kb(sf)
     if q.ok:
-        await state.set_state(None)
+        await state.set_state(SF.topup_choice)   # parked on the payment-method buttons, not finished
         await state.update_data(topup_code_id=q.code_id, topup_bonus=q.bonus_toman)
         await message.answer(rtl(
             f"✅ کد پذیرفته شد: +{_toman(q.bonus_toman)} تومان پاداش.\n"
@@ -2284,7 +2302,7 @@ async def sf_credit_code(message: Message, state: FSMContext, bot: Bot) -> None:
                                  reply_markup=kb.flow_cancel_kb())
             return
     await state.update_data(c_code=code)
-    await state.set_state(None)
+    await state.set_state(SF.credit_choice)   # parked on the type buttons — the wizard continues
     await message.answer(rtl("نوعِ کد را انتخاب کنید:"), reply_markup=kb.credit_type_kb())
 
 
@@ -2373,7 +2391,7 @@ async def sf_credit_maxuses(message: Message, state: FSMContext) -> None:
 
 
 async def _credit_ask_percustomer(ans, state: FSMContext) -> None:  # noqa: ANN001
-    await state.set_state(None)
+    await state.set_state(SF.credit_choice)   # parked on the per-customer buttons, still mid-wizard
     await ans(rtl("هر مشتری چند بار بتواند از این کد استفاده کند؟"),
               reply_markup=kb.credit_percustomer_kb())
 
