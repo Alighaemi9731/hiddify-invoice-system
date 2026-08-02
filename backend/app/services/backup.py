@@ -283,12 +283,25 @@ def _validate_sqlite(data: bytes) -> None:
         raise BackupError("فایل دیتابیس SQLite معتبر نیست؛ پشتیبان لغو شد.")
 
 
+def _same_dir(a: Path, b: Path) -> bool:
+    """True if two paths name the same directory, regardless of relative/absolute form."""
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:  # a vanished path can't be resolved — it is certainly not our backup dir
+        return False
+
+
 def discard_temp_archive(path: Path) -> None:
     """Delete an archive returned by `create_backup_file` together with its temp directory.
     Safe to call twice, and never raises — cleanup must not mask the caller's own error."""
     try:
         parent = path.parent
-        if parent.name.startswith(_TMP_PREFIX) and parent.parent == BACKUP_DIR:
+        # Compare RESOLVED paths. `tempfile.mkdtemp()` absolutises its `dir` argument, while in
+        # production BACKUP_DIR is RELATIVE ("data/backups"), so a plain `==` never matched: the
+        # archive was unlinked but its directory survived, and only the 6-hourly stale sweep
+        # eventually collected it. Caught on the production smoke test — the unit tests missed it
+        # because they monkeypatch BACKUP_DIR to an absolute tmp_path, which compares equal.
+        if parent.name.startswith(_TMP_PREFIX) and _same_dir(parent.parent, BACKUP_DIR):
             shutil.rmtree(parent, ignore_errors=True)
         else:  # a caller passed a path we did not create — remove just the file
             path.unlink(missing_ok=True)

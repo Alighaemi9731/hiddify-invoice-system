@@ -15,7 +15,9 @@ allocation that caused the kills — zlib's own buffers are C-level and correctl
 """
 import asyncio
 import os
+import tempfile
 import tracemalloc
+from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/bmem.db")
 os.environ.setdefault("SECRET_KEY", "k")
@@ -91,6 +93,34 @@ def test_create_backup_file_never_materialises_the_dump(tmp_path, monkeypatch):
         await engine.dispose()
 
     asyncio.run(body())
+
+
+def test_temp_build_dir_is_removed_when_backup_dir_is_relative(tmp_path, monkeypatch):
+    """PRODUCTION SHAPE. `BACKUP_DIR` is the RELATIVE `data/backups` on a real install, but
+    `tempfile.mkdtemp()` absolutises its `dir` argument — so the cleanup's
+    `parent.parent == BACKUP_DIR` guard never matched and every backup left an empty build
+    directory behind (found on the production smoke test of v1.105.0, fixed in v1.105.1).
+
+    Every other test here monkeypatches BACKUP_DIR to an absolute `tmp_path`, which compares
+    equal and hides the bug — so this one deliberately runs with a relative path.
+    """
+    monkeypatch.chdir(tmp_path)
+    rel = Path("data/backups")
+    monkeypatch.setattr(backup, "BACKUP_DIR", rel)
+    rel.mkdir(parents=True)
+
+    workdir = Path(tempfile.mkdtemp(prefix=backup._TMP_PREFIX, dir=rel))
+    archive = workdir / "invoice-backup-x.zip"
+    archive.write_bytes(b"zip")
+
+    backup.discard_temp_archive(archive)
+
+    assert not archive.exists(), "the archive itself was not removed"
+    assert not workdir.exists(), (
+        "the temp build directory survived — with a relative BACKUP_DIR the cleanup guard fails "
+        "and every backup leaks a directory into the data volume"
+    )
+    assert not list(rel.glob(f"{backup._TMP_PREFIX}*"))
 
 
 def test_temp_build_dir_is_removed_even_when_the_dump_fails(tmp_path, monkeypatch):
