@@ -402,13 +402,16 @@ async def _send_pay(answer, chat_id: int, session) -> None:
         )
     ).scalars().all()
     today = tehran_today()
-    due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
-    deferred = [i for i in owed if i.deferred_until and i.deferred_until > today]
+    # A payment deadline (`deferred_until`) does NOT gate payment — it only re-anchors the
+    # reminder/suspension cycle (see `dunning.py`). Every owed invoice is offered; the deadline
+    # rides along in the button label as information, so the reseller knows they have until then
+    # but can still settle early if they want to.
     # An invoice with a payment already awaiting review is NOT offered for payment again —
     # the customer is told it's under review (one pending payment per invoice).
     pending = await _pending_invoice_ids(session, ids)
-    payable = [i for i in due if i.id not in pending]
-    in_review = [i for i in due if i.id in pending]
+    payable = [i for i in owed if i.id not in pending]
+    in_review = [i for i in owed if i.id in pending]
+    deferred = [i for i in payable if i.deferred_until and i.deferred_until > today]
 
     if not payable:
         if in_review:
@@ -416,15 +419,15 @@ async def _send_pay(answer, chat_id: int, session) -> None:
                 f"⏳ {len(in_review)} فاکتور فرستاده‌اید و در انتظار تأیید پشتیبانی است؛ "
                 "لطفاً منتظر بمانید. (لازم نیست دوباره بفرستید.)"
             )
-        elif deferred:
-            await answer("فاکتورِ سررسیدشده‌ای برای پرداخت ندارید؛ فاکتورهای شما مهلت‌دار هستند. ⏳")
         else:
             await answer("بدهی فعالی برای پرداخت ندارید. 🎉")
         return
 
     items = [
         (i.id,
-         f"💳 دوره {i.period_label} — {float(i.amount_toman):,.0f} تومان")
+         f"💳 دوره {i.period_label} — {float(i.amount_toman):,.0f} تومان"
+         + (f" (مهلت تا {i.deferred_until.isoformat()})"
+            if i.deferred_until and i.deferred_until > today else ""))
         for i in payable
     ]
     pay_all_label = None
@@ -440,7 +443,10 @@ async def _send_pay(answer, chat_id: int, session) -> None:
     if in_review:
         msg += f"\n\n⏳ {len(in_review)} فاکتور دیگر در انتظار تأیید است (لازم نیست دوباره بفرستید)."
     if deferred:
-        msg += f"\n\n📅 {len(deferred)} فاکتور مهلت‌دار فعلاً لازم نیست پرداخت شود."
+        msg += (
+            f"\n\n📅 {len(deferred)} فاکتور مهلت‌دار است؛ تا تاریخِ مهلت فرصت دارید، "
+            "ولی هر وقت بخواهید می‌توانید زودتر پرداخت کنید."
+        )
     await answer(msg, reply_markup=keyboards.pay_invoices_keyboard(items, pay_all_label=pay_all_label))
 
 

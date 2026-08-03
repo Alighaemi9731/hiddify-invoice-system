@@ -169,16 +169,15 @@ async def submit_reseller_payment(
         REJECTED one is re-opened only for the reseller it belongs to, and ONLY after its
         coverage — the fresh selection, or the original set on a cold resubmit — passes the
         same re-validation as a fresh submission);
-      * EVERY chosen invoice is re-checked under a row lock — must still belong to the caller, be
-        OWED, and not be deferred to a future date. If ANY chosen invoice is no longer payable the
-        WHOLE batch is rejected (atomic) — never silently pay a subset / mis-attribute money;
+      * EVERY chosen invoice is re-checked under a row lock — must still belong to the caller and
+        be OWED. If ANY chosen invoice is no longer payable the WHOLE batch is rejected (atomic) —
+        never silently pay a subset / mis-attribute money. A payment deadline (`deferred_until`)
+        is NOT part of that check: it only re-anchors dunning, never blocks paying;
       * no invoice may already sit in another pending payment's set (one pending per invoice).
     A multi-invoice payment stores the full set in `settled_invoice_ids` (the first id is also the
     primary `invoice_id` for display/back-compat) and its amount is the SUM of the set. Never
     auto-confirms — the owner decides. The file save for a screenshot proof is done by the caller
     (it needs the new payment id). `invoice_id` is a legacy single-id alias for `invoice_ids`."""
-    from app.services.periods import today as tehran_today
-
     # Normalize the requested ids: explicit set wins; fall back to the legacy single alias.
     raw = list(invoice_ids) if invoice_ids else ([invoice_id] if invoice_id else [])
     ids: list[int] = []
@@ -275,15 +274,18 @@ async def submit_reseller_payment(
     # re-deadlined between the button tap and the proof arriving — if so, reject the whole batch.
     # Rows are locked in SORTED id order (two concurrent submissions locking overlapping sets in
     # opposite orders would deadlock on Postgres); the payment keeps the submission order.
-    today = tehran_today()
     fresh_by_id: dict[int, Invoice] = {}
     for iid in sorted(ids):
         fresh = await session.get(Invoice, iid, with_for_update=True, populate_existing=True)
+        # NOTE: a payment deadline (`deferred_until`) is deliberately NOT checked here. A deadline
+        # only moves the dunning/enforcement clock (see `dunning.py` — the cycle re-anchors on it);
+        # it never takes away the right to pay. Blocking payment made the reseller's own debt
+        # unpayable until a date the OWNER chose, which is backwards: a grace period is a promise
+        # not to chase them yet, not a refusal to accept their money.
         if (
             fresh is None
             or fresh.reseller_id not in reseller_ids
             or fresh.status not in _OWED
-            or (fresh.deferred_until and fresh.deferred_until > today)
         ):
             return SubmitResult(
                 "not_payable",

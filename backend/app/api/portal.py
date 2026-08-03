@@ -38,7 +38,6 @@ from app.models.enums import InvoiceStatus
 from app.services import invoice_pdf as invoice_pdf_service
 from app.services import owner_notify, payment_methods, payments, reseller_report
 from app.services.periods import current_month, parse_period
-from app.services.periods import today as tehran_today
 
 # Receipt upload safety cap (matches a phone screenshot; refuse anything larger).
 _MAX_PROOF_BYTES = 8 * 1024 * 1024
@@ -307,15 +306,15 @@ async def summary(
     owed = (await session.execute(
         select(Invoice).where(Invoice.reseller_id.in_(ctx.ids), Invoice.status.in_(_OWED))
     )).scalars().all()
-    today = tehran_today()
-    due = [i for i in owed if not (i.deferred_until and i.deferred_until > today)]
-    outstanding = sum(float(i.amount_toman) for i in due)
+    # A payment deadline does NOT reduce what the reseller owes — it only moves the dunning clock
+    # (see `dunning.py`). Outstanding is every unpaid invoice, deadline or not.
+    outstanding = sum(float(i.amount_toman) for i in owed)
 
     return {
         "period": p.label,
         "estimate": {"amount_toman": est_amount, "gb": round(est_gb, 2), "users": est_users},
         "per_reseller": per_reseller,
-        "outstanding": {"amount_toman": round(outstanding), "count": len(due)},
+        "outstanding": {"amount_toman": round(outstanding), "count": len(owed)},
         "reseller_count": len(ctx.resellers),
         "trend": [
             {"day": i + 1,
@@ -375,14 +374,15 @@ async def invoices(
         .order_by(Invoice.period_start.desc(), Invoice.id.desc())
         .limit(60)
     )).scalars().all()
-    today = tehran_today()
     return [
         {
             "id": i.id, "number": invoice_code(i.id), "period_label": i.period_label,
             "panel_key": panels[i.panel_id].key if i.panel_id in panels else "?",
             "usage_gb": float(i.usage_gb), "amount_toman": float(i.amount_toman),
             "status": i.status.value,
-            "owed": i.status in _OWED and not (i.deferred_until and i.deferred_until > today),
+            # A deadline never makes an invoice unpayable — it only re-anchors dunning. The date
+            # rides along so the portal can show «مهلت تا …» beside the (enabled) pay button.
+            "owed": i.status in _OWED,
             "deferred_until": i.deferred_until.isoformat() if i.deferred_until else None,
             "created_at": i.created_at.isoformat() if i.created_at else None,
         }
@@ -577,8 +577,9 @@ async def pay_options(
     inv = await session.get(Invoice, invoice_id)
     if inv is None or inv.reseller_id not in ctx.ids:
         raise HTTPException(404, "Invoice not found")
-    today = tehran_today()
-    payable = inv.status in _OWED and not (inv.deferred_until and inv.deferred_until > today)
+    # Deadline-independent: a granted deadline is a promise not to chase them yet, not a refusal
+    # to accept payment.
+    payable = inv.status in _OWED
     pending = await payments._pending_payment_for_invoice(session, inv.id) is not None
     opts = await payment_methods.load_options(session)
     amount_ton = None
@@ -618,10 +619,10 @@ async def pay_options_all(
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """All payable invoices (owed, not future-deferred, not already in a pending payment) plus
-    the SUMMED amounts and enabled payment methods — so the portal can render a «pay all»
-    dialog and submit the whole set in one payment."""
-    today = tehran_today()
+    """All payable invoices (owed, not already in a pending payment) plus the SUMMED amounts and
+    enabled payment methods — so the portal can render a «pay all» dialog and submit the whole set
+    in one payment. Invoices with a payment deadline ARE included: a deadline moves the dunning
+    clock, not the right to settle."""
     owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ctx.ids), Invoice.status.in_(_OWED))
@@ -630,10 +631,7 @@ async def pay_options_all(
     ).scalars().all()
     held = await payments._pending_invoice_ids_in_sets(
         session, {i.id for i in owed}, set(ctx.ids))
-    payable = [
-        i for i in owed
-        if not (i.deferred_until and i.deferred_until > today) and i.id not in held
-    ]
+    payable = [i for i in owed if i.id not in held]
     total_toman = float(sum((i.amount_toman or 0) for i in payable))
     total_usdt = float(sum((i.amount_usdt or 0) for i in payable))
     opts = await payment_methods.load_options(session)

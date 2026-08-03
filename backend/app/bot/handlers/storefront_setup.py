@@ -43,7 +43,6 @@ from app.bot.handlers.views import (
 from app.bot.rtl import rtl
 from app.models import Invoice, Panel, Reseller
 from app.services import owner_notify
-from app.services.periods import today as tehran_today
 
 
 @router.callback_query(F.data == "menu:storefront")
@@ -501,11 +500,10 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
         resellers = await _resellers_for_chat(s, cb.from_user.id)
         owned = {r.id for r in resellers}
         inv = await s.get(Invoice, inv_id)
-        # Not payable if: not the caller's, not owed, OR deferred to a future date (a payment
-        # deadline the owner granted) — `_send_pay` excludes deferred invoices, so a stale
-        # button must not let one be paid early.
-        deferred = inv is not None and inv.deferred_until and inv.deferred_until > tehran_today()
-        if inv is None or inv.reseller_id not in owned or inv.status not in _OWED or deferred:
+        # Not payable if: not the caller's, or not owed. A payment deadline (`deferred_until`) is
+        # deliberately NOT a blocker — it only re-anchors the reminder/suspension cycle, so a
+        # reseller may always settle early if they want to.
+        if inv is None or inv.reseller_id not in owned or inv.status not in _OWED:
             await cb.answer("این فاکتور در حال حاضر قابل پرداخت نیست.", show_alert=True)
             return
         # Already submitted a payment covering this invoice → don't let them pay again (one
@@ -522,9 +520,10 @@ async def cb_pay_invoice(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "payall")
 async def cb_pay_all(cb: CallbackQuery, state: FSMContext) -> None:
-    """Pay ALL the customer's payable invoices with one transfer. Gathers every owed, due-now
-    invoice not already inside a pending payment and locks the customer into one combined pay
-    flow whose proof settles the whole set."""
+    """Pay ALL the customer's payable invoices with one transfer. Gathers every owed invoice not
+    already inside a pending payment — including ones with a payment deadline, which are payable
+    like any other — and locks the customer into one combined pay flow whose proof settles the
+    whole set."""
     if await state.get_state() == PayState.waiting.state:
         await cb.answer(
             "شما در حال پرداخت هستید. رسید یا شناسهٔ تراکنش (TXID) را بفرستید، "
@@ -544,12 +543,8 @@ async def cb_pay_all(cb: CallbackQuery, state: FSMContext) -> None:
                 .order_by(Invoice.period_start.asc())
             )
         ).scalars().all()
-        today = tehran_today()
         pending = await _pending_invoice_ids(s, ids)
-        payable = [
-            i for i in owed
-            if not (i.deferred_until and i.deferred_until > today) and i.id not in pending
-        ]
+        payable = [i for i in owed if i.id not in pending]
         if not payable:
             await cb.answer("بدهی قابل پرداختی ندارید.", show_alert=True)
             return

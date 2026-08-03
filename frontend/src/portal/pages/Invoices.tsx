@@ -81,6 +81,12 @@ export default function PortalInvoices() {
                           variant={inv.status === "draft" || inv.status === "canceled" ? "outlined" : "filled"}
                         />
                         {inv.owed && <Chip size="small" color="error" variant="outlined" label="بدهکار" />}
+                        {/* A deadline only moves the reminder/suspension clock — the invoice stays
+                            payable, so this is information beside an ENABLED pay button. */}
+                        {inv.owed && inv.deferred_until && (
+                          <Chip size="small" color="info" variant="outlined"
+                            label={`مهلت تا ${fmtDate(inv.deferred_until)}`} />
+                        )}
                       </Stack>
                     </TableCell>
                     <TableCell dir="ltr">{fmtDate(inv.created_at)}</TableCell>

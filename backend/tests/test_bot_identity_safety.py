@@ -141,13 +141,23 @@ def test_support_html_escapes_user_content():
     assert "&lt;a href=&#x27;tg://user?id=9&#x27;&gt;" in rendered
 
 
-def test_payable_revalidation_uses_tehran_today(tmp_path, monkeypatch):
-    # The payable re-validation now lives in payments.submit_reseller_payment, which reads
-    # the Tehran-local "today" from app.services.periods at call time.
-    from app.services import payments
+def test_deadline_checks_use_tehran_today(tmp_path, monkeypatch):
+    """A payment deadline is compared against the TEHRAN calendar day, not a raw UTC `.date()`.
+
+    This originally guarded `submit_reseller_payment`, because a deadline used to make an invoice
+    unpayable and an off-by-one day therefore refused a legitimate payment. A deadline no longer
+    gates payment at all (it only re-anchors dunning), so the same boundary is now asserted where
+    the date logic actually lives: `enforcement._has_due_invoice`, the re-check every queued
+    suspension runs before it writes to a panel. An off-by-one there suspends a reseller a day
+    early — the more expensive version of the same bug.
+    """
+    from app.services import enforcement, payments
 
     local_today = dt.date(2026, 6, 10)
+    # `enforcement` binds the helper at import time (`from ... import today as tehran_today`), so
+    # patching only the source module would leave it reading the real calendar.
     monkeypatch.setattr("app.services.periods.today", lambda: local_today)
+    monkeypatch.setattr("app.services.enforcement.tehran_today", lambda: local_today)
 
     async def body(session):
         reseller = Reseller(
@@ -164,17 +174,18 @@ def test_payable_revalidation_uses_tehran_today(tmp_path, monkeypatch):
         )
         session.add(invoice)
         await session.commit()
-        # Deferred to a FUTURE date → not payable yet.
+
+        # Deadline is TOMORROW in Tehran → nothing is due yet, so no suspension may fire…
+        assert await enforcement._has_due_invoice(session, reseller.id) is False
+        # …but the reseller may still pay whenever they like: a deadline never blocks payment.
         res = await payments.submit_reseller_payment(
             session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="0x" + "a" * 64)
-        assert res.status == "not_payable"
+        assert res.status == "ok"
 
-        # Deadline reached today → payable.
+        # Deadline reached today (Tehran) → the invoice is due and enforcement may act.
         invoice.deferred_until = local_today
         await session.commit()
-        res2 = await payments.submit_reseller_payment(
-            session, reseller_ids={reseller.id}, invoice_id=invoice.id, txid="0x" + "b" * 64)
-        assert res2.status == "ok"
+        assert await enforcement._has_due_invoice(session, reseller.id) is True
 
     _run(body, tmp_path, "date.db")
 

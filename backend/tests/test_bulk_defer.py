@@ -144,14 +144,16 @@ def test_bulk_defer_clear_deadline(tmp_path):
     _run(body, tmp_path, "b2.db")
 
 
-def test_defer_to_today_resets_the_cycle_and_stays_payable(tmp_path):
-    """«مهلت = امروز» must mean «as if issued today»: the guard is `>= today`, not `> today`.
+def test_defer_to_today_resets_the_cycle(tmp_path):
+    """«مهلت = امروز» must mean «as if issued today»: the reset guard is `>= today`, not `> today`.
 
     Under `>` a deadline of today only moved the dunning ANCHOR (dunning counts days from
     `deferred_until`) while the old reminder/warning marks survived. Since each reminder kind is
     sent at most once per invoice, the invoice then went silent for the whole new cycle and an
-    already-overdue one kept its status. Payability is a separate, strictly-future check, so today
-    must still be payable.
+    already-overdue one kept its status.
+
+    (Payability no longer enters into it at all — see
+    `test_defer_only_moves_the_dunning_clock_not_the_right_to_pay`.)
     """
     async def body(s):
         r = await _seed(s)
@@ -175,15 +177,23 @@ def test_defer_to_today_resets_the_cycle_and_stays_payable(tmp_path):
             __import__("sqlalchemy").select(DeliveryLog).where(DeliveryLog.invoice_id == inv.id)
         )).scalars().all()
         assert left == []                                 # stale reminders cleared → they re-fire
-        # Payability is `deferred_until > today`, so a deadline of today does NOT block payment.
-        assert not (inv.deferred_until and inv.deferred_until > today)
-
     _run(body, tmp_path, "b4.db")
 
 
-def test_defer_to_tomorrow_still_blocks_payment(tmp_path):
-    """The other half of the rule: a FUTURE deadline keeps the invoice unpayable until that day."""
+def test_defer_only_moves_the_dunning_clock_not_the_right_to_pay(tmp_path):
+    """A deadline is a promise not to CHASE the reseller yet — never a refusal to accept payment.
+
+    It used to be both: every payment surface (bot pay flow, portal pay dialog, and the atomic
+    guard in `payments.submit_payment`) skipped an invoice whose `deferred_until` was in the
+    future, so granting someone extra time made their own debt unpayable until a date the OWNER
+    picked. The reseller saw the pay button vanish.
+
+    Now the deadline has exactly one effect: `dunning` re-anchors the reminder/warning/suspension
+    cycle on it. This test pins BOTH halves so a future change can't fix one and break the other.
+    """
     async def body(s):
+        from app.services import enforcement
+
         r = await _seed(s)
         tomorrow = tehran_today() + dt.timedelta(days=1)
         inv = _inv(r.id, label="2026-07", status=InvoiceStatus.sent)
@@ -192,5 +202,13 @@ def test_defer_to_tomorrow_still_blocks_payment(tmp_path):
         await invoices_api.bulk_defer(
             BulkDefer(ids=[inv.id], deferred_until=tomorrow, defer_note=None), session=s)
         await s.refresh(inv)
-        assert inv.deferred_until > tehran_today()        # blocked by the payability guard
+
+        assert inv.deferred_until == tomorrow
+        # Half 1 — still owed, so every payability check (which is now just `status in OWED`)
+        # lets it through.
+        assert inv.status in (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+        # Half 2 — the enforcement clock DOES respect the deadline: nothing is due yet, so a
+        # queued suspension re-checking debt at execution time must find none.
+        assert await enforcement._has_due_invoice(s, r.id) is False
+
     _run(body, tmp_path, "b5.db")

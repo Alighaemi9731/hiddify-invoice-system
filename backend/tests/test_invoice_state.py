@@ -253,7 +253,9 @@ def test_submit_revalidates_stale_invoice(tmp_path):
         assert await status(owed.id, ids, "0x" + "a" * 64) == "ok"
         assert await status(paid.id, ids, "0x" + "b" * 64) == "not_payable"
         assert await status(canceled.id, ids, "0x" + "c" * 64) == "not_payable"
-        assert await status(deferred.id, ids, "0x" + "d" * 64) == "not_payable"
+        # A payment deadline is NOT a payability gate — it only re-anchors the dunning cycle, so
+        # a reseller may always settle early. Status is the only thing this guard looks at.
+        assert await status(deferred.id, ids, "0x" + "d" * 64) == "ok"
         assert await status(owed.id, {9999}, "0x" + "e" * 64) == "not_payable"  # not owner's
 
     _run(body, tmp_path, "p4.db")
