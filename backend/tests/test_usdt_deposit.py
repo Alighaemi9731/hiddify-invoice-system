@@ -30,9 +30,12 @@ class _Resp:
         return self._d
 
 
+BLOCK_TS = 1_700_000_000
+
+
 class _Client:
-    def __init__(self, receipt, block="0x100"):
-        self._receipt, self._block = receipt, block
+    def __init__(self, receipt, block="0x100", block_ts=BLOCK_TS):
+        self._receipt, self._block, self._block_ts = receipt, block, block_ts
 
     async def __aenter__(self):
         return self
@@ -46,11 +49,16 @@ class _Client:
             return _Resp({"result": self._receipt})
         if method == "eth_blockNumber":
             return _Resp({"result": self._block})
+        if method == "eth_getBlockByNumber":
+            if self._block_ts is None:
+                return _Resp({"result": None})
+            return _Resp({"result": {"timestamp": hex(self._block_ts)}})
         return _Resp({})
 
 
-def _patch(monkeypatch, receipt, block="0x100"):
-    monkeypatch.setattr(P.httpx, "AsyncClient", lambda *a, **k: _Client(receipt, block))
+def _patch(monkeypatch, receipt, block="0x100", block_ts=BLOCK_TS):
+    monkeypatch.setattr(
+        P.httpx, "AsyncClient", lambda *a, **k: _Client(receipt, block, block_ts))
 
 
 def test_usdt_received_sums_transfers_to_us(monkeypatch):
@@ -61,14 +69,27 @@ def test_usdt_received_sums_transfers_to_us(monkeypatch):
          "data": hex(1 * 10**18)},                                   # 1 USDT FROM us → ignore
     ]}
     _patch(monkeypatch, receipt, block="0xf5")
-    amt, confs = asyncio.run(P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc"))
+    amt, confs, block_ts = asyncio.run(P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc"))
     assert amt == Decimal("5")
     assert confs == int("0xf5", 16) - int("0xf0", 16) + 1  # 6
+    assert block_ts == BLOCK_TS
+
+
+def test_usdt_received_block_ts_none_when_unreadable(monkeypatch):
+    """The freshness guard must fail closed, so an unreadable block time is None (not 'now')."""
+    receipt = {"status": "0x1", "blockNumber": "0xf0", "logs": [
+        {"address": CONTRACT, "topics": [TRANSFER, _topic_addr("0x" + "b" * 40), _topic_addr(WALLET)],
+         "data": hex(5 * 10**18)}]}
+    _patch(monkeypatch, receipt, block_ts=None)
+    amt, _, block_ts = asyncio.run(P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc"))
+    assert amt == Decimal("5")
+    assert block_ts is None
 
 
 def test_usdt_received_none_on_revert(monkeypatch):
     _patch(monkeypatch, {"status": "0x0", "blockNumber": "0xf0", "logs": []})
-    assert asyncio.run(P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc")) == (None, None)
+    assert asyncio.run(
+        P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc")) == (None, None, None)
 
 
 def test_usdt_received_none_on_wrong_token(monkeypatch):
@@ -76,7 +97,8 @@ def test_usdt_received_none_on_wrong_token(monkeypatch):
         {"address": "0x" + "e" * 40, "topics": [TRANSFER, _topic_addr("0x" + "b" * 40), _topic_addr(WALLET)],
          "data": hex(5 * 10**18)}]}                                  # right amount, wrong contract
     _patch(monkeypatch, receipt)
-    assert asyncio.run(P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc")) == (None, None)
+    assert asyncio.run(
+        P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc")) == (None, None, None)
 
 
 def test_usdt_received_none_on_network_error(monkeypatch):
@@ -85,7 +107,8 @@ def test_usdt_received_none_on_network_error(monkeypatch):
         async def __aexit__(self, *a): return False
         async def post(self, *a, **k): raise RuntimeError("rpc down")
     monkeypatch.setattr(P.httpx, "AsyncClient", lambda *a, **k: _Boom())
-    assert asyncio.run(P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc")) == (None, None)
+    assert asyncio.run(
+        P._usdt_received(TXID, WALLET, CONTRACT, "http://rpc")) == (None, None, None)
 
 
 def test_deposit_check_dispatches_by_chain(monkeypatch):

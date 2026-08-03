@@ -7,6 +7,7 @@ linked invoice paid and restores access only when no other due debt remains.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import logging
@@ -375,11 +376,21 @@ async def submit_reseller_payment(
         owner_intro = "🧾 رسید پرداخت جدید — منتظر تأیید شماست."
     else:
         label = {"ton": "GRAM", "avax": "AVAX"}.get(payment.chain or chain, "USDT")
+        # With auto-confirm on, an exact-match deposit is confirmed seconds from now — promising
+        # "waiting for support" and then acknowledging it immediately would read as contradictory.
+        auto_on = bool(await settings_service.get(session, "payment_auto_confirm_enabled", True))
         user_message = (
-            f"✅ شناسهٔ تراکنش ({label}) برای {scope_fa} دریافت شد و در انتظار تأیید پشتیبانی است.\n"
-            "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
-            f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
-        )
+            (
+                f"✅ شناسهٔ تراکنش ({label}) برای {scope_fa} دریافت شد و در حال بررسی خودکار "
+                "روی زنجیره است.\n"
+                "اگر واریزی مطابق فاکتور باشد تا لحظاتی دیگر همین‌جا تأیید می‌شود؛ در غیر این "
+                "صورت پشتیبانی آن را بررسی می‌کند.\n"
+            ) if auto_on else (
+                f"✅ شناسهٔ تراکنش ({label}) برای {scope_fa} دریافت شد و در انتظار تأیید "
+                "پشتیبانی است.\n"
+                "نتیجهٔ بررسی همین‌جا به شما اطلاع داده می‌شود.\n"
+            )
+        ) + f"🔖 شمارهٔ پیگیری: #{payment_code(payment.id)}"
         owner_intro = (
             "🔁 تراکنشِ ردشده دوباره ارسال شد و منتظر تأیید شماست."
             if reopen is not None else
@@ -540,6 +551,16 @@ class _ChainCheck:
     contract_address: str | None = None  # the token contract of the matched tx
 
 
+def _age_hours(block_ts: int | None) -> float | None:
+    """Hours elapsed since a block/transaction unix timestamp. None when the chain didn't give us
+    one — the auto-confirm freshness guard treats that as 'unknown age' and refuses, so a missing
+    timestamp can never be mistaken for a fresh deposit. Clamped at 0 for clock skew."""
+    if not block_ts:
+        return None
+    now = dt.datetime.now(dt.timezone.utc).timestamp()
+    return max(0.0, (now - float(block_ts)) / 3600.0)
+
+
 def _ton_account_id(addr: str) -> str:
     """Normalize a TON address to its 32-byte account id (hex) so EQ.../UQ.../raw forms of the
     SAME wallet compare equal. Returns '' if it can't be parsed."""
@@ -559,12 +580,18 @@ def _ton_account_id(addr: str) -> str:
     return ""
 
 
-async def _ton_received(txid: str, our_address: str, api_key: str | None = None) -> Decimal | None:
-    """Best-effort: total TON credited to `our_address` by transaction `txid`, read from
-    toncenter v3. Returns None on any failure / no match so the caller falls back. Network I/O is
-    async (never blocks the loop); this is display-only — it NEVER auto-confirms a payment."""
+async def _ton_received(
+    txid: str, our_address: str, api_key: str | None = None
+) -> tuple[Decimal | None, int | None]:
+    """Best-effort (total TON credited to `our_address` by transaction `txid`, its block unix
+    timestamp), read from toncenter v3. Returns (None, None) on any failure / no match so the
+    caller falls back. Network I/O is async (never blocks the loop).
+
+    The timestamp comes from the crediting transaction's `now` field and powers the auto-confirm
+    freshness guard; it is None when toncenter omits it, which fails that guard CLOSED (no
+    auto-confirm) rather than treating an unknown-age deposit as fresh."""
     if not txid or not our_address:
-        return None
+        return None, None
     headers = {"Accept": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
@@ -577,10 +604,10 @@ async def _ton_received(txid: str, our_address: str, api_key: str | None = None)
             resp.raise_for_status()
             data = resp.json() or {}
     except Exception:  # noqa: BLE001 — toncenter down / bad txid → fall back silently
-        return None
+        return None, None
     want = _ton_account_id(our_address)
     if not want:
-        return None
+        return None, None
     book = data.get("address_book") or {}
 
     def _credits_us(dest: str | None) -> bool:
@@ -590,6 +617,7 @@ async def _ton_received(txid: str, our_address: str, api_key: str | None = None)
         return _ton_account_id(friendly) == want
 
     total = Decimal(0)
+    tx_ts: int | None = None
     for tx in (data.get("transactions") or []):
         # The hash a user copies from their wallet is usually the SENDER-side transaction: its
         # in_msg is the external trigger (no TON value) and the credit to us sits in its out_msgs.
@@ -610,7 +638,16 @@ async def _ton_received(txid: str, our_address: str, api_key: str | None = None)
                 total += Decimal(int(str(val))) / Decimal(1_000_000_000)
             except (TypeError, ValueError):
                 continue
-    return total if total > 0 else None
+            # Keep the OLDEST crediting transaction's time: the freshness guard must judge when
+            # the money actually landed, not when a later related transaction was recorded.
+            try:
+                now_s = int(tx.get("now"))
+            except (TypeError, ValueError):
+                continue
+            tx_ts = now_s if tx_ts is None else min(tx_ts, now_s)
+    if total <= 0:
+        return None, None
+    return total, tx_ts
 
 
 async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
@@ -622,7 +659,7 @@ async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         return {"available": False}
     our = await settings_service.get(session, "ton_wallet_address", "") or ""
     api_key = await settings_service.get(session, "toncenter_api_key", "") or None
-    received = await _ton_received(payment.txid, our, api_key)
+    received, tx_ts = await _ton_received(payment.txid, our, api_key)
     if received is None:
         return {"available": False}
     ton_rate = await rates.get_ton_toman(session)  # int, 0 if unavailable
@@ -641,6 +678,7 @@ async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         "ton_rate": ton_rate,
         "tolerance_pct": tol_pct,
         "match": match,
+        "tx_age_hours": _age_hours(tx_ts),
     }
 
 
@@ -648,16 +686,39 @@ async def ton_deposit_check(session: AsyncSession, payment: Payment) -> dict:
 _ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 
+async def _evm_block_ts(client: httpx.AsyncClient, rpc_url: str, block_number) -> int | None:  # noqa: ANN001
+    """The unix timestamp of an EVM block (BSC / Avalanche C-Chain), or None if it can't be read.
+
+    Deliberately derived from the block itself rather than from the confirmation count: block
+    times drift (BSC went from 3s to sub-second), so counting blocks would silently mis-age a
+    transaction — and this feeds a security guard, not a display figure."""
+    if not block_number:
+        return None
+    try:
+        resp = await client.post(rpc_url, json={
+            "jsonrpc": "2.0", "id": 9, "method": "eth_getBlockByNumber",
+            "params": [block_number, False]})
+        blk = (resp.json() or {}).get("result") or {}
+        ts = blk.get("timestamp")
+        return int(ts, 16) if ts else None
+    except Exception:  # noqa: BLE001 — the timestamp is optional; the caller fails closed on None
+        return None
+
+
 async def _usdt_received(
     txid: str, our_wallet: str, contract: str, rpc_url: str
-) -> tuple[Decimal | None, int | None]:
-    """Best-effort (USDT credited to our wallet by this tx, confirmations), read straight from a
-    public BSC JSON-RPC node — free, no API key. Parses the tx receipt's ERC-20 Transfer logs for
-    the configured token contract and sums transfers whose recipient is our wallet. Returns
-    (None, None) on any failure so the caller falls back. Display-only — never auto-confirms."""
+) -> tuple[Decimal | None, int | None, int | None]:
+    """Best-effort (USDT credited to our wallet by this tx, confirmations, block unix timestamp),
+    read straight from a public BSC JSON-RPC node — free, no API key. Parses the tx receipt's
+    ERC-20 Transfer logs for the configured token contract and sums transfers whose recipient is
+    our wallet. Returns (None, None, None) on any failure so the caller falls back.
+
+    Confirmations and the block timestamp are OPTIONAL extras (each in its own try): a node that
+    answers the receipt but not the follow-ups still yields a usable amount, and both auto-confirm
+    guards that depend on them then fail closed."""
     tx = (txid or "").strip()
     if not tx or not our_wallet or not contract or not rpc_url:
-        return None, None
+        return None, None, None
     if not tx.startswith("0x"):
         tx = "0x" + tx
     want = our_wallet.lower()
@@ -670,7 +731,7 @@ async def _usdt_received(
             receipt = (resp.json() or {}).get("result")
             # status 0x1 = success; a reverted (0x0) transfer credited nothing.
             if not receipt or receipt.get("status") != "0x1":
-                return None, None
+                return None, None, None
             total = Decimal(0)
             for lg in receipt.get("logs") or []:
                 if (lg.get("address") or "").lower() != token:
@@ -686,7 +747,7 @@ async def _usdt_received(
                 except (TypeError, ValueError):
                     continue
             if total <= 0:
-                return None, None
+                return None, None, None
             confs: int | None = None
             try:
                 bn = await client.post(rpc_url, json={
@@ -697,9 +758,9 @@ async def _usdt_received(
                     confs = max(0, latest - txblk + 1)
             except Exception:  # noqa: BLE001 — confirmations are optional
                 confs = None
-            return total, confs
+            return total, confs, await _evm_block_ts(client, rpc_url, receipt.get("blockNumber"))
     except Exception:  # noqa: BLE001 — node down / bad txid → fall back silently
-        return None, None
+        return None, None, None
 
 
 async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
@@ -713,7 +774,7 @@ async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         ["usdt_bep20_address", "usdt_bep20_contract", "bsc_rpc_url",
          "min_confirmations", "payment_amount_tolerance_usdt"],
     )
-    received, confs = await _usdt_received(
+    received, confs, block_ts = await _usdt_received(
         payment.txid, cfg.get("usdt_bep20_address") or "",
         cfg.get("usdt_bep20_contract") or "", cfg.get("bsc_rpc_url") or "",
     )
@@ -732,21 +793,23 @@ async def usdt_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         "min_confirmations": int(cfg.get("min_confirmations") or 0),
         "tolerance_usdt": tol,
         "match": match,
+        "tx_age_hours": _age_hours(block_ts),
     }
 
 
 async def _avax_received(
     txid: str, our_wallet: str, rpc_url: str
-) -> tuple[Decimal | None, int | None]:
-    """Best-effort (native AVAX credited to our wallet by this tx, confirmations), read from a public
-    Avalanche C-Chain JSON-RPC node — free, no API key. AVAX is a NATIVE coin, so (unlike USDT) the
-    amount is the transaction's own `value` and the recipient is its `to` — no ERC-20 log parsing.
-    Returns (None, None) on any failure so the caller falls back. Display-only — never auto-confirms.
+) -> tuple[Decimal | None, int | None, int | None]:
+    """Best-effort (native AVAX credited to our wallet by this tx, confirmations, block unix
+    timestamp), read from a public Avalanche C-Chain JSON-RPC node — free, no API key. AVAX is a
+    NATIVE coin, so (unlike USDT) the amount is the transaction's own `value` and the recipient is
+    its `to` — no ERC-20 log parsing. Returns (None, None, None) on any failure so the caller
+    falls back.
     Limitation: only a top-level value transfer is read (the normal exchange→wallet case); a
     contract-internal transfer isn't visible here and just yields a fall-back 'read failed'."""
     tx = (txid or "").strip()
     if not tx or not our_wallet or not rpc_url:
-        return None, None
+        return None, None, None
     if not tx.startswith("0x"):
         tx = "0x" + tx
     want = our_wallet.lower()
@@ -757,19 +820,19 @@ async def _avax_received(
             resp.raise_for_status()
             txn = (resp.json() or {}).get("result")
             if not txn or (txn.get("to") or "").lower() != want:
-                return None, None
+                return None, None, None
             try:
                 value = Decimal(int(txn.get("value") or "0x0", 16)) / (Decimal(10) ** 18)
             except (TypeError, ValueError):
-                return None, None
+                return None, None, None
             if value <= 0:
-                return None, None
+                return None, None, None
             # Confirm the tx actually succeeded (a reverted tx credits nothing).
             rc = await client.post(rpc_url, json={
                 "jsonrpc": "2.0", "id": 2, "method": "eth_getTransactionReceipt", "params": [tx]})
             receipt = (rc.json() or {}).get("result")
             if not receipt or receipt.get("status") != "0x1":
-                return None, None
+                return None, None, None
             confs: int | None = None
             try:
                 bn = await client.post(rpc_url, json={
@@ -780,9 +843,10 @@ async def _avax_received(
                     confs = max(0, latest - txblk + 1)
             except Exception:  # noqa: BLE001 — confirmations are optional
                 confs = None
-            return value, confs
+            blk_no = receipt.get("blockNumber") or txn.get("blockNumber")
+            return value, confs, await _evm_block_ts(client, rpc_url, blk_no)
     except Exception:  # noqa: BLE001 — node down / bad txid → fall back silently
-        return None, None
+        return None, None, None
 
 
 async def avax_deposit_check(session: AsyncSession, payment: Payment) -> dict:
@@ -794,7 +858,7 @@ async def avax_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         return {"available": False}
     cfg = await settings_service.get_many(
         session, ["avax_address", "avalanche_rpc_url", "avax_amount_tolerance_pct"])
-    received, confs = await _avax_received(
+    received, confs, block_ts = await _avax_received(
         payment.txid, cfg.get("avax_address") or "", cfg.get("avalanche_rpc_url") or "")
     if received is None:
         return {"available": False}
@@ -815,6 +879,7 @@ async def avax_deposit_check(session: AsyncSession, payment: Payment) -> dict:
         "tolerance_pct": tol_pct,
         "confirmations": confs,
         "match": match,
+        "tx_age_hours": _age_hours(block_ts),
     }
 
 
@@ -837,6 +902,142 @@ async def deposit_check(session: AsyncSession, payment: Payment) -> dict:
     d = await usdt_deposit_check(session, payment)
     d["kind"] = "usdt" if d.get("available") else "none"
     return d
+
+
+# ---------------------------- automatic on-chain confirmation ----------------------------
+# A submitted TXID whose on-chain read matches the invoice EXACTLY is confirmed by the system
+# itself, so a reseller who paid correctly is settled in seconds instead of waiting for the owner.
+# EVERYTHING else is left untouched as `pending` for the owner's manual decision — this feature
+# only ever ADDS confirmations, it never rejects and never touches a payment it isn't sure about.
+
+_AUTO_CONFIRM_TAG = "[auto-confirmed on-chain]"
+
+# Hard ceiling for the whole chain read. The per-request httpx timeouts (12s) don't bound a
+# reader that makes several sequential calls, and this runs inline on the reseller's submit.
+_AUTO_CONFIRM_TIMEOUT_S = 15.0
+
+# Methods whose proof is a chain transaction. A screenshot or a card transfer can't be read from
+# any chain and must always stay with the owner.
+_AUTO_CONFIRM_METHODS = (
+    PaymentMethod.usdt_txid, PaymentMethod.ton_txid, PaymentMethod.avax_txid,
+)
+
+
+@dataclass
+class AutoConfirmResult:
+    """Outcome of one automatic confirmation attempt. `reason` is a stable English code for the
+    log/tests; nothing user-facing is built from it."""
+
+    confirmed: bool
+    reason: str  # matched | disabled | not_found | not_pending | no_txid | unavailable
+    #              | amount_mismatch | low_confirmations | unknown_age | too_old | zero_amount
+    #              | timeout | not_settled | error
+    check: dict | None = None
+
+
+def _auto_confirm_verdict(chk: dict, *, min_confirmations: int, max_age_hours: float) -> str:
+    """Pure decision: may this `deposit_check` result settle its payment automatically?
+    Returns "matched" or the code of the FIRST failed gate. No I/O — unit-testable on its own.
+
+    The amount gate is deliberately the very same `match` flag the owner already reads in the
+    review message ("✅ مطابق فاکتور"), so auto-confirm can never accept a deposit the owner
+    would have been shown as mismatched — including an OVERPAYMENT outside tolerance, which the
+    owner asked to keep reviewing by hand.
+    """
+    if not chk.get("available"):
+        return "unavailable"
+    kind = chk.get("kind")
+    if kind not in ("usdt", "ton", "avax"):
+        return "unavailable"
+    match = chk.get("match")
+    if match is None:
+        # No comparable invoice total (zero-amount set, or an unavailable TON/AVAX rate).
+        return "zero_amount"
+    if match is not True:
+        return "amount_mismatch"
+    if kind in ("usdt", "avax"):
+        # TON has no confirmation depth — a transaction toncenter returns is already committed.
+        confs = chk.get("confirmations")
+        if min_confirmations > 0 and (confs is None or int(confs) < min_confirmations):
+            return "low_confirmations"
+    age = chk.get("tx_age_hours")
+    if age is None:
+        return "unknown_age"  # fail CLOSED: an unreadable block time is not proof of freshness
+    if float(age) > max_age_hours:
+        return "too_old"
+    return "matched"
+
+
+async def try_auto_confirm(session: AsyncSession, payment_id: int) -> AutoConfirmResult:
+    """Read the chain for a freshly submitted payment and, ONLY on an exact match, settle it
+    through the normal confirmation path (invoices paid, ledger written, suspension restored,
+    receipt + acknowledgement sent to the reseller).
+
+    Never raises: any failure — chain unreadable, node slow, unexpected error — degrades to
+    "leave it pending", which is exactly the behaviour that existed before this feature.
+
+    All network I/O happens BEFORE any row lock is taken (same discipline as `verify_payment`):
+    holding `FOR UPDATE` across a 12-second HTTP call would block every other money path.
+    """
+    try:
+        payment = await session.get(Payment, payment_id)
+        if payment is None:
+            return AutoConfirmResult(False, "not_found")
+        if payment.status != PaymentStatus.pending:
+            return AutoConfirmResult(False, "not_pending")
+        if not payment.txid or payment.method not in _AUTO_CONFIRM_METHODS:
+            return AutoConfirmResult(False, "no_txid")
+        cfg = await settings_service.get_many(
+            session,
+            ["payment_auto_confirm_enabled", "payment_auto_confirm_max_age_hours",
+             "min_confirmations"],
+        )
+        if not cfg.get("payment_auto_confirm_enabled"):
+            return AutoConfirmResult(False, "disabled")
+        try:
+            chk = await asyncio.wait_for(
+                deposit_check(session, payment), timeout=_AUTO_CONFIRM_TIMEOUT_S)
+        except TimeoutError:  # asyncio.TimeoutError is an alias of the builtin on 3.11+
+            # The cancellation may have landed on one of the check's own settings queries, which
+            # leaves the session unusable. Roll back (the check is read-only, so nothing is lost)
+            # so the CALLER can still build and send the owner review on this same session.
+            await session.rollback()
+            log.warning("auto-confirm chain read timed out for payment %s", payment_id)
+            return AutoConfirmResult(False, "timeout")
+
+        verdict = _auto_confirm_verdict(
+            chk,
+            min_confirmations=int(cfg.get("min_confirmations") or 0),
+            max_age_hours=float(cfg.get("payment_auto_confirm_max_age_hours") or 0),
+        )
+        if verdict != "matched":
+            log.info("auto-confirm declined payment %s: %s", payment_id, verdict)
+            return AutoConfirmResult(False, verdict, chk)
+
+        # Keep the evidence on the row, so the owner can audit later WHY it was auto-confirmed.
+        payment.raw_json = json.dumps(chk, default=str)[:4000]
+        confs = chk.get("confirmations")
+        if confs is not None:
+            payment.confirmations = int(confs)
+        # Flush before `_confirm_payment` re-reads the row with populate_existing=True — that
+        # refresh would otherwise overwrite these still-pending attributes with the DB's old ones.
+        await session.flush()
+        result = await _confirm_payment(
+            session, payment_id, note_tag=_AUTO_CONFIRM_TAG, require_pending=True)
+        if result.status != "confirmed":
+            # An owner decision landed first, or a set member is draft/canceled/deleted — the
+            # guards inside `_confirm_payment` refused. Leave it for the owner.
+            log.info("auto-confirm not settled for payment %s: %s", payment_id, result.message_fa)
+            return AutoConfirmResult(False, "not_settled", chk)
+        log.info("payment %s auto-confirmed on-chain", payment_id)
+        return AutoConfirmResult(True, "matched", chk)
+    except Exception:  # noqa: BLE001 — an auto-confirm failure must never break the submission
+        log.warning("auto-confirm failed for payment %s", payment_id, exc_info=True)
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return AutoConfirmResult(False, "error")
 
 
 async def _bscscan_tokentx(
@@ -1256,9 +1457,31 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
     is notified only when the status actually CHANGES to confirmed (re-confirming an already-
     confirmed payment is silent), so a double-click doesn't spam them.
     """
+    return await _confirm_payment(session, payment_id, note_tag="[manually confirmed]")
+
+
+async def _confirm_payment(
+    session: AsyncSession,
+    payment_id: int,
+    *,
+    note_tag: str,
+    require_pending: bool = False,
+) -> PaymentResult:
+    """THE settlement path behind every confirm (owner-manual and on-chain auto-confirm).
+
+    Both callers must share this body: it carries the hard-won guards (draft/canceled member,
+    vanished invoice, only-OWED-may-be-paid, stored set order, ledger mirror, restore fan-out,
+    single notification) and a second copy of them would inevitably drift.
+
+    `note_tag` stamps WHO confirmed it, so the panel/ledger can tell an owner decision from a
+    chain-verified one. `require_pending` makes the automatic path refuse anything the owner has
+    already decided — without it, an auto-confirm racing an owner's «رد» would silently undo it.
+    """
     payment = await session.get(Payment, payment_id, with_for_update=True, populate_existing=True)
     if payment is None:
         return PaymentResult("rejected", False, "Payment not found")
+    if require_pending and payment.status != PaymentStatus.pending:
+        return PaymentResult("pending", False, "Payment is no longer pending")
     was_confirmed = payment.status == PaymentStatus.confirmed
     reseller = await session.get(Reseller, payment.reseller_id)
     set_ids = _settled_ids(payment)
@@ -1301,8 +1524,8 @@ async def confirm_manually(session: AsyncSession, payment_id: int) -> PaymentRes
             payment.amount_usdt = float(
                 sum(Decimal(str(inv.amount_usdt or 0)) for inv in all_in_set)
             )
-    if "[manually confirmed]" not in (payment.note or ""):
-        payment.note = (payment.note or "") + " [manually confirmed]"
+    if note_tag and note_tag not in (payment.note or ""):
+        payment.note = (payment.note or "") + " " + note_tag
     await session.commit()
 
     if all_in_set:

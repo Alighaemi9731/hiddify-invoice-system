@@ -157,12 +157,23 @@ const SECTIONS: Section[] = [
         ],
       },
       {
+        title: "تأیید خودکار پرداخت روی زنجیره",
+        fields: [
+          { key: "payment_auto_confirm_enabled", label: "تأیید خودکار واریزیِ مطابق فاکتور",
+            help: "وقتی نماینده شناسهٔ تراکنش (USDT / گرام / اوالانچ) را ثبت می‌کند، واریزی از زنجیره خوانده می‌شود؛ اگر مقصد، مبلغ و تعداد تأییدها دقیقاً مطابق فاکتور بود، سامانه همان‌جا آن را تأیید و فاکتور را تسویه می‌کند. هر مورد دیگری — مبلغِ متفاوت، تأییدِ کم، تراکنشِ قدیمی، یا نخواندنِ زنجیره — مثل قبل در انتظارِ تأیید دستیِ شما می‌ماند. رسیدِ تصویری و کارت‌به‌کارت هرگز خودکار تأیید نمی‌شوند." },
+          { key: "payment_auto_confirm_max_age_hours", label: "حداکثر سنِ تراکنش برای تأیید خودکار (ساعت)", type: "number", min: 1, max: 8760,
+            help: "فقط واریزی‌هایی که تا این تعداد ساعت قبل انجام شده‌اند خودکار تأیید می‌شوند. آدرسِ کیف پول شما عمومی است؛ این محدودیت جلوی ادعای شناسهٔ یک واریزِ قدیمیِ ثبت‌نشده را می‌گیرد. پیش‌فرض ۲۴.",
+            when: (v) => !!v("payment_auto_confirm_enabled") },
+        ],
+      },
+      {
         title: "تأیید تراکنش روی زنجیره (BscScan)",
         fields: [
           { key: "bscscan_api_key", label: "کلید API بی‌اسکن", advanced: true, dir: "ltr" },
           { key: "bscscan_api_url", label: "آدرس API بی‌اسکن", advanced: true, dir: "ltr" },
-          { key: "min_confirmations", label: "حداقل تعداد تأیید", type: "number", min: 1, max: 100, advanced: true },
-          { key: "payment_amount_tolerance_usdt", label: "اغماض مبلغ (USDT)", help: "اختلاف مجاز بین مبلغ فاکتور و واریزی.", type: "number", advanced: true },
+          { key: "min_confirmations", label: "حداقل تعداد تأیید", type: "number", min: 1, max: 100, advanced: true,
+            help: "حداقل تأییدِ لازم روی شبکه (USDT و AVAX) برای اینکه واریزی خودکار تأیید شود. پیش‌فرض ۱۲؛ اگر پرداخت‌ها زیاد به تأیید دستی می‌افتند این عدد را کم کنید." },
+          { key: "payment_amount_tolerance_usdt", label: "اغماض مبلغ (USDT)", help: "اختلاف مجاز بین مبلغ فاکتور و واریزی — همین عدد ملاکِ «مطابق بودن» در تأیید خودکار هم هست.", type: "number", advanced: true },
           { key: "usdt_master_xpub", label: "xpub کیف پول مادر (HD)", advanced: true, dir: "ltr" },
         ],
       },

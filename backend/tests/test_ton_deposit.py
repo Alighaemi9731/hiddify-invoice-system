@@ -40,14 +40,18 @@ def _patch(monkeypatch, data):
     monkeypatch.setattr(P.httpx, "AsyncClient", lambda *a, **k: _Client(data))
 
 
+TX_TS = 1_700_000_000
+
+
 def test_ton_received_sums_only_incoming_to_our_address(monkeypatch):
     data = {"transactions": [
-        {"in_msg": {"destination": OUR, "value": "2500000000"}},          # 2.5 TON to us
-        {"in_msg": {"destination": "0:" + "b" * 64, "value": "9000000000"}},  # to someone else
+        {"now": TX_TS, "in_msg": {"destination": OUR, "value": "2500000000"}},  # 2.5 TON to us
+        {"now": TX_TS, "in_msg": {"destination": "0:" + "b" * 64, "value": "9000000000"}},
     ]}
     _patch(monkeypatch, data)
-    got = asyncio.run(P._ton_received("hash", OUR))
+    got, tx_ts = asyncio.run(P._ton_received("hash", OUR))
     assert got == Decimal("2.5")
+    assert tx_ts == TX_TS
 
 
 def test_ton_received_credits_from_out_msgs_sender_side_tx(monkeypatch):
@@ -55,6 +59,7 @@ def test_ton_received_credits_from_out_msgs_sender_side_tx(monkeypatch):
     # the external trigger (no value) and the credit to us is in out_msgs. We must still find it.
     data = {"transactions": [{
         "account": "0:" + "b" * 64,                               # the sender's wallet, not us
+        "now": TX_TS,
         "in_msg": {"destination": "0:" + "b" * 64, "value": None},  # external trigger, no TON
         "out_msgs": [
             {"destination": "0:" + "d" * 64, "value": "1000000000"},  # to someone else
@@ -62,13 +67,20 @@ def test_ton_received_credits_from_out_msgs_sender_side_tx(monkeypatch):
         ],
     }]}
     _patch(monkeypatch, data)
-    assert asyncio.run(P._ton_received("hash", OUR)) == Decimal("17.35")
+    assert asyncio.run(P._ton_received("hash", OUR)) == (Decimal("17.35"), TX_TS)
+
+
+def test_ton_received_ts_none_when_toncenter_omits_it(monkeypatch):
+    """No `now` field → unknown age, which the auto-confirm freshness guard must refuse."""
+    _patch(monkeypatch, {"transactions": [
+        {"in_msg": {"destination": OUR, "value": "2500000000"}}]})
+    assert asyncio.run(P._ton_received("hash", OUR)) == (Decimal("2.5"), None)
 
 
 def test_ton_received_none_when_no_match(monkeypatch):
     _patch(monkeypatch, {"transactions": [
-        {"in_msg": {"destination": "0:" + "c" * 64, "value": "1000000000"}}]})
-    assert asyncio.run(P._ton_received("hash", OUR)) is None
+        {"now": TX_TS, "in_msg": {"destination": "0:" + "c" * 64, "value": "1000000000"}}]})
+    assert asyncio.run(P._ton_received("hash", OUR)) == (None, None)
 
 
 def test_ton_received_none_on_network_error(monkeypatch):
@@ -77,7 +89,7 @@ def test_ton_received_none_on_network_error(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get(self, *a, **k): raise RuntimeError("toncenter down")
     monkeypatch.setattr(P.httpx, "AsyncClient", lambda *a, **k: _Boom())
-    assert asyncio.run(P._ton_received("hash", OUR)) is None
+    assert asyncio.run(P._ton_received("hash", OUR)) == (None, None)
 
 
 def test_ton_account_id_equates_raw_and_friendly_forms():

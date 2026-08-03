@@ -551,18 +551,16 @@ async def _owns_sub(session: AsyncSession, ctx: ResellerContext, sub: Reseller) 
     return False
 
 
-async def _notify_owner_new_payment(session: AsyncSession, result: payments.SubmitResult) -> None:
-    """Send the owner the same rich review + confirm/reject buttons the bot sends. Reuses the
-    bot's review builder so both surfaces stay identical (lazy import avoids load-order cost)."""
+async def _notify_owner_new_payment(
+    session: AsyncSession, result: payments.SubmitResult, *, auto=None
+) -> None:
+    """Send the owner the same rich review + buttons the bot sends. Reuses the bot's notification
+    builder so both surfaces stay identical (lazy import avoids load-order cost)."""
     if not result.notify or result.payment is None:
         return
-    from app.bot import keyboards as kb
-    from app.bot.handlers import _payment_review_html
+    from app.bot.handlers import notify_owner_new_payment
 
-    review = await _payment_review_html(session, result.payment, invs=result.invoices)
-    await owner_notify.notify_owner(
-        session, result.owner_intro + "\n\n" + review,
-        html=True, reply_markup=kb.owner_payment_detail_keyboard(result.payment.id))
+    await notify_owner_new_payment(session, result, auto=auto)
 
 
 # ------------------------------ pay ------------------------------
@@ -693,8 +691,9 @@ async def pay_txid(
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Submit a tx hash (USDT/BSC, TON, or AVAX) as a PENDING payment for one OR MORE owed
-    invoices. Same shared validation as the bot — never auto-confirms; the owner reviews."""
+    """Submit a tx hash (USDT/BSC, TON, or AVAX) for one OR MORE owed invoices. Same shared
+    validation as the bot: the payment is recorded as PENDING, then checked on-chain — an exact
+    match confirms itself immediately, anything else waits for the owner's review."""
     txid = (body.txid or "").strip()
     if not txid:
         raise HTTPException(400, "شناسهٔ تراکنش خالی است.")
@@ -705,10 +704,16 @@ async def pay_txid(
     ids = body.invoice_ids or ([body.invoice_id] if body.invoice_id else [])
     result = await payments.submit_reseller_payment(
         session, reseller_ids=set(ctx.ids), invoice_ids=ids, txid=txid, chain=chain)
-    await _notify_owner_new_payment(session, result)
+    auto = (
+        await payments.try_auto_confirm(session, result.payment.id)
+        if result.notify and result.payment is not None else None
+    )
+    await _notify_owner_new_payment(session, result, auto=auto)
     return {
         "status": result.status, "message": result.user_message,
         "number": payment_code(result.payment.id) if result.payment else None,
+        # The portal dialog shows the real outcome instead of a flat "waiting for review".
+        "auto_confirmed": bool(auto is not None and auto.confirmed),
     }
 
 

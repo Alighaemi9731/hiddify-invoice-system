@@ -152,6 +152,15 @@ DEFS: list[SettingDef] = [
     # native AVAX transfer's value/recipient. No API key needed; swap if it rate-limits.
     SettingDef("avalanche_rpc_url", "https://api.avax.network/ext/bc/C/rpc", False, "payments"),
     SettingDef("avax_amount_tolerance_pct", 5, False, "payments"),  # match tolerance for the AVAX read
+    # Auto-confirm a submitted TXID when the on-chain read matches the invoice EXACTLY (same
+    # tolerances the owner already sees in the review message). Anything else — different amount,
+    # too few confirmations, an older deposit, an unreadable chain — stays pending for manual
+    # review, exactly as before. Screenshot/card proofs are never auto-confirmed.
+    SettingDef("payment_auto_confirm_enabled", True, False, "payments"),
+    # Freshness guard: only a deposit that landed within this many hours may auto-confirm. Our
+    # wallet addresses are public, so without it a reseller could claim the TXID of some OLD
+    # never-submitted deposit and settle their own debt with it.
+    SettingDef("payment_auto_confirm_max_age_hours", 24, False, "payments"),
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
@@ -395,6 +404,9 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "min_confirmations": (0, 10_000),
     "ton_amount_tolerance_pct": (0, 100),
     "avax_amount_tolerance_pct": (0, 100),
+    # Lower bound 1, NOT 0: a 0-hour freshness window would make auto-confirm unreachable
+    # (every deposit is at least seconds old) — to switch the feature off, use its own toggle.
+    "payment_auto_confirm_max_age_hours": (1, 24 * 365),
 }
 _NONNEGATIVE_NUMBERS = {
     "payment_amount_tolerance_usdt", "free_under_gb", "overage_tolerance_gb",

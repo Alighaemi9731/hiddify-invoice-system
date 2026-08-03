@@ -172,13 +172,16 @@ async def _reseller_username(session, reseller) -> str | None:
     return bu.username if bu else None
 
 
-async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=None) -> str:
+async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=None, chk=None) -> str:
     """Rich, owner-facing HTML summary of a pending payment — shared by the submit notification
     and the «پرداخت‌های در انتظار» detail view so both are complete and identical. Includes the
     tracking number, a CLICKABLE reseller name (opens their Telegram profile), method, EVERY
     invoice the payment covers (a payment may settle several) with its paid-currency equivalent
     plus a grand total, a clickable explorer link, and — for TON — a best-effort on-chain deposit
-    read (actual received ≈ Toman, matched against the total) so the owner can decide."""
+    read (actual received ≈ Toman, matched against the total) so the owner can decide.
+
+    `chk` lets a caller that ALREADY read the chain (the auto-confirm attempt) hand its result in,
+    so a submission doesn't pay for the same RPC round trips twice."""
     from app.services import payments as _payments
 
     if reseller is None:
@@ -220,9 +223,56 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=No
         lines.append(f"🔗 تراکنش: {_explorer_link(chain, pay.txid)}")
         lines.append(_iso(f"TXID: {pay.txid}"))
         # Best-effort on-chain read (free): TON via toncenter, USDT via a public BSC RPC node.
-        chk = await _payments.deposit_check(session, pay)
+        if chk is None:
+            chk = await _payments.deposit_check(session, pay)
         lines.append(f"🔍 وضعیت شبکه: {_network_status_fa(chk)}")
     return "\n".join(lines)
+
+
+# Why the automatic on-chain confirmation declined, in the owner's language. Only the reasons
+# that say something about THIS transaction are listed; internal ones (feature off, not a txid,
+# already decided, unexpected error) add nothing to a review and are left out.
+_AUTO_DECLINE_FA = {
+    "amount_mismatch": "مبلغ واریزی با فاکتور مطابق نبود",
+    "low_confirmations": "تعداد تأییدهای شبکه هنوز کافی نبود",
+    "too_old": "تراکنش قدیمی‌تر از بازهٔ مجاز بود",
+    "unknown_age": "زمان تراکنش از زنجیره خوانده نشد",
+    "unavailable": "واریزی از زنجیره خوانده نشد",
+    "zero_amount": "مبلغ قابل مقایسه‌ای برای فاکتور وجود نداشت",
+    "timeout": "زنجیره به‌موقع پاسخ نداد",
+}
+
+
+async def notify_owner_new_payment(session, result, *, reseller=None, auto=None) -> None:
+    """Send the owner the review of a freshly submitted payment — the ONE path for both the bot
+    and the web portal, so the two surfaces can never drift.
+
+    `auto` is the `AutoConfirmResult` of the automatic on-chain attempt (None when there wasn't
+    one). When it confirmed, the owner is told so and only «رد» is offered — the payment is
+    already settled, and rejecting it reverts every invoice. Otherwise this is byte-for-byte the
+    notification that existed before auto-confirm: intro, review, تأیید/رد.
+    """
+    if not result.notify or result.payment is None:
+        return
+    review = await _payment_review_html(
+        session, result.payment, reseller=reseller, invs=result.invoices,
+        chk=(auto.check if auto is not None else None))
+    confirmed = bool(auto is not None and auto.confirmed)
+    if confirmed:
+        intro = "✅ پرداخت جدید به‌صورت خودکار روی زنجیره تأیید شد (نیازی به اقدام شما نیست)."
+    else:
+        intro = result.owner_intro
+        # Say WHY it still needs a human — otherwise a review showing «✅ مطابق فاکتور» next to
+        # confirm/reject buttons looks like the automatic check simply didn't run.
+        why = _AUTO_DECLINE_FA.get(auto.reason) if auto is not None else None
+        if why:
+            review += f"\n🤖 تأیید خودکار انجام نشد: {why}"
+    markup = (
+        keyboards.owner_payment_auto_confirmed_keyboard(result.payment.id) if confirmed
+        else keyboards.owner_payment_detail_keyboard(result.payment.id)
+    )
+    await owner_notify.notify_owner(
+        session, intro + "\n\n" + review, html=True, reply_markup=markup)
 
 
 # Telegram's hard cap for photo captions. A «پرداخت همهٔ بدهی» review with many invoices
@@ -305,9 +355,10 @@ async def _handle_txid(
     chain: str = "bsc",
     from_user=None,  # noqa: ANN001 — when called from a callback, cb.message.from_user is the bot
 ) -> None:
-    """Record a submitted tx hash (USDT/BSC, TON, or AVAX) as a PENDING payment for MANUAL review —
-    no on-chain auto-verify. The owner opens the clickable explorer link in the panel and
-    confirms/rejects. A payment may cover several invoices (one transfer for several debts)."""
+    """Record a submitted tx hash (USDT/BSC, TON, or AVAX) as a PENDING payment, then try to
+    confirm it automatically from the chain. Only an exact match settles itself; anything else
+    stays pending and the owner confirms/rejects from the review message as before. A payment may
+    cover several invoices (one transfer for several debts)."""
     from app.services import payments
 
     actor = from_user or message.from_user
@@ -320,17 +371,16 @@ async def _handle_txid(
         session, reseller_ids={r.id for r in resellers},
         invoice_ids=[i.id for i in (invoices or [])], txid=txid, chain=chain,
     )
+    # Answer the reseller FIRST: the chain read that follows can take seconds, and their
+    # submission is already safely recorded either way.
     await message.answer(rtl(result.user_message))
     if result.notify and result.payment is not None:
+        auto = await payments.try_auto_confirm(session, result.payment.id)
         # Attribute the review to the reseller row the payment actually belongs to — a
         # multi-panel customer's resellers[0] can be a DIFFERENT row (wrong name shown).
         primary = next(
             (r for r in resellers if r.id == result.payment.reseller_id), resellers[0])
-        review = await _payment_review_html(
-            session, result.payment, reseller=primary, invs=result.invoices)
-        await owner_notify.notify_owner(
-            session, result.owner_intro + "\n\n" + review,
-            html=True, reply_markup=keyboards.owner_payment_detail_keyboard(result.payment.id))
+        await notify_owner_new_payment(session, result, reseller=primary, auto=auto)
 
 
 async def _handle_payment_proof(

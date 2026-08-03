@@ -388,6 +388,15 @@ def owner_payment_detail_keyboard(payment_id: int) -> InlineKeyboardMarkup:
     ], [InlineKeyboardButton(text="« پرداخت‌های در انتظار", callback_data="owner:payments")]])
 
 
+def owner_payment_auto_confirmed_keyboard(payment_id: int) -> InlineKeyboardMarkup:
+    """Shown when the SYSTEM confirmed a payment from the chain. No «تأیید» (it is already
+    confirmed — a second tap would be a no-op), but «رد» stays: rejecting a confirmed payment
+    reverts every invoice it settled, so the owner always keeps the last word."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ رد کردن", callback_data=f"opno:{payment_id}"),
+    ], [InlineKeyboardButton(text="« پرداخت‌های در انتظار", callback_data="owner:payments")]])
+
+
 def owner_payment_decided_keyboard() -> InlineKeyboardMarkup:
     """Shown after the owner confirms/rejects — the تأیید/رد buttons are gone (so the decision is
     unmistakable and can't be re-tapped); only the back-to-pending link remains."""

@@ -315,9 +315,12 @@ def test_verify_holds_avax_for_manual():
 
 # ───────────────────────── on-chain deposit read (display-only) ─────────────────────────
 
-def _fake_rpc(*, to, value_wei, status="0x1", tx_block=100, latest=112):
+BLOCK_TS = 1_700_000_000
+
+
+def _fake_rpc(*, to, value_wei, status="0x1", tx_block=100, latest=112, block_ts=BLOCK_TS):
     """A fake Avalanche JSON-RPC client: answers getTransactionByHash / getTransactionReceipt /
-    blockNumber by the request's `method`."""
+    blockNumber / getBlockByNumber by the request's `method`."""
     class FakeClient:
         def __init__(self, **kw):
             pass
@@ -337,6 +340,10 @@ def _fake_rpc(*, to, value_wei, status="0x1", tx_block=100, latest=112):
                 return _Resp({"result": {"status": status, "blockNumber": hex(tx_block)}})
             if m == "eth_blockNumber":
                 return _Resp({"result": hex(latest)})
+            if m == "eth_getBlockByNumber":
+                if block_ts is None:
+                    return _Resp({"result": None})
+                return _Resp({"result": {"timestamp": hex(block_ts)}})
             return _Resp({"result": None})
 
     return FakeClient
@@ -345,21 +352,24 @@ def _fake_rpc(*, to, value_wei, status="0x1", tx_block=100, latest=112):
 def test_avax_received_reads_native_transfer(monkeypatch):
     monkeypatch.setattr(payments_service.httpx, "AsyncClient",
                         _fake_rpc(to="0xWALLET", value_wei=2 * 10**18, tx_block=100, latest=112))
-    recv, confs = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
+    recv, confs, block_ts = asyncio.run(
+        payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
     assert recv == Decimal(2) and confs == 13  # 112 - 100 + 1
+    assert block_ts == BLOCK_TS
 
 
 def test_avax_received_wrong_recipient(monkeypatch):
     monkeypatch.setattr(payments_service.httpx, "AsyncClient",
                         _fake_rpc(to="0xSOMEONE_ELSE", value_wei=2 * 10**18))
-    recv, confs = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
-    assert recv is None and confs is None
+    recv, confs, block_ts = asyncio.run(
+        payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
+    assert recv is None and confs is None and block_ts is None
 
 
 def test_avax_received_reverted_tx(monkeypatch):
     monkeypatch.setattr(payments_service.httpx, "AsyncClient",
                         _fake_rpc(to="0xwallet", value_wei=10**18, status="0x0"))
-    recv, _ = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
+    recv, _, _ = asyncio.run(payments_service._avax_received(HASH, "0xwallet", "http://rpc"))
     assert recv is None  # a reverted tx credited nothing
 
 
@@ -377,7 +387,7 @@ def test_avax_deposit_check_and_dispatch(monkeypatch):
                 pid = res.payment.id
             # 0.6 AVAX × 1,000,000 = 600,000 T == the invoice → match; never touches the network.
             monkeypatch.setattr(payments_service, "_avax_received",
-                                lambda *a, **k: _coro((Decimal("0.6"), 12)))
+                                lambda *a, **k: _coro((Decimal("0.6"), 12, BLOCK_TS)))
             async with factory() as s:
                 p = await s.get(Payment, pid)
                 d = await payments_service.avax_deposit_check(s, p)

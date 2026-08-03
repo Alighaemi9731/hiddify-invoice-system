@@ -107,6 +107,7 @@ from app.bot.handlers.intake import (
     _network_status_fa,
     _payment_review_html,
     _registration_candidate,
+    notify_owner_new_payment,
 )
 from app.bot.handlers.menus import _do_owner_menu, _do_reseller_menu, on_menu_label
 from app.bot.handlers.misc import on_forward
@@ -306,5 +307,5 @@ __all__ = [
     "_handle_link", "_registration_candidate",
     "_invoice_amount_for_chain", "_PAYMENT_METHOD_FA", "_explorer_link",
     "_network_status_fa", "_payment_review_html", "_handle_txid",
-    "_handle_payment_proof",
+    "_handle_payment_proof", "notify_owner_new_payment",
 ]

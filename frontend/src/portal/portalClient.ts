@@ -276,7 +276,13 @@ export interface PayOptionsAll {
 export const portalPayOptionsAll = () =>
   portalApi.get("/api/portal/pay/options-all").then((r) => r.data as PayOptionsAll);
 
-export interface PaySubmitResult { status: string; message: string; number: string | null }
+export interface PaySubmitResult {
+  status: string;
+  message: string;
+  number: string | null;
+  /** True when the on-chain check matched the invoice and the system settled it right away. */
+  auto_confirmed?: boolean;
+}
 export const portalPayTxid = (
   body: { invoice_id?: number; invoice_ids?: number[]; txid: string; chain: string },
 ) => portalApi.post("/api/portal/pay/txid", body).then((r) => r.data as PaySubmitResult);

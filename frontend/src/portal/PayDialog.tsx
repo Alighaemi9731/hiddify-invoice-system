@@ -122,8 +122,13 @@ export default function PayDialog({
     setBusy(true);
     try {
       const r = await portalPayTxid({ invoice_ids: opts.invoice_ids, txid: txid.trim(), chain: effChain });
-      if (r.status === "ok" || r.status === "reopened") finish(r.message);
-      else show(r.message, "warning");
+      // `message` was written before the on-chain check ran; when the check settled the payment
+      // outright, say so instead of "waiting for review".
+      if (r.status === "ok" || r.status === "reopened") {
+        finish(r.auto_confirmed
+          ? "✅ واریزی شما روی زنجیره بررسی و تأیید شد؛ فاکتور تسویه شد."
+          : r.message);
+      } else show(r.message, "warning");
     } catch (e) { show(errMsg(e), "error"); }
     finally { setBusy(false); }
   };
