@@ -221,6 +221,31 @@ def test_trial_conversion_counts_a_trial_customer_who_later_paid():
     _run(body)
 
 
+def test_revoked_shop_leaves_the_operational_table_for_its_own_bucket():
+    """A shop whose token is dead has nothing to operate on, so it must not sit in the shops
+    table competing for attention — but it must stay visible somewhere, and still count as a
+    REGISTERED shop so the adoption ratio keeps its meaning."""
+    async def body(s):
+        _p1, _r1, live, _c1 = await _shop(s, "ra")
+        _p2, r2, dead, _c2 = await _shop(s, "rb", status="revoked")
+        await s.commit()
+
+        out = await sfa.analytics(s, PERIOD, now=NOW)
+
+        assert out.bots.revoked == 1
+        assert out.bots.active == 1
+        assert out.bots.selling == 1          # a revoked shop cannot sell
+        assert out.bots.total == 2            # ...but it IS still a registered shop
+
+        assert [row.shop_id for row in out.shops] == [live.id]
+        assert [row.shop_id for row in out.revoked_shops] == [dead.id]
+        row = out.revoked_shops[0]
+        assert row.reseller_name == r2.name
+        assert row.bot_username == "rb_bot"
+        assert row.customers == 1             # what is stranded until they send a new token
+    _run(body)
+
+
 def test_endpoint_requires_auth_and_serializes_the_report():
     """The route is owner-only, validates the period, and its cache is per-period."""
     from httpx import ASGITransport, AsyncClient

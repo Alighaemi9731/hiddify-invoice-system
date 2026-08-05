@@ -38,7 +38,7 @@ const payload = {
   period: "2026-07", period_start: "2026-07-01", period_end: "2026-07-31",
   previous_period: "2026-06", generated_at: "2026-07-20T08:30:00Z",
   bots: {
-    total: 4, enabled: 3, disabled: 1, active: 3, errored: 1, closed: 1, selling: 2,
+    total: 5, enabled: 4, disabled: 1, active: 3, errored: 1, revoked: 1, closed: 1, selling: 2,
     without_plans: 1, trial_enabled: 3, channel_locked: 1, panel_unhealthy: 0,
     new_in_period: 1, eligible_resellers: 8,
   },
@@ -75,6 +75,12 @@ const payload = {
     new_customers: i === 0 ? 3 : 0, topups_toman: i === 0 ? 600_000 : 0,
   })),
   top_plans: [{ gb: 50, days: 30, orders: 20, amount_toman: 4_000_000 }],
+  revoked_shops: [
+    {
+      shop_id: 9, reseller_id: 9, reseller_name: "نمایندهٔ ج", panel_key: "p3",
+      bot_username: "dead_bot", customers: 12, revoked_at: "2026-07-18T10:00:00Z",
+    },
+  ],
   shops: [
     shopRow(1, "نمایندهٔ الف", 6_000_000),
     shopRow(2, "نمایندهٔ ب", 3_600_000, {
@@ -104,14 +110,20 @@ describe("storefront analytics page", () => {
     // «ready to sell» is the honest headline: enabled AND healthy AND not temporarily closed.
     expect(await screen.findByText("ربات‌های در حال فروش")).toBeInTheDocument();
     expect(screen.getByText("۲")).toBeInTheDocument();
-    expect(screen.getByText(/۴ ربات ثبت‌شده · ۱ خطادار/)).toBeInTheDocument();
+    expect(screen.getByText(/۵ ربات ثبت‌شده · ۲ خطادار/)).toBeInTheDocument();
     // today vs yesterday, and this period vs the previous one
     expect(screen.getByText(/۱۰۰٪ نسبت به دیروز/)).toBeInTheDocument();
     expect(screen.getByText(/۲۰٪ نسبت به دورهٔ قبل/)).toBeInTheDocument();
     expect(screen.getByText("۲۵٪")).toBeInTheDocument();               // trial → paid
     // the banner surfaces what needs the owner's attention right now
     expect(screen.getByText(/۱ ربات با توکن خراب/)).toBeInTheDocument();
+    expect(screen.getByText(/۱ ربات نیازمند توکن جدید/)).toBeInTheDocument();
     expect(screen.getByText(/۳ شارژ در انتظار تأیید فروشنده/)).toBeInTheDocument();
+
+    // A revoked shop gets its own section — never a dead row in the operational table.
+    expect(screen.getByText("نیازمند توکن جدید")).toBeInTheDocument();
+    expect(screen.getByText("نمایندهٔ ج")).toBeInTheDocument();
+    expect(screen.getByText(/@dead_bot · ۱۲ مشتری در انتظار/)).toBeInTheDocument();
   });
 
   it("flags the shops that need attention with a concrete reason", async () => {
@@ -159,6 +171,7 @@ describe("storefront analytics page", () => {
       daily: payload.daily.map((d) => ({ ...d, net_toman: 0, orders: 0 })),
       top_plans: [],
       shops: [],
+      revoked_shops: [],
     });
 
     expect(await screen.findByText("ربات‌های در حال فروش")).toBeInTheDocument();

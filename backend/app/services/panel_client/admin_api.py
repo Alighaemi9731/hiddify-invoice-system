@@ -513,10 +513,14 @@ class AdminApiClient(PanelClient):
     async def delete_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None
     ) -> None:
-        """Delete an admin via `DELETE /api/v2/admin/admin_user/{uuid}/`. On the panel this also
-        deletes the admin's sub-admins recursively (and reassigns any LEFTOVER users to the caller
-        — so the cascade deletes all subtree users FIRST). 404 (already gone) is tolerated; the
-        panel refuses to delete the super-admin/self (we never target those)."""
+        """Delete ONE admin via `DELETE /api/v2/admin/admin_user/{uuid}/`.
+
+        This does NOT cascade: Hiddify answers 500 with MySQL 1451
+        (`FOREIGN KEY (parent_admin_id) REFERENCES admin_user(id)`) while the admin still has
+        sub-admins, so callers must delete a subtree deepest-first (see
+        `enforcement._delete_order`). Leftover users are reassigned to the caller, so the cascade
+        deletes all subtree users FIRST. 404 (already gone) is tolerated, which makes retries
+        idempotent; the panel refuses to delete the super-admin/self (we never target those)."""
         url = f"{panel.admin_api_base}/admin_user/{admin_uuid}/"
         async with httpx.AsyncClient(timeout=max(self.timeout, 120.0)) as client:
             resp = await client.delete(url, headers=self._headers(panel, api_key))

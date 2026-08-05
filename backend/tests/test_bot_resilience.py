@@ -110,7 +110,7 @@ def test_owner_reply_to_blocked_user_shows_clean_persian():
 
 # ── storefront polling: revoked token stops the loop ─────────────────────────
 
-def test_poll_one_marks_errored_after_consecutive_unauthorized(monkeypatch):
+def test_poll_one_marks_revoked_after_consecutive_unauthorized(monkeypatch):
     from app.bot.storefront import manager
 
     class _FakeBot:
@@ -131,12 +131,12 @@ def test_poll_one_marks_errored_after_consecutive_unauthorized(monkeypatch):
 
     recorded: list[tuple[int, str]] = []
 
-    async def fake_mark_errored(_s, row_id, error):
+    async def fake_mark_revoked(_s, row_id, error):
         recorded.append((row_id, error))
 
     monkeypatch.setattr(manager, "_POLL_BACKOFF", 0)
     monkeypatch.setattr(manager, "SessionLocal", lambda: _S())
-    monkeypatch.setattr(manager.storefront, "mark_errored", fake_mark_errored)
+    monkeypatch.setattr(manager.storefront, "mark_revoked", fake_mark_revoked)
     # Don't build the REAL dispatcher: attaching storefront_router to a throwaway Dispatcher
     # here would poison later tests (an aiogram router attaches to exactly one dispatcher).
     monkeypatch.setattr(
@@ -151,7 +151,8 @@ def test_poll_one_marks_errored_after_consecutive_unauthorized(monkeypatch):
     assert "revoked" in recorded[0][1]
 
 
-def test_active_bots_excludes_errored(tmp_path):
+def test_active_bots_only_polls_active(tmp_path):
+    """Neither `errored` (ambiguous) nor `revoked` (dead credential) may be polled."""
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from app.models import Panel, Reseller, StorefrontBot
@@ -170,17 +171,75 @@ def test_active_bots_excludes_errored(tmp_path):
                 await s.flush()
                 r1 = Reseller(panel_id=panel.id, admin_uuid="a1", name="r1")
                 r2 = Reseller(panel_id=panel.id, admin_uuid="a2", name="r2")
-                s.add_all([r1, r2])
+                r3 = Reseller(panel_id=panel.id, admin_uuid="a3", name="r3")
+                s.add_all([r1, r2, r3])
                 await s.flush()
                 s.add_all([
                     StorefrontBot(reseller_id=r1.id, panel_id=panel.id, bot_token_enc="t1",
                                   enabled=True, status="active"),
                     StorefrontBot(reseller_id=r2.id, panel_id=panel.id, bot_token_enc="t2",
-                                  enabled=True, status="errored", last_error="revoked"),
+                                  enabled=True, status="errored", last_error="id clash"),
+                    StorefrontBot(reseller_id=r3.id, panel_id=panel.id, bot_token_enc="",
+                                  enabled=True, status="revoked", last_error="token revoked"),
                 ])
                 await s.commit()
                 rows = await storefront.active_bots(s)
                 assert [b.reseller_id for b in rows] == [r1.id]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(go())
+
+
+def test_mark_revoked_clears_token_and_notifies_reseller_once(tmp_path, monkeypatch):
+    """The dead secret must not be retained, and the reseller is told exactly once — over the
+    MAIN bot, since their own bot is precisely what stopped working."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.models import Panel, Reseller, StorefrontBot
+    from app.services import notifier, storefront
+
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send(_s, reseller, text, **_kw):
+        sent.append((reseller.id, text))
+
+    monkeypatch.setattr(notifier, "send_to_reseller", fake_send)
+
+    async def go():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'sfrev.db'}")
+        from app.core.db import Base
+        async with engine.begin() as c:
+            await c.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with Session() as s:
+                panel = Panel(key="p", host="h", proxy_path_enc="x", owner_uuid="o")
+                s.add(panel)
+                await s.flush()
+                r = Reseller(panel_id=panel.id, admin_uuid="a1", name="r1", bot_chat_id=555)
+                s.add(r)
+                await s.flush()
+                bot = StorefrontBot(reseller_id=r.id, panel_id=panel.id,
+                                    bot_token_enc="enc::secret", bot_username="shop_bot",
+                                    enabled=True, status="active")
+                s.add(bot)
+                await s.commit()
+
+                await storefront.mark_revoked(s, bot.id, "token revoked: Unauthorized")
+                await s.refresh(bot)
+                assert bot.status == "revoked"
+                assert bot.bot_token_enc == ""          # dead secret dropped, NOT kept
+                assert bot.last_error.startswith("token revoked")
+                assert len(sent) == 1 and sent[0][0] == r.id
+                assert "@shop_bot" in sent[0][1]
+
+                # The shop row and its data survive so a new token recovers it in place.
+                assert await storefront.get_bot_for_reseller(s, r.id) is not None
+
+                # Re-marking must NOT re-notify (the poll loop can hit this more than once).
+                await storefront.mark_revoked(s, bot.id, "token revoked: Unauthorized")
+                assert len(sent) == 1
         finally:
             await engine.dispose()
 
@@ -215,7 +274,7 @@ def test_sf_setup_malformed_token_gets_friendly_reply():
     asyncio.run(go())
 
 
-def test_start_runner_marks_malformed_stored_token_errored(monkeypatch):
+def test_start_runner_marks_malformed_stored_token_revoked(monkeypatch):
     from app.bot.storefront import manager
 
     class _S:
@@ -227,11 +286,11 @@ def test_start_runner_marks_malformed_stored_token_errored(monkeypatch):
 
     recorded: list[tuple[int, str]] = []
 
-    async def fake_mark_errored(_s, row_id, error):
+    async def fake_mark_revoked(_s, row_id, error):
         recorded.append((row_id, error))
 
     monkeypatch.setattr(manager, "SessionLocal", lambda: _S())
-    monkeypatch.setattr(manager.storefront, "mark_errored", fake_mark_errored)
+    monkeypatch.setattr(manager.storefront, "mark_revoked", fake_mark_revoked)
 
     async def go():
         sem = asyncio.Semaphore(1)
@@ -244,7 +303,7 @@ def test_start_runner_marks_malformed_stored_token_errored(monkeypatch):
 
 
 def _start_runner_with_getme(monkeypatch, exc: Exception) -> list[tuple[int, str]]:
-    """Drive `_start_runner` against a fake Bot whose get_me() raises `exc`; return mark_errored calls."""
+    """Drive `_start_runner` against a fake Bot whose get_me() raises `exc`; return mark_revoked calls."""
     from app.bot.storefront import manager
 
     class _FakeBot:
@@ -265,13 +324,13 @@ def _start_runner_with_getme(monkeypatch, exc: Exception) -> list[tuple[int, str
 
     recorded: list[tuple[int, str]] = []
 
-    async def fake_mark_errored(_s, row_id, error):
+    async def fake_mark_revoked(_s, row_id, error):
         recorded.append((row_id, error))
 
     monkeypatch.setattr(manager, "Bot", _FakeBot)
     monkeypatch.setattr(manager.rtl_middleware, "install", lambda _b: None)
     monkeypatch.setattr(manager, "SessionLocal", lambda: _S())
-    monkeypatch.setattr(manager.storefront, "mark_errored", fake_mark_errored)
+    monkeypatch.setattr(manager.storefront, "mark_revoked", fake_mark_revoked)
 
     asyncio.run(manager._start_runner(1, 9, "123456:AAquiteplausiblelookingtokenvalue", asyncio.Semaphore(1)))
     assert 1 not in manager._active
@@ -298,7 +357,7 @@ def test_start_runner_does_not_error_a_bot_on_a_getme_timeout(monkeypatch):
     assert _start_runner_with_getme(monkeypatch, TimeoutError()) == []
 
 
-def test_start_runner_marks_revoked_token_errored(monkeypatch):
+def test_start_runner_marks_revoked_token_revoked(monkeypatch):
     """The one case that IS permanent: a 401 must still stop the fleet re-validating a dead token."""
     recorded = _start_runner_with_getme(monkeypatch, TelegramUnauthorizedError(
         method=SendMessage(chat_id=1, text="x"), message="Unauthorized"))

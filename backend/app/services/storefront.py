@@ -7,6 +7,7 @@ owner's monthly-fee computation. Money movement lives in `storefront_wallet`; pr
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy import exists, func, or_, select
@@ -15,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import crypto
 from app.models import Reseller, StorefrontBot, StorefrontCustomer, StorefrontPlan
 from app.services import settings_service
+
+log = logging.getLogger("storefront")
 
 # Refresh last_seen_at at most this often (avoid a write on every single interaction; 6h granularity
 # is ample for a 90-day retention window).
@@ -95,14 +98,15 @@ async def billing_caps(session: AsyncSession, panel_id: int) -> dict[str, float]
 
 
 async def active_bots(session: AsyncSession) -> list[StorefrontBot]:
-    """Enabled storefront bots the manager should be polling. Errored rows (invalid/revoked
-    token) are EXCLUDED — otherwise reconcile re-validates the dead token every ~30s forever.
+    """Enabled storefront bots the manager should be polling. Only `active` rows qualify —
+    `errored` (ambiguous failure) and `revoked` (credential permanently dead, token cleared) are
+    both EXCLUDED, otherwise reconcile re-validates a dead token every ~30s forever.
     Re-running the setup wizard (`upsert_bot`) resets status to active and re-arms polling."""
     return list(
         (
             await session.execute(
                 select(StorefrontBot).where(
-                    StorefrontBot.enabled.is_(True), StorefrontBot.status != "errored"
+                    StorefrontBot.enabled.is_(True), StorefrontBot.status == "active"
                 )
             )
         ).scalars().all()
@@ -167,11 +171,62 @@ async def upsert_bot(
 
 
 async def mark_errored(session: AsyncSession, bot_id: int, error: str) -> None:
+    """An AMBIGUOUS failure (e.g. a Telegram-id clash): the token may well still be valid, so it
+    is kept. Use `mark_revoked` when the credential itself is provably dead."""
     bot = await session.get(StorefrontBot, bot_id)
     if bot is not None:
         bot.status = "errored"
         bot.last_error = (error or "")[:300]
         await session.commit()
+
+
+async def mark_revoked(session: AsyncSession, bot_id: int, error: str) -> None:
+    """The bot's credential is permanently dead (401 Unauthorized / malformed token).
+
+    Keeping a revoked secret buys us nothing and is one more thing to leak, so the encrypted
+    token is CLEARED. It is set to "" rather than NULL: the column is NOT NULL, `upsert_bot`
+    already writes `crypto.encrypt(...) or ""`, and `storefront_admin` hashes the raw column
+    without a None guard. Every token consumer already treats a falsy token as "bot unavailable".
+
+    The shop row itself is kept — plans, customers, orders and wallet balances hang off it, and
+    re-running the setup wizard with a fresh token recovers the whole shop in place.
+
+    The reseller is told once, over the MAIN owner bot (their own bot is dead, so it is the only
+    channel left). De-dup piggybacks on the status transition: an already-revoked row is skipped.
+    """
+    bot = await session.get(StorefrontBot, bot_id)
+    if bot is None:
+        return
+    first_time = bot.status != "revoked"
+    bot.status = "revoked"
+    bot.bot_token_enc = ""
+    bot.last_error = (error or "")[:300]
+    await session.commit()
+    if first_time:
+        await _notify_reseller_token_revoked(session, bot)
+
+
+async def _notify_reseller_token_revoked(session: AsyncSession, bot: StorefrontBot) -> None:
+    """Best-effort — a failed notification must never block the status write."""
+    try:
+        from app.services import notifier
+
+        reseller = await session.get(Reseller, bot.reseller_id)
+        if reseller is None:
+            return
+        shop = f"@{bot.bot_username}" if bot.bot_username else "ربات فروشگاه شما"
+        await notifier.send_to_reseller(
+            session,
+            reseller,
+            "⚠️ توکن ربات فروشگاهی شما دیگر معتبر نیست و فروشگاه موقتاً متوقف شد.\n"
+            f"ربات: {shop}\n\n"
+            "احتمالاً توکن در BotFather باطل یا بازتولید شده است. برای راه‌اندازی دوباره، از منوی "
+            "«فروشگاه من» توکن جدید را ارسال کنید.\n"
+            "نگران نباشید: مشتریان، سفارش‌ها، پلن‌ها و موجودی کیف‌پول‌ها همگی حفظ شده‌اند و با "
+            "توکن جدید دقیقاً از همین‌جا ادامه پیدا می‌کند.",
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("token-revoked notice failed for storefront bot %s", bot.id, exc_info=True)
 
 
 # ── plans ───────────────────────────────────────────────────────────────────

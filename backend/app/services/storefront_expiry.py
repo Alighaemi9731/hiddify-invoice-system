@@ -263,7 +263,7 @@ async def notify_expiring(
                 StorefrontOrder.is_trial.is_(False),  # trials get the «trial ended» nudge instead
                 StorefrontCustomer.banned.is_(False),
                 StorefrontBot.enabled.is_(True),
-                StorefrontBot.status != "errored",
+                StorefrontBot.status == "active",
             )
         )
     ).all()
@@ -338,7 +338,7 @@ async def notify_trial_ended(
                 StorefrontOrder.trial_ended_alerted_at.is_(None),
                 StorefrontCustomer.banned.is_(False),
                 StorefrontBot.enabled.is_(True),
-                StorefrontBot.status != "errored",
+                StorefrontBot.status == "active",
             )
         )
     ).all()
@@ -395,7 +395,7 @@ async def notify_expired(
                 StorefrontOrder.is_trial.is_(False),   # trials get the «trial ended» nudge instead
                 StorefrontCustomer.banned.is_(False),
                 StorefrontBot.enabled.is_(True),
-                StorefrontBot.status != "errored",
+                StorefrontBot.status == "active",
             )
         )
     ).all()
@@ -474,7 +474,7 @@ async def notify_usage_high(
                 StorefrontOrder.is_trial.is_(False),
                 StorefrontCustomer.banned.is_(False),
                 StorefrontBot.enabled.is_(True),
-                StorefrontBot.status != "errored",
+                StorefrontBot.status == "active",
             )
         )
     ).all()

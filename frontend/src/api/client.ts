@@ -432,11 +432,17 @@ export interface StorefrontShopRow {
   wallet_liability_toman: number; pending_topups_count: number; pending_topups_toman: number;
   last_sale_at: string | null; created_at: string | null;
 }
+/** A shop whose bot token is dead: kept out of the operational table, listed on its own. */
+export interface StorefrontRevokedShop {
+  shop_id: number; reseller_id: number; reseller_name: string; panel_key: string;
+  bot_username: string | null; customers: number; revoked_at: string | null;
+}
 export interface StorefrontAnalytics {
   period: string; period_start: string; period_end: string; previous_period: string;
   generated_at: string;
   bots: {
     total: number; enabled: number; disabled: number; active: number; errored: number;
+    revoked: number;
     closed: number; selling: number; without_plans: number; trial_enabled: number;
     channel_locked: number; panel_unhealthy: number; new_in_period: number;
     eligible_resellers: number;
@@ -476,6 +482,7 @@ export interface StorefrontAnalytics {
   }[];
   top_plans: { gb: number; days: number; orders: number; amount_toman: number }[];
   shops: StorefrontShopRow[];
+  revoked_shops: StorefrontRevokedShop[];
 }
 
 export const getStorefrontAnalytics = (period?: string, refresh?: boolean) =>

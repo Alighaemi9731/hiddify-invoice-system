@@ -35,7 +35,8 @@ class BotsOut(BaseModel):
     enabled: int
     disabled: int
     active: int          # status == 'active'
-    errored: int         # status == 'errored' (revoked/failing token)
+    errored: int         # status == 'errored' — ambiguous failure, token kept
+    revoked: int         # status == 'revoked' — token provably dead + cleared; needs a new one
     closed: int          # «فروشگاه موقتاً بسته است»
     selling: int         # enabled AND active AND not closed → actually able to sell right now
     without_plans: int
@@ -160,6 +161,18 @@ class ShopRowOut(BaseModel):
     created_at: dt.datetime | None
 
 
+class RevokedShopOut(BaseModel):
+    """A shop whose bot token is dead. Kept out of the operational shops table (there is nothing
+    to operate) and surfaced on its own so the owner can chase the reseller for a new token."""
+    shop_id: int
+    reseller_id: int
+    reseller_name: str
+    panel_key: str
+    bot_username: str | None
+    customers: int
+    revoked_at: dt.datetime | None   # when the row was last written (i.e. when it went revoked)
+
+
 class StorefrontAnalyticsOut(BaseModel):
     period: str
     period_start: dt.date
@@ -182,3 +195,4 @@ class StorefrontAnalyticsOut(BaseModel):
     daily: list[DailyPointOut]
     top_plans: list[PlanShapeOut]
     shops: list[ShopRowOut]
+    revoked_shops: list[RevokedShopOut]

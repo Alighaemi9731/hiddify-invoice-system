@@ -37,7 +37,16 @@ from app.models.mixins import TimestampMixin
 
 class StorefrontBot(Base, TimestampMixin):
     """One storefront per top-level reseller. Holds the bot token (encrypted), the chosen panel,
-    payment configuration, and the forced-join gate. `status`: 'active' | 'errored' (revoked token)."""
+    payment configuration, and the forced-join gate.
+
+    `status`:
+      - 'active'  — polled by the manager; the only status that counts as live.
+      - 'errored' — an AMBIGUOUS failure (e.g. two rows claiming one Telegram id). The token is
+                    kept, because it may well still be valid.
+      - 'revoked' — the credential is provably dead (401 / malformed). `bot_token_enc` is CLEARED
+                    to "" and the owning reseller is notified once. The row and all its shop data
+                    survive: re-running the setup wizard with a new token recovers it in place.
+    """
     __tablename__ = "storefront_bots"
     __table_args__ = (
         UniqueConstraint("reseller_id", name="uq_storefront_bot_reseller"),

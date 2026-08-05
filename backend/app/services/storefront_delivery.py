@@ -224,7 +224,7 @@ async def _dispatch(
             try:
                 bot = _build_bot(token)
             except Exception as exc:  # noqa: BLE001 — malformed token: park, don't burn attempts
-                await _mark_shop_errored(shop_id, f"malformed token: {exc}")
+                await _mark_shop_revoked(shop_id, f"malformed token: {exc}")
                 bot = None
         if bot is None:
             for c, _t in items:
@@ -240,12 +240,14 @@ async def _dispatch(
     return outcomes
 
 
-async def _mark_shop_errored(shop_id: int, error: str) -> None:
+async def _mark_shop_revoked(shop_id: int, error: str) -> None:
+    """A stored token we can no longer even construct a Bot from is permanently dead — clear it
+    and tell the reseller, rather than parking every future broadcast forever."""
     try:
         async with SessionLocal() as session:
-            await storefront.mark_errored(session, shop_id, error)
+            await storefront.mark_revoked(session, shop_id, error)
     except Exception:  # noqa: BLE001
-        log.warning("failed to mark storefront %s errored", shop_id, exc_info=True)
+        log.warning("failed to mark storefront %s revoked", shop_id, exc_info=True)
 
 
 async def _apply_outcomes(

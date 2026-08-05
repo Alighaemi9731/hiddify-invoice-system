@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.exceptions import TelegramForbiddenError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.exc import IntegrityError
 
@@ -75,6 +75,12 @@ async def _safe_close(bot: Bot) -> None:
 async def _feed(dp: Dispatcher, bot: Bot, update) -> None:  # noqa: ANN001
     try:
         await dp.feed_update(bot, update)
+    except TelegramForbiddenError:
+        # The customer blocked the bot (or deactivated their account) between sending us this
+        # update and our reply. Benign, permanent for this chat, and by far the most common
+        # exception here — a full traceback per occurrence is pure noise. Same policy as
+        # notifier/broadcast/delivery.
+        log.debug("storefront reply refused: recipient blocked the bot")
     except Exception:  # noqa: BLE001 — one bad update must never kill the bot's poll loop
         log.warning("storefront update handling failed", exc_info=True)
 
@@ -110,13 +116,13 @@ async def _poll_one(
         except TelegramUnauthorizedError as exc:
             unauthorized += 1
             if unauthorized >= _UNAUTHORIZED_LIMIT:
-                log.warning("storefront bot row %s token revoked — marking errored: %s", row_id, exc)
+                log.warning("storefront bot row %s token revoked — marking revoked: %s", row_id, exc)
                 try:
                     async with SessionLocal() as s:
-                        await storefront.mark_errored(s, row_id, f"token revoked: {exc}")
+                        await storefront.mark_revoked(s, row_id, f"token revoked: {exc}")
                 except Exception:  # noqa: BLE001
-                    log.exception("mark_errored failed for storefront bot row %s", row_id)
-                return  # reconcile reaps the done task; errored rows are excluded from active_bots
+                    log.exception("mark_revoked failed for storefront bot row %s", row_id)
+                return  # reconcile reaps the done task; revoked rows are excluded from active_bots
             await asyncio.sleep(_POLL_BACKOFF)
             continue
         except Exception as exc:  # noqa: BLE001 — 409 during a token-change overlap, network blips, …
@@ -159,11 +165,12 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
     async with sem:
         try:
             # The Bot constructor validates the token FORMAT synchronously; a malformed stored
-            # token must be marked errored like a revoked one, not re-raised every reconcile.
+            # token is as permanently dead as a revoked one, not something to re-raise every
+            # reconcile.
             bot = Bot(token=token)
         except Exception as exc:  # noqa: BLE001
             async with SessionLocal() as s:
-                await storefront.mark_errored(s, row_id, f"malformed token: {exc}")
+                await storefront.mark_revoked(s, row_id, f"malformed token: {exc}")
             log.warning("storefront bot row %s token malformed: %s", row_id, exc)
             return
         rtl_middleware.install(bot)  # storefront replies are Persian+Latin mixes too
@@ -172,7 +179,7 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
         except TelegramUnauthorizedError as exc:  # revoked/invalid token → permanent, stop retrying
             await _safe_close(bot)
             async with SessionLocal() as s:
-                await storefront.mark_errored(s, row_id, f"getMe failed: {exc}")
+                await storefront.mark_revoked(s, row_id, f"getMe failed: {exc}")
             log.warning("storefront bot row %s token invalid: %s", row_id, exc)
             return
         except Exception as exc:  # noqa: BLE001

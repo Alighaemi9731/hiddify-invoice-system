@@ -59,6 +59,35 @@ async def _bundle(session: AsyncSession, reseller: Reseller) -> list[Reseller]:
     return collect_descendants(reseller, children)
 
 
+def _delete_order(descendants: list[Reseller]) -> list[str]:
+    """Admin uuids ordered deepest-first — every child strictly before its parent.
+
+    Hiddify does NOT cascade sub-admins. `DELETE /api/v2/admin/admin_user/{uuid}/` on a parent
+    fails with MySQL 1451 (`FOREIGN KEY (parent_admin_id) REFERENCES admin_user(id)`) for as long
+    as any child row still points at it, so the subtree has to be dismantled from the leaves up.
+    The root's parent lives outside the bundle, so it is depth 0 and therefore sorted LAST.
+
+    Depth is walked through the bundle's own `parent_admin_uuid` links and is cycle-safe: a self-
+    or mutual-parent row (which a panel restore can produce) must not spin here.
+    """
+    by_uuid = {d.admin_uuid: d for d in descendants if d.admin_uuid}
+    depth: dict[str, int] = {}
+    for uuid, node in by_uuid.items():
+        d = 0
+        seen = {uuid}
+        cur = node
+        while cur.parent_admin_uuid and cur.parent_admin_uuid not in seen:
+            parent = by_uuid.get(cur.parent_admin_uuid)
+            if parent is None:          # parent is outside the bundle → this node is a root
+                break
+            seen.add(parent.admin_uuid)
+            cur = parent
+            d += 1
+        depth[uuid] = d
+    # Deepest first; uuid as the tie-break keeps the order stable across ticks.
+    return sorted(by_uuid, key=lambda u: (-depth[u], u))
+
+
 async def _get_admin_limits_safe(
     client: AdminApiClient, panel, admin: Reseller
 ) -> tuple[int | None, int | None]:
@@ -1357,7 +1386,11 @@ async def _notify_owner_failed(session: AsyncSession, action: EnforcementAction)
 
         reseller = await session.get(Reseller, action.reseller_id)
         who = owner_notify.user_link(reseller) if reseller else f"#{action.reseller_id}"
-        kind = "بازگردانی" if action.action == EnforcementActionType.restore else "مسدودسازی"
+        kind = {
+            EnforcementActionType.restore: "بازگردانی",
+            EnforcementActionType.delete_admin: "حذف آبشاری",
+            EnforcementActionType.freeze: "توقف ساخت کاربر",
+        }.get(action.action, "مسدودسازی")
         await owner_notify.notify_owner(
             session,
             f"⛔️ {kind} خودکار برای نماینده {who} پس از چند تلاش ناموفق ماند و متوقف شد.\n"
@@ -1936,8 +1969,9 @@ async def _process_delete_action(
 ) -> dict:
     """Resumable cascade deletion: (1) delete the subtree's users on the panel in bounded chunks
     via the native bulk delete (one quick_apply per batch) and drop their DB rows as we go; then
-    (2) delete the admin on the panel (Hiddify cascades sub-admins); then (3) purge the subtree
-    from our DB (ledger kept). Progress phase is committed so a restart resumes mid-cascade."""
+    (2) delete the subtree's admins on the panel DEEPEST FIRST (Hiddify does NOT cascade
+    sub-admins — see `_delete_order`); then (3) purge the subtree from our DB (ledger kept).
+    Progress phase is committed so a restart resumes mid-cascade."""
     result = _empty_queue_result()
     snapshot = action.snapshot or {}
     progress = _progress(snapshot)
@@ -1957,6 +1991,28 @@ async def _process_delete_action(
         await session.commit()
         result["failed"] = 1
         return result
+
+    # Deletion is unrecoverable, so an action must never widen past what the owner confirmed. A
+    # queued cascade can sit for days (panel down, retries), and in that time the reseller may have
+    # created new sub-admins — whose users this action would silently destroy. If the subtree grew,
+    # stop and hand it back to the owner to re-confirm instead.
+    planned_admins = {u for u in (snapshot.get("admins") or []) if u}
+    if planned_admins:
+        grown = sorted(
+            {d.admin_uuid for d in await _bundle(session, reseller) if d.admin_uuid}
+            - planned_admins
+        )
+        if grown:
+            action.status = EnforcementActionStatus.failed
+            action.error = (
+                "subtree changed after this deletion was confirmed — "
+                f"{len(grown)} new sub-admin(s) appeared: {', '.join(grown[:10])}. "
+                "Nothing was deleted; re-queue the deletion to include them."
+            )[:1000]
+            await session.commit()
+            result["failed"] = 1
+            return result
+
     client = AdminApiClient()
     chunk = max(1, int(user_chunk_size or 500))
 
@@ -2093,16 +2149,57 @@ async def _process_delete_action(
         flag_modified(action, "snapshot")
         await session.commit()
 
-    # ---- Phase 2: delete the admin on the panel (Hiddify cascades sub-admins) ----
+    # ---- Phase 2: delete the subtree's admins on the panel, DEEPEST FIRST ----
+    # Hiddify does not cascade sub-admins (see _delete_order): deleting only the root fails with
+    # MySQL 1451 forever while any child still references it.
     if progress.get("phase") == "panel_admin":
-        try:
-            await client.delete_admin(panel, reseller.admin_uuid)
-        except Exception as exc:  # noqa: BLE001
-            action.error = f"delete admin failed (will retry): {str(exc)[:300]}"
+        descendants = await _bundle(session, reseller)   # fresh: the subtree can have changed
+        done_admins: set[str] = set(progress.get("admins_done") or [])
+        failed_admins: dict[str, str] = dict(progress.get("admins_failed") or {})
+        admin_attempts: dict[str, int] = dict(progress.get("admin_attempts") or {})
+        any_hard_fail = False
+
+        for admin_uuid in _delete_order(descendants):
+            if admin_uuid in done_admins:
+                continue
+            try:
+                # 404 (already gone) is tolerated by the client → idempotent across retries.
+                await client.delete_admin(panel, admin_uuid)
+            except Exception as exc:  # noqa: BLE001
+                admin_attempts[admin_uuid] = admin_attempts.get(admin_uuid, 0) + 1
+                failed_admins[admin_uuid] = str(exc)[:300]
+                if admin_attempts[admin_uuid] >= _MAX_RETRIES:
+                    any_hard_fail = True
+                # A child that refuses to die blocks its parent too (that is the whole point of
+                # the ordering) — stop here rather than burning calls that cannot succeed.
+                break
+            done_admins.add(admin_uuid)
+            failed_admins.pop(admin_uuid, None)
+            admin_attempts.pop(admin_uuid, None)
+
+        progress["admins_done"] = sorted(done_admins)
+        progress["admins_failed"] = failed_admins
+        progress["admin_attempts"] = admin_attempts
+
+        if any_hard_fail:
+            action.status = EnforcementActionStatus.failed
+            action.error = (
+                f"cascade delete failed for admin(s): {', '.join(list(failed_admins)[:10])} — "
+                f"{next(iter(failed_admins.values()), '')}"
+            )[:1000]
+            flag_modified(action, "snapshot")
+            await session.commit()
+            result["failed"] = 1
+            return result
+        if failed_admins:
             action.status = EnforcementActionStatus.partial
+            action.error = f"{len(failed_admins)} admin delete failure(s), will retry"
+            flag_modified(action, "snapshot")
             await session.commit()
             result["partial"] = 1
             return result
+
+        result["patched_admins"] += len(done_admins)
         progress["phase"] = "db"
         action.error = None
         flag_modified(action, "snapshot")

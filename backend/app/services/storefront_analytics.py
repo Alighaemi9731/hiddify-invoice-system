@@ -50,6 +50,7 @@ from app.schemas.storefront_analytics import (
     MethodRowOut,
     OperationsOut,
     PlanShapeOut,
+    RevokedShopOut,
     SalesWindowOut,
     ServicesOut,
     ShopRowOut,
@@ -428,6 +429,8 @@ async def analytics(
         tally["enabled" if bot.enabled else "disabled"] += 1
         if bot.status == "active":
             tally["active"] += 1
+        elif bot.status == "revoked":
+            tally["revoked"] += 1
         elif bot.status == "errored":
             tally["errored"] += 1
         if bot.shop_closed:
@@ -452,6 +455,7 @@ async def analytics(
         disabled=tally["disabled"],
         active=tally["active"],
         errored=tally["errored"],
+        revoked=tally["revoked"],
         closed=tally["closed"],
         selling=tally["selling"],
         without_plans=tally["without_plans"],
@@ -698,9 +702,25 @@ async def analytics(
     }
     customer_by_shop = {r[0]: r for r in customer_rows}
 
+    # A revoked shop has no live bot, so every operational column (sales, expiring, pending
+    # top-ups) is frozen and meaningless to act on. Keep it OUT of the shops table and surface it
+    # in `revoked_shops` instead — the only useful action is "get a new token from the reseller".
+    # `bots.total` still counts it, so the adoption ratio keeps meaning "shops registered".
+    revoked_shops: list[RevokedShopOut] = []
     shops: list[ShopRowOut] = []
     for bot, reseller, panel in shop_rows:
         crow = customer_by_shop.get(bot.id)
+        if bot.status == "revoked":
+            revoked_shops.append(RevokedShopOut(
+                shop_id=bot.id,
+                reseller_id=reseller.id,
+                reseller_name=reseller.name,
+                panel_key=panel.key,
+                bot_username=bot.bot_username,
+                customers=_int(crow[1]) if crow else 0,
+                revoked_at=_aware(bot.updated_at),
+            ))
+            continue
         net, orders = period_by_shop.get(bot.id, (0, 0))
         pending_count, pending_amount = pending_by_shop.get(bot.id, (0, 0))
         shops.append(ShopRowOut(
@@ -729,6 +749,7 @@ async def analytics(
             created_at=_aware(bot.created_at),
         ))
     shops.sort(key=lambda s: (s.net_sales_toman, s.customers), reverse=True)
+    revoked_shops.sort(key=lambda s: s.customers, reverse=True)   # biggest loss first
 
     return StorefrontAnalyticsOut(
         period=period.label,
@@ -752,4 +773,5 @@ async def analytics(
         daily=await _daily(session, period.start, period.end),
         top_plans=await _top_plan_shapes(session, period_start, period_end),
         shops=shops,
+        revoked_shops=revoked_shops,
     )

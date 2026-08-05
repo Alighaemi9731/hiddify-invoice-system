@@ -1,8 +1,11 @@
 """Cascade admin deletion (Tools) + the owner-id rebind fix.
 
 - `queue_admin_deletion` + `_process_delete_action`: deletes the subtree's users on the panel
-  (bulk delete), then the admin (cascades sub-admins), then purges the subtree from our DB while
-  KEEPING the financial ledger. Owner is refused.
+  (bulk delete), then the subtree's admins DEEPEST-FIRST (Hiddify does NOT cascade sub-admins —
+  it answers 500/MySQL-1451 while a child still references the parent), then purges the subtree
+  from our DB while KEEPING the financial ledger. Owner is refused.
+- The panel-admin phase is retry-capped and gives up as `failed` (→ owner alert) instead of
+  retrying forever, and refuses to run at all once the subtree has grown past what was confirmed.
 - `_is_owner_user`: a numeric `owner_telegram` is authoritative (a Settings change applies even
   when a stale `owner_chat_id` is pinned).
 """
@@ -94,9 +97,10 @@ def test_cascade_delete_removes_subtree_and_keeps_ledger(tmp_path, monkeypatch):
         res = await enforcement._process_delete_action(s, action, user_chunk_size=500)
         assert res["done"] == 1
 
-        # Panel: both users bulk-deleted; the top admin deleted (Hiddify cascades sub-admins).
+        # Panel: both users bulk-deleted; BOTH admins deleted, child strictly before the parent.
+        # Deleting "A" first would fail with MySQL 1451 while "B" still points at it.
         assert sorted(_FakeClient.bulk_deleted) == [101, 102]
-        assert _FakeClient.admins_deleted == ["A"]
+        assert _FakeClient.admins_deleted == ["B", "A"]
 
         # DB: users + meters + both resellers gone; ledger kept.
         assert (await s.execute(select(func.count(EndUserSnapshot.id)))).scalar_one() == 0
@@ -106,6 +110,93 @@ def test_cascade_delete_removes_subtree_and_keeps_ledger(tmp_path, monkeypatch):
         assert action.status == EnforcementActionStatus.done
 
     _run(body, tmp_path, "c1.db")
+
+
+def test_delete_order_is_deepest_first_and_cycle_safe():
+    """Children strictly before parents; the root (parent outside the bundle) is always last."""
+    def node(uuid, parent):
+        return SimpleNamespace(admin_uuid=uuid, parent_admin_uuid=parent)
+
+    # root A → B, C; B → D (a branch deeper than its sibling).
+    order = enforcement._delete_order(
+        [node("A", "owner"), node("B", "A"), node("C", "A"), node("D", "B")]
+    )
+    assert order[-1] == "A"                      # root last
+    assert order.index("D") < order.index("B")   # grandchild before its parent
+    assert order.index("B") < order.index("A")
+    assert order.index("C") < order.index("A")
+
+    # Single node, and a mutual-parent cycle (a panel restore can produce one) must terminate.
+    assert enforcement._delete_order([node("A", "owner")]) == ["A"]
+    assert sorted(enforcement._delete_order([node("X", "Y"), node("Y", "X")])) == ["X", "Y"]
+
+
+def test_cascade_delete_gives_up_after_max_retries(tmp_path, monkeypatch):
+    """A child that will not delete must not be retried forever: after _MAX_RETRIES the action
+    goes `failed` (which is what raises the owner alert) instead of sitting `partial` for weeks."""
+    class _Stubborn(_FakeClient):
+        async def delete_admin(self, panel, admin_uuid, *, api_key=None):
+            raise RuntimeError(
+                'DELETE admin_user 500: {"msg":"(MySQLdb.IntegrityError) (1451, \'Cannot delete '
+                "or update a parent row: a foreign key constraint fails')\"}"
+            )
+
+    async def body(s):
+        monkeypatch.setattr(enforcement, "AdminApiClient", _Stubborn)
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        a = Reseller(panel_id=1, admin_uuid="A", name="Top", parent_admin_uuid="owner")
+        b = Reseller(panel_id=1, admin_uuid="B", name="Sub", parent_admin_uuid="A")
+        s.add_all([a, b])
+        await s.commit()
+
+        action = await enforcement.queue_admin_deletion(s, a)
+        for _ in range(enforcement._MAX_RETRIES - 1):
+            res = await enforcement._process_delete_action(s, action, user_chunk_size=500)
+            assert res["partial"] == 1
+            assert action.status == EnforcementActionStatus.partial
+
+        res = await enforcement._process_delete_action(s, action, user_chunk_size=500)
+        assert res["failed"] == 1                       # → _notify_owner_failed fires
+        assert action.status == EnforcementActionStatus.failed
+        assert "1451" in (action.error or "")
+        # Nothing was purged — the resellers are still there for the owner to deal with.
+        assert (await s.execute(select(func.count(Reseller.id)))).scalar_one() == 2
+
+    _run(body, tmp_path, "c4.db")
+
+
+def test_cascade_delete_refuses_a_subtree_that_grew(tmp_path, monkeypatch):
+    """A sub-admin created AFTER the owner confirmed the deletion must stop the action, not get
+    silently destroyed along with its users (prod action #204, stuck 15 days while the reseller
+    kept selling)."""
+    async def body(s):
+        _FakeClient.bulk_deleted = []
+        _FakeClient.admins_deleted = []
+        monkeypatch.setattr(enforcement, "AdminApiClient", _FakeClient)
+
+        s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+        a = Reseller(panel_id=1, admin_uuid="A", name="Top", parent_admin_uuid="owner")
+        s.add(a)
+        await s.commit()
+
+        action = await enforcement.queue_admin_deletion(s, a)   # snapshot records {"A"}
+        # ... days pass, and the reseller adds a sub-reseller with a user of its own.
+        s.add(Reseller(panel_id=1, admin_uuid="NEW", name="Late", parent_admin_uuid="A"))
+        s.add(EndUserSnapshot(panel_id=1, user_uuid="u9", name="u9", added_by_uuid="NEW",
+                              enable=True))
+        await s.commit()
+
+        res = await enforcement._process_delete_action(s, action, user_chunk_size=500)
+        assert res["failed"] == 1
+        assert action.status == EnforcementActionStatus.failed
+        assert "NEW" in (action.error or "")
+        # Nothing touched: no panel calls, no rows removed.
+        assert _FakeClient.admins_deleted == []
+        assert _FakeClient.bulk_deleted == []
+        assert (await s.execute(select(func.count(EndUserSnapshot.id)))).scalar_one() == 1
+        assert (await s.execute(select(func.count(Reseller.id)))).scalar_one() == 2
+
+    _run(body, tmp_path, "c5.db")
 
 
 def test_queue_admin_deletion_refuses_owner(tmp_path):

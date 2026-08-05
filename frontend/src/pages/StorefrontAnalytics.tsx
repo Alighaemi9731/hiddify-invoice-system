@@ -225,6 +225,7 @@ const SHOP_SORTS: Record<ShopSort, (r: StorefrontShopRow) => number | string> = 
 
 function ShopStatus({ row }: { row: StorefrontShopRow }) {
   if (!row.enabled) return <Chip size="small" label="خاموش" />;
+  if (row.status === "revoked") return <Chip size="small" color="error" label="توکن باطل" />;
   if (row.status === "errored") return <Chip size="small" color="error" label="خطای توکن" />;
   if (row.shop_closed) return <Chip size="small" color="warning" label="بسته" />;
   return <Chip size="small" color="success" variant="outlined" label="فعال" />;
@@ -277,7 +278,8 @@ function ShopsTable({ rows }: { rows: StorefrontShopRow[] }) {
       "شارژ در انتظار", "آخرین فروش"],
     filtered.map((r) => [
       r.reseller_name, r.bot_username ? `@${r.bot_username}` : "", r.panel_key,
-      !r.enabled ? "خاموش" : r.status === "errored" ? "خطای توکن" : r.shop_closed ? "بسته" : "فعال",
+      !r.enabled ? "خاموش" : r.status === "revoked" ? "توکن باطل"
+        : r.status === "errored" ? "خطای توکن" : r.shop_closed ? "بسته" : "فعال",
       r.customers, r.new_customers, r.services_active, r.net_sales_toman, r.orders,
       r.today_net_toman, r.wallet_liability_toman, r.pending_topups_count,
       r.last_sale_at ? fmtDateTime(r.last_sale_at) : "",
@@ -867,6 +869,7 @@ function OverviewTab({ data }: { data: Analytics }) {
   const slices = [
     { label: "در حال فروش", value: b.selling, color: C.green },
     { label: "موقتاً بسته", value: b.closed, color: C.amber },
+    { label: "توکن باطل", value: b.revoked, color: C.red },
     { label: "خطای توکن", value: b.errored, color: C.red },
     { label: "خاموش", value: b.disabled, color: C.slate },
   ];
@@ -874,10 +877,13 @@ function OverviewTab({ data }: { data: Analytics }) {
     .map((r) => {
       const idle = daysAgo(r.last_sale_at);
       const reasons: string[] = [];
+      // One reason per problem: a bad token used to add BOTH "توکن ربات کار نمی‌کند" and
+      // "دسترسی ربات رد شد" for the same shop. Fully-dead tokens now live in `revoked_shops`
+      // and never reach this list at all.
       if (r.status === "errored") reasons.push("توکن ربات کار نمی‌کند");
+      else if (r.health_error_class === "unauthorized") reasons.push("دسترسی ربات رد شد");
       if (!r.enabled) reasons.push("ربات خاموش است");
       if (r.shop_closed) reasons.push("فروشگاه موقتاً بسته است");
-      if (r.health_error_class === "unauthorized") reasons.push("دسترسی ربات رد شد");
       if (!r.plans) reasons.push("هیچ پلن فعالی ندارد");
       if (r.pending_topups_count) reasons.push(`${fmtNum(r.pending_topups_count)} شارژ در انتظار تأیید`);
       if (r.expiring_3d) reasons.push(`${fmtNum(r.expiring_3d)} سرویس تا ۳ روز دیگر منقضی می‌شود`);
@@ -945,6 +951,10 @@ function OverviewTab({ data }: { data: Analytics }) {
                 hint="ساخت سرویس مختل می‌شود" />
             </Grid>
             <Grid item xs={6} sm={4}>
+              <Metric label="توکن باطل" value={fmtNum(b.revoked)} color={C.red}
+                hint="توکن پاک شد" />
+            </Grid>
+            <Grid item xs={6} sm={4}>
               <Metric label="خطای توکن" value={fmtNum(b.errored)} color={C.red} />
             </Grid>
             <Grid item xs={6} sm={4}>
@@ -979,6 +989,42 @@ function OverviewTab({ data }: { data: Analytics }) {
           ) : <EmptyState>هیچ فروشگاهی هشدار باز ندارد.</EmptyState>}
         </SectionCard>
       </Grid>
+
+      {/* Dead tokens have no operational data left to act on, so they get their own list
+          instead of a permanent red row in the shops table. The one useful action is asking
+          the reseller for a new token — the shop's customers and orders are waiting for it. */}
+      {data.revoked_shops.length > 0 && (
+        <Grid item xs={12}>
+          <SectionCard title="نیازمند توکن جدید"
+            action={<Chip size="small" color="error" variant="outlined"
+              label={`${fmtNum(data.revoked_shops.length)} فروشگاه`} />}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.4 }}>
+              توکن این ربات‌ها باطل شده و از سامانه پاک شده است. به نماینده اطلاع داده شده تا از
+              «فروشگاه من» توکن جدید بفرستد؛ مشتریان، سفارش‌ها و موجودی کیف‌پول‌ها حفظ شده‌اند.
+            </Typography>
+            <Stack spacing={1.2}>
+              {data.revoked_shops.map((r) => (
+                <Box key={r.shop_id} sx={{
+                  p: 1.4, borderRadius: 2.5, border: 1, borderColor: "divider",
+                }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                    <Typography variant="body2" noWrap sx={{ fontWeight: 750 }}>
+                      {r.reseller_name}
+                    </Typography>
+                    <Chip size="small" color="error" label="توکن باطل" />
+                  </Stack>
+                  <Typography variant="caption" color="text.secondary">
+                    {[
+                      r.bot_username ? `@${r.bot_username}` : r.panel_key,
+                      `${fmtNum(r.customers)} مشتری در انتظار`,
+                    ].join(" · ")}
+                  </Typography>
+                </Box>
+              ))}
+            </Stack>
+          </SectionCard>
+        </Grid>
+      )}
     </Grid>
   );
 }
@@ -1063,7 +1109,7 @@ export default function StorefrontAnalytics() {
               {
                 label: "ربات‌های در حال فروش",
                 value: <CountUp to={data.bots.selling} format={fmtNum} />,
-                sub: <Hint>{fmtNum(data.bots.total)} ربات ثبت‌شده · {fmtNum(data.bots.errored)} خطادار</Hint>,
+                sub: <Hint>{fmtNum(data.bots.total)} ربات ثبت‌شده · {fmtNum(data.bots.errored + data.bots.revoked)} خطادار</Hint>,
                 color: C.blue, icon: <StorefrontIcon />,
               },
               {
@@ -1119,10 +1165,11 @@ export default function StorefrontAnalytics() {
             ))}
           </Grid>
 
-          {(data.bots.errored > 0 || data.operations.failed_24h > 0 || data.topups.pending_count > 0) && (
-            <Alert severity={data.bots.errored ? "warning" : "info"} icon={<WarningAmberIcon />}
+          {(data.bots.errored + data.bots.revoked > 0 || data.operations.failed_24h > 0 || data.topups.pending_count > 0) && (
+            <Alert severity={data.bots.errored + data.bots.revoked ? "warning" : "info"} icon={<WarningAmberIcon />}
               sx={{ mt: 2 }}>
               {[
+                data.bots.revoked ? `${fmtNum(data.bots.revoked)} ربات نیازمند توکن جدید` : null,
                 data.bots.errored ? `${fmtNum(data.bots.errored)} ربات با توکن خراب` : null,
                 data.operations.failed_24h ? `${fmtNum(data.operations.failed_24h)} عملیات ناموفق در ۲۴ ساعت گذشته` : null,
                 data.topups.pending_count ? `${fmtNum(data.topups.pending_count)} شارژ در انتظار تأیید فروشنده` : null,
