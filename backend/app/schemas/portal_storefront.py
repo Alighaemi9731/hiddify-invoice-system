@@ -36,6 +36,11 @@ class StorefrontSummaryOut(BaseModel):
     health_error_class: HealthErrorClass | None
     health_state_updated_at: dt.datetime | None
     shop_closed: bool
+    # What one GB costs the owning reseller — their own buy price from us, so the plan form can
+    # show the price floor and refuse a below-cost plan before hitting the API. Not a leak: a
+    # storefront only ever belongs to a top-level reseller, i.e. the portal user themselves, and
+    # the bot already states this figure in their «فاکتور علی‌الحساب».
+    cost_per_gb_toman: int = 0
     role: Literal["owner"] = "owner"
 
 

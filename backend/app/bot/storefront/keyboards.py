@@ -174,6 +174,12 @@ def plans_manage_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:
         flag = "" if p.enabled else " (غیرفعال)"
         rows.append([InlineKeyboardButton(text=rtl(f"{plan_label(p)}{flag}"), callback_data="sfnoop")])
         actions = [InlineKeyboardButton(text="✏️ ویرایش", callback_data=f"sfplanedit:{p.id}")]
+        # Enable/disable was portal-only, which left a bot-only reseller unable to bring a disabled
+        # plan back — including one the below-cost sweep turned off, where "fix the price and turn
+        # it back on" was the whole remedy.
+        actions.append(InlineKeyboardButton(
+            text="🚫 غیرفعال" if p.enabled else "✅ فعال",
+            callback_data=f"sfplantoggle:{p.id}:{0 if p.enabled else 1}"))
         if i > 0:
             actions.append(InlineKeyboardButton(text="⬆️", callback_data=f"sfplanup:{p.id}"))
         if i < n - 1:

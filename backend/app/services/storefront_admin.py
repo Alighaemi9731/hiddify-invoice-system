@@ -32,7 +32,12 @@ from app.models import (
     StorefrontPlan,
     StorefrontWalletTxn,
 )
-from app.services import storefront, storefront_audit, storefront_credit
+from app.services import (
+    storefront,
+    storefront_audit,
+    storefront_credit,
+    storefront_pricing,
+)
 
 log = logging.getLogger("bot.storefront")
 
@@ -227,7 +232,7 @@ async def _cache_known_failure(
     command: StorefrontApiCommand, exc: AdminCommandError,
 ) -> None:
     status = exc.response_status or {
-        "not_found": 404, "validation": 422, "config_conflict": 409,
+        "not_found": 404, "validation": 422, "below_cost": 422, "config_conflict": 409,
     }.get(exc.code, 409)
     current = await _current_version(session, shop.id)
     body = exc.response_body or {"error": exc.code, "config_version": current}
@@ -322,6 +327,26 @@ def _plan_dict(plan: StorefrontPlan) -> dict:
     }
 
 
+def _assert_price_covers_cost(
+    *, cost: int, gb: int, price_toman: int, action: storefront_pricing.Action = "save",
+) -> None:
+    """Refuse a plan priced below what that quota costs the reseller (see `storefront_pricing`).
+
+    Raised as `below_cost` rather than `validation` so each surface can react differently: the bot
+    keeps the reseller in the price prompt to retype, the portal renders a field-level error.
+    """
+    if not storefront_pricing.is_below_cost(cost=cost, gb=gb, price_toman=price_toman):
+        return
+    raise AdminCommandError(
+        "below_cost",
+        storefront_pricing.below_cost_message_fa(
+            cost=cost, gb=gb, price_toman=price_toman, action=action),
+        response_status=422,
+        response_body=storefront_pricing.below_cost_body(
+            cost=cost, gb=gb, price_toman=price_toman),
+    )
+
+
 def _validate_plan(*, title: str, gb: int, days: int, price_toman: int) -> tuple[str, int, int, int]:
     title = title.strip()
     if len(title) > 128:
@@ -349,18 +374,23 @@ async def create_plan(
 ) -> CommandResult:
     title, gb, days, price_toman = _validate_plan(
         title=title, gb=gb, days=days, price_toman=price_toman)
-    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    shop, reseller = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
     request = {"title": title, "gb": gb, "days": days, "price_toman": price_toman}
     command, replay = await _claim_db_command(
         session, shop, ctx, action="plan.create", intent=request)
     if replay is not None:
         return replay
-    plan_count = len(await storefront.list_plans(session, shop.id))
-    if plan_count >= 500:
-        exc = AdminCommandError("validation", "a storefront can have at most 500 plans")
+    try:
+        _assert_price_covers_cost(
+            cost=await storefront_pricing.cost_per_gb(session, reseller),
+            gb=gb, price_toman=price_toman)
+        plan_count = len(await storefront.list_plans(session, shop.id))
+        if plan_count >= 500:
+            raise AdminCommandError("validation", "a storefront can have at most 500 plans")
+    except AdminCommandError as exc:
         await _cache_known_failure(
             session, shop, ctx, action="plan.create", command=command, exc=exc)
-        raise exc
+        raise
 
     async def mutate(_version: int) -> _Mutation:
         plan = StorefrontPlan(
@@ -398,7 +428,7 @@ async def update_plan(
             intent[name] = normalized
     if len(intent) == 1:
         raise AdminCommandError("validation", "empty plan update")
-    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    shop, reseller = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
     command, replay = await _claim_db_command(
         session, shop, ctx, action="plan.update", intent=intent)
     if replay is not None:
@@ -411,6 +441,11 @@ async def update_plan(
             days=int(intent.get("days", plan.days)),
             price_toman=int(intent.get("price_toman", plan.price_toman)),
         )
+        # Checked on the MERGED values: a PATCH of price alone must be judged against the stored
+        # gb (and a PATCH of gb alone against the stored price).
+        _assert_price_covers_cost(
+            cost=await storefront_pricing.cost_per_gb(session, reseller),
+            gb=values[1], price_toman=values[3])
     except AdminCommandError as exc:
         await _cache_known_failure(
             session, shop, ctx, action="plan.update", command=command, exc=exc)
@@ -431,7 +466,7 @@ async def update_plan(
 async def set_plan_enabled(
     session: AsyncSession, shop_id: int, plan_id: int, ctx: CommandContext, *, enabled: bool,
 ) -> CommandResult:
-    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    shop, reseller = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
     intent = {"plan_id": plan_id, "enabled": bool(enabled)}
     command, replay = await _claim_db_command(
         session, shop, ctx, action="plan.set_enabled", intent=intent)
@@ -439,6 +474,12 @@ async def set_plan_enabled(
         return replay
     try:
         plan = await _owned_plan(session, shop.id, plan_id)
+        # Enable-only: DISABLING a below-cost plan must always stay possible — it is the remedy,
+        # and the below-cost sweep depends on it.
+        if enabled:
+            _assert_price_covers_cost(
+                cost=await storefront_pricing.cost_per_gb(session, reseller),
+                gb=plan.gb, price_toman=plan.price_toman, action="enable")
     except AdminCommandError as exc:
         await _cache_known_failure(
             session, shop, ctx, action="plan.set_enabled", command=command, exc=exc)
@@ -1368,8 +1409,10 @@ async def _finalize_order_command(
             session, command, succeeded=True, response_status=200, response_body=body)
         await session.commit()
         return CommandResult(200, body, await _current_version(session, shop.id))
-    # Definite validation failure (order not in an actionable state).
-    if result.reason in ("not_found", "trial"):
+    # Definite validation failure (order not in an actionable state). `below_cost` belongs here and
+    # NOT in the ambiguous branch below: it is decided before any durable state or panel I/O, so
+    # there is nothing for the reaper to reconcile.
+    if result.reason in ("not_found", "trial", "below_cost"):
         body = {"error": result.reason, "order_id": order_id}
         await storefront_audit.append_event(
             session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
@@ -1494,8 +1537,12 @@ async def renew_order(
         await session.commit()
         return CommandResult(200, body, current)
     reason = result.reason or "error"
-    outcome, code, status = ("failed", "validation", 422) if reason in ("not_found", "trial") else (
-        ("failed", "in_flight", 409) if reason == "processing" else ("failed", "external_failure", 502))
+    # `below_cost` is a deterministic pre-flight refusal (no durable state, no panel call), so it
+    # must not be reported as an external failure the reaper would try to reconcile.
+    outcome, code, status = (
+        ("failed", "validation", 422) if reason in ("not_found", "trial", "below_cost")
+        else ("failed", "in_flight", 409) if reason == "processing"
+        else ("failed", "external_failure", 502))
     await storefront_audit.append_event(
         session, storefront_bot_id=shop.id, actor_telegram_id=ctx.actor_telegram_id,
         actor_role=role, source=ctx.source, action="order.renew", outcome=outcome,

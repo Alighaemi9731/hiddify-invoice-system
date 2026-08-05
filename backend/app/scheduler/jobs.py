@@ -302,6 +302,14 @@ async def daily_maintenance_job() -> None:
             await session.commit()
             if pruned:
                 log.info("storefront delivery retention: pruned %s recipient rows", pruned)
+        async with SessionLocal() as session:
+            # Re-send below-cost sweep notices that hit a transient delivery failure. This only
+            # walks shops the owner already swept — it never re-scans and never disables, so
+            # raising `default_price_per_gb` can't turn it into an unattended mass-disable.
+            from app.services import storefront_belowcost
+            retried = await storefront_belowcost.retry_pending_notices(session)
+            if retried.get("sent"):
+                log.info("below-cost sweep notices retried: %s", retried)
     except Exception:  # noqa: BLE001
         log.exception("daily_maintenance_job failed")
 

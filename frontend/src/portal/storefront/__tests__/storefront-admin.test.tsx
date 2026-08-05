@@ -25,6 +25,7 @@ const shop = {
   health_error_class: null,
   health_state_updated_at: null,
   shop_closed: false,
+  cost_per_gb_toman: 2000,
   role: "owner",
 };
 
@@ -81,6 +82,15 @@ function renderWithProviders(element: ReactElement, path: string) {
   return { ...rendered, queryClient };
 }
 
+/** Open «پلن جدید» and price it above the shop's floor (1 GB × 2,000), so tests that are about
+ *  something else aren't blocked by the below-cost guard on the empty draft's 0 price. */
+async function openCreateForm(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "پلن جدید" }));
+  const price = screen.getByLabelText(/قیمت \(تومان\)/);
+  await user.clear(price);
+  await user.type(price, "50000");
+}
+
 describe("storefront Release B administration", () => {
   it("uses one request for a double-click and permits an optional plan title", async () => {
     const user = userEvent.setup();
@@ -103,7 +113,7 @@ describe("storefront Release B administration", () => {
     );
 
     renderAdmin("plans", <StorefrontPlansPage />);
-    await user.click(await screen.findByRole("button", { name: "پلن جدید" }));
+    await openCreateForm(user);
     await user.dblClick(screen.getByRole("button", { name: "ذخیره" }));
 
     await waitFor(() => expect(requests).toBe(1));
@@ -132,7 +142,7 @@ describe("storefront Release B administration", () => {
     );
 
     renderAdmin("plans", <StorefrontPlansPage />);
-    await user.click(await screen.findByRole("button", { name: "پلن جدید" }));
+    await openCreateForm(user);
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
     expect(await screen.findByText(/ذخیرهٔ تغییرات انجام نشد/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
@@ -161,7 +171,7 @@ describe("storefront Release B administration", () => {
     );
 
     renderAdmin("plans", <StorefrontPlansPage />);
-    await user.click(await screen.findByRole("button", { name: "پلن جدید" }));
+    await openCreateForm(user);
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
     expect(await screen.findByText(/ذخیرهٔ تغییرات انجام نشد/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
@@ -647,5 +657,83 @@ describe("storefront Release B administration", () => {
     expect(screen.getByRole("tab", { name: "تنظیمات" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "مدیران" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "پیش‌نمایش مشتری" })).toBeInTheDocument();
+  });
+
+  // A plan priced below the reseller's own cost (2,000 T/GB here) is a loss on every sale. The
+  // overwhelmingly common cause is a unit slip — 50 typed for 50,000 — so the form has to teach
+  // the unit, not just refuse the number.
+  it("blocks a below-cost price in the plan form and spells out the unit", async () => {
+    const user = userEvent.setup();
+    let posted = 0;
+    server.use(
+      http.get("*/api/portal/storefronts/1/plans", () => HttpResponse.json(
+        { items: [], config_version: 1 },
+        { headers: { ETag: '"sf-config-1"' } },
+      )),
+      http.post("*/api/portal/storefronts/1/plans", () => { posted += 1; return HttpResponse.json({}); }),
+    );
+
+    renderAdmin("plans", <StorefrontPlansPage />);
+    await user.click(await screen.findByRole("button", { name: "پلن جدید" }));
+    const gb = screen.getByLabelText(/حجم \(گیگابایت\)/);
+    await user.clear(gb);
+    await user.type(gb, "10");
+    const price = screen.getByLabelText(/قیمت \(تومان\)/);
+    await user.clear(price);
+    await user.type(price, "50");
+
+    expect(screen.getByText(/برای ۵۰ هزار تومان بنویسید 50000/)).toBeInTheDocument();
+    expect(screen.getByText(/کفِ مجاز برای این پلن/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ذخیره" })).toBeDisabled();
+
+    await user.clear(price);
+    await user.type(price, "50000");
+    expect(screen.getByRole("button", { name: "ذخیره" })).toBeEnabled();
+    expect(posted).toBe(0);
+  });
+
+  it("renders the server's below-cost explanation verbatim, not the generic failure", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("*/api/portal/storefronts/1/plans", () => HttpResponse.json(
+        { items: [], config_version: 1 },
+        { headers: { ETag: '"sf-config-1"' } },
+      )),
+      // The client floor and the server's may disagree (another admin just changed the price),
+      // so the 422 still has to surface usefully.
+      http.post("*/api/portal/storefronts/1/plans", () => HttpResponse.json(
+        { detail: { code: "below_cost", message: "⛔️ این قیمت از هزینهٔ خودِ شما کمتر است و ذخیره نشد." } },
+        { status: 422 },
+      )),
+    );
+
+    renderAdmin("plans", <StorefrontPlansPage />);
+    await openCreateForm(user);
+    await user.click(screen.getByRole("button", { name: "ذخیره" }));
+
+    expect(await screen.findByText(/این قیمت از هزینهٔ خودِ شما کمتر است/)).toBeInTheDocument();
+    expect(screen.queryByText(/ذخیرهٔ تغییرات انجام نشد/)).not.toBeInTheDocument();
+  });
+
+  it("will not let a below-cost plan be switched back on, and flags the ones that are", async () => {
+    server.use(
+      http.get("*/api/portal/storefronts/1/plans", () => HttpResponse.json(
+        {
+          items: [
+            { id: 1, title: "ارزان", gb: 10, days: 30, price_toman: 50, enabled: false, sort_order: 0 },
+            { id: 2, title: "سالم", gb: 10, days: 30, price_toman: 50_000, enabled: true, sort_order: 1 },
+          ],
+          config_version: 1,
+        },
+        { headers: { ETag: '"sf-config-1"' } },
+      )),
+    );
+
+    renderAdmin("plans", <StorefrontPlansPage />);
+    expect(await screen.findByText(/قیمتِ ۱ پلن از هزینهٔ خودتان کمتر است/)).toBeInTheDocument();
+
+    const switches = screen.getAllByRole("checkbox");
+    expect(switches[0]).toBeDisabled();     // below cost → cannot be re-enabled
+    expect(switches[1]).toBeEnabled();      // healthy → still freely toggleable
   });
 });

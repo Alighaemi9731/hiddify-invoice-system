@@ -22,7 +22,12 @@ from app.models import (
     StorefrontOrder,
     StorefrontPlan,
 )
-from app.services import enforcement, storefront_ops, storefront_wallet
+from app.services import (
+    enforcement,
+    storefront_ops,
+    storefront_pricing,
+    storefront_wallet,
+)
 from app.services.panel_client.admin_api import AdminApiClient
 from app.services.storefront_provision import _customer_lock, _lease_active
 
@@ -119,9 +124,21 @@ async def renew(
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
-        price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        # gb/days have always come from the LIVE plan whenever the row still exists, `enabled` or
+        # not — so taking the price from a different vintage (the original purchase snapshot) was
+        # the real bug: a plan disabled for being below cost kept delivering its quota at the old
+        # loss-making price, and REPRICING it could never take effect. One row, one vintage.
+        price = int(plan.price_toman) if plan else int(order.price_toman)
         if locked_price_toman is not None:   # auto-renew bills the price locked at arm time, not the
             price = int(locked_price_toman)   # current plan price (which may have changed since arming).
+        # After the locked-price override on purpose: a price locked at arm time must not slip a
+        # below-cost renewal through the back door.
+        cost = await storefront_pricing.cost_per_gb(s, reseller)
+        if storefront_pricing.is_below_cost(cost=cost, gb=gb, price_toman=price):
+            # Carries the full Persian explanation because an ADMIN-initiated renewal surfaces
+            # `message` directly (see storefront_admin's order-command result handling).
+            return SubResult(False, "below_cost", message=storefront_pricing.below_cost_message_fa(
+                cost=cost, gb=gb, price_toman=price))
         sf_id, customer_id = sf.id, customer.id
         uuid, api_key = order.panel_user_uuid, reseller.admin_uuid
         panel_id = panel.id

@@ -34,7 +34,13 @@ from app.models import (
     StorefrontOrder,
     StorefrontPlan,
 )
-from app.services import broadcast, settings_service, storefront, storefront_wallet
+from app.services import (
+    broadcast,
+    settings_service,
+    storefront,
+    storefront_pricing,
+    storefront_wallet,
+)
 from app.services.periods import today as tehran_today
 from app.services.storefront_expiry import (
     BotFactory,
@@ -76,10 +82,14 @@ def is_armed(order: StorefrontOrder) -> bool:
 
 
 async def _plan_price(s: AsyncSession, order: StorefrontOrder) -> int:
-    """The price to lock: the current plan's price if the plan still exists+enabled, else the price
-    the order last carried (a deleted/disabled plan still renews at its last known price)."""
+    """The price to lock: the current plan's price if the plan still exists, else the price the
+    order last carried (a DELETED plan still renews at its last known price).
+
+    `enabled` is deliberately NOT consulted — it used to be, which meant a plan disabled for
+    underpricing kept renewing at the stale snapshot price and a repricing could never reach it.
+    Matches `storefront_subscription.renew`, which reads gb/days from the live plan the same way."""
     plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
-    if plan and plan.enabled:
+    if plan:
         return int(plan.price_toman)
     return int(order.price_toman)
 
@@ -93,7 +103,7 @@ async def arm(
     order0 = await session.get(StorefrontOrder, order_id)
     if order0 is None:
         return ArmResult(False, "not_found")
-    sf, customer, _reseller, _panel = await _panel_ctx(session, order0)
+    sf, customer, reseller, _panel = await _panel_ctx(session, order0)
     if not (sf and customer):
         return ArmResult(False, "error")
     if expected_sf_id is not None and sf.id != expected_sf_id:
@@ -111,6 +121,13 @@ async def arm(
         price = await _plan_price(session, order)
         if price <= 0:
             return ArmResult(False, "error")
+        # Refuse BEFORE any hold is placed, so a broken price never reserves the customer's money
+        # for a renewal the fire job would then have to refuse anyway.
+        if reseller is not None and storefront_pricing.is_below_cost(
+            cost=await storefront_pricing.cost_per_gb(session, reseller),
+            gb=int(order.gb), price_toman=price,
+        ):
+            return ArmResult(False, "below_cost")
         ok, hold = await storefront_wallet.place_hold(
             session, customer.id, price, order_id=order_id)
         if not ok or hold is None:
@@ -208,7 +225,8 @@ async def fire(
 # ─────────────────────────── the near-exhaustion sweep ───────────────────────────
 
 def _new_counts() -> dict:
-    return {"checked": 0, "backstop_cleared": 0, "due": 0, "fired": 0, "failed": 0, "skipped": 0}
+    return {"checked": 0, "backstop_cleared": 0, "due": 0, "fired": 0, "failed": 0, "skipped": 0,
+            "below_cost_disarmed": 0}
 
 
 def _post_fire_msg(label: str | None) -> str:
@@ -242,6 +260,41 @@ async def _suspended_bot_ids(session: AsyncSession, bots: list[StorefrontBot]) -
     except Exception:  # noqa: BLE001
         log.warning("autorenew suspension filter failed", exc_info=True)
         return set()
+
+
+async def _reseller_costs(session: AsyncSession, bots: list[StorefrontBot]) -> dict[int, int]:
+    """Cost-per-GB for each shop id, cached per reseller. Fails OPEN (empty map) so a lookup error
+    can never disarm a healthy customer's auto-renew."""
+    try:
+        from app.models import Reseller
+
+        costs: dict[int, int] = {}
+        per_reseller: dict[int, int] = {}
+        for sf_bot in bots:
+            if sf_bot.id in costs:
+                continue
+            cached = per_reseller.get(sf_bot.reseller_id)
+            if cached is None:
+                reseller = await session.get(Reseller, sf_bot.reseller_id)
+                if reseller is None:
+                    continue
+                cached = await storefront_pricing.cost_per_gb(session, reseller)
+                per_reseller[sf_bot.reseller_id] = cached
+            costs[sf_bot.id] = cached
+        return costs
+    except Exception:  # noqa: BLE001
+        log.warning("autorenew cost lookup failed", exc_info=True)
+        return {}
+
+
+def _below_cost_msg(label: str | None) -> str:
+    """Told to the CUSTOMER when their armed renewal is cancelled because the shop's plan is priced
+    below the reseller's own cost. Never names the reseller's cost — that is the shop's business."""
+    name = f"«{label}» " if label else ""
+    return (
+        f"🔁 «تمدید خودکارِ» سرویس {name}شما خاموش شد و مبلغِ رزروشده به کیفِ پولِ شما بازگشت.\n"
+        "فروشگاه در حالِ به‌روزرسانیِ قیمت‌هاست؛ پس از اصلاح می‌توانید دوباره آن را روشن کنید."
+    )
 
 
 def _fire_due(remaining_gb: float | None, days_left: int | None,
@@ -288,7 +341,7 @@ async def sweep(
                     StorefrontOrder.is_trial.is_(False),
                     StorefrontCustomer.banned.is_(False),
                     StorefrontBot.enabled.is_(True),
-                    StorefrontBot.status != "errored",
+                    StorefrontBot.status == "active",
                 )
             )
         ).all()
@@ -303,7 +356,9 @@ async def sweep(
         # back online. The arm is LEFT INTACT (not disarmed, the customer's hold is untouched) — once
         # the reseller pays and is restored, the next sweep fires it normally.
         suspended_bots = await _suspended_bot_ids(s, [b for _o, _c, b in rows])
+        costs = await _reseller_costs(s, [b for _o, _c, b in rows])
         work: list[tuple[int, str | None, str, int, int]] = []  # order_id, label, token, chat, bot_id
+        refunded: list[tuple[str | None, str, int, int]] = []   # label, token, chat, bot_id
         for order, customer, sf_bot in rows:
             counts["checked"] += 1
             # Backstop: armed but the hold is no longer `held` → the arm is spent (a reconciler
@@ -314,6 +369,20 @@ async def sweep(
                 continue
             if sf_bot.id in suspended_bots:
                 counts["skipped"] += 1
+                continue
+            # Unlike suspension (transient — the reseller pays and is restored, so the hold is kept),
+            # a below-cost price may never be fixed. `renew` would refuse this fire anyway, so
+            # holding the customer's money indefinitely for a renewal that can never happen is worse
+            # than refunding it now. Disarming is idempotent and makes the notice naturally one-shot.
+            cost = costs.get(sf_bot.id)
+            if cost is not None and storefront_pricing.is_below_cost(
+                cost=cost, gb=int(order.gb), price_toman=int(order.autorenew_price_toman or 0)
+            ):
+                token = storefront.bot_token(sf_bot)
+                if await disarm_quietly(s, order.id):
+                    counts["below_cost_disarmed"] += 1
+                    if token:
+                        refunded.append((order.label, token, customer.telegram_id, sf_bot.id))
                 continue
             snap = snaps.get((order.panel_id, order.panel_user_uuid or ""))
             remaining_gb = None
@@ -335,12 +404,29 @@ async def sweep(
                 break
         await s.commit()
 
-    if not work:
+    if not work and not refunded:
         return counts
 
     limiter = broadcast.rate_limiter()
     bots: dict[int, Bot] = {}
+
+    async def _shop_bot(bot_id: int, token: str) -> Bot | None:
+        bot = bots.get(bot_id)
+        if bot is None:
+            try:
+                bot = await bot_factory(token)
+            except Exception:  # noqa: BLE001 — bad token: the money move already happened
+                log.warning("autorenew: bot init failed (sf %s)", bot_id)
+                return None
+            bots[bot_id] = bot
+        return bot
+
     try:
+        for label, token, chat_id, bot_id in refunded:
+            bot = await _shop_bot(bot_id, token)
+            if bot is not None:
+                await broadcast.send_with_flood_control(
+                    bot, chat_id, _below_cost_msg(label), limiter)
         for order_id, label, token, chat_id, bot_id in work:
             # A tight LIVE confirm — the snapshot is up to one sync interval stale and a fast line can
             # burn through its margin between syncs. Best-effort: on a live-read failure we trust the
@@ -351,18 +437,24 @@ async def sweep(
             res = await fire(session_factory, order_id=order_id)
             if res.ok:
                 counts["fired"] += 1
-                bot = bots.get(bot_id)
+                bot = await _shop_bot(bot_id, token)
                 if bot is None:
-                    try:
-                        bot = await bot_factory(token)
-                    except Exception:  # noqa: BLE001 — bad token: the renewal still happened
-                        log.warning("autorenew: post-fire bot init failed (sf %s)", bot_id)
-                        continue
-                    bots[bot_id] = bot
+                    continue
                 await broadcast.send_with_flood_control(
                     bot, chat_id, _post_fire_msg(label), limiter)
             elif res.reason == "processing":
                 counts["skipped"] += 1   # reconciler owns it; the next sweep confirms
+            elif res.reason == "below_cost":
+                # Phase 1 screens on the order's own gb; `renew` is authoritative and reads the
+                # LIVE plan, so a plan resized after the arm can only be caught here. Same remedy.
+                async with session_factory() as s2:
+                    disarmed = await disarm_quietly(s2, order_id)
+                if disarmed:
+                    counts["below_cost_disarmed"] += 1
+                    bot = await _shop_bot(bot_id, token)
+                    if bot is not None:
+                        await broadcast.send_with_flood_control(
+                            bot, chat_id, _below_cost_msg(label), limiter)
             else:
                 counts["failed"] += 1
                 log.warning("autorenew fire failed for order %s: %s", order_id, res.reason)
@@ -372,7 +464,7 @@ async def sweep(
                 await bot.session.close()
             except Exception:  # noqa: BLE001
                 pass
-    if counts["due"] or counts["backstop_cleared"]:
+    if counts["due"] or counts["backstop_cleared"] or counts["below_cost_disarmed"]:
         log.info("autorenew sweep: %s", counts)
     return counts
 

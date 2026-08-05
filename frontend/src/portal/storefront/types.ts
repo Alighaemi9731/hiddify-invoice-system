@@ -30,6 +30,9 @@ export interface StorefrontShop {
   health_error_class: StorefrontHealthErrorClass;
   health_state_updated_at: string | null;
   shop_closed: boolean;
+  // What one GB costs this reseller (their own buy price). Drives the plan price floor so the
+  // form can refuse a below-cost plan locally instead of round-tripping to a 422.
+  cost_per_gb_toman: number;
   role: "owner";
 }
 

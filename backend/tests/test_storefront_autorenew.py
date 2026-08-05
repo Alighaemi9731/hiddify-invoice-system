@@ -23,6 +23,7 @@ from app.core import crypto  # noqa: E402
 from app.models import (  # noqa: E402
     Panel,
     Reseller,
+    StorefrontAuditEvent,  # noqa: E402
     StorefrontBot,
     StorefrontCustomer,
     StorefrontOperation,
@@ -32,6 +33,7 @@ from app.models import (  # noqa: E402
 )
 from app.services import (  # noqa: E402
     storefront,
+    storefront_admin,
     storefront_autorenew,
     storefront_subscription,
     storefront_wallet,
@@ -436,3 +438,148 @@ def test_concurrent_fire_and_disarm_settle_or_release_once(monkeypatch):
         finally:
             await engine.dispose()
     asyncio.run(run())
+
+
+# ───────────────── a plan sold below the reseller's own cost never renews ─────────────────
+
+def test_arming_a_below_cost_plan_is_refused_before_any_money_is_reserved(tmp_path):
+    """A shop selling 10 GB for 50 T against a 10,000 T cost must not lock the customer's money
+    into a renewal that would deepen the reseller's loss every cycle."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "bc-arm.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000, price=50)
+            order = await _mk_order(s, cust, plan, bot, price=50)
+            res = await storefront_autorenew.arm(s, order.id, expected_sf_id=bot.id)
+            assert res.ok is False and res.reason == "below_cost"
+            cid, oid = cust.id, order.id
+        assert await _wallet(Session, cid) == 100_000        # nothing reserved
+        assert await _txn_count(Session, cid, "hold") == 0
+        async with Session() as s:
+            assert (await s.get(StorefrontOrder, oid)).autorenew_armed_at is None
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_a_below_cost_renewal_is_refused_before_any_debit(tmp_path):
+    async def go():
+        engine, Session = _engine_session(tmp_path, "bc-renew.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000, price=50)
+            order = await _mk_order(s, cust, plan, bot, price=50)
+            cid, oid = cust.id, order.id
+        res = await storefront_subscription.renew(Session, order_id=oid, expected_sf_id=bot.id)
+        assert res.ok is False and res.reason == "below_cost"
+        assert await _wallet(Session, cid) == 100_000
+        async with Session() as s:
+            assert (await s.execute(
+                select(func.count()).select_from(StorefrontOperation))).scalar_one() == 0
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_repricing_a_disabled_plan_above_cost_makes_it_renewable_again(tmp_path):
+    """The price and the quota must share one vintage. Renewal has always read gb from the LIVE
+    plan; taking the price from the ORDER whenever the plan was disabled meant a plan disabled for
+    underpricing kept renewing at the old loss-making price and a fix could never reach it."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "bc-vintage.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000, price=50)
+            order = await _mk_order(s, cust, plan, bot, price=50)
+            oid, pid = order.id, plan.id
+        # Disabled AND still below cost → refused.
+        async with Session() as s:
+            p = await s.get(StorefrontPlan, pid)
+            p.enabled = False
+            await s.commit()
+        assert (await storefront_subscription.renew(
+            Session, order_id=oid, expected_sf_id=bot.id)).reason == "below_cost"
+        # The reseller fixes the price. The (still disabled) plan now governs the renewal.
+        async with Session() as s:
+            p = await s.get(StorefrontPlan, pid)
+            p.price_toman = 50_000
+            await s.commit()
+        res = await storefront_subscription.renew(
+            Session, order_id=oid, by_admin=True, expected_sf_id=bot.id)
+        assert res.reason != "below_cost"
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_the_sweep_refunds_an_armed_order_whose_plan_turned_out_below_cost(tmp_path):
+    """Unlike a suspension (transient — kept armed so it resumes on payment), a below-cost price may
+    never be fixed. Holding the customer's money for a renewal that can never fire is worse than
+    refunding it, so the arm is released and the customer told."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "bc-sweep.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000, price=30_000)
+            order = await _mk_order(s, cust, plan, bot)
+            armed = await storefront_autorenew.arm(s, order.id, expected_sf_id=bot.id)
+            assert armed.ok
+            cid, oid = cust.id, order.id
+        assert await _wallet(Session, cid) == 70_000     # reserved while the price was healthy
+
+        # The reseller then slashes the price under their own cost.
+        async with Session() as s:
+            p = await s.get(StorefrontPlan, plan.id)
+            p.price_toman = 50
+            o = await s.get(StorefrontOrder, oid)
+            o.autorenew_price_toman = 50
+            await s.commit()
+
+        sent: list[str] = []
+
+        class _Bot:
+            session = SimpleNamespace(close=lambda: asyncio.sleep(0))
+
+            async def send_message(self, chat_id, text, **kw):  # noqa: ANN001, ANN003, ARG002
+                sent.append(text)
+
+        async def bot_factory(_token):  # noqa: ANN001, ANN202
+            return _Bot()
+
+        res = await storefront_autorenew.sweep(Session, bot_factory=bot_factory)
+        assert res["below_cost_disarmed"] == 1 and res["fired"] == 0
+        assert await _wallet(Session, cid) == 100_000    # the reservation came back
+        async with Session() as s:
+            assert (await s.get(StorefrontOrder, oid)).autorenew_armed_at is None
+        assert sent and "به کیفِ پولِ شما بازگشت" in sent[0]
+        # ...and the reseller's own buy price is never disclosed to a customer.
+        assert "هزینه" not in sent[0]
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_an_admin_renew_of_a_below_cost_plan_is_a_definite_refusal_not_an_ambiguous_one(
+        tmp_path, monkeypatch):
+    """`below_cost` is decided before any durable state or panel I/O, so it must surface as a 422
+    validation failure — not the `external_unknown` 502 that hands the order to the reaper."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "bc-admin.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000, price=50)
+            order = await _mk_order(s, cust, plan, bot, price=50)
+            oid, sid = order.id, bot.id
+
+        # renew_order dispatches through the app-level SessionLocal; point it at this test DB.
+        monkeypatch.setattr(storefront_admin, "SessionLocal", Session)
+        async with Session() as s:
+            ctx = storefront_admin.CommandContext(
+                actor_telegram_id=0, actor_role="system", source="system",
+                idempotency_key="renew-bc", expected_version=1)
+            with pytest.raises(storefront_admin.AdminCommandError) as exc:
+                await storefront_admin.renew_order(s, sid, oid, ctx)
+            assert exc.value.response_status == 422
+            assert exc.value.code != "external_unknown"
+            assert "50000" in str(exc.value)          # the admin still gets the unit lesson
+            event = (await s.execute(select(StorefrontAuditEvent))).scalars().all()[-1]
+            assert event.outcome == "failed" and event.error_class == "below_cost"
+        await engine.dispose()
+    asyncio.run(go())

@@ -85,6 +85,16 @@ export function commandRecoveryMessage(error: unknown) {
   return null;
 }
 
+// A plan priced under the reseller's own cost. The server authors the (Persian) explanation —
+// including the "you probably meant 50000, not 50" hint — so render it verbatim rather than
+// reconstructing it here. Kept separate from commandRecoveryMessage so that helper's soft-409
+// recovery semantics stay intact.
+export function belowCostMessage(error: unknown) {
+  if (!axios.isAxiosError(error) || error.response?.status !== 422) return null;
+  const detail = (error.response.data as { detail?: { code?: string; message?: string } } | undefined)?.detail;
+  return detail?.code === "below_cost" ? (detail.message ?? null) : null;
+}
+
 function isDefinitiveResponse(response: { status: number; data?: unknown }) {
   const code = (response.data as { detail?: { code?: string } } | undefined)?.detail?.code;
   if (response.status === 409 && (code === "in_flight" || code === "unknown")) return false;

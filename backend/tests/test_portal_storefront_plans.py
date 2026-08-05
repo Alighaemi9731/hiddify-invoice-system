@@ -186,3 +186,75 @@ def test_plan_request_validation_rejects_extra_empty_and_invalid_order():
             )).status_code == 422
 
     _run(body)
+
+
+def test_a_below_cost_plan_is_refused_over_http_with_a_usable_explanation():
+    async def body(session):  # noqa: ANN001
+        owner, shop, first, _foreign_plan = await _seed(session)
+
+        async def session_override():
+            yield session
+
+        async def context_override():
+            return ResellerContext(chat_id=111, resellers=[owner])
+
+        app.dependency_overrides[get_session] = session_override
+        app.dependency_overrides[get_current_reseller] = context_override
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test",
+        ) as client:
+            # The shop's cost per GB must reach the client, or the form cannot show the floor.
+            shops = await client.get("/api/portal/storefronts")
+            assert shops.status_code == 200
+            assert shops.json()[0]["cost_per_gb_toman"] == 1000
+
+            # 10 GB at 50 T against a 10,000 T floor — the production ×1000 slip.
+            refused = await client.post(
+                f"/api/portal/storefronts/{shop.id}/plans",
+                json={"gb": 10, "days": 30, "price_toman": 50},
+                headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "below-cost"},
+            )
+            assert refused.status_code == 422
+            detail = refused.json()["detail"]
+            assert detail["code"] == "below_cost"
+            assert "50000" in detail["message"]
+
+            # Disabling stays possible; re-enabling does not.
+            off = await client.put(
+                f"/api/portal/storefronts/{shop.id}/plans/{first.id}/enabled",
+                json={"enabled": False},
+                headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "off"},
+            )
+            assert off.status_code == 200
+            cheap = await client.patch(
+                f"/api/portal/storefronts/{shop.id}/plans/{first.id}",
+                json={"price_toman": 5},
+                headers={"If-Match": off.headers["etag"], "Idempotency-Key": "cheap"},
+            )
+            assert cheap.status_code == 422
+            assert cheap.json()["detail"]["code"] == "below_cost"
+
+    _run(body)
+
+
+def test_the_portal_reports_the_resellers_own_price_when_it_overrides_the_default():
+    async def body(session):  # noqa: ANN001
+        owner, _shop, _first, _foreign_plan = await _seed(session)
+        owner.price_per_gb = 2500
+        await session.commit()
+
+        async def session_override():
+            yield session
+
+        async def context_override():
+            return ResellerContext(chat_id=111, resellers=[owner])
+
+        app.dependency_overrides[get_session] = session_override
+        app.dependency_overrides[get_current_reseller] = context_override
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test",
+        ) as client:
+            shops = await client.get("/api/portal/storefronts")
+            assert shops.json()[0]["cost_per_gb_toman"] == 2500
+
+    _run(body)

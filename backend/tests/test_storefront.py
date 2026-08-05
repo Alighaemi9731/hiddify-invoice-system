@@ -433,6 +433,21 @@ def test_plans_manage_kb_has_edit_move_delete():
     assert "sfplanadd" in data
 
 
+def test_plans_manage_kb_can_toggle_a_plan_from_the_bot():
+    """A disabled plan must be re-enableable WITHOUT the web portal — otherwise a bot-only reseller
+    whose plans the below-cost sweep turned off can fix the price and still have nothing for sale.
+    The desired state is in the callback data so a stale keyboard can't invert the intent."""
+    plans = [StorefrontPlan(id=1, gb=1, days=1, price_toman=1, enabled=True, sort_order=0),
+             StorefrontPlan(id=2, gb=2, days=2, price_toman=2, enabled=False, sort_order=1)]
+    buttons = [b for row in sfkb.plans_manage_kb(plans).inline_keyboard for b in row]
+    data = [b.callback_data for b in buttons]
+    assert "sfplantoggle:1:0" in data      # enabled → the button turns it OFF
+    assert "sfplantoggle:2:1" in data      # disabled → the button turns it ON
+    labels = {b.callback_data: b.text for b in buttons}
+    assert labels["sfplantoggle:1:0"] == "🚫 غیرفعال"
+    assert labels["sfplantoggle:2:1"] == "✅ فعال"
+
+
 def test_storefront_order_has_label_column(tmp_path):
     async def body(s):
         _r, _bot, cust = await _seed(s)

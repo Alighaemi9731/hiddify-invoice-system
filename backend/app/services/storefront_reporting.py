@@ -69,7 +69,7 @@ def classify_health_error(error: str | None) -> str | None:
     return "unknown"
 
 
-def storefront_summary(access: StorefrontAccess) -> StorefrontSummaryOut:
+def storefront_summary(access: StorefrontAccess, *, cost_per_gb: int = 0) -> StorefrontSummaryOut:
     bot_error = classify_health_error(access.shop.last_error)
     panel_error = classify_health_error(access.panel.last_error)
     error_class = bot_error or panel_error
@@ -88,6 +88,7 @@ def storefront_summary(access: StorefrontAccess) -> StorefrontSummaryOut:
         health_error_class=error_class,  # type: ignore[arg-type]
         health_state_updated_at=state_updated_at,
         shop_closed=access.shop.shop_closed,
+        cost_per_gb_toman=int(cost_per_gb),
     )
 
 

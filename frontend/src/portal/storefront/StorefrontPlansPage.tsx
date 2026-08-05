@@ -22,7 +22,7 @@ import StorefrontConflictDialog from "./StorefrontConflictDialog";
 import StorefrontPlanHistoryDialog from "./StorefrontPlanHistoryDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { StorefrontPlan, StorefrontPlanDraft, Versioned } from "./types";
-import { commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
+import { belowCostMessage, commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
 
 type PlanCommand =
@@ -92,9 +92,19 @@ export default function StorefrontPlansPage() {
     setDraft({ title: plan.title, gb: plan.gb, days: plan.days, price_toman: plan.price_toman });
     setFormOpen(true);
   };
+  // A plan may never be sold below what its quota costs this reseller. The server is authoritative
+  // (see storefront_pricing); mirroring the floor here just avoids a pointless 422 round-trip.
+  const costPerGb = shop.cost_per_gb_toman || 0;
+  const floorFor = (gb: number) => costPerGb * Math.max(0, gb || 0);
+  const draftFloor = floorFor(draft.gb);
+  const belowCost = (plan: { gb: number; price_toman: number }) =>
+    floorFor(plan.gb) > 0 && plan.price_toman < floorFor(plan.gb);
+  const priceUnderFloor = draftFloor > 0 && draft.price_toman < draftFloor;
+  const underpricedPlans = orderedPlans.filter(belowCost);
   const valid = draft.gb >= 1 && draft.gb <= 100_000
     && draft.days >= 1 && draft.days <= 3650
     && draft.price_toman >= 0 && draft.price_toman <= 1_000_000_000_000
+    && !priceUnderFloor
     && (draft.title?.length || 0) <= 128;
   const planChanges = editing ? changedFields<StorefrontPlanDraft>(
     { title: editing.title, gb: editing.gb, days: editing.days, price_toman: editing.price_toman },
@@ -142,8 +152,16 @@ export default function StorefrontPlansPage() {
       </Stack>
       {message && <Alert severity="success" onClose={() => setMessage(null)} sx={{ mb: 2 }}>{message}</Alert>}
       {command.isError && !isVersionConflict(command.error) && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {commandRecoveryMessage(command.error) || "ذخیرهٔ تغییرات انجام نشد. ورودی‌ها و اتصال را بررسی کنید."}
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: "pre-line" }}>
+          {belowCostMessage(command.error)
+            || commandRecoveryMessage(command.error)
+            || "ذخیرهٔ تغییرات انجام نشد. ورودی‌ها و اتصال را بررسی کنید."}
+        </Alert>
+      )}
+      {underpricedPlans.length > 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          قیمتِ {fmtNum(underpricedPlans.length)} پلن از هزینهٔ خودتان کمتر است و فروششان برای شما ضرر
+          دارد. قیمت به تومان است، نه هزار تومان — برای ۵۰ هزار تومان باید بنویسید 50000.
         </Alert>
       )}
       <DataState isLoading={plansQuery.isLoading} isError={plansQuery.isError} rows={5} onRetry={() => plansQuery.refetch()}>
@@ -173,10 +191,12 @@ export default function StorefrontPlansPage() {
                       </Box>
                     </Stack>
                     <Stack direction="row" alignItems="center" justifyContent={{ xs: "space-between", sm: "flex-end" }}>
-                      <FormControlLabel
-                        control={<Switch checked={plan.enabled} onChange={(_, enabled) => command.mutate({ type: "enabled", planId: plan.id, enabled })} disabled={command.isPending} />}
-                        label={plan.enabled ? "فعال" : "غیرفعال"}
-                      />
+                      <Tooltip title={!plan.enabled && belowCost(plan) ? `قیمت این پلن از هزینهٔ خودتان (${fmtToman(floorFor(plan.gb))}) کمتر است؛ ابتدا قیمت را اصلاح کنید.` : ""}>
+                        <FormControlLabel
+                          control={<Switch checked={plan.enabled} onChange={(_, enabled) => command.mutate({ type: "enabled", planId: plan.id, enabled })} disabled={command.isPending || (!plan.enabled && belowCost(plan))} />}
+                          label={plan.enabled ? "فعال" : "غیرفعال"}
+                        />
+                      </Tooltip>
                       <Tooltip title="انتقال به بالا"><span><IconButton aria-label={`انتقال ${plan.title || plan.id} به بالا`} disabled={index === 0 || command.isPending} onClick={() => move(index, -1)}><ArrowUpwardIcon /></IconButton></span></Tooltip>
                       <Tooltip title="انتقال به پایین"><span><IconButton aria-label={`انتقال ${plan.title || plan.id} به پایین`} disabled={index === orderedPlans.length - 1 || command.isPending} onClick={() => move(index, 1)}><ArrowDownwardIcon /></IconButton></span></Tooltip>
                       <IconButton aria-label="تاریخچه پلن" onClick={() => setHistoryPlan(plan)}><HistoryIcon /></IconButton>
@@ -204,7 +224,20 @@ export default function StorefrontPlansPage() {
               <TextField label="عنوان (اختیاری)" value={draft.title || ""} inputProps={{ maxLength: 128 }} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
               <TextField required label="حجم (گیگابایت)" type="number" value={draft.gb} inputProps={{ min: 1, max: 100000 }} error={draft.gb < 1 || draft.gb > 100000} onChange={(event) => setDraft({ ...draft, gb: Number(event.target.value) })} />
               <TextField required label="مدت (روز)" type="number" value={draft.days} inputProps={{ min: 1, max: 3650 }} error={draft.days < 1 || draft.days > 3650} onChange={(event) => setDraft({ ...draft, days: Number(event.target.value) })} />
-              <TextField required label="قیمت (تومان)" type="number" value={draft.price_toman} inputProps={{ min: 0, max: 1000000000000 }} error={draft.price_toman < 0 || draft.price_toman > 1_000_000_000_000} onChange={(event) => setDraft({ ...draft, price_toman: Number(event.target.value) })} />
+              <TextField
+                required
+                label="قیمت (تومان)"
+                type="number"
+                value={draft.price_toman}
+                inputProps={{ min: 0, max: 1000000000000 }}
+                error={draft.price_toman < 0 || draft.price_toman > 1_000_000_000_000 || priceUnderFloor}
+                helperText={
+                  draftFloor > 0
+                    ? `قیمت به تومان است، نه هزار تومان (برای ۵۰ هزار تومان بنویسید 50000). کفِ مجاز برای این پلن: ${fmtToman(draftFloor)} — هزینهٔ هر گیگابایت برای شما ${fmtToman(costPerGb)}`
+                    : "قیمت به تومان است، نه هزار تومان (برای ۵۰ هزار تومان بنویسید 50000)."
+                }
+                onChange={(event) => setDraft({ ...draft, price_toman: Number(event.target.value) })}
+              />
             </Stack>
           </DialogContent>
           <DialogActions>

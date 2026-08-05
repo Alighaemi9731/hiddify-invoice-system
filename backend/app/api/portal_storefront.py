@@ -69,6 +69,7 @@ from app.schemas.portal_storefront import (
     StorefrontWalletAdjustmentBody,
 )
 from app.services import (
+    pricing,
     settings_service,
     storefront,
     storefront_admin,
@@ -297,7 +298,13 @@ async def storefronts(
 ) -> list[StorefrontSummaryOut]:
     """List configured shops owned by the authenticated Telegram identity."""
     owned = await list_owned_storefronts(session, ctx)
-    return [storefront_reporting.storefront_summary(access) for access in owned]
+    # Resolved once; each shop's cost is its own reseller's price, falling back to the global one.
+    default_price = await pricing.get_default_price_per_gb(session)
+    return [
+        storefront_reporting.storefront_summary(
+            access, cost_per_gb=int(access.reseller.price_per_gb or default_price))
+        for access in owned
+    ]
 
 
 def _dashboard_dates(

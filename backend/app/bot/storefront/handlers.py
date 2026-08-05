@@ -48,6 +48,7 @@ from app.services import (
     storefront_autorenew,
     storefront_credit,
     storefront_ops,
+    storefront_pricing,
     storefront_provision,
     storefront_subscription,
     storefront_wallet,
@@ -307,6 +308,24 @@ async def _start_admin_fsm(state: FSMContext, sf: StorefrontBot) -> None:
         sf_config_version=sf.config_version,
         sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}",
     )
+
+
+def _price_prompt(head: str, data: dict, cost_key: str, gb_key: str) -> str:
+    """The price prompt plus the unit warning and this shop's own price floor. Spelling the unit
+    out BEFORE the reseller types is what actually prevents the ×1000 slip; the guard behind it is
+    only the backstop."""
+    hint = storefront_pricing.price_prompt_hint_fa(
+        cost=int(data.get(cost_key) or 0), gb=int(data.get(gb_key) or 0))
+    return f"{head}\n\n{hint}"
+
+
+async def _rotate_command_key(state: FSMContext) -> None:
+    """Mint a fresh idempotency key so the reseller can retype a CORRECTED value in the same FSM
+    state. `storefront_audit.claim_command` returns `conflict` when a key reappears with a different
+    request hash, so reusing the flow's original key after a rejection would answer the fixed input
+    with «این درخواست هنوز در حال انجام است» instead of accepting it. `sf_config_version` stays
+    valid: a cached failure never CASes."""
+    await state.update_data(sf_command_key=f"tg-fsm:{secrets.token_urlsafe(18)}")
 
 
 def _fsm_ctx(user_id: int, data: dict, sf: StorefrontBot) -> storefront_admin.CommandContext:
@@ -1254,6 +1273,13 @@ async def _report_arm(cb: CallbackQuery, res: storefront_autorenew.ArmResult, pr
             reply_markup=kb.wallet_kb())
     elif res.reason == "trial":
         await cb.message.answer(rtl(_TRIAL_NO_RENEW))
+    elif res.reason == "below_cost":
+        # The shop's pricing is broken (this plan sells under the reseller's own cost), so we
+        # refuse to lock in another loss-making renewal. NEVER surface the reseller's cost to a
+        # customer — this is the shop's problem to fix, not the customer's to understand.
+        await cb.message.answer(rtl(
+            "🔁 «تمدید خودکار» فعلاً برای این سرویس در دسترس نیست. "
+            "لطفاً با پشتیبانیِ فروشگاه تماس بگیرید."))
     else:
         await cb.message.answer(rtl("❌ انجام نشد. لطفاً بعداً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید."))
 
@@ -2069,12 +2095,16 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
 @storefront_router.callback_query(F.data == "sfplanadd")
 async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     async with SessionLocal() as s:
-        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-    if sf is None or not is_admin:
-        await cb.answer("دسترسی ندارید.", show_alert=True)
-        return
+        sf, r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        # Resolved once here so the price prompt can show this shop's own floor without opening
+        # another session mid-flow.
+        cost = await storefront_pricing.cost_per_gb(s, r) if r is not None else 0
     # No title (owner: «عنوان نمی‌خواهیم») — collect volume → days → price only.
     await _start_admin_fsm(state, sf)
+    await state.update_data(p_cost=cost)
     await state.set_state(SF.plan_gb)
     await cb.message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
@@ -2098,8 +2128,11 @@ async def sf_plan_days(message: Message, state: FSMContext) -> None:
         await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(p_days=int(raw))
+    data = await state.get_data()
     await state.set_state(SF.plan_price)
-    await message.answer(rtl("قیمت به تومان (عدد):"), reply_markup=kb.flow_cancel_kb())
+    await message.answer(
+        rtl(_price_prompt("قیمتِ فروش به تومان (عدد):", data, "p_cost", "p_gb")),
+        reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.plan_price, F.text)
@@ -2119,6 +2152,12 @@ async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
                 gb=int(data.get("p_gb", 0)), days=int(data.get("p_days", 0)),
                 price_toman=int(raw))
         except storefront_admin.AdminCommandError as exc:
+            if exc.code == "below_cost":
+                # Recoverable by retyping — keep the reseller in the price prompt instead of
+                # dumping them back to the plan list and making them restart the whole flow.
+                await _rotate_command_key(state)
+                await message.answer(rtl(_admin_error(exc)), reply_markup=kb.flow_cancel_kb())
+                return
             await state.clear()
             plans = await storefront.list_plans(s, sf.id)
             await message.answer(rtl(_admin_error(exc)), reply_markup=kb.plans_manage_kb(plans))
@@ -2147,6 +2186,37 @@ async def sf_plan_del(cb: CallbackQuery, bot: Bot) -> None:
         plans = await storefront.list_plans(s, sf.id)
     await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
     await cb.answer("حذف شد.")
+
+
+@storefront_router.callback_query(F.data.startswith("sfplantoggle:"))
+async def sf_plan_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    """Enable/disable a plan from the bot. The desired state travels in the callback data (not
+    "flip whatever it is now") so a stale keyboard can't invert the reseller's intent."""
+    _, raw_id, raw_enabled = (cb.data or "").split(":")
+    plan_id, enabled = int(raw_id), raw_enabled == "1"
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        try:
+            await storefront_admin.set_plan_enabled(
+                s, sf.id, plan_id, _callback_ctx(cb, sf), enabled=enabled)
+        except storefront_admin.AdminCommandError as exc:
+            plans = await storefront.list_plans(s, sf.id)
+            if exc.code in ("config_conflict", "below_cost"):
+                await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
+            if exc.code == "below_cost":
+                # Too long for a callback alert, and it is the actionable part — send it as a
+                # message so the reseller can read the floor and fix the price.
+                await cb.answer()
+                await cb.message.answer(rtl(_admin_error(exc)))
+                return
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
+        plans = await storefront.list_plans(s, sf.id)
+    await cb.message.edit_reply_markup(reply_markup=kb.plans_manage_kb(plans))
+    await cb.answer("فعال شد." if enabled else "غیرفعال شد.")
 
 
 @storefront_router.callback_query(F.data.startswith("sfplanup:"))
@@ -2207,9 +2277,10 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             await cb.answer("پلن یافت نشد.", show_alert=True)
             return
         cur = f"{plan.gb} گیگابایت · {plan.days} روز · {plan.price_toman:,} تومان"
+        cost = await storefront_pricing.cost_per_gb(s, _r) if _r is not None else 0
     await state.set_state(SF.edit_gb)
     await _start_admin_fsm(state, sf)
-    await state.update_data(edit_plan_id=plan_id)
+    await state.update_data(edit_plan_id=plan_id, e_cost=cost)
     await cb.message.answer(
         rtl(f"ویرایش پلن ({cur})\n\nحجمِ جدید به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
     await cb.answer()
@@ -2233,8 +2304,11 @@ async def sf_edit_days(message: Message, state: FSMContext) -> None:
         await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     await state.update_data(e_days=int(raw))
+    data = await state.get_data()
     await state.set_state(SF.edit_price)
-    await message.answer(rtl("قیمتِ جدید به تومان (عدد):"), reply_markup=kb.flow_cancel_kb())
+    await message.answer(
+        rtl(_price_prompt("قیمتِ جدید به تومان (عدد):", data, "e_cost", "e_gb")),
+        reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.edit_price, F.text)
@@ -2257,6 +2331,10 @@ async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
             ok = True
         except storefront_admin.AdminCommandError as exc:
             ok = False
+            if exc.code == "below_cost":
+                await _rotate_command_key(state)
+                await message.answer(rtl(_admin_error(exc)), reply_markup=kb.flow_cancel_kb())
+                return
             if exc.code != "not_found":
                 await state.clear()
                 plans = await storefront.list_plans(s, sf.id)

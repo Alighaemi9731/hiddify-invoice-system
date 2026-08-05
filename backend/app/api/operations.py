@@ -117,6 +117,30 @@ async def run_enforcement_queue(session: AsyncSession = Depends(get_session)) ->
     return await enforcement.process_enforcement_queue(session)
 
 
+@router.get("/storefront/below-cost-report")
+async def below_cost_report(session: AsyncSession = Depends(get_session)) -> dict:
+    """Which storefront plans are priced below the owning reseller's own cost, and what the sweep
+    would do about them. Pure read — safe to call any time."""
+    from app.services import storefront_belowcost
+
+    return await storefront_belowcost.report(session)
+
+
+@router.post("/storefront/below-cost-sweep")
+async def below_cost_sweep(
+    dry_run: bool = True, limit: int | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Disable below-cost storefront plans, close shops left with nothing to sell, and DM each
+    owning reseller. Idempotent — safe to re-run.
+
+    `dry_run` defaults to TRUE: an accidental POST reports instead of acting. Use `limit` to
+    canary a few shops before the full run."""
+    from app.services import storefront_belowcost
+
+    return await storefront_belowcost.run_sweep(session, dry_run=dry_run, limit=limit)
+
+
 @router.post("/storefront/reset-trial-quota")
 async def reset_trial_quota(session: AsyncSession = Depends(get_session)) -> dict:
     """One-time cleanup: reset over-renewed free-trial configs back to 1 GB on their panels

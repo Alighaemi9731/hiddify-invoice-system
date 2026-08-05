@@ -98,6 +98,25 @@ def test_no_portal_mutation_handler_bypasses_the_shared_command_layer():
     assert not violations, f"portal mutation handlers bypass the shared layer: {violations}"
 
 
+def test_every_plan_write_command_enforces_the_below_cost_guard():
+    """Static AST guard: a plan can be created, repriced or re-enabled, and all three must refuse a
+    price below the reseller's own cost. A new plan-write path that forgets the guard fails here
+    rather than quietly reopening the hole that cost one shop ~1.6M Toman in a month."""
+    src = (pathlib.Path("app/services/storefront_admin.py")).read_text("utf-8")
+    tree = ast.parse(src)
+    guarded = {"create_plan": False, "update_plan": False, "set_plan_enabled": False}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name not in guarded:
+            continue
+        guarded[node.name] = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == "_assert_price_covers_cost"
+            for call in ast.walk(node)
+        )
+    assert all(guarded.values()), f"plan write paths missing the below-cost guard: {guarded}"
+    assert "storefront_pricing" in src
+
+
 def test_legacy_callback_removal_pin_is_a_future_version():
     pin = DATA["legacy_owner_callbacks_remove_not_before"]
     assert isinstance(pin, str) and pin.startswith("v")

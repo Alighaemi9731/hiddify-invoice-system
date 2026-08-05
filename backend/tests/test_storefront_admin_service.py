@@ -213,10 +213,12 @@ def test_plan_commands_are_cas_audited_idempotent_and_tenant_safe():
 def test_exact_reorder_validation_and_delete_preserve_audit_history():
     async def body(session):  # noqa: ANN001
         _owner, _foreign, shop, _other = await _seed(session)
+        # Prices clear the below-cost floor (gb x default_price_per_gb = 1000/GB) so this test
+        # exercises reordering, not the pricing guard.
         one = await storefront_admin.create_plan(
-            session, shop.id, _ctx(1, "p1"), gb=1, days=1, price_toman=0)
+            session, shop.id, _ctx(1, "p1"), gb=1, days=1, price_toman=1_000)
         two = await storefront_admin.create_plan(
-            session, shop.id, _ctx(2, "p2"), gb=2, days=2, price_toman=2)
+            session, shop.id, _ctx(2, "p2"), gb=2, days=2, price_toman=2_000)
         ids = [one.body["plan"]["id"], two.body["plan"]["id"]]
         with pytest.raises(storefront_admin.AdminCommandError):
             await storefront_admin.reorder_plans(
@@ -331,7 +333,7 @@ def test_audit_failure_rolls_back_db_mutation(monkeypatch):
         monkeypatch.setattr(storefront_audit, "append_event", fail_audit)
         with pytest.raises(RuntimeError, match="audit unavailable"):
             await storefront_admin.create_plan(
-                session, shop.id, _ctx(1), gb=10, days=30, price_toman=10)
+                session, shop.id, _ctx(1), gb=10, days=30, price_toman=100_000)
         assert await session.scalar(select(func.count(StorefrontPlan.id))) == 0
         assert await session.scalar(select(StorefrontBot.config_version)) == 1
         assert await session.scalar(select(func.count(StorefrontApiCommand.id))) == 0
@@ -343,13 +345,13 @@ def test_replay_survives_later_child_and_partial_settings_changes():
     async def body(session):  # noqa: ANN001
         _owner, _foreign, shop, _other = await _seed(session)
         created = await storefront_admin.create_plan(
-            session, shop.id, _ctx(1, "original-create"), gb=10, days=30, price_toman=10)
+            session, shop.id, _ctx(1, "original-create"), gb=10, days=30, price_toman=100_000)
         plan_id = created.body["plan"]["id"]
         updated = await storefront_admin.update_plan(
             session, shop.id, plan_id, _ctx(2, "later-update"), gb=20)
         assert updated.body["plan"]["gb"] == 20
         replay = await storefront_admin.create_plan(
-            session, shop.id, _ctx(1, "original-create"), gb=10, days=30, price_toman=10)
+            session, shop.id, _ctx(1, "original-create"), gb=10, days=30, price_toman=100_000)
         assert replay.replayed is True and replay.body == created.body
 
         deleted = await storefront_admin.delete_plan(
