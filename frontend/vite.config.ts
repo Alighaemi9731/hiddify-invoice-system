@@ -91,5 +91,11 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     css: true,
+    // The heaviest portal tests drive MUI forms through userEvent one keystroke at a time — each
+    // character is a real React render + validation pass. They run in well under a second locally
+    // (the worst is ~0.8s), but vitest's 5s default left no headroom on a contended CI runner and
+    // produced a red build on a commit whose own `main` run was green. Raise the ceiling rather
+    // than thin the assertions; a genuine hang still fails, just 15s later.
+    testTimeout: 15_000,
   },
 });

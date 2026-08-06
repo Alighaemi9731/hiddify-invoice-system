@@ -1,8 +1,19 @@
 name: CI
 
 on:
+  # BRANCHES ONLY — deliberately not tags. A release tag always points at a commit that was already
+  # gated by its own `main` run (docs/RELEASE_PROCESS.md: tag only a green commit), so an unfiltered
+  # `push:` re-ran the identical 5-job matrix a few seconds after the branch push and the two runs
+  # then competed for the same runner pool. That contention, not any code change, is what failed the
+  # v1.109.0 and v1.102.0 tag runs: same commit, `main` green, tag red on a 5s frontend test timeout.
   push:
+    branches: ["main"]
   pull_request:
+
+# One run per ref: a newer push supersedes an in-flight one instead of queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
