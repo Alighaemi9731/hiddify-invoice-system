@@ -7,10 +7,13 @@ from app.services.panel_client import admin_api
 
 
 class _Response:
-    def __init__(self, status_code: int, *, json_data=None, text: str = "") -> None:
+    def __init__(
+        self, status_code: int, *, json_data=None, text: str = "", headers: dict | None = None
+    ) -> None:
         self.status_code = status_code
         self._json_data = json_data
         self.text = text
+        self.headers = headers or {}
 
     def json(self):
         return self._json_data
@@ -199,3 +202,106 @@ def test_delete_user_absent_on_panel_deletes_nothing(monkeypatch):
     monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
     asyncio.run(admin_api.AdminApiClient().delete_user(_panel(), "gone", api_key="OWNER"))
     assert posted == []
+
+
+# ── the deleted-admin failure mode (2026-08-06) ──────────────────────────────
+#
+# A reseller asked us to suspend a sub-reseller and then deleted that sub-admin from the panel
+# before the queue got to it. Hiddify answers a page request carrying an unknown admin key with
+# `302 → /<proxy>/?force=1&next=…` (auth_before_request → logout_redirect), not a 4xx. The old
+# `status >= 400` check let that through, the empty redirect body had no CSRF token, and the
+# owner was alerted five times about a CSRF problem that never existed.
+
+_LOGIN_REDIRECT = {"location": "/proxy/?force=1&next=/proxy/admin/user/"}
+
+
+def _login_redirect_client(*, on_get=True):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, headers=None):
+            if on_get:
+                return _Response(302, headers=_LOGIN_REDIRECT)
+            return _Response(200, text='<input name="csrf_token" value="tok">')
+        async def post(self, url, data):
+            return _Response(302, headers=_LOGIN_REDIRECT)
+    return FakeClient
+
+
+def test_bulk_page_login_redirect_is_an_auth_error_not_a_csrf_error(monkeypatch):
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", _login_redirect_client())
+    try:
+        asyncio.run(
+            admin_api.AdminApiClient().bulk_set_users_enabled(
+                _panel(), [11], False, api_key="deadbeef-0000-0000-0000-000000000000")
+        )
+    except admin_api.PanelAuthError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("a login redirect must not pass as a scrapeable page")
+    assert "CSRF" not in message
+    assert "deadbeef…" in message, "the error must name the key the panel refused"
+    assert "302" in message
+
+
+def test_bulk_action_post_bounced_to_login_is_not_reported_as_success(monkeypatch):
+    """Flask-Admin redirects to the list on success, so a 3xx POST normally means done — but a
+    3xx to the LOGIN page means the write never ran. Accepting it would record an untouched
+    batch as disabled, the silent-miss mode the whole verification layer exists to prevent."""
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", _login_redirect_client(on_get=False))
+    try:
+        asyncio.run(admin_api.AdminApiClient().bulk_set_users_enabled(_panel(), [11], False))
+    except admin_api.PanelAuthError:
+        return
+    raise AssertionError("a POST bounced to the login page must not count as a successful write")
+
+
+def test_admin_exists_is_three_valued(monkeypatch):
+    """404 = definitively gone; anything else unhappy = unknown. "Gone" cancels a suspension, so
+    it may never be inferred from a timeout or a 5xx."""
+    codes = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, headers=None):
+            if codes["code"] == 0:
+                raise RuntimeError("connection reset")
+            return _Response(codes["code"], json_data={"uuid": "a"})
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    c = admin_api.AdminApiClient()
+    for code, expected in ((200, True), (404, False), (500, None), (403, None), (0, None)):
+        codes["code"] = code
+        assert asyncio.run(c.admin_exists(_panel(), "some-admin")) is expected, code
+
+
+def test_get_user_identity_reports_the_live_owner(monkeypatch):
+    """The id AND the current `added_by_uuid`, in the one call enforcement already makes — the
+    frozen user→owner map of a queued action cannot be trusted once an admin is deleted."""
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def get(self, url, headers=None):
+            if url.endswith("/user/moved/"):
+                return _Response(200, json_data={"id": 5, "added_by_uuid": "AAAA1111-BBBB"})
+            return _Response(404)
+
+    monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)
+    c = admin_api.AdminApiClient()
+    identity = asyncio.run(c.get_user_identity(_panel(), "moved"))
+    assert identity.panel_user_id == 5
+    assert identity.added_by_uuid == "aaaa1111-bbbb", "owner uuids are compared lowercased"
+    assert asyncio.run(c.get_user_identity(_panel(), "gone")) is None

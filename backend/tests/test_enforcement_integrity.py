@@ -34,6 +34,7 @@ from app.models.enums import (  # noqa: E402
     InvoiceStatus,
 )
 from app.services import enforcement  # noqa: E402
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -185,7 +186,7 @@ def test_restore_keeps_snapshot_of_admins_it_did_not_restore(tmp_path, monkeypat
         async def fake_verify(session, action, client, panel, uuids, *, expect_enabled):
             return False
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement, "_fail_if_writes_missed", fake_verify)
 
@@ -342,7 +343,7 @@ def test_suspend_marks_descendants_and_blocks_their_independent_restore(tmp_path
         async def fake_verify(session, action, client, panel, uuids, *, expect_enabled):
             return False
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)

@@ -20,6 +20,7 @@ from app.models import EndUserSnapshot, Panel, Reseller  # noqa: E402
 from app.models.enums import EnforcementState  # noqa: E402
 from app.services import metering, reseller_report  # noqa: E402
 from app.services.periods import month_period  # noqa: E402
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -110,7 +111,7 @@ def test_enforcement_processes_multiple_panels_in_one_tick(tmp_path, monkeypatch
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)

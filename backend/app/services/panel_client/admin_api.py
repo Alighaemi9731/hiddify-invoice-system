@@ -34,6 +34,40 @@ class UserLimitError(RuntimeError):
     """Raised when the panel rejects a create because the admin's max_users is reached."""
 
 
+class PanelAuthError(RuntimeError):
+    """The panel refused the credentials we authenticated a WEB-UI request with.
+
+    Hiddify answers an unauthenticated *page* request with `302 → login`, never a 4xx
+    (`auth_before_request` → `logout_redirect`; only `/api/` paths get a JSON 403). A status-only
+    `>= 400` check therefore reads the login redirect as a page worth scraping, and the failure
+    surfaces as whatever the empty body lacks — which is how a **deleted admin** was reported for
+    five retries as "Hiddify bulk user action has no CSRF token" (2026-08-06). Distinguishing it
+    lets callers ask the real question ("does this admin still exist?") instead of retrying a
+    credential that can never work.
+    """
+
+
+def _mask_key(key: str | None) -> str:
+    """A uuid IS a credential on Hiddify — identify it in errors/logs by its prefix only."""
+    return f"{key[:8]}…" if key else "<none>"
+
+
+def _redirect_target(response: httpx.Response) -> str:
+    return (response.headers.get("location") or "")[:200]
+
+
+def _is_login_redirect(response: httpx.Response) -> bool:
+    """Is this response Hiddify's login screen rather than a normal post-action redirect?
+
+    `redirect_to_login()` sends `/<proxy_path>/?force=1&next=…`; a successful Flask-Admin action
+    redirects back to the list URL we passed. `force=1` is the discriminator — without it a POST
+    bounced to the login page would be recorded as a successful bulk write.
+    """
+    if not 300 <= response.status_code < 400:
+        return False
+    return "force=1" in _redirect_target(response)
+
+
 def _tag_attr(tag: str, name: str) -> str | None:
     m = re.search(rf'\b{name}\s*=\s*["\']([^"\']*)["\']', tag, re.I)
     return m.group(1) if m else None
@@ -86,6 +120,14 @@ def _scrape_edit_form_fields(html_text: str) -> dict[str, str]:
     ):
         fields[tm.group(1)] = html.unescape(tm.group(2))
     return fields
+
+
+@dataclass(frozen=True)
+class UserIdentity:
+    """What the panel says about one end-user right now: its rowid and its owning admin."""
+
+    panel_user_id: int | None
+    added_by_uuid: str | None
 
 
 @dataclass(frozen=True)
@@ -186,15 +228,20 @@ class AdminApiClient(PanelClient):
             raise UserLimitError(text)
         raise RuntimeError(f"POST user {resp.status_code}: {text}")
 
-    async def get_user_id(  # noqa: ANN001
+    async def get_user_identity(  # noqa: ANN001
         self, panel, user_uuid: str, *, api_key: str | None = None
-    ) -> int | None:
-        """Hiddify's numeric id for ONE user via `GET /user/{uuid}/`.
+    ) -> UserIdentity | None:
+        """Hiddify's numeric id **and current owning admin** for ONE user via `GET /user/{uuid}/`.
 
-        Used by enforcement to resolve only the reseller's TARGET users' ids (the bulk action
-        needs numeric rowids) instead of downloading the entire panel user list — far gentler on
-        large panels. Returns the int id, or None if the user is absent on the panel (404) so the
-        caller skips it. Other HTTP errors raise so the caller's retry path handles them."""
+        Used by enforcement to resolve only the reseller's TARGET users (the bulk action needs
+        numeric rowids) instead of downloading the entire panel user list — far gentler on large
+        panels. Returns None if the user is absent on the panel (404) so the caller skips it; other
+        HTTP errors raise so the caller's retry path handles them.
+
+        `added_by_uuid` rides along free of charge because a queued action carries a user→owner map
+        FROZEN at queue time, and ownership moves: deleting a sub-admin in Hiddify re-parents its
+        users to the parent. Acting on the frozen map would then disable a user that now belongs to
+        somebody else entirely."""
         url = f"{panel.admin_api_base}/user/{user_uuid}/"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.get(url, headers=self._headers(panel, api_key))
@@ -203,8 +250,44 @@ class AdminApiClient(PanelClient):
         if resp.status_code >= 400:
             raise RuntimeError(f"GET user {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
-        uid = data.get("id") if isinstance(data, dict) else None
-        return int(uid) if isinstance(uid, int) else None
+        if not isinstance(data, dict):
+            return UserIdentity(None, None)
+        uid = data.get("id")
+        owner = data.get("added_by_uuid")
+        return UserIdentity(
+            panel_user_id=int(uid) if isinstance(uid, int) else None,
+            added_by_uuid=str(owner).strip().lower() if owner else None,
+        )
+
+    async def get_user_id(  # noqa: ANN001
+        self, panel, user_uuid: str, *, api_key: str | None = None
+    ) -> int | None:
+        """The numeric id alone — see `get_user_identity`."""
+        identity = await self.get_user_identity(panel, user_uuid, api_key=api_key)
+        return identity.panel_user_id if identity else None
+
+    async def admin_exists(  # noqa: ANN001
+        self, panel, admin_uuid: str, *, api_key: str | None = None
+    ) -> bool | None:
+        """Does this admin still exist on the panel? True / False (definitively gone) / None (unknown).
+
+        The three-valued answer is the point: "gone" must never be inferred from a timeout or a 500,
+        because acting on a wrong "gone" would silently cancel a real suspension. Only Hiddify's own
+        404 counts — and on `/api/` paths a rejected key aborts with **403**, not 404
+        (`redirect_to_login` → `json_abort(403)`), so a 404 cannot be our own credentials failing.
+        Authenticates with the panel key by default: asking a deleted admin about itself is exactly
+        the request that can't work."""
+        url = f"{panel.admin_api_base}/admin_user/{admin_uuid}/"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.get(url, headers=self._headers(panel, api_key))
+        except Exception:  # noqa: BLE001 — unreachable panel says nothing about the admin
+            return None
+        if resp.status_code == 404:
+            return False
+        if resp.status_code >= 400:
+            return None
+        return True
 
     async def get_user(  # noqa: ANN001
         self, panel, user_uuid: str, *, api_key: str | None = None
@@ -341,6 +424,7 @@ class AdminApiClient(PanelClient):
         action_url = f"{panel.proxy_base}/admin/user/action/"
         headers = self._headers(panel, api_key)
         headers["User-Agent"] = "invoice-system-bulk-enforcement/1"
+        key = headers["Hiddify-API-Key"]
         async with httpx.AsyncClient(
             timeout=max(self.timeout, 300.0),
             follow_redirects=False,
@@ -351,12 +435,24 @@ class AdminApiClient(PanelClient):
                 raise RuntimeError(
                     f"Hiddify bulk user page {page.status_code}: {page.text[:300]}"
                 )
+            if 300 <= page.status_code < 400:
+                # NOT a page: Hiddify bounced us to its login screen because it could not resolve
+                # the key we sent to an admin (`AdminUser.by_uuid(key) is None`) — the admin was
+                # deleted, or the uuid we hold is stale. Say that, instead of blaming the CSRF
+                # token that an empty redirect body was never going to contain.
+                raise PanelAuthError(
+                    f"Hiddify rejected the admin key {_mask_key(key)} for the bulk user page "
+                    f"({page.status_code} → {_redirect_target(page)})"
+                )
             match = re.search(
                 r'name=["\']csrf_token["\'][^>]*value=["\']([^"\']+)["\']',
                 page.text,
             )
             if match is None:
-                raise RuntimeError("Hiddify bulk user action has no CSRF token")
+                raise RuntimeError(
+                    "Hiddify bulk user action has no CSRF token (the page loaded but carries no "
+                    "action form — panel template changed?)"
+                )
             csrf_token = html.unescape(match.group(1))
             response = await client.post(
                 action_url,
@@ -370,6 +466,14 @@ class AdminApiClient(PanelClient):
             if response.status_code >= 400:
                 raise RuntimeError(
                     f"Hiddify bulk user action {response.status_code}: {response.text[:300]}"
+                )
+            if _is_login_redirect(response):
+                # Flask-Admin redirects to the list on success, so a 3xx here normally means "done".
+                # A 3xx to the LOGIN page means the session died between the two requests and the
+                # action never ran — accepting it would record an untouched batch as disabled.
+                raise PanelAuthError(
+                    f"Hiddify rejected the admin key {_mask_key(key)} on the bulk action POST "
+                    f"({response.status_code} → {_redirect_target(response)})"
                 )
 
     async def bulk_set_users_enabled(  # noqa: ANN001
@@ -475,6 +579,13 @@ class AdminApiClient(PanelClient):
             search = await client.get(list_url, params={"search": admin_uuid})
             if search.status_code >= 400:
                 raise RuntimeError(f"admin list {search.status_code}: {search.text[:200]}")
+            if 300 <= search.status_code < 400:
+                # Same trap as the bulk page: an unauthenticated page request is a 302 to the login
+                # screen, and its empty body would otherwise read as "this admin isn't in the list".
+                raise PanelAuthError(
+                    f"Hiddify rejected the admin key {_mask_key(headers['Hiddify-API-Key'])} for "
+                    f"the admin list ({search.status_code} → {_redirect_target(search)})"
+                )
             ids = re.findall(rf'{ADMIN_LIST_PATH}edit/\?[^"\']*?\bid=(\d+)', search.text)
             unique_ids = sorted(set(ids))
             if not unique_ids:
@@ -489,6 +600,11 @@ class AdminApiClient(PanelClient):
             page = await client.get(edit_url, params={"id": row_id})
             if page.status_code >= 400:
                 raise RuntimeError(f"admin edit page {page.status_code}: {page.text[:200]}")
+            if 300 <= page.status_code < 400:
+                raise PanelAuthError(
+                    f"Hiddify rejected the admin key {_mask_key(headers['Hiddify-API-Key'])} for "
+                    f"the admin edit page ({page.status_code} → {_redirect_target(page)})"
+                )
             fields = _scrape_edit_form_fields(page.text)
             if "new_password" not in fields and "csrf_token" not in fields:
                 raise RuntimeError("admin edit form not recognized (no csrf/new_password)")

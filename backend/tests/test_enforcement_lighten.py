@@ -18,6 +18,7 @@ from app.core.db import Base  # noqa: E402
 from app.models import EndUserSnapshot, Panel, Reseller  # noqa: E402
 from app.models.enums import EnforcementState  # noqa: E402
 from app.services import enforcement, settings_service  # noqa: E402
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -78,7 +79,7 @@ def test_resolves_per_target_caches_and_skips_absent(tmp_path, monkeypatch):
         async def fake_get_user_id(self, panel, user_uuid, *, api_key=None):
             looked_up.append(user_uuid)
             return {"u1": 101, "u2": 102}.get(user_uuid)  # u3 → None (404, absent)
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_get_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_get_user_id))
 
         await enforcement.queue_enforcement(s, r, dry_run=False)
         res = await enforcement.process_enforcement_queue(s, action_limit=1)
@@ -122,7 +123,7 @@ def test_cached_ids_are_never_reused_across_runs(tmp_path, monkeypatch):
         async def fake_get_user_id(self, panel, user_uuid, *, api_key=None):
             looked_up.append(user_uuid)
             return {"u1": 101, "u2": 102}.get(user_uuid)  # u3 → None (absent)
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_get_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_get_user_id))
 
         await enforcement.queue_enforcement(s, r, dry_run=False)
         res = await enforcement.process_enforcement_queue(s, action_limit=1)

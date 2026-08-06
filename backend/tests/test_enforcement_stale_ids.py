@@ -35,6 +35,7 @@ from app.models.enums import (  # noqa: E402
     EnforcementState,
     InvoiceStatus,
 )
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -117,7 +118,7 @@ def test_stale_cached_panel_user_id_is_never_reused(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
@@ -159,7 +160,7 @@ def test_bulk_write_that_missed_its_targets_fails_loudly(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
@@ -231,7 +232,7 @@ def test_each_bulk_batch_runs_under_its_owning_admins_key(tmp_path, monkeypatch)
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
@@ -473,7 +474,7 @@ def test_reassert_action_touches_no_admin_limits(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             limit_writes.append((admin_uuid, mu, mau))
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
@@ -518,7 +519,7 @@ def test_reassert_action_actually_disables_the_users(tmp_path, monkeypatch):
         async def fake_get_user(self, panel, user_uuid, *, api_key=None):
             return {"enable": False}          # the write landed
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_user", fake_get_user)
 
@@ -552,8 +553,8 @@ def test_a_normal_suspension_of_an_enforced_reseller_is_still_idempotent(tmp_pat
             touched.append("panel")
             raise AssertionError("an already-enforced reseller must not be re-suspended")
 
-        for name in ("get_user_id", "bulk_set_users_enabled", "get_admin_limits",
-                     "set_admin_limits"):
+        for name in ("get_user_identity", "bulk_set_users_enabled", "get_admin_limits",
+                     "set_admin_limits", "admin_exists"):
             monkeypatch.setattr(enforcement.AdminApiClient, name, boom)
 
         await enforcement.process_enforcement_queue(s, action_limit=5, user_chunk_size=10)

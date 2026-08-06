@@ -36,6 +36,7 @@ from app.models.enums import (  # noqa: E402
     PaymentMethod,
     PaymentStatus,
 )
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -104,7 +105,7 @@ def test_enforcement_completes_in_one_tick(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             calls.append(("set_limits", admin_uuid, mu, mau))
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
@@ -169,7 +170,7 @@ def test_enforcement_partial_on_user_chunk_failure(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             pass
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
@@ -285,7 +286,7 @@ def test_partial_restore_keeps_reseller_enforced(tmp_path, monkeypatch):
                 raise RuntimeError("panel rejected")
 
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
         res = await enforcement.queue_restore(s, r)
@@ -363,7 +364,7 @@ def test_restore_cancels_partial_disable_and_only_undoes_completed_work(
                 raise RuntimeError("panel error during disable")
             calls.append((enabled, tuple(sorted(user_ids))))
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
 
         disable = await enforcement.queue_enforcement(

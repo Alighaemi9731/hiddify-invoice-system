@@ -31,6 +31,7 @@ from app.models.enums import (  # noqa: E402
     EnforcementState,
     InvoiceStatus,
 )
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -113,7 +114,7 @@ def test_midflight_payment_reverts_suspend_without_done_overwrite(tmp_path, monk
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
@@ -187,7 +188,7 @@ def test_finalize_skips_enforced_stamp_when_invoice_paid(tmp_path, monkeypatch):
         async def fake_set_limits(self, panel, admin_uuid, mu, mau, api_key=None):
             return None
 
-        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_user_id)
+        monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_user_id))
         monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
         monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
         monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)

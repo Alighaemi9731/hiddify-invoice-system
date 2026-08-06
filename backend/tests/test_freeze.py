@@ -14,6 +14,7 @@ from app.core.db import Base  # noqa: E402
 from app.models import EndUserSnapshot, Panel, Reseller  # noqa: E402
 from app.models.enums import EnforcementState  # noqa: E402
 from app.services import enforcement, settings_service  # noqa: E402
+from tests.panel_fakes import as_identity  # noqa: E402
 
 
 def _run(coro_fn, tmp_path, name):
@@ -63,7 +64,7 @@ def _panel_sim(monkeypatch, set_calls, bulk_calls, *, start=(10, 10)):
     monkeypatch.setattr(enforcement.AdminApiClient, "get_admin_limits", fake_get_limits)
     monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_limits", fake_set_limits)
     monkeypatch.setattr(enforcement.AdminApiClient, "bulk_set_users_enabled", fake_bulk)
-    monkeypatch.setattr(enforcement.AdminApiClient, "get_user_id", fake_get_user_id)
+    monkeypatch.setattr(enforcement.AdminApiClient, "get_user_identity", as_identity(fake_get_user_id))
 
 
 async def _process(Session) -> dict:

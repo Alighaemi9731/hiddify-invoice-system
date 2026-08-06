@@ -33,9 +33,13 @@ from app.models.enums import (
 )
 from app.services import settings_service
 from app.services.invoice_engine import build_children_map, collect_descendants
-from app.services.panel_client.admin_api import AdminApiClient
+from app.services.panel_client.admin_api import (
+    AdminApiClient,
+    PanelAuthError,
+    UserIdentity,
+)
 from app.services.periods import today as tehran_today
-from app.services.presence import snapshot_present_filter
+from app.services.presence import reseller_absent, snapshot_present_filter
 
 log = logging.getLogger("enforcement")
 
@@ -86,6 +90,61 @@ def _delete_order(descendants: list[Reseller]) -> list[str]:
         depth[uuid] = d
     # Deepest first; uuid as the tie-break keeps the order stable across ticks.
     return sorted(by_uuid, key=lambda u: (-depth[u], u))
+
+
+async def _admin_is_gone(client: AdminApiClient, panel, admin_uuid: str) -> bool:  # noqa: ANN001
+    """True only when the panel DEFINITIVELY says this admin no longer exists (HTTP 404).
+
+    Unknown (timeout, 5xx, rejected key) is deliberately not "gone": cancelling a suspension
+    because a panel blinked would hand a debtor a free pass. See `AdminApiClient.admin_exists`.
+    """
+    return await client.admin_exists(panel, admin_uuid) is False
+
+
+async def _close_as_obsolete(
+    session: AsyncSession, action: EnforcementAction, reason: str
+) -> dict:
+    """Finish an action whose PREMISE disappeared — nothing to do, and nothing wrong with us.
+
+    A queued action outlives the world it was planned in: a parent can delete the very sub-admin
+    it just asked us to suspend (which is what happened on 2026-08-06), and every panel write for
+    a deleted admin then fails forever. Retrying that to exhaustion produced a red "چند تلاش
+    ناموفق" alert describing a CSRF problem that did not exist. `done` + a recorded reason is the
+    honest outcome: the work is not pending, it is moot.
+    """
+    action.status = EnforcementActionStatus.done
+    action.error = f"obsolete: {reason}"[:1000]
+    snapshot = action.snapshot or {}
+    _progress(snapshot)["obsolete_reason"] = reason
+    action.snapshot = snapshot
+    flag_modified(action, "snapshot")
+    await session.commit()
+    log.warning("enforcement action %s closed as obsolete: %s", action.id, reason)
+    return {"done": 1, "obsolete": 1}
+
+
+async def _abort_if_admin_gone(
+    session: AsyncSession, action: EnforcementAction, client: AdminApiClient,
+    panel, reseller: Reseller,  # noqa: ANN001
+) -> dict | None:
+    """Pre-flight: is the reseller this action targets still an admin on the panel?
+
+    Short-circuits every later phase at once — users, admin limits and the password lockout all
+    address the same admin, so if it is gone they can only fail, five times each.
+
+    Costs nothing on the happy path: the panel is asked ONLY when our own latest sync already
+    failed to see this admin (`reseller_absent`). That local signal is never the verdict on its
+    own — sync lag, a half-finished sync or a panel hiccup would then cancel real suspensions —
+    the panel's 404 is. Returns the step dict when the action was closed, else None.
+    """
+    if not reseller_absent(reseller, panel):
+        return None
+    if not await _admin_is_gone(client, panel, reseller.admin_uuid):
+        return None
+    return await _close_as_obsolete(
+        session, action,
+        f"reseller '{reseller.name}' no longer exists as an admin on panel '{panel.key}'",
+    )
 
 
 async def _get_admin_limits_safe(
@@ -632,14 +691,26 @@ async def _run_user_chunks(
     if to_lookup:
         sem = asyncio.Semaphore(_ID_LOOKUP_CONCURRENCY)
 
-        async def _resolve(uuid: str) -> tuple[str, int | None, str | None]:
+        async def _resolve(uuid: str) -> tuple[str, UserIdentity | None, str | None]:
             async with sem:
                 try:
-                    return uuid, await client.get_user_id(panel, uuid), None
+                    return uuid, await client.get_user_identity(panel, uuid), None
                 except Exception as exc:  # noqa: BLE001 — a single user's lookup failed
                     return uuid, None, str(exc)[:300]
 
-        for uuid, uid, err in await asyncio.gather(*[_resolve(u) for u in to_lookup]):
+        # The action's user→owner map was frozen when it was queued; the panel is the live truth.
+        # A user whose owner has moved OUTSIDE this action's subtree is no longer ours to touch —
+        # deleting a sub-admin re-parents its users to the parent, and disabling those would hit an
+        # unrelated, fully paid-up reseller's customer. Anything still inside the subtree is fair
+        # game (a reseller may shuffle users between their own sub-admins mid-flight); we simply
+        # re-point it at the owner the panel reports, so the write is scoped by the right key.
+        # uuids are compared case-insensitively project-wide — Hiddify's own storage is.
+        owned_by = {
+            str(u).lower()
+            for u in ((snapshot.get("admins") or []) + list(users_map.values()))
+            if u
+        }
+        for uuid, identity, err in await asyncio.gather(*[_resolve(u) for u in to_lookup]):
             if err is not None:
                 user_attempts[uuid] = user_attempts.get(uuid, 0) + 1
                 failed_users[uuid] = err
@@ -652,15 +723,27 @@ async def _run_user_chunks(
                     lookup_failed = True
                 continue
             failed_users.pop(uuid, None)
-            if uid is None:
+            if identity is None or identity.panel_user_id is None:
                 # 404 → user absent on the panel; skip it (we only act on present users).
                 missing_users.add(uuid)
                 done_users.add(uuid)
-            else:
-                panel_user_ids[uuid] = uid
-                row = snapshot_rows.get(uuid)
-                if row is not None:
-                    row.panel_user_id = uid  # cache durably → next time zero lookups
+                continue
+            live_owner = identity.added_by_uuid
+            if live_owner and owned_by and live_owner.lower() not in owned_by:
+                missing_users.add(uuid)
+                done_users.add(uuid)
+                progress.setdefault("users_reassigned", {})[uuid] = live_owner
+                log.warning(
+                    "action %s skips user %s: the panel now reports owner %s, outside this "
+                    "action's subtree", action.id, uuid, live_owner,
+                )
+                continue
+            if live_owner and live_owner != users_map.get(uuid):
+                users_map[uuid] = live_owner       # moved within the subtree → follow it
+            panel_user_ids[uuid] = identity.panel_user_id
+            row = snapshot_rows.get(uuid)
+            if row is not None:
+                row.panel_user_id = identity.panel_user_id  # cache durably → next time zero lookups
         # Persist resolved ids + progress so a restart resumes without re-looking-up.
         progress["users_done"] = sorted(done_users)
         progress["users_missing"] = sorted(missing_users)
@@ -701,6 +784,34 @@ async def _run_user_chunks(
             total_patched += len(chunk)
             action.error = None
         except Exception as exc:  # noqa: BLE001
+            # The panel refused the OWNING admin's key. If that admin is definitively gone, no
+            # number of retries brings it back and its users are unreachable through the scoped
+            # path — skip them for good instead of burning five ticks on a dead credential and
+            # then alarming the owner about a CSRF token. Any OTHER auth failure keeps the normal
+            # retry path: it may well be transient.
+            if (
+                isinstance(exc, PanelAuthError)
+                and owner
+                and await _admin_is_gone(client, panel, owner)
+            ):
+                for uuid in chunk:
+                    missing_users.add(uuid)
+                    done_users.add(uuid)
+                    failed_users.pop(uuid, None)
+                    progress.setdefault("users_owner_missing", {})[uuid] = owner
+                log.warning(
+                    "action %s: owning admin %s no longer exists on panel %s; skipping %d user(s)",
+                    action.id, owner, panel.key, len(chunk),
+                )
+                progress["users_done"] = sorted(done_users)
+                progress["users_missing"] = sorted(missing_users)
+                progress["users_failed"] = failed_users
+                action.affected_count = len(done_users - missing_users)
+                action.snapshot = snapshot
+                flag_modified(action, "snapshot")
+                await session.commit()
+                remaining = [u for u in remaining if u not in done_users]
+                continue
             for uuid in chunk:
                 user_attempts[uuid] = user_attempts.get(uuid, 0) + 1
                 failed_users[uuid] = str(exc)[:300]
@@ -934,6 +1045,16 @@ async def _run_admin_limits(
                 "admin %s is already at max_users=0/max_active_users=0 with no recovery snapshot; "
                 "not recording 0 as its real limits", admin_uuid,
             )
+        elif await _admin_is_gone(client, panel, admin_uuid):
+            # The admin was deleted from the panel (by its parent, typically) after this action was
+            # queued. There are no limits to zero or restore on a row that does not exist, and no
+            # retry can change that — record it like a missing admin instead of failing the action.
+            done_admins.add(admin_uuid)
+            failed_admins.pop(admin_uuid, None)
+            if admin_uuid not in progress["admins_missing"]:
+                progress["admins_missing"].append(admin_uuid)
+            log.warning(
+                "admin %s no longer exists on panel %s; skipping its limits", admin_uuid, panel.key)
         else:
             admin_attempts[admin_uuid] = admin_attempts.get(admin_uuid, 0) + 1
             failed_admins[admin_uuid] = error
@@ -1386,11 +1507,7 @@ async def _notify_owner_failed(session: AsyncSession, action: EnforcementAction)
 
         reseller = await session.get(Reseller, action.reseller_id)
         who = owner_notify.user_link(reseller) if reseller else f"#{action.reseller_id}"
-        kind = {
-            EnforcementActionType.restore: "بازگردانی",
-            EnforcementActionType.delete_admin: "حذف آبشاری",
-            EnforcementActionType.freeze: "توقف ساخت کاربر",
-        }.get(action.action, "مسدودسازی")
+        kind = _ACTION_KIND_FA.get(action.action, "مسدودسازی")
         await owner_notify.notify_owner(
             session,
             f"⛔️ {kind} خودکار برای نماینده {who} پس از چند تلاش ناموفق ماند و متوقف شد.\n"
@@ -1400,6 +1517,35 @@ async def _notify_owner_failed(session: AsyncSession, action: EnforcementAction)
         )
     except Exception:  # noqa: BLE001
         log.warning("owner failure notification failed for action %s", action.id, exc_info=True)
+
+
+_ACTION_KIND_FA = {
+    EnforcementActionType.restore: "بازگردانی",
+    EnforcementActionType.delete_admin: "حذف آبشاری",
+    EnforcementActionType.freeze: "توقف ساخت کاربر",
+}
+
+
+async def _notify_owner_obsolete(session: AsyncSession, action: EnforcementAction) -> None:
+    """Tell the owner an action became MOOT — calmly, and without an action item.
+
+    The failure alert asks for an intervention ("کلید API را بررسی کنید"). Sending that for a
+    sub-admin the reseller themself deleted sent the owner hunting a panel fault that never
+    existed. This one just states what happened."""
+    try:
+        from app.services import owner_notify
+
+        reseller = await session.get(Reseller, action.reseller_id)
+        who = owner_notify.user_link(reseller) if reseller else f"#{action.reseller_id}"
+        kind = _ACTION_KIND_FA.get(action.action, "مسدودسازی")
+        await owner_notify.notify_owner(
+            session,
+            f"ℹ️ {kind} برای نماینده {who} منتفی شد: این نماینده دیگر روی پنل وجود ندارد "
+            f"(از پنل حذف شده است).\nاقدامی لازم نیست.",
+            html=bool(reseller),
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("owner obsolete notification failed for action %s", action.id, exc_info=True)
 
 
 # ── worker actions ───────────────────────────────────────────────────────────
@@ -1473,6 +1619,9 @@ async def _process_enforcement_action(
     failed_users: dict[str, str] = dict(progress.get("users_failed") or {})
     user_attempts: dict[str, int] = dict(progress.get("user_attempts") or {})
     client = AdminApiClient()
+
+    if (obsolete := await _abort_if_admin_gone(session, action, client, panel, reseller)):
+        return obsolete
 
     action.status = EnforcementActionStatus.partial
     action.snapshot = snapshot
@@ -1681,8 +1830,16 @@ async def _process_restore_action(
         return {"failed": 1}
 
     progress = _progress(snapshot)
-    action.status = EnforcementActionStatus.partial
     client = AdminApiClient()
+
+    if (obsolete := await _abort_if_admin_gone(session, action, client, panel, reseller)):
+        # Nothing left to give back: the admin (and with it its users) is off the panel. Leaving the
+        # restore pending would retry forever and keep the reseller pinned in `enforced`.
+        reseller.enforcement_state = EnforcementState.active
+        await session.commit()
+        return obsolete
+
+    action.status = EnforcementActionStatus.partial
     descendants = await _bundle(session, reseller)
     by_uuid = {d.admin_uuid: d for d in descendants}
     # A descendant that is INDEPENDENTLY frozen/suspended (by its OWN action — e.g. its parent froze
@@ -1866,6 +2023,10 @@ async def _process_freeze_action(
     snapshot = action.snapshot or {}
     progress = _progress(snapshot)
     client = AdminApiClient()
+
+    if (obsolete := await _abort_if_admin_gone(session, action, client, panel, reseller)):
+        return obsolete
+
     descendants = await _bundle(session, reseller)
     by_uuid = {d.admin_uuid: d for d in descendants}
     # Bottom-up (leaf → root) so a child loses new-user capacity before its parent.
@@ -2237,7 +2398,7 @@ def _empty_queue_result() -> dict:
         "done": 0, "partial": 0, "failed": 0, "skipped": 0,
         "patched_users": 0, "failed_users": 0, "patched_admins": 0,
         "restored_users": 0, "restored_admins": 0, "restore_queued": 0,
-        "reverted_midflight": 0,
+        "reverted_midflight": 0, "obsolete": 0,
     }
 
 
@@ -2316,6 +2477,8 @@ async def _process_panel_queue(
         # suspension/restore is visible instead of leaving debt uncollected.
         if step.get("failed"):
             await _notify_owner_failed(session, action)
+        elif step.get("obsolete"):
+            await _notify_owner_obsolete(session, action)
         for key in result:
             if key != "picked":
                 result[key] += int(step.get(key, 0) or 0)

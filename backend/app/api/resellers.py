@@ -1,7 +1,6 @@
 """Resellers: list (with panel), detail, edit price / billing exclusion."""
 from __future__ import annotations
 
-import datetime as dt
 from collections import defaultdict
 from types import SimpleNamespace
 
@@ -34,32 +33,32 @@ from app.schemas.reseller import (
 )
 from app.services import admin_capacity, enforcement, payment_guard, pricing
 from app.services.invoice_engine import build_children_map
-from app.services.presence import snapshot_present_filter
-
-# Resellers removed from Hiddify keep their DB row for billing history but must not
-# appear in the UI.  This filter, applied to queries that JOIN Panel, keeps only
-# resellers seen in the panel's latest successful sync (or when we have no good sync yet).
-_PRESENCE_SKEW = dt.timedelta(seconds=2)
+from app.services.presence import (
+    RESELLER_PRESENCE_SKEW,
+    reseller_absent,
+    snapshot_present_filter,
+)
 
 
 def _present_filter():
-    """SQLAlchemy WHERE clause: reseller is still present on the panel."""
+    """SQLAlchemy WHERE clause: reseller is still present on the panel.
+
+    Resellers removed from Hiddify keep their DB row for billing history but must not appear in
+    the UI. Applied to queries that JOIN Panel, this keeps only resellers seen in the panel's
+    latest successful sync (or when we have no good sync yet)."""
     return or_(
         Panel.status != PanelStatus.ok,
         Panel.last_synced_at.is_(None),
         Reseller.last_seen_at.is_(None),
-        Reseller.last_seen_at >= Panel.last_synced_at - _PRESENCE_SKEW,
+        Reseller.last_seen_at >= Panel.last_synced_at - RESELLER_PRESENCE_SKEW,
     )
 
 
 def _is_absent(reseller: Reseller, panel: Panel | None) -> bool:
     """Re-check (in Python) whether a reseller is currently absent — used to guard deletion so an
-    active reseller can never be removed through the absent-only path."""
-    if panel is None or panel.status != PanelStatus.ok or panel.last_synced_at is None:
-        return False
-    if reseller.last_seen_at is None:
-        return False
-    return reseller.last_seen_at < panel.last_synced_at - _PRESENCE_SKEW
+    active reseller can never be removed through the absent-only path. Shared with enforcement,
+    which uses the same signal to decide when it is worth asking the panel to confirm."""
+    return reseller_absent(reseller, panel)
 
 
 router = APIRouter(

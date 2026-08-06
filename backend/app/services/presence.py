@@ -58,3 +58,28 @@ def snapshot_present(
     if panel_synced.tzinfo is None:
         panel_synced = panel_synced.replace(tzinfo=dt.timezone.utc)
     return user_synced >= panel_synced
+
+
+# The same question one level up: is the RESELLER (a panel admin) still on the panel? Sync stamps
+# `Reseller.last_seen_at` for every admin the panel reported, so an admin deleted from Hiddify
+# simply stops being refreshed. Unlike the user-level stamps these two clocks are written in
+# different statements, hence a small skew tolerance.
+RESELLER_PRESENCE_SKEW = dt.timedelta(seconds=2)
+
+
+def reseller_absent(reseller, panel) -> bool:  # noqa: ANN001
+    """Did the panel's latest good sync NOT report this reseller's admin?
+
+    Fails CLOSED (returns False = "still there") whenever we cannot tell: no panel, an unhealthy
+    panel, no successful sync, or a row that has never been stamped. Callers use this only as a
+    cheap local hint — deleting or cancelling anything on its word alone would act on our own
+    stale bookkeeping rather than on the panel's answer.
+    """
+    if panel is None or panel.last_synced_at is None:
+        return False
+    status = getattr(panel, "status", None)
+    if status is not None and getattr(status, "value", status) != "ok":
+        return False
+    if reseller.last_seen_at is None:
+        return False
+    return reseller.last_seen_at < panel.last_synced_at - RESELLER_PRESENCE_SKEW
