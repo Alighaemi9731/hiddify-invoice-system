@@ -391,7 +391,14 @@ async def set_enabled(
     enabled: bool,
     expected_sf_id: int | None = None,
 ) -> SubResult:
-    """Pause (disable) or resume (enable) the panel config; reflect it in the order status."""
+    """Pause (disable) or resume (enable) the panel config; reflect it in the order status.
+
+    Pausing an ARMED order also returns the reserved renewal money to the wallet. The auto-renew
+    sweep only ever fires `provisioned` orders, so an arm that survives a pause is money locked up
+    for a renewal that can never happen — the same reasoning (and the same release) as
+    `delete_subscription`. Customers can no longer pause at all, so in practice this is the shop
+    admin's pause; the release happens only after the panel actually went down, so a failed pause
+    leaves the arm exactly as it was."""
     async with session_factory() as s:
         order = await s.get(StorefrontOrder, order_id)
         if order is None or order.status not in _ACTIVE:
@@ -406,6 +413,8 @@ async def set_enabled(
             return SubResult(False, "suspended")
         uuid, api_key = order.panel_user_uuid, (reseller.admin_uuid if reseller else None)
         panel_id = panel.id if panel else None
+        sf_id = sf.id if sf else None
+        customer_id = customer.id if customer else None
     if not (panel_id and uuid):
         return SubResult(False, "error")
     try:
@@ -417,6 +426,22 @@ async def set_enabled(
     except Exception as exc:  # noqa: BLE001
         log.warning("set_user_enabled failed for order %s", order_id, exc_info=True)
         return SubResult(False, "error", message=str(exc)[:200])
+    if not enabled and sf_id is not None and customer_id is not None:
+        # Under the same per-customer lock arm/disarm take, so a concurrent arm can't slip a fresh
+        # hold past this release (and vice versa).
+        async with _customer_lock(sf_id, customer_id):
+            async with session_factory() as s:
+                o = await _order_for_update(s, order_id)
+                if o is not None:
+                    if o.autorenew_armed_at is not None:
+                        if o.autorenew_hold_txn_id is not None:
+                            await storefront_wallet.release_hold(s, o.autorenew_hold_txn_id)
+                        o.autorenew_armed_at = None
+                        o.autorenew_price_toman = None
+                        o.autorenew_hold_txn_id = None
+                    o.status = "disabled"
+                await s.commit()
+        return SubResult(True)
     async with session_factory() as s:
         o = await s.get(StorefrontOrder, order_id)
         if o is not None:

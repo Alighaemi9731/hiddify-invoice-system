@@ -208,10 +208,17 @@ def order_actions_kb(
     order_id: int, renew_price: int, *, paused: bool, is_trial: bool = False, armed: bool = False
 ) -> InlineKeyboardMarkup:
     """Customer controls for one provisioned service: the ONE-SHOT auto-renew toggle (arm reserves the
-    plan price; it fires once near exhaustion), pause/resume, delete. There is no immediate "renew now"
+    plan price; it fires once near exhaustion), resume, delete. There is no immediate "renew now"
     any more — everyone renews via auto-renew; a customer who wants MORE volume buys a new config. Free
-    trials get NO auto-renew — they're one-time (non-renewable)."""
-    toggle = ("▶️ فعال‌سازی", "sftgl") if paused else ("⏸ توقف", "sftgl")
+    trials get NO auto-renew — they're one-time (non-renewable).
+
+    PAUSE is a ONE-WAY DOOR out, never in: «▶️ فعال‌سازی» shows only while the service IS paused, and
+    the customer is never offered «⏸ توقف». Pausing gained a customer nothing — Hiddify's day-clock
+    runs off `start_date` in calendar days, so a paused service still burns its month — while it cost
+    them plenty: the button sat one mis-tap away from «🗑 حذف» with no confirmation, every expiry /
+    usage / trial sweep filters on `provisioned` so a paused customer goes silent, and an armed
+    auto-renew on a paused order could never fire. Pausing stays available to the SHOP ADMIN
+    (`sfatgl:`), who has a real use for it."""
     rows = []
     if not is_trial:
         if armed:
@@ -219,8 +226,11 @@ def order_actions_kb(
         else:
             label = f"🔁 تمدید خودکار: خاموش ({renew_price:,} تومان)"
         rows.append([InlineKeyboardButton(text=rtl(label), callback_data=f"sfauto:{order_id}")])
-    rows.append([InlineKeyboardButton(text=toggle[0], callback_data=f"{toggle[1]}:{order_id}"),
-                 InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfdel:{order_id}")])
+    last = []
+    if paused:
+        last.append(InlineKeyboardButton(text="▶️ فعال‌سازی", callback_data=f"sftgl:{order_id}"))
+    last.append(InlineKeyboardButton(text="🗑 حذف", callback_data=f"sfdel:{order_id}"))
+    rows.append(last)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

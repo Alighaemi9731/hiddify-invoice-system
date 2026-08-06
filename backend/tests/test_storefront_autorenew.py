@@ -583,3 +583,123 @@ def test_an_admin_renew_of_a_below_cost_plan_is_a_definite_refusal_not_an_ambigu
             assert event.outcome == "failed" and event.error_class == "below_cost"
         await engine.dispose()
     asyncio.run(go())
+
+
+# ─────────────────── pause is a one-way door (v1.109.0) ───────────────────
+def test_arming_a_paused_order_is_refused_and_reserves_nothing(tmp_path):
+    """A paused order was armable on the promise it would "fire once resumed", but the sweep only
+    selects `provisioned` — so the arm just sat there with the customer's money locked and no
+    renewal ever came. Arming must refuse, distinctly from `not_found` (the remedy is one tap)."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "arm_paused.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000)
+            order = await _mk_order(s, cust, plan, bot, status="disabled")
+            oid, cid, sfid = order.id, cust.id, bot.id
+        async with Session() as s:
+            res = await storefront_autorenew.arm(s, oid, expected_sf_id=sfid)
+            assert res.ok is False and res.reason == "paused"
+        assert await _wallet(Session, cid) == 100_000       # not a toman reserved
+        assert await _txn_count(Session, cid, "hold") == 0
+        async with Session() as s:
+            o = await s.get(StorefrontOrder, oid)
+            assert o.autorenew_armed_at is None and o.autorenew_hold_txn_id is None
+        # resumed → the very same arm now succeeds
+        async with Session() as s:
+            o = await s.get(StorefrontOrder, oid)
+            o.status = "provisioned"
+            await s.commit()
+        async with Session() as s:
+            assert (await storefront_autorenew.arm(s, oid, expected_sf_id=sfid)).ok
+        assert await _wallet(Session, cid) == 70_000
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_pausing_an_armed_order_returns_the_reservation(tmp_path):
+    """The other way into the stuck state: the SHOP ADMIN pauses an already-armed order. The arm can
+    never fire again, so the reservation must come back — same rule as delete."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "pause_armed.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000)
+            order = await _mk_order(s, cust, plan, bot)
+            oid, cid, sfid = order.id, cust.id, bot.id
+        async with Session() as s:
+            assert (await storefront_autorenew.arm(s, oid, expected_sf_id=sfid)).ok
+        assert await _wallet(Session, cid) == 70_000
+
+        from app.services.panel_client import admin_api as _aa
+
+        async def _noop_set(self, panel, uuid, enabled, *, api_key=None):  # noqa: ANN001, ANN002
+            return None
+        _orig = _aa.AdminApiClient.set_user_enabled
+        _aa.AdminApiClient.set_user_enabled = _noop_set
+        try:
+            res = await storefront_subscription.set_enabled(
+                Session, order_id=oid, enabled=False, expected_sf_id=sfid)
+            assert res.ok
+        finally:
+            _aa.AdminApiClient.set_user_enabled = _orig
+
+        assert await _wallet(Session, cid) == 100_000      # reservation came back
+        async with Session() as s:
+            o = await s.get(StorefrontOrder, oid)
+            assert o.status == "disabled"
+            assert o.autorenew_armed_at is None and o.autorenew_hold_txn_id is None
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_a_failed_pause_leaves_the_arm_untouched(tmp_path):
+    """The release happens only after the panel actually went down. A panel error must not cost the
+    customer their reservation while the service keeps running."""
+    async def go():
+        engine, Session = _engine_session(tmp_path, "pause_fail.db")
+        await _create_all(engine)
+        async with Session() as s:
+            _r, bot, cust, plan = await _seed(s, balance=100_000)
+            order = await _mk_order(s, cust, plan, bot)
+            oid, cid, sfid = order.id, cust.id, bot.id
+        async with Session() as s:
+            assert (await storefront_autorenew.arm(s, oid, expected_sf_id=sfid)).ok
+
+        from app.services.panel_client import admin_api as _aa
+
+        async def _boom(self, panel, uuid, enabled, *, api_key=None):  # noqa: ANN001, ANN002
+            raise RuntimeError("panel down")
+        _orig = _aa.AdminApiClient.set_user_enabled
+        _aa.AdminApiClient.set_user_enabled = _boom
+        try:
+            res = await storefront_subscription.set_enabled(
+                Session, order_id=oid, enabled=False, expected_sf_id=sfid)
+            assert res.ok is False
+        finally:
+            _aa.AdminApiClient.set_user_enabled = _orig
+
+        assert await _wallet(Session, cid) == 70_000      # still reserved
+        async with Session() as s:
+            o = await s.get(StorefrontOrder, oid)
+            assert o.status == "provisioned" and o.autorenew_armed_at is not None
+        await engine.dispose()
+    asyncio.run(go())
+
+
+def test_customer_keyboard_never_offers_pause_but_still_offers_resume():
+    """The customer-facing pause button is gone; the way OUT of a pause has to stay, or anyone the
+    shop admin pauses is stranded."""
+    from app.bot.storefront import keyboards as kb
+
+    live = kb.order_actions_kb(7, 30_000, paused=False, armed=False)
+    data = [b.callback_data for row in live.inline_keyboard for b in row]
+    assert "sftgl:7" not in data                    # no pause on a live service
+    assert "sfdel:7" in data and "sfauto:7" in data
+
+    paused = kb.order_actions_kb(7, 30_000, paused=True, armed=False)
+    pdata = [b.callback_data for row in paused.inline_keyboard for b in row]
+    assert "sftgl:7" in pdata                       # resume stays reachable
+    labels = [b.text for row in paused.inline_keyboard for b in row]
+    assert any("فعال‌سازی" in t for t in labels)
+    assert not any("توقف" in t for t in labels)

@@ -58,9 +58,13 @@ from app.services.storefront_subscription import (
 
 log = logging.getLogger("bot.storefront")
 
-# Arm is allowed on a live config (paused configs can be armed too — they'll fire once resumed and
-# near-exhaustion). Same set `renew()` treats as renewable.
-_ARMABLE = ("provisioned", "disabled")
+# Arm requires a LIVE config. A paused (`disabled`) order used to be armable on the promise that it
+# would "fire once resumed" — but the sweep selects `status == "provisioned"` only, so the arm just
+# sat there with the customer's money reserved and no renewal ever came, silently, until they thought
+# to resume. Three real orders were stuck that way. Refusing at arm time is the honest half of the
+# fix; widening the sweep to `disabled` is the WRONG half, because a renewal PATCHes `enable: True`
+# and would quietly undo a shop admin's deliberate pause.
+_ARMABLE = ("provisioned",)
 # Cap candidates processed per sweep tick (fire does panel + wallet I/O under a lock).
 _SWEEP_LIMIT = 100
 
@@ -72,7 +76,7 @@ def _now() -> dt.datetime:
 @dataclass
 class ArmResult:
     ok: bool
-    reason: str | None = None    # not_found | trial | already | insufficient | error
+    reason: str | None = None    # not_found | trial | already | insufficient | paused | error
     price: int = 0
     short_toman: int = 0
 
@@ -110,7 +114,13 @@ async def arm(
         return ArmResult(False, "not_found")   # tenant guard — never touch another shop's order
     async with _customer_lock(sf.id, customer.id):
         order = await _order_for_update(session, order_id)
-        if order is None or order.status not in _ARMABLE:
+        if order is None:
+            return ArmResult(False, "not_found")
+        if order.status == "disabled":
+            # Distinct from not_found on purpose: the customer owns a real service and the remedy is
+            # a single tap («▶️ فعال‌سازی»), so tell them that instead of a dead end.
+            return ArmResult(False, "paused")
+        if order.status not in _ARMABLE:
             return ArmResult(False, "not_found")
         if order.is_trial:
             return ArmResult(False, "trial")   # trials are one-time, never renewable

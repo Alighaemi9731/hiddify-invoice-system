@@ -1273,6 +1273,10 @@ async def _report_arm(cb: CallbackQuery, res: storefront_autorenew.ArmResult, pr
             reply_markup=kb.wallet_kb())
     elif res.reason == "trial":
         await cb.message.answer(rtl(_TRIAL_NO_RENEW))
+    elif res.reason == "paused":
+        await cb.message.answer(rtl(
+            "این سرویس هم‌اکنون متوقف است و تا وقتی متوقف بماند تمدید نمی‌شود.\n"
+            "ابتدا با «▶️ فعال‌سازی» آن را فعال کنید، سپس «تمدید خودکار» را روشن کنید."))
     elif res.reason == "below_cost":
         # The shop's pricing is broken (this plan sells under the reseller's own cost), so we
         # refuse to lock in another loss-making renewal. NEVER surface the reseller's cost to a
@@ -1374,6 +1378,9 @@ async def sf_renew_legacy(cb: CallbackQuery, bot: Bot) -> None:
 
 @storefront_router.callback_query(F.data.startswith("sftgl:"))
 async def sf_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    """RESUME only. The customer-facing pause was removed (see `kb.order_actions_kb`), but the button
+    is gone only from NEW keyboards — every «⏸ توقف» already sitting in a customer's chat history
+    still fires this exact callback, so the refusal has to live here, not just in the markup."""
     order_id = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         sf, _r, _ = await _resolve(s, bot, cb.from_user)
@@ -1384,14 +1391,16 @@ async def sf_toggle(cb: CallbackQuery, bot: Bot) -> None:
         if order is None or order.status not in ("provisioned", "disabled"):
             await cb.answer("یافت نشد.", show_alert=True)
             return
-        enable = order.status == "disabled"
+        if order.status != "disabled":
+            # An old «⏸ توقف» tap on a live service: do nothing at all, and say why.
+            await cb.answer(
+                "توقفِ سرویس از سمتِ شما امکان‌پذیر نیست؛ در صورتِ نیاز با پشتیبانیِ فروشگاه "
+                "تماس بگیرید.", show_alert=True)
+            return
         sf_id = sf.id
     res = await storefront_subscription.set_enabled(
-        SessionLocal, order_id=order_id, enabled=enable, expected_sf_id=sf_id)
-    if res.ok:
-        await cb.answer("فعال شد." if enable else "متوقف شد.", show_alert=False)
-    else:
-        await cb.answer("ناموفق بود.", show_alert=True)
+        SessionLocal, order_id=order_id, enabled=True, expected_sf_id=sf_id)
+    await cb.answer("فعال شد." if res.ok else "ناموفق بود.", show_alert=not res.ok)
 
 
 @storefront_router.callback_query(F.data.startswith("sfdel:"))
