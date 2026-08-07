@@ -456,12 +456,19 @@ async def list_customers_page(
 
 async def monthly_fee_for(session: AsyncSession, reseller: Reseller) -> int:
     """The owner's monthly storefront fee to bill THIS reseller — only when they actually have an
-    active storefront bot. Per-reseller override falls back to the global default."""
+    active storefront bot. Per-reseller override falls back to the global default.
+
+    The liveness test is the SAME predicate `active_bots` polls on (`enabled AND status ==
+    'active'`), and it must stay that way: billing rent for a shop the manager refuses to poll is
+    charging for a bot customers cannot reach. Checking `enabled` alone was the bug — nothing in
+    the backend ever writes `enabled = False`, so `revoke_bot` (status → 'revoked', token cleared)
+    left the shop looking billable forever, and a zero-usage month then MADE a whole invoice for it
+    (see the fee gate in `invoicing._generate`)."""
     if not getattr(reseller, "storefront_enabled", False):
         return 0
     bot = await get_bot_for_reseller(session, reseller.id)
-    if bot is None or not bot.enabled:
-        return 0  # enabled flag but no active bot → no fee (active-only billing)
+    if bot is None or not bot.enabled or bot.status != "active":
+        return 0  # no bot, or one that is not polled (revoked/errored) → no fee
     fee = reseller.storefront_monthly_fee_toman
     if fee is None:
         fee = await settings_service.get(session, "storefront_monthly_fee_toman", 0)

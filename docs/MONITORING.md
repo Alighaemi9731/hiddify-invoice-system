@@ -6,7 +6,7 @@
    error tracking (`app/core/errortrack.py`, surfaced in `/health` as `errors_24h` and
    the owner's daily Telegram digest), scheduler heartbeat (written to the settings
    table by the scheduler container; `/health` reports `scheduler: ok|stale` from every
-   process).
+   process), and the **storefront fleet heartbeat** (below).
 2. **Container** — compose healthchecks on all six services; `restart: unless-stopped`
    self-heals crashed containers. A stale scheduler is deliberately NOT a container
    failure (restart isn't the remedy); it surfaces as `degraded` in `/health`.
@@ -15,9 +15,32 @@
    the full public path (relay → Caddy → backend → DB), so it also validates DNS, TLS,
    and the ingress. Installed automatically by `deploy/install.sh`.
 
+## Storefront fleet heartbeat
+
+The bot container's watchdog (`app/bot/run.py`) proves only the **main** bot's session. Every
+per-reseller storefront bot could be mute — `_poll_one` swallows `getUpdates` errors and retries
+forever — while `getMe` on the main bot still succeeds, so the heartbeat file stayed fresh and the
+container kept reporting healthy. That is the 2026-07-31 silent-outage shape one layer down.
+
+So the fleet stamps its own liveness, mirroring the scheduler pattern:
+
+- `app/bot/storefront/manager.py` refreshes an in-process stamp on **every** completed `getUpdates`
+  by any bot (an empty long-poll counts — that is what reachability means) and on a successful
+  `getMe` at runner start.
+- `fleet_beacon` writes `storefront_fleet_last_heartbeat` into the settings table every 60 s, but
+  **only while the fleet is provably live**: some bot reached Telegram within 5 min, *or* there are
+  no runners at all (a shop-less install is healthy, not stale).
+- `/health` reports `storefront_fleet: ok | stale | unknown` and counts `stale` toward `degraded`.
+  `unknown` means never stamped — a just-upgraded install that has not run the new bot code yet —
+  and deliberately does **not** alert.
+- A bot stuck failing `getUpdates` logs one WARNING after 5 consecutive failures (then stays quiet
+  until it recovers), so a permanent per-bot failure reaches `errors_24h` and the daily digest
+  instead of vanishing into an unprinted debug line.
+
 ## healthwatch policy
 
-- **Failure** = unreachable/TLS-invalid/non-200, `database != ok`, or `scheduler != ok`.
+- **Failure** = unreachable/TLS-invalid/non-200, `database != ok`, `scheduler != ok`, or
+  `storefront_fleet == stale`.
 - Alerts after **3 consecutive failures** (~6 min), re-alerts at most every **6 h**,
   sends one **recovery** notice. State in `/var/lib/hiddify-healthwatch/`.
 - Log: `/var/log/hiddify-healthwatch.log` (one line per run incl. response ms;

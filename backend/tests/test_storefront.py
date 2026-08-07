@@ -990,7 +990,41 @@ def test_monthly_fee_active_only(tmp_path):
         r3, _b3, _c3 = await _seed(s, tag="3", storefront_enabled=False, with_bot=True, fee=300_000)
         assert await storefront.monthly_fee_for(s, r3) == 0
 
+        # A REVOKED bot (401 → token cleared) is excluded from `active_bots`, so customers cannot
+        # reach the shop at all. `enabled` stays True forever — nothing in the backend ever clears
+        # it — so gating on it alone billed rent on a dead shop every month.
+        r4, b4, _c4 = await _seed(s, tag="4", storefront_enabled=True, with_bot=True, fee=300_000)
+        assert await storefront.monthly_fee_for(s, r4) == 300_000
+        await storefront.mark_revoked(s, b4.id, "getMe failed: 401")
+        assert b4.enabled is True                       # the bug's premise, pinned
+        assert await storefront.monthly_fee_for(s, r4) == 0
+
+        # 'errored' (ambiguous id clash, token kept) is equally unpolled → equally unbillable.
+        r5, b5, _c5 = await _seed(s, tag="5", storefront_enabled=True, with_bot=True, fee=300_000)
+        await storefront.mark_errored(s, b5.id, "id clash")
+        assert await storefront.monthly_fee_for(s, r5) == 0
+
+        # Re-running the setup wizard revives the shop → the fee comes back.
+        b5.status = "active"
+        await s.commit()
+        assert await storefront.monthly_fee_for(s, r5) == 300_000
+
     _run(body, tmp_path, "fee.db")
+
+
+def test_monthly_fee_matches_active_bots_predicate(tmp_path):
+    """The fee predicate and the polling predicate must never drift apart: a shop is billable
+    exactly when the manager is willing to poll it."""
+    async def body(s):
+        r, bot, _c = await _seed(s, tag="1", storefront_enabled=True, with_bot=True, fee=300_000)
+        for status in ("active", "errored", "revoked"):
+            bot.status = status
+            await s.commit()
+            polled = {b.id for b in await storefront.active_bots(s)}
+            billed = await storefront.monthly_fee_for(s, r) > 0
+            assert billed is (bot.id in polled), status
+
+    _run(body, tmp_path, "fee_parity.db")
 
 
 # ── v1.44.0: atomic purchase, reaper, subscription lifecycle, retention ──────────

@@ -18,7 +18,9 @@ network blip can never permanently disable a healthy bot. The handler resolves t
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
+import time
 from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher
@@ -29,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from app.bot import rtl_middleware
 from app.core.db import SessionLocal
 from app.models import StorefrontBot
-from app.services import storefront
+from app.services import settings_service, storefront
 
 log = logging.getLogger("bot.storefront")
 
@@ -39,6 +41,26 @@ _LONGPOLL_TIMEOUT = 25    # getUpdates long-poll seconds
 _POLL_BACKOFF = 3         # seconds to wait after a getUpdates error (e.g. a brief 409 on token change)
 _UNAUTHORIZED_LIMIT = 3   # consecutive 401s before a mid-run revoked token is marked errored
 _HANDLER_CONCURRENCY = 32  # max in-flight update handlers PER storefront bot (backpressure)
+
+# ── fleet liveness ────────────────────────────────────────────────────────────────
+# The main bot's watchdog (`app/bot/run.py`) proves only the MAIN bot's session. Every storefront
+# bot could be mute — `_poll_one` swallows getUpdates errors and retries forever at debug level —
+# while the main bot answers `getMe` fine, so the heartbeat file stayed fresh and the container kept
+# reporting «healthy». That is the 2026-07-31 silent-outage shape, one layer down. So the fleet
+# stamps its OWN heartbeat into the settings table (same pattern as `scheduler_last_heartbeat`) and
+# `/health` reports it, which puts it in front of deploy/healthwatch.sh.
+FLEET_HEARTBEAT_KEY = "storefront_fleet_last_heartbeat"
+_FLEET_STALE_SECONDS = 300.0   # a healthy fleet proves a round-trip every ≤_LONGPOLL_TIMEOUT
+_FLEET_BEACON_SECONDS = 60
+_FLEET_ALERT_EVERY = 600.0     # throttle the "fleet is mute" ERROR (else a day-long outage logs
+                               # 1440 identical rows into errortrack and the owner's daily digest)
+_POLL_FAIL_ALERT_AFTER = 5     # consecutive getUpdates failures before ONE warning (~15s of them)
+
+# Monotonic stamp of the last PROVEN Telegram round-trip by ANY storefront bot. A successful
+# long-poll counts even when it returns zero updates — that is exactly what "the fleet can reach
+# Telegram" means, and it keeps a quiet shop from looking dead.
+_last_fleet_ok = time.monotonic()
+_last_fleet_alert: float | None = None   # monotonic; None = not currently alerting
 
 
 @dataclass
@@ -53,6 +75,54 @@ class _Runner:
 _dp: Dispatcher | None = None
 _active: dict[int, _Runner] = {}          # reseller_id → its running poller
 _reconcile_lock = asyncio.Lock()          # serialize reconcile (loop tick vs. setup-wizard call)
+
+
+def mark_fleet_ok() -> None:
+    """Record a proven Telegram round-trip by some storefront bot."""
+    global _last_fleet_ok
+    _last_fleet_ok = time.monotonic()
+
+
+def fleet_silent_for() -> float:
+    """Seconds since any storefront bot last reached Telegram."""
+    return time.monotonic() - _last_fleet_ok
+
+
+def fleet_is_live() -> bool:
+    """Whether the fleet counts as healthy right now.
+
+    An install with NO storefront bots running is healthy, not stale — otherwise a fresh
+    deployment (or one whose resellers simply have no shops) would alarm forever.
+    """
+    return not _active or fleet_silent_for() < _FLEET_STALE_SECONDS
+
+
+async def fleet_beacon() -> None:
+    """Stamp the fleet heartbeat while the fleet is provably alive; go silent when it isn't.
+
+    Deliberately shaped like `run.py`'s `_liveness_beacon`: the stamp is written only on PROOF, so
+    a wedged fleet decays into `storefront_fleet: stale` in /health rather than riding on a live
+    event loop. Never raises — liveness reporting must not be able to kill the manager.
+    """
+    global _last_fleet_alert
+    while True:
+        try:
+            if fleet_is_live():
+                _last_fleet_alert = None
+                async with SessionLocal() as session:
+                    await settings_service.set_value(
+                        session, FLEET_HEARTBEAT_KEY,
+                        dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
+            else:
+                now = time.monotonic()
+                if _last_fleet_alert is None or now - _last_fleet_alert >= _FLEET_ALERT_EVERY:
+                    _last_fleet_alert = now
+                    log.error(
+                        "storefront fleet silent for %.0fs across %d running bot(s) — "
+                        "reporting stale", fleet_silent_for(), len(_active))
+        except Exception:  # noqa: BLE001
+            log.exception("storefront fleet beacon failed")
+        await asyncio.sleep(_FLEET_BEACON_SECONDS)
 
 
 def _dispatcher() -> Dispatcher:
@@ -107,6 +177,7 @@ async def _poll_one(
     allowed = dp.resolve_used_update_types()
     offset: int | None = None
     unauthorized = 0
+    consecutive_errors = 0
     while True:
         try:
             updates = await bot.get_updates(
@@ -126,10 +197,24 @@ async def _poll_one(
             await asyncio.sleep(_POLL_BACKOFF)
             continue
         except Exception as exc:  # noqa: BLE001 — 409 during a token-change overlap, network blips, …
-            log.debug("storefront getUpdates error: %s", exc)
+            # A one-off stays at debug (these are routine). A PERSISTENT failure used to be
+            # invisible: the loop retried forever at a level production never prints, so a bot that
+            # never recovered looked identical to one that did. Warn ONCE per outage episode — that
+            # reaches errors_24h and the owner's daily digest — and stay quiet until it recovers.
+            consecutive_errors += 1
+            if consecutive_errors == _POLL_FAIL_ALERT_AFTER:
+                log.warning(
+                    "storefront bot row %s: %d consecutive getUpdates failures, still retrying: %s",
+                    row_id, consecutive_errors, exc)
+            else:
+                log.debug("storefront getUpdates error: %s", exc)
             await asyncio.sleep(_POLL_BACKOFF)
             continue
+        if consecutive_errors >= _POLL_FAIL_ALERT_AFTER:
+            log.info("storefront bot row %s recovered after %d failures", row_id, consecutive_errors)
         unauthorized = 0
+        consecutive_errors = 0
+        mark_fleet_ok()   # a completed long-poll — even an empty one — proves this bot reaches Telegram
         for update in updates:
             offset = update.update_id + 1
             # F13: acquire a concurrency slot BEFORE creating the task. When all _HANDLER_CONCURRENCY
@@ -212,6 +297,10 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
             log.warning(
                 "storefront bot row %s id persist failed (transient, will retry): %s", row_id, exc)
             return
+    # A successful getMe is proof too, and it matters most here: a process that ran a long time with
+    # ZERO shops carries a stale `_last_fleet_ok`, so the very first bot to start would otherwise be
+    # reported stale until its first long-poll returned.
+    mark_fleet_ok()
     sem = asyncio.Semaphore(_HANDLER_CONCURRENCY)
     handler_tasks: set[asyncio.Task[None]] = set()
     task = asyncio.create_task(_poll_one(bot, row_id, sem, handler_tasks))

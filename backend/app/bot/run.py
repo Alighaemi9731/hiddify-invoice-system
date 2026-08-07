@@ -199,12 +199,16 @@ async def main() -> None:
     # Run the owner/reseller main bot AND the per-reseller storefront-bot manager (which polls every
     # active reseller storefront bot) concurrently in this one process. Each runs under a supervisor so
     # an unexpected crash in one self-restarts WITHOUT cancelling the other.
-    from app.bot.storefront.manager import run_manager
+    from app.bot.storefront.manager import fleet_beacon, run_manager
 
     await asyncio.gather(
         _supervise(_main_bot_loop, "main-bot-loop"),
         _supervise(run_manager, "storefront-manager"),
         _supervise(_liveness_beacon, "liveness-beacon"),
+        # The beacon above proves only the MAIN bot. This one reports the storefront fleet's own
+        # liveness into the settings table (→ /health → healthwatch), so a mute fleet behind a
+        # healthy main bot can no longer pass for a healthy container.
+        _supervise(fleet_beacon, "storefront-fleet-beacon"),
     )
 
 

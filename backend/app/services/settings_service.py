@@ -318,6 +318,10 @@ DEFS: list[SettingDef] = [
     # for the daily digest's "new tracked errors" section.
     SettingDef("scheduler_last_heartbeat", "", False, "general"),
     SettingDef("error_digest_last_ts", "", False, "general"),
+    # The storefront fleet's own liveness stamp (written ~every 60s by the bot process while some
+    # storefront bot provably reaches Telegram). The scheduler heartbeat above says nothing about
+    # the ~151 shop bots, and neither does the main bot's watchdog.
+    SettingDef("storefront_fleet_last_heartbeat", "", False, "general"),
     # Deployment (Phase 2): domain + automatic HTTPS, applied by the installer.
     SettingDef("server_domain", "", False, "deploy"),
     SettingDef("https_enabled", False, False, "deploy"),
@@ -346,7 +350,7 @@ _DEF_BY_KEY = {d.key: d for d in DEFS}
 _API_READ_ONLY = {
     "owner_chat_id", "setup_done", "toman_per_usdt_auto", "toman_per_usdt_auto_at",
     "ton_toman_auto", "avax_toman_auto", "last_backup_at",
-    "scheduler_last_heartbeat", "error_digest_last_ts",
+    "scheduler_last_heartbeat", "error_digest_last_ts", "storefront_fleet_last_heartbeat",
 }
 # Bounded positive-integer option lists (deduped + sorted) — the bot user-creation menus.
 _POSITIVE_INT_LISTS = {

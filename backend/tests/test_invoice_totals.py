@@ -7,7 +7,9 @@ totals computation (`_compute_totals`/`_write_lines`):
 - a zero-usage month still bills the flat storefront fee (fee-only invoice) and that
   fee-only draft survives regeneration's reconciliation;
 - persist and recompute produce identical figures for identical inputs;
-- zero usage + zero fee is still skipped.
+- zero usage + zero fee is still skipped;
+- a shop that is not polled (revoked/errored) is not billed rent at all, so a zero-usage
+  month for a dead shop creates NO invoice and a recompute drops the fee.
 """
 import asyncio
 import datetime as dt
@@ -28,7 +30,7 @@ from app.models import (  # noqa: E402
     Reseller,
     StorefrontBot,
 )
-from app.services import invoicing  # noqa: E402
+from app.services import invoicing, storefront  # noqa: E402
 from app.services.periods import Period  # noqa: E402
 
 PERIOD = Period(dt.date(2026, 6, 1), dt.date(2026, 6, 30))
@@ -50,7 +52,7 @@ def _run(coro_fn, tmp_path, name):
     asyncio.run(go())
 
 
-async def _seed(s, *, users_gb=(), fee=FEE, with_bot=True):
+async def _seed(s, *, users_gb=(), fee=FEE, with_bot=True, bot_status="active"):
     now = dt.datetime.now(dt.timezone.utc)
     p = Panel(key="p1", host="p1.invalid", proxy_path_enc=crypto.encrypt("x"),
               owner_uuid="o", last_synced_at=now)
@@ -65,7 +67,7 @@ async def _seed(s, *, users_gb=(), fee=FEE, with_bot=True):
     if with_bot:
         s.add(StorefrontBot(
             reseller_id=r.id, panel_id=p.id, bot_token_enc=crypto.encrypt("123:abc") or "",
-            bot_telegram_id=991, enabled=True,
+            bot_telegram_id=991, enabled=True, status=bot_status,
         ))
     for i, gb in enumerate(users_gb):
         s.add(EndUserSnapshot(
@@ -156,6 +158,42 @@ def test_persist_and_recompute_agree(tmp_path):
         assert before == after
 
     _run(body, tmp_path, "t4.db")
+
+
+def test_dead_shop_zero_usage_creates_no_invoice(tmp_path):
+    """A shop whose token was revoked is not polled, so it can't sell — and a zero-usage month
+    must NOT manufacture a rent-only invoice for it. Gating the fee on `enabled` alone did exactly
+    that: `enabled` is never cleared, so the dead shop stayed billable and the fee pushed it past
+    the zero-usage skip into a real, deliverable, enforceable invoice."""
+    async def body(s):
+        p, r = await _seed(s, users_gb=(), bot_status="revoked")
+        summary = await invoicing.generate_invoices(s, PERIOD, panel_id=p.id)
+        assert summary.created == 0 and summary.zero_skipped == 1
+        assert await _invoice_for(s, r.id) is None
+
+    _run(body, tmp_path, "t6.db")
+
+
+def test_recompute_drops_fee_for_revoked_shop(tmp_path):
+    """The fee is evaluated at call time, so «بازمحاسبه از روی پنل» on an invoice issued while the
+    shop was alive drops the rent once the shop is dead — the behaviour `_compute_totals`'s
+    docstring always promised but could never reach while `enabled` was the only gate."""
+    async def body(s):
+        p, r = await _seed(s, users_gb=(10,))
+        await invoicing.generate_invoices(s, PERIOD, panel_id=p.id)
+        inv = await _invoice_for(s, r.id)
+        assert float(inv.amount_toman) == 10 * 1000 + FEE
+
+        bot = (await s.execute(select(StorefrontBot))).scalars().one()
+        await storefront.mark_revoked(s, bot.id, "getMe failed: 401")
+
+        await invoicing.recompute_invoice(s, inv, sync_first=False)
+        await s.refresh(inv)
+        assert float(inv.amount_toman) == 10 * 1000          # usage only, rent gone
+        assert not [ln for ln in await _lines_for(s, inv.id)
+                    if str(ln.end_user_uuid).startswith("storefront_fee_")]
+
+    _run(body, tmp_path, "t7.db")
 
 
 def test_zero_usage_zero_fee_still_skipped(tmp_path):

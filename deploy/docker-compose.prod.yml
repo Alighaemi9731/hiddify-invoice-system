@@ -17,10 +17,15 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
-# Memory caps protect the (small, ~2 GiB) host from ONE runaway container taking the
-# whole box down with it — normal total usage is ~0.5 GiB, so these are generous
-# ceilings, not budgets. An OOM-killed container self-heals via `restart: unless-stopped`;
-# a host-level OOM can kill dockerd or Postgres instead.
+# Memory caps protect the host from ONE runaway container taking the whole box down with it —
+# they are generous ceilings, not budgets. An OOM-killed container self-heals via
+# `restart: unless-stopped`; a host-level OOM can kill dockerd or Postgres instead.
+#
+# Measured on the production host (2026-08-07): 3815 MiB RAM + 2 GiB swap, containers using
+# ~1.1 GiB in total (caddy 12 · scheduler 326 · bot 369 · backend 206 · db 192 · frontend 4).
+# The caps below sum to 3264 MiB, which stays under RAM on purpose — the sum must never exceed
+# the host, or a simultaneous spike trades a self-healing container OOM for a host OOM that can
+# take Postgres or dockerd with it. Re-check this arithmetic before raising any cap.
 
 services:
   db:
@@ -117,7 +122,12 @@ services:
     logging: *default-logging
     # One process polls the main bot AND every storefront bot (151 and growing), and it sat at
     # 366/512 MB — close enough to the cap that one busy broadcast would OOM the WHOLE fleet.
-    mem_limit: 768m
+    # Raised again to 1024m: measured ~1.8 MB of resident state per bot (Bot + aiohttp session +
+    # poll task), so 768m would run out around ~350 shops. This buys room to ~500 while keeping
+    # the cap total under host RAM. Sharding the fleet across containers is the answer past that,
+    # NOT a bigger cap — but it needs token-ownership enforcement first, or the 409 double-delivery
+    # bug documented in app/bot/storefront/manager.py comes back.
+    mem_limit: 1024m
     env_file: ../.env
     environment:
       POSTGRES_HOST: db

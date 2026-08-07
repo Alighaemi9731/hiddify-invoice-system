@@ -9,7 +9,7 @@
 # on a systemd timer, and notifies the owner's Telegram directly via the Bot API.
 #
 # Checks per run:  HTTPS reachability + TLS validity, /health JSON (database +
-# scheduler), /api/info version, response time.
+# scheduler + storefront bot fleet), /api/info version, response time.
 # Policy:  alert after ALERT_AFTER consecutive failures (default 3 → ~6 min at the
 # 2-min timer); re-alert at most every REALERT_HOURS; one recovery notice when healthy
 # again. State survives reboots in $STATE_DIR. Exit 0 = healthy, 1 = failing.
@@ -83,7 +83,15 @@ if [ $RC -eq 0 ]; then
   case "$BODY" in
     *'"database":"ok"'*)
       case "$BODY" in
-        *'"scheduler":"ok"'*) STATUS="ok" ;;
+        *'"scheduler":"ok"'*)
+          # The storefront fleet reports its own liveness: the main bot's watchdog proves only the
+          # MAIN bot, so all ~151 shop bots can be mute while the container looks healthy. Match
+          # ONLY the explicit "stale" — `unknown` (never stamped, e.g. right after an upgrade) and
+          # a backend too old to emit the key must not raise an alarm.
+          case "$BODY" in
+            *'"storefront_fleet":"stale"'*) STATUS="degraded" DETAIL="storefront-fleet-stale" ;;
+            *) STATUS="ok" ;;
+          esac ;;
         *) STATUS="degraded" DETAIL="scheduler-not-ok" ;;
       esac ;;
     *) STATUS="degraded" DETAIL="database-not-ok" ;;

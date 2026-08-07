@@ -111,6 +111,50 @@ def test_health_settings_failure_degrades_not_503(monkeypatch):
     assert result["database"] == "ok"
 
 
+def _with_keys(monkeypatch, stamps: dict) -> None:
+    """Per-key heartbeat stamps — `_with_scheduler` hands the same value to every key."""
+    monkeypatch.setattr(meta, "SessionLocal", lambda: _Session())
+    monkeypatch.setattr(meta, "settings", SimpleNamespace(run_scheduler=True))
+
+    async def _get(_session, key, default=None):
+        return stamps.get(key, "") or default
+
+    monkeypatch.setattr(settings_service, "get", _get)
+
+
+def test_health_reports_storefront_fleet(monkeypatch):
+    _with_keys(monkeypatch, {
+        "scheduler_last_heartbeat": _stamp(1),
+        "storefront_fleet_last_heartbeat": _stamp(1),
+    })
+    result = asyncio.run(meta.health())
+    assert result["status"] == "ok"
+    assert result["storefront_fleet"] == "ok"
+
+
+def test_health_degrades_when_only_the_storefront_fleet_is_stale(monkeypatch):
+    """The exact blind spot this signal exists for: scheduler fine, main bot fine, shops mute."""
+    _with_keys(monkeypatch, {
+        "scheduler_last_heartbeat": _stamp(1),
+        "storefront_fleet_last_heartbeat": _stamp(30),
+    })
+    result = asyncio.run(meta.health())
+    assert result["status"] == "degraded"
+    assert result["scheduler"] == "ok"
+    assert result["storefront_fleet"] == "stale"
+    # deploy/smoke.sh greps '"database":"ok"' — a mute fleet must never break it.
+    assert result["database"] == "ok"
+
+
+def test_health_never_stamped_fleet_is_unknown_not_degraded(monkeypatch):
+    """A just-upgraded install has not run the new bot code yet. Calling that `stale` would fire a
+    healthwatch alert on every first deploy, which trains the owner to ignore the alert."""
+    _with_keys(monkeypatch, {"scheduler_last_heartbeat": _stamp(1)})
+    result = asyncio.run(meta.health())
+    assert result["status"] == "ok"
+    assert result["storefront_fleet"] == "unknown"
+
+
 def test_health_reports_error_counter(monkeypatch):
     monkeypatch.setattr(meta, "SessionLocal", lambda: _Session())
     monkeypatch.setattr(meta.errortrack, "recent_total", lambda: 7)
