@@ -30,11 +30,13 @@ from app.schemas.portal_storefront import (
     CustomerMetricsOut,
     DailySalesPointOut,
     DashboardRangeOut,
+    FinancePeriodOut,
     PanelHealthOut,
     PendingTopupsOut,
     SalesBucketOut,
     SalesPeriodOut,
     StorefrontDashboardOut,
+    StorefrontFinanceOut,
     StorefrontHealthOut,
     StorefrontPanelOut,
     StorefrontResellerOut,
@@ -42,6 +44,8 @@ from app.schemas.portal_storefront import (
     TopPlanOut,
     TrialConversionOut,
 )
+from app.services import periods, pricing, storefront_pricing
+from app.services.invoice_engine import _excluded
 from app.services.storefront_expiry import _days_left
 
 TEHRAN = ZoneInfo("Asia/Tehran")
@@ -336,6 +340,159 @@ async def _operation_states(session: AsyncSession, storefront_id: int) -> dict[s
         if state in counts:
             counts[state] = int(count)
     return counts
+
+
+FINANCE_MONTH_LIMIT = 36
+
+
+class _FinanceAcc:
+    """Mutable per-month accumulator; converted to a DTO once both scans are folded in."""
+
+    __slots__ = ("purchases", "renewals", "gb_sold", "gb_free", "gross", "reversals", "unresolved")
+
+    def __init__(self) -> None:
+        self.purchases = 0
+        self.renewals = 0
+        self.gb_sold = 0.0
+        self.gb_free = 0.0
+        self.gross = 0
+        self.reversals = 0
+        self.unresolved = 0
+
+
+def _finance_out(label: str, acc: _FinanceAcc, cost_per_gb: int) -> FinancePeriodOut:
+    billable = acc.gb_sold - acc.gb_free
+    cost = int(round(billable * cost_per_gb))
+    net = acc.gross - acc.reversals
+    return FinancePeriodOut(
+        label=label,
+        purchases=acc.purchases,
+        renewals=acc.renewals,
+        gb_sold=acc.gb_sold,
+        gb_free=acc.gb_free,
+        gb_billable=billable,
+        cost_toman=cost,
+        gross_sales_toman=acc.gross,
+        reversals_toman=acc.reversals,
+        net_sales_toman=net,
+        profit_toman=net - cost,
+        unresolved_ops=acc.unresolved,
+    )
+
+
+async def finance(
+    session: AsyncSession, access: StorefrontAccess, *, month_limit: int = FINANCE_MONTH_LIMIT
+) -> StorefrontFinanceOut:
+    """The shop's own profit and loss: quota sold through the bot, what it costs the reseller on
+    the owner's invoice, what the bot collected, and the difference.
+
+    Every month with activity is returned in ONE payload (newest first) plus an all-time `totals`,
+    so the page switches months client-side without a refetch.  Both scans bucket in Python by
+    Tehran calendar month — the same reason `_daily_sales` does: SQLite and Postgres truncate dates
+    differently and the boundary is Tehran-local, never UTC.
+    """
+    cost_per_gb = await storefront_pricing.cost_per_gb(session, access.reseller)
+    # A reseller we never invoice has no cost, whatever their nominal price per GB says.
+    effective_cost = 0 if access.reseller.exclude_from_billing else int(cost_per_gb)
+    free_threshold = await pricing.get_free_threshold_gb(session)
+    excluded_sizes = await pricing.get_excluded_usage_gb(session)
+
+    months: dict[str, _FinanceAcc] = {}
+
+    def bucket(when: dt.datetime) -> _FinanceAcc:
+        label = periods.to_local_date(when).strftime("%Y-%m")
+        acc = months.get(label)
+        if acc is None:
+            acc = months[label] = _FinanceAcc()
+        return acc
+
+    # ── scan A: quota sold ──────────────────────────────────────────────────────────────────
+    # The purchase path claims its operation with only a plan_id, and `claim` overwrites what
+    # `reserve` stored with its 0 defaults — so `StorefrontOperation.gb` is 0 on every historical
+    # purchase, while renewals carry the real figure.  Fall back through the plan BEFORE the order:
+    # `StorefrontOrder.gb` is rewritten in place by each renewal (despite its docstring claiming it
+    # snapshots the purchase), so it is the less faithful of the two.  Trials need no filter — a
+    # trial grant never creates an operation at all.
+    resolved_gb = func.coalesce(
+        func.nullif(StorefrontOperation.gb, 0), StorefrontPlan.gb, StorefrontOrder.gb
+    )
+    op_rows = (await session.execute(
+        select(StorefrontOperation.created_at, StorefrontOperation.op_type, resolved_gb)
+        .select_from(StorefrontOperation)
+        .outerjoin(StorefrontPlan, StorefrontPlan.id == StorefrontOperation.plan_id)
+        .outerjoin(
+            StorefrontOrder,
+            StorefrontOrder.id == func.coalesce(
+                StorefrontOperation.order_id, StorefrontOperation.result_order_id
+            ),
+        )
+        .where(
+            StorefrontOperation.storefront_bot_id == access.shop.id,
+            StorefrontOperation.status == "done",
+            StorefrontOperation.op_type.in_(("purchase", "renewal")),
+        )
+    )).all()
+
+    for created_at, op_type, gb in op_rows:
+        acc = bucket(created_at)
+        if op_type == "renewal":
+            acc.renewals += 1
+        else:
+            acc.purchases += 1
+        quota = float(gb or 0)
+        if quota <= 0:
+            acc.unresolved += 1
+            continue
+        acc.gb_sold += quota
+        # The invoice's own free-test predicate, so this tracks `free_under_gb` when the owner
+        # changes it instead of hard-coding "1 GB".
+        if _excluded(quota, excluded_sizes, free_threshold):
+            acc.gb_free += quota
+
+    # ── scan B: money collected ─────────────────────────────────────────────────────────────
+    # Bucketed on `decided_at`, not `created_at`: auto-renew debits the wallet at ARM time and
+    # `settle_hold` relabels that same row into a `purchase` when the renewal fires, leaving
+    # `created_at` on the arm date.  Bucketing on it would book a hold armed in March and fired in
+    # April as revenue in March against its cost in April — wrong in both months.  `charge_purchase`
+    # stamps `decided_at` too, so both paths agree.
+    txn_rows = (await session.execute(
+        select(
+            func.coalesce(StorefrontWalletTxn.decided_at, StorefrontWalletTxn.created_at),
+            StorefrontWalletTxn.kind,
+            StorefrontWalletTxn.amount_toman,
+        ).where(
+            StorefrontWalletTxn.storefront_bot_id == access.shop.id,
+            StorefrontWalletTxn.status == "done",
+            StorefrontWalletTxn.kind.in_(("purchase", "refund", "renew_reversal")),
+        )
+    )).all()
+
+    for when, kind, amount in txn_rows:
+        value = int(amount or 0)
+        if kind == "purchase" and value < 0:
+            bucket(when).gross += -value
+        elif kind in ("refund", "renew_reversal") and value > 0:
+            bucket(when).reversals += value
+
+    totals = _FinanceAcc()
+    for acc in months.values():
+        totals.purchases += acc.purchases
+        totals.renewals += acc.renewals
+        totals.gb_sold += acc.gb_sold
+        totals.gb_free += acc.gb_free
+        totals.gross += acc.gross
+        totals.reversals += acc.reversals
+        totals.unresolved += acc.unresolved
+
+    # Truncate the OUTPUT list, never the queries — a cutoff predicate would quietly stop `totals`
+    # from being all-time.
+    ordered = sorted(months.items(), key=lambda item: item[0], reverse=True)[:month_limit]
+    return StorefrontFinanceOut(
+        cost_per_gb_toman=effective_cost,
+        excluded_below_gb=float(free_threshold),
+        months=[_finance_out(label, acc, effective_cost) for label, acc in ordered],
+        totals=_finance_out("", totals, effective_cost),
+    )
 
 
 async def dashboard(

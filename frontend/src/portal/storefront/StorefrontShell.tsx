@@ -23,8 +23,9 @@ export default function StorefrontShell() {
             : location.pathname.endsWith("/topups") ? "topups"
               : location.pathname.endsWith("/credits") ? "credits"
                 : location.pathname.endsWith("/campaigns") ? "campaigns"
-                  : location.pathname.includes("/customers") ? "customers"
-                    : "dashboard";
+                  : location.pathname.endsWith("/finance") ? "finance"
+                    : location.pathname.includes("/customers") ? "customers"
+                      : "dashboard";
 
   // Pending top-up count drives the «شارژها» tab badge (shared cache with the dashboard + top-ups pages).
   const range = currentTehranMonthRange();
@@ -105,6 +106,7 @@ export default function StorefrontShell() {
             sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
           >
             <Tab value="dashboard" label="داشبورد فروش" />
+            <Tab value="finance" label="گزارش مالی" />
             <Tab value="plans" label="پلن‌ها" />
             <Tab value="customers" label="مشتریان" />
             <Tab value="topups" label={<ShellTabBadge text="شارژها" count={pendingTopups} />} />

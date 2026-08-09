@@ -30,6 +30,7 @@ import type {
   StorefrontChannel,
   StorefrontCustomerPreview,
   StorefrontDashboard,
+  StorefrontFinance,
   StorefrontHealth,
   StorefrontManagers,
   StorefrontPlan,
@@ -54,6 +55,7 @@ export const storefrontQueryKeys = {
   dashboard: (shopId: number, from: string, to: string) =>
     ["portal-storefronts", shopId, "dashboard", from, to] as const,
   health: (shopId: number) => ["portal-storefronts", shopId, "health"] as const,
+  finance: (shopId: number) => ["portal-storefronts", shopId, "finance"] as const,
   plans: (shopId: number) => ["portal-storefronts", shopId, "plans"] as const,
   planHistory: (shopId: number, planId: number) =>
     ["portal-storefronts", shopId, "plans", planId, "history"] as const,
@@ -115,6 +117,11 @@ export const getStorefrontDashboard = (shopId: number, from: string, to: string)
   portalApi
     .get(`/api/portal/storefronts/${shopId}/dashboard`, { params: { from, to } })
     .then((response) => response.data as StorefrontDashboard);
+
+export const getStorefrontFinance = (shopId: number) =>
+  portalApi
+    .get(`/api/portal/storefronts/${shopId}/finance`)
+    .then((response) => response.data as StorefrontFinance);
 
 export const getStorefrontHealth = (shopId: number) =>
   portalApi

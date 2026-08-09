@@ -26,6 +26,7 @@ const StorefrontCustomerDetailPage = lazy(() => import("./storefront/CustomerDet
 const StorefrontTopupsPage = lazy(() => import("./storefront/TopupsPage"));
 const StorefrontCreditsPage = lazy(() => import("./storefront/StorefrontCreditsPage"));
 const StorefrontCampaignsPage = lazy(() => import("./storefront/StorefrontCampaignsPage"));
+const StorefrontFinancePage = lazy(() => import("./storefront/StorefrontFinancePage"));
 
 function RequirePortalAuth({ children }: { children: ReactNode }) {
   const { authed, loading } = usePortalAuth();
@@ -65,6 +66,7 @@ export default function PortalApp() {
           <Route path="/portal/storefront" element={<StorefrontIndexPage />} />
           <Route path="/portal/storefront/:shopId" element={<StorefrontShell />}>
             <Route index element={<StorefrontDashboardPage />} />
+            <Route path="finance" element={<StorefrontFinancePage />} />
             <Route path="plans" element={<StorefrontPlansPage />} />
             <Route path="customers" element={<StorefrontCustomersPage />} />
             <Route path="customers/:customerId" element={<StorefrontCustomerDetailPage />} />

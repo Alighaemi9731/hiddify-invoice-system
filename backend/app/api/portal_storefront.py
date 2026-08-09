@@ -39,6 +39,7 @@ from app.schemas.portal_storefront import (
     StorefrontDashboardOut,
     StorefrontDirectMessageBody,
     StorefrontEnabledBody,
+    StorefrontFinanceOut,
     StorefrontHealthOut,
     StorefrontManagerBody,
     StorefrontManagerOut,
@@ -75,6 +76,7 @@ from app.services import (
     storefront_admin,
     storefront_cursor,
     storefront_customers,
+    storefront_pricing,
     storefront_provision,
     storefront_reporting,
 )
@@ -302,7 +304,8 @@ async def storefronts(
     default_price = await pricing.get_default_price_per_gb(session)
     return [
         storefront_reporting.storefront_summary(
-            access, cost_per_gb=int(access.reseller.price_per_gb or default_price))
+            access,
+            cost_per_gb=storefront_pricing.cost_per_gb_with_default(access.reseller, default_price))
         for access in owned
     ]
 
@@ -334,6 +337,15 @@ async def storefront_dashboard(
 ) -> StorefrontDashboardOut:
     day_from, day_to = _dashboard_dates(from_date, to_date)
     return await storefront_reporting.dashboard(session, access, day_from, day_to)
+
+
+@router.get("/{shop_id}/finance", response_model=StorefrontFinanceOut)
+async def storefront_finance(
+    access: StorefrontAccess = Depends(get_storefront_access),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontFinanceOut:
+    """Every month with activity in one payload, so the page switches months with no refetch."""
+    return await storefront_reporting.finance(session, access)
 
 
 @router.get("/{shop_id}/health", response_model=StorefrontHealthOut)

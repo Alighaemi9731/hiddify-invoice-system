@@ -104,6 +104,36 @@ class TopPlanOut(BaseModel):
     amount_toman: int
 
 
+class FinancePeriodOut(BaseModel):
+    """One Tehran calendar month of the shop's own profit-and-loss (``label`` is "" for totals).
+
+    `gb_sold` is every GB the bot moved; `gb_billable` is what the owner's invoice actually charges
+    for, i.e. `gb_sold` minus the free test sizes.  `cost_toman` is derived from `gb_billable`, so
+    the page can state `cost = gb × rate` and have it be exactly true.
+    """
+    label: str = ""
+    purchases: int = 0
+    renewals: int = 0
+    gb_sold: float = 0
+    gb_free: float = 0
+    gb_billable: float = 0
+    cost_toman: int = 0
+    gross_sales_toman: int = 0
+    reversals_toman: int = 0
+    net_sales_toman: int = 0
+    profit_toman: int = 0
+    # Completed operations whose plan AND order were both pruned, so no quota could be recovered.
+    # Surfaced rather than silently counted as 0 GB, which would overstate the profit.
+    unresolved_ops: int = 0
+
+
+class StorefrontFinanceOut(BaseModel):
+    cost_per_gb_toman: int = 0
+    excluded_below_gb: float = 1
+    months: list[FinancePeriodOut] = Field(default_factory=list)
+    totals: FinancePeriodOut = Field(default_factory=FinancePeriodOut)
+
+
 class StorefrontDashboardOut(BaseModel):
     storefront_id: int
     range: DashboardRangeOut

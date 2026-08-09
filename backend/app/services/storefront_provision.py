@@ -315,6 +315,13 @@ async def purchase(
                 await s.rollback()
                 return PurchaseResult(False, reason="insufficient", short_toman=price - bal)
             op.order_id = order.id
+            # `claim` above is called before the plan is loaded, so it wrote its 0 defaults over the
+            # figures `reserve` had stored. Restore them here so the operation is self-describing and
+            # reporting doesn't have to reconstruct the quota from a plan row that may be edited or
+            # deleted later. (`price_toman` is deliberately left alone — the owner's fleet analytics
+            # filters on `price_toman > 0` to mean "renewal", so writing it would silently change
+            # numbers on a surface this feature isn't about.)
+            op.gb, op.days = order.gb, order.days
             if txn is not None:
                 op.debit_txn_id = txn.id
             await s.commit()

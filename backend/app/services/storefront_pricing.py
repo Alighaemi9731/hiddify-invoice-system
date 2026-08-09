@@ -28,6 +28,15 @@ from app.services import pricing
 Action = Literal["save", "enable"]
 
 
+def cost_per_gb_with_default(reseller: Reseller, default_price_per_gb: int) -> int:
+    """The pure rule, for callers that already hold the global default.
+
+    Split out so a list endpoint can read the default ONCE and still apply the identical rule to
+    every shop, instead of re-deriving it per row or duplicating the expression.
+    """
+    return int(reseller.price_per_gb or default_price_per_gb)
+
+
 async def cost_per_gb(session: AsyncSession, reseller: Reseller) -> int:
     """What one GB costs THIS reseller — their own buy price from us.
 
@@ -36,7 +45,7 @@ async def cost_per_gb(session: AsyncSession, reseller: Reseller) -> int:
     a `price_per_gb` of 0 falls through to the global default. Kept identical on purpose: the guard
     must agree with what the reseller is actually invoiced, quirk and all.
     """
-    return int(reseller.price_per_gb or await pricing.get_default_price_per_gb(session))
+    return cost_per_gb_with_default(reseller, await pricing.get_default_price_per_gb(session))
 
 
 def price_floor(cost: int, gb: int) -> int:

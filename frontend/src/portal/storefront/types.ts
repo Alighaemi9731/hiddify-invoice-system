@@ -84,6 +84,30 @@ export interface StorefrontDashboard {
   new_customers_range: number;
 }
 
+export interface StorefrontFinancePeriod {
+  /** Gregorian "YYYY-MM"; "" on the all-time totals row. */
+  label: string;
+  purchases: number;
+  renewals: number;
+  gb_sold: number;
+  gb_free: number;
+  gb_billable: number;
+  cost_toman: number;
+  gross_sales_toman: number;
+  reversals_toman: number;
+  net_sales_toman: number;
+  profit_toman: number;
+  unresolved_ops: number;
+}
+
+export interface StorefrontFinance {
+  cost_per_gb_toman: number;
+  excluded_below_gb: number;
+  /** Every month with activity, newest first. */
+  months: StorefrontFinancePeriod[];
+  totals: StorefrontFinancePeriod;
+}
+
 export interface StorefrontHealth {
   storefront_id: number;
   bot: {

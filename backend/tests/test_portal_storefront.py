@@ -306,10 +306,12 @@ def test_release_a_storefront_routes_remain_registered_as_get_only():
     assert ("/api/portal/storefronts", frozenset({"GET"})) in storefront_routes
     assert ("/api/portal/storefronts/{shop_id}/dashboard", frozenset({"GET"})) in storefront_routes
     assert ("/api/portal/storefronts/{shop_id}/health", frozenset({"GET"})) in storefront_routes
+    assert ("/api/portal/storefronts/{shop_id}/finance", frozenset({"GET"})) in storefront_routes
     release_a_paths = {
         "/api/portal/storefronts",
         "/api/portal/storefronts/{shop_id}/dashboard",
         "/api/portal/storefronts/{shop_id}/health",
+        "/api/portal/storefronts/{shop_id}/finance",
     }
     assert all(methods == {"GET"} for path, methods in storefront_routes if path in release_a_paths)
 
