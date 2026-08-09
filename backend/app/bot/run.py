@@ -20,6 +20,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.bot import rtl_middleware
 from app.bot.commands import apply_command_menus
 from app.bot.handlers import router
+from app.bot.session import new_session
 from app.bot.telegram import get_token
 from app.core.db import SessionLocal
 from app.services.bootstrap import run_bootstrap
@@ -56,7 +57,7 @@ async def _main_bot_loop() -> None:
             await asyncio.sleep(30)
             continue
 
-        bot = Bot(token=token)
+        bot = Bot(token=token, session=new_session())
         rtl_middleware.install(bot)  # bidi-safe outgoing text on every handler reply
         try:
             # Default (reseller) command menu globally + owner menu scoped to the

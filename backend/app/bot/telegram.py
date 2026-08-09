@@ -5,6 +5,7 @@ from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import rtl_middleware
+from app.bot.session import new_session
 from app.services import settings_service
 
 
@@ -18,6 +19,8 @@ async def build_bot(session: AsyncSession) -> Bot | None:
     token = await get_token(session)
     if not token:
         return None
-    bot = Bot(token=token)
+    # `build_bot` is called per notification from 17 sites (owner_notify, notifier, gb_cap,
+    # channel_guard, …), so a fresh TLS trust store per call was ~690 KB of churn each time.
+    bot = Bot(token=token, session=new_session())
     rtl_middleware.install(bot)  # bidi-safe outgoing text; idempotent with rtl() at call sites
     return bot

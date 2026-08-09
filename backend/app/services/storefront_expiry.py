@@ -54,8 +54,9 @@ _STAMP_BATCH = 25
 
 async def _default_bot_factory(token: str) -> Bot:
     from app.bot import rtl_middleware
+    from app.bot.session import new_session
 
-    bot = Bot(token=token)
+    bot = Bot(token=token, session=new_session())
     rtl_middleware.install(bot)
     return bot
 
@@ -135,20 +136,40 @@ def _renew_keyboard(order_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+# Bound the IN() list, exactly like metering._load_events: an unbounded list overflows SQLite's
+# bound-parameter limit on a large fleet and gives Postgres a worse plan. 500 matches metering.
+_SNAP_CHUNK = 500
+
+
 async def _load_snaps(session: AsyncSession, rows: Sequence[Any]) -> dict:
-    """One-query snapshot lookup for every (panel_id, uuid) in `rows` (order⋈customer⋈bot tuples)."""
+    """Snapshot lookup for every (panel_id, uuid) in `rows` (order⋈customer⋈bot tuples).
+
+    Filters on BOTH columns. The old query selected on `user_uuid` alone while the result dict is
+    keyed `(panel_id, user_uuid)`, so it fetched every same-uuid row from every other panel and
+    discarded them in Python — a wider scan that could not use the (panel_id, …) indexes. Uuids
+    are unique per panel, not globally (`uq_enduser_panel_uuid`), so this is a correctness-shaped
+    tidy-up as well as a cheaper one.
+    """
     keys = {(o.panel_id, o.panel_user_uuid) for o, _c, _b in rows
             if o.panel_id is not None and o.panel_user_uuid}
     snaps: dict[tuple[int, str], EndUserSnapshot] = {}
-    if keys:
-        for sn in (
-            await session.execute(
-                select(EndUserSnapshot).where(
-                    EndUserSnapshot.user_uuid.in_([u for (_p, u) in keys])
+    if not keys:
+        return snaps
+    by_panel: dict[int, list[str]] = {}
+    for panel_id, user_uuid in keys:
+        by_panel.setdefault(panel_id, []).append(user_uuid)
+    for panel_id, uuids in by_panel.items():
+        uuids.sort()  # deterministic chunking
+        for i in range(0, len(uuids), _SNAP_CHUNK):
+            for sn in (
+                await session.execute(
+                    select(EndUserSnapshot).where(
+                        EndUserSnapshot.panel_id == panel_id,
+                        EndUserSnapshot.user_uuid.in_(uuids[i:i + _SNAP_CHUNK]),
+                    )
                 )
-            )
-        ).scalars().all():
-            snaps[(sn.panel_id, sn.user_uuid)] = sn
+            ).scalars().all():
+                snaps[(sn.panel_id, sn.user_uuid)] = sn
     return snaps
 
 

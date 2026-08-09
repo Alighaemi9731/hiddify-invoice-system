@@ -41,6 +41,7 @@ from app.bot.handlers.views import (
     _storefront_target_line,
 )
 from app.bot.rtl import rtl
+from app.bot.session import new_session
 from app.models import Invoice, Panel, Reseller
 from app.services import owner_notify
 
@@ -82,7 +83,7 @@ async def on_sf_setup_token(message: Message, state: FSMContext) -> None:
         # aiogram validates the token FORMAT synchronously in the constructor — a malformed
         # paste that slips past the cheap pre-check above must get the same friendly reply,
         # not crash the handler (seen live: TokenValidationError, 2026-07-02).
-        probe = Bot(token=token)
+        probe = Bot(token=token, session=new_session())
     except Exception:  # noqa: BLE001
         await message.answer(rtl("توکن نامعتبر است؛ توکنِ BotFather را بفرستید."),
                              reply_markup=keyboards.cancel_keyboard("« انصراف"))

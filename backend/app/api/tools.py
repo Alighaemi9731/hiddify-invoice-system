@@ -34,6 +34,10 @@ async def search_end_users(
     """Find end-users by name or uuid (case-insensitive), with the context the owner needs to
     identify the right one before removing it."""
     like = f"%{q.strip()}%"
+    # Deliberately an unindexed double ILIKE. The 2026-08 audit proposed a pg_trgm index plus a
+    # prefix-anchored uuid match, then measured: this is a 45 ms parallel seq scan at 200k rows,
+    # anchoring the uuid would drop legitimate substring matches, and a GIN index would tax every
+    # sync's UPSERT to save ~40 ms on an occasional owner lookup. Left as-is on purpose.
     rows = (await session.execute(
         select(EndUserSnapshot)
         .where(or_(EndUserSnapshot.name.ilike(like), EndUserSnapshot.user_uuid.ilike(like)))

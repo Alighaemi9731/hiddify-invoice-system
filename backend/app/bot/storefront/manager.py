@@ -29,6 +29,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from sqlalchemy.exc import IntegrityError
 
 from app.bot import rtl_middleware
+from app.bot.session import new_session
 from app.core.db import SessionLocal
 from app.models import StorefrontBot
 from app.services import settings_service, storefront
@@ -252,7 +253,11 @@ async def _start_runner(reseller_id: int, row_id: int, token: str, sem: asyncio.
             # The Bot constructor validates the token FORMAT synchronously; a malformed stored
             # token is as permanently dead as a revoked one, not something to re-raise every
             # reconcile.
-            bot = Bot(token=token)
+            # The session stays per-bot (so `_stop_runner` can still close it to abort an
+            # in-flight getUpdates — the 409 guard) but shares ONE TLS trust store across the
+            # fleet: measured 690 KB/bot → 39 KB/bot, i.e. −96 MB at 151 shops. See
+            # app/bot/session.py.
+            bot = Bot(token=token, session=new_session())
         except Exception as exc:  # noqa: BLE001
             async with SessionLocal() as s:
                 await storefront.mark_revoked(s, row_id, f"malformed token: {exc}")

@@ -78,6 +78,35 @@ async def _done_kinds(session: AsyncSession, invoice_id: int) -> set[str]:
     return {k.value for k in rows}
 
 
+async def _done_kinds_bulk(
+    session: AsyncSession, invoice_ids: list[int]
+) -> dict[int, set[str]]:
+    """`_done_kinds` for a whole run in one grouped query.
+
+    Same predicate, same semantics — only successfully-sent deliveries count. This used to be one
+    query per invoice inside the dunning loop (~800–1200 round trips a day at 400 resellers).
+    Small next to the Telegram sends that dominate the run, but free to fix. Chunked so a large
+    debt backlog can't overflow SQLite's bound-parameter limit (same policy as
+    metering._load_events / storefront_expiry._load_snaps).
+    """
+    out: dict[int, set[str]] = {i: set() for i in invoice_ids}
+    if not invoice_ids:
+        return out
+    ids = sorted(invoice_ids)
+    for i in range(0, len(ids), 500):
+        rows = (
+            await session.execute(
+                select(DeliveryLog.invoice_id, DeliveryLog.kind).where(
+                    DeliveryLog.invoice_id.in_(ids[i:i + 500]),
+                    DeliveryLog.status == DeliveryStatus.sent,
+                )
+            )
+        ).all()
+        for invoice_id, kind in rows:
+            out.setdefault(invoice_id, set()).add(kind.value)
+    return out
+
+
 async def _msg(session: AsyncSession, key: str, inv: Invoice, reseller: Reseller) -> str:
     return await texts.render(
         session, key,
@@ -180,6 +209,10 @@ async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = 
               "enforced": 0, "enforced_dry": 0, "enforcement_queued": 0,
               "deferred": 0, "on_hold": 0}
     enforced_links: list[str] = []  # clickable owner-facing links of enforced resellers
+    # One grouped read of the delivery log for the whole run, instead of one query per invoice.
+    # Safe to read up front: nothing in the loop below adds a `sent` DeliveryLog for an invoice
+    # it has not yet reached, and each invoice's own `done` set is consulted exactly once.
+    done_by_invoice = await _done_kinds_bulk(session, [inv.id for inv in invoices])
     bot: Bot | None = await build_bot(session)
     try:
         for inv in invoices:
@@ -208,7 +241,7 @@ async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = 
             reseller = await session.get(Reseller, inv.reseller_id)
             if reseller is None:
                 continue
-            done = await _done_kinds(session, inv.id)
+            done = done_by_invoice.get(inv.id, set())
 
             if days >= d1 and DeliveryKind.reminder1.value not in done:
                 dl = await notifier.send_to_reseller(

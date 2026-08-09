@@ -54,6 +54,17 @@ class ScheduleConfig:
     storefront_autorenew_minutes: int = 15  # deferred auto-renew fire-sweep cadence (1–1440)
 
 
+def _anchor(tz, minute_offset: int) -> datetime:  # noqa: ANN001
+    """The fixed epoch a repeating job's IntervalTrigger counts from, shifted by `minute_offset`.
+
+    The anchor must be FIXED (not "now"), or the job re-anchors to process start and a frequent
+    redeploy can starve it forever — that is why the 2-hourly backup once never fired. The
+    per-job OFFSET is the second half of the rule: with a shared epoch every repeating job is in
+    phase, so their memory peaks add instead of interleaving (see `register`).
+    """
+    return datetime(2000, 1, 1, 0, 0, tzinfo=tz) + timedelta(minutes=minute_offset)
+
+
 def _clamp(value, lo: int, hi: int, default: int) -> int:
     """Coerce a setting to an int within [lo, hi], falling back to `default` if it's
     missing or unparseable — a bad value can never break the scheduler."""
@@ -403,8 +414,25 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
     across day/hour boundaries. Times use the scheduler timezone."""
     cfg = cfg or ScheduleConfig()
     tz = sched.timezone
-    interval_anchor = datetime(2000, 1, 1, 0, 0, tzinfo=tz)
-    rate_anchor = datetime(2000, 1, 1, 0, 5, tzinfo=tz)
+    # Per-job anchor offsets — see _anchor(). Jobs used to SHARE one midnight epoch, which put
+    # every repeating job in phase: eight of them fired together at 00:00 and the two heaviest,
+    # periodic_sync (~416 MB) and backup (~79 MB), coincided four times a day (6h and 2h both
+    # divide 6h). Peaks ADD — APScheduler bounds instances per job, not globally — so the
+    # scheduler sat at ~87% of its 768 MB cap at those moments, which is the shape of the
+    # Jul 2026 OOM kills. Spreading the phases makes the peak a max() instead of a sum().
+    #
+    # Offsets are chosen so no two jobs share a firing minute at their default cadences —
+    # asserted by tests/test_scheduler_stagger.py, which fails if an offset is reused.
+    # `storefront_delivery` is exempt: at a 1-minute cadence it fires every minute by
+    # definition, and it is the lightest job here.
+    interval_anchor = _anchor(tz, 0)          # heartbeat only (fixed 2-min cadence, ~1 MB)
+    enforcement_anchor = _anchor(tz, 2)
+    guard_anchor = _anchor(tz, 3)
+    rate_anchor = _anchor(tz, 5)              # kept at :05 (was already staggered)
+    reaper_anchor = _anchor(tz, 6)            # not 8: 8+15=23 lands on channel_guard's :23
+    autorenew_anchor = _anchor(tz, 10)
+    backup_anchor = _anchor(tz, 20)           # the two heavyweights, 25 minutes apart and
+    sync_anchor = _anchor(tz, 45)             # on periods that can never realign (20≢45 mod 120)
 
     # Build + validate ALL triggers BEFORE mutating the jobstore. add_job(..., "cron", ...)
     # constructs the trigger internally, so a bad field would throw mid-loop and leave the
@@ -412,8 +440,8 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
     # Constructing the CronTrigger objects up front makes registration all-or-nothing.
     #   • Monthly invoice: day N of each month at HH:00 (bill prev month + deliver)
     #   • Daily dunning at HH:00 (reminders + enforcement)
-    #   • Channel/group guard every N minutes from a fixed midnight anchor
-    #   • Panel sync and auto-backup every N hours from the same fixed anchor
+    #   • Channel/group guard every N minutes from its own fixed anchor
+    #   • Panel sync and auto-backup every N hours, from anchors 25 minutes apart
     # The 4th value is misfire_grace_time (seconds): how late a fire may run if the scheduler
     # was busy/down at the exact moment. APScheduler's DEFAULT is 1s, which silently SKIPS a
     # job whose tick the loop missed by a second — fatal for the once-a-month invoicing. Give
@@ -431,28 +459,34 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         ("daily_digest", daily_digest_job,
          CronTrigger(hour=cfg.digest_hour, minute=30, timezone=tz), 6 * 3600),
         ("channel_guard", channel_guard_job,
-         IntervalTrigger(minutes=cfg.guard_minutes, start_date=interval_anchor, timezone=tz), 300),
+         IntervalTrigger(minutes=cfg.guard_minutes, start_date=guard_anchor, timezone=tz), 300),
         ("enforcement_queue", enforcement_queue_job,
-         IntervalTrigger(minutes=cfg.enforcement_minutes, start_date=interval_anchor, timezone=tz), 300),
+         IntervalTrigger(minutes=cfg.enforcement_minutes, start_date=enforcement_anchor,
+                         timezone=tz), 300),
+        # The two heavyweights. periodic_sync peaks around 416 MB (3 concurrent panel upserts)
+        # and backup around 79 MB; on the old shared anchor they landed together 4×/day. 20 vs
+        # 45 minutes past keeps them apart at EVERY cadence pair the settings can produce.
         ("periodic_sync", periodic_sync_job,
-         IntervalTrigger(hours=cfg.sync_hours, start_date=interval_anchor, timezone=tz), 1800),
+         IntervalTrigger(hours=cfg.sync_hours, start_date=sync_anchor, timezone=tz), 1800),
         ("backup", backup_job,
-         IntervalTrigger(hours=cfg.backup_hours, start_date=interval_anchor, timezone=tz), 3600),
+         IntervalTrigger(hours=cfg.backup_hours, start_date=backup_anchor, timezone=tz), 3600),
         # Live USDT→Toman rate refresh, a few minutes past the hour so it doesn't collide
         # with the on-the-hour jobs above.
         ("rate_refresh", rate_refresh_job,
          IntervalTrigger(hours=cfg.rate_hours, start_date=rate_anchor, timezone=tz), 3600),
         # Storefront pending-order reaper: complete/refund purchases orphaned by a mid-buy crash.
         ("storefront_reaper", storefront_reaper_job,
-         IntervalTrigger(minutes=cfg.storefront_reaper_minutes, start_date=interval_anchor,
+         IntervalTrigger(minutes=cfg.storefront_reaper_minutes, start_date=reaper_anchor,
                          timezone=tz), 300),
         # Storefront durable delivery worker: send queued broadcasts + direct messages.
+        # Default cadence is 1 minute, so this one fires every minute by definition — it is the
+        # lightest job here and is the documented exception to the no-shared-minute rule.
         ("storefront_delivery", storefront_delivery_worker_job,
          IntervalTrigger(minutes=cfg.storefront_delivery_minutes, start_date=interval_anchor,
                          timezone=tz), 300),
         # Deferred one-shot auto-renew: fire armed configs that are near exhaustion.
         ("storefront_autorenew", storefront_autorenew_job,
-         IntervalTrigger(minutes=cfg.storefront_autorenew_minutes, start_date=interval_anchor,
+         IntervalTrigger(minutes=cfg.storefront_autorenew_minutes, start_date=autorenew_anchor,
                          timezone=tz), 300),
         # Liveness stamp read by /health; fixed cadence on purpose (not a setting).
         ("scheduler_heartbeat", scheduler_heartbeat_job,

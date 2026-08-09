@@ -162,10 +162,13 @@ forged `next` degrades to the owner's dashboard with no open redirect and no cro
 
 ## 6. Deployment
 
-Production Compose runs `db`, `backend`, `bot`, `frontend`, and `caddy`. The bot and
-backend share the same code image and DB; only the backend runs scheduler jobs. Caddy
-provides same-origin API routing and automatic TLS. Backend readiness calls `/health`,
-which executes `SELECT 1`; Caddy does not start until that database-aware probe is healthy.
+Production Compose runs `db`, `backend`, `scheduler`, `bot`, `frontend`, and `caddy`. The
+backend, scheduler, and bot share the same code image and DB. Since v1.100.2 the scheduler is
+its **own container** (`RUN_SCHEDULER=true`, exactly one replica) so a heavy job — panel sync,
+monthly invoicing, backup — cannot contend with API requests for the event loop or the API's
+connection pool; the backend container runs no scheduler jobs. Caddy provides same-origin API
+routing and automatic TLS. Backend readiness calls `/health`, which executes `SELECT 1`; Caddy
+does not start until that database-aware probe is healthy.
 
 Production updates never execute a mutable branch script as root. Each GitHub Release
 contains an application archive and SHA-256 file. The host updater resolves one exact tag,
@@ -186,12 +189,17 @@ database backup. Alembic drift is checked against a freshly migrated database.
 
 Frontend installs use `npm ci`; CI also runs `npm audit`. Vite/Rolldown splits large
 dependencies into bounded React, UI, data, animation, ECharts, and zrender chunks.
-`npm run build` runs TypeScript checking and enforces a 500 KiB maximum per JS chunk.
+`npm run build` runs TypeScript checking and enforces the per-chunk ceiling in
+`frontend/scripts/check-bundle.mjs` (currently **600 KiB**, and the same script bans the
+`echarts-for-react` runtime). The largest chunk today is `vendor-charts` at ~553 KiB.
 
 Repeating scheduler jobs use `IntervalTrigger` with a fixed Tehran-local epoch anchor.
 This preserves true spacing for non-divisor values such as 7 hours or 17 minutes while
 remaining stable across restarts. Monthly invoicing and daily dunning remain calendar cron
-jobs. All schedule settings, including `rate_refresh_hours`, are live-applied.
+jobs. All schedule settings, including `rate_refresh_hours`, are live-applied. Each repeating
+job carries its **own** anchor offset so that independent jobs do not fire on the same minute:
+their memory peaks add, and a shared midnight epoch once put the scheduler at ~87% of its cap
+four times a day. See `CLAUDE.md` → Scheduler.
 
 The active enums intentionally contain only values produced by implemented workflows.
 Migration `3f2a7c91b8e4` normalizes obsolete labels from older installations before the

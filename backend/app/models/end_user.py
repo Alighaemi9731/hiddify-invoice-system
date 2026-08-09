@@ -36,6 +36,18 @@ class EndUserSnapshot(Base, TimestampMixin):
         # enforcement/reseller counts, which a plain b-tree can't serve.
         Index("ix_enduser_panel_addedby", "panel_id", "added_by_uuid"),
         Index("ix_enduser_panel_addedby_lower", "panel_id", text("lower(added_by_uuid)")),
+        # Billing asks for one month at a time: `panel_id = ? AND start_date BETWEEN ? AND ?`
+        # (app/services/invoicing._period_users_q). Leading with panel_id matters — with ~10
+        # panels that column is barely selective, so the range on start_date is what narrows
+        # the scan to the ~8% of rows created in the period.
+        Index("ix_enduser_panel_start_date", "panel_id", "start_date"),
+        # NOTE — deliberately NOT indexed for the owner's end-user search. The 2026-08 audit
+        # proposed a pg_trgm GIN index on `name` for its unanchored `ILIKE '%q%'`, then measured
+        # the premise away: on 200k rows the whole search is a 45 ms parallel seq scan, not the
+        # 200 ms–1 s the audit assumed. A GIN index would add write amplification to the most
+        # heavily UPSERTed table in the system (every user of every panel, every sync) to save
+        # ~40 ms on an occasional manual lookup. Revisit only if the table grows an order of
+        # magnitude or the search becomes type-ahead.
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -33,8 +33,11 @@ class _FakeBotSession:
 class _FakeTelegramBot:
     instances: list[_FakeTelegramBot] = []
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, session=None) -> None:  # noqa: ANN001
         assert token == "123456:TESTTOKENVALUE"
+        # Production passes `session=new_session()` so every Bot shares one TLS trust store
+        # (app/bot/session.py). The double ignores it and keeps its own closable stand-in — the
+        # assertions below are about the session being CLOSED, not about which one it is.
         self.session = _FakeBotSession()
         self.instances.append(self)
 

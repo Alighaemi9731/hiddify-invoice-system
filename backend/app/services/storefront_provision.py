@@ -667,7 +667,9 @@ async def _notify_completed(
     token = storefront.bot_token(sf)
     if not token or not order.sub_link:
         return
-    bot = Bot(token=token)
+    from app.bot.session import new_session
+
+    bot = Bot(token=token, session=new_session())
     try:
         await bot.send_message(
             customer.telegram_id,

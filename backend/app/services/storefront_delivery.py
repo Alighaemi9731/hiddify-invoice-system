@@ -96,7 +96,10 @@ def _build_bot(token: str):  # noqa: ANN202 — returns an aiogram Bot (or a tes
     from aiogram import Bot
 
     from app.bot import rtl_middleware
-    bot = Bot(token=token)
+    from app.bot.session import new_session
+    # Shared TLS trust store: the delivery worker builds one Bot per shop per batch, so a
+    # per-bot context re-parsed certifi's CA bundle on every send round. See app/bot/session.py.
+    bot = Bot(token=token, session=new_session())
     rtl_middleware.install(bot)
     return bot
 

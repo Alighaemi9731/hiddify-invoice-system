@@ -30,6 +30,30 @@ log = logging.getLogger("invoicing")
 # panel's last_synced_at (both stamped from the same value during a sync).
 _PRESENCE_SKEW = dt.timedelta(seconds=2)
 
+
+def _period_users_q(panel_id: int, period: Period):
+    """The end-user snapshots that can possibly be billed for `period` on this panel.
+
+    The date filter is not a heuristic — it is the engine's OWN first predicate, moved into SQL.
+    `invoice_engine.billable_gb_for_user` returns None unless `period.contains(u.start_date)`,
+    and `Period.contains` is exactly `d is not None and start <= d <= end`; `compute_invoices`
+    reads `users` ONLY to build lines (`users_count`, `raw_gb` and `total_gb` all derive from
+    them), while roots and the hierarchy come from `resellers`. So a snapshot outside the period
+    can never affect any output — including the removed-from-panel branch, which is evaluated
+    after the date check.
+
+    Why it matters: only ~8% of snapshots were created in any given month, so the old
+    whole-table load hydrated ~12x more ORM rows than the engine could use — measured 5.10 s /
+    45 MB for 200k rows versus 0.78 s / 4 MB for the 16.5k the period actually contains
+    (one `EndUserSnapshot` instance costs ~2.02 KB of Python heap). That load ran on the API
+    event loop behind /reports/sales-by-day. Parity is pinned by
+    tests/test_invoice_engine_prefilter.py.
+    """
+    return select(EndUserSnapshot).where(
+        EndUserSnapshot.panel_id == panel_id,
+        EndUserSnapshot.start_date.between(period.start, period.end),
+    )
+
 # Serializes all invoice generation/recompute so two concurrent runs (the monthly scheduler
 # job overlapping a manual «صدور فاکتورهای دوره», or a double-click) can never race on the
 # same (reseller, period): the unique constraint already blocks duplicates, but without this
@@ -179,11 +203,7 @@ async def generate_invoices(
         resellers = (
             await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
         ).scalars().all()
-        users = (
-            await session.execute(
-                select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id)
-            )
-        ).scalars().all()
+        users = (await session.execute(_period_users_q(panel.id, period))).scalars().all()
         # Free-trial configs are a giveaway — excluded from the reseller's invoice (base + metering).
         trial_uuids = await storefront.trial_user_uuids(session, panel.id)
         # Storefront config uuid → plan sold — caps the inflated renewal quota (used+plan_gb) so a
@@ -290,11 +310,7 @@ async def preview_bundles(
         resellers = (
             await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
         ).scalars().all()
-        users = (
-            await session.execute(
-                select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id)
-            )
-        ).scalars().all()
+        users = (await session.execute(_period_users_q(panel.id, period))).scalars().all()
         trial_uuids = await storefront.trial_user_uuids(session, panel.id)
         caps = await storefront.billing_caps(session, panel.id)
         preview_bundles_list = compute_invoices(
@@ -376,9 +392,7 @@ async def recompute_invoice(
     resellers = (
         await session.execute(select(Reseller).where(Reseller.panel_id == panel.id))
     ).scalars().all()
-    users = (
-        await session.execute(select(EndUserSnapshot).where(EndUserSnapshot.panel_id == panel.id))
-    ).scalars().all()
+    users = (await session.execute(_period_users_q(panel.id, period))).scalars().all()
     trial_uuids = await storefront.trial_user_uuids(session, panel.id)
     caps = await storefront.billing_caps(session, panel.id)
     bundles = compute_invoices(

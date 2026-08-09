@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.session import new_session
 from app.core.db import get_session
 from app.core.portal_auth import ResellerContext, get_current_reseller
 from app.core.storefront_access import (
@@ -173,7 +174,7 @@ async def _verify_channel_with_telegram(
     resolved_link: str | None = None
     tg_bot: Bot | None = None
     try:
-        tg_bot = Bot(token=token)
+        tg_bot = Bot(token=token, session=new_session())
         me = await tg_bot.get_me()
         member = await tg_bot.get_chat_member(channel_id, me.id)
         status_value = getattr(member.status, "value", str(member.status))

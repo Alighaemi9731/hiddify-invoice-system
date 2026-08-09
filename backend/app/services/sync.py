@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import weakref
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,40 @@ log = logging.getLogger("sync")
 # Two-key advisory-lock namespace for serializing a SINGLE panel's sync (F12) — distinct key-space
 # from the billing lock (invoicing._BILLING_LOCK_KEY, single-key) so they never collide.
 _SYNC_LOCK_NS = 0x53594E43  # "SYNC"
+
+# Only ONE panel may be in its WRITE phase at a time, per event loop.
+#
+# `sync_all` fans out to `_SYNC_ALL_CONCURRENCY` panels so a slow/unreachable panel can't
+# serialize the rest — but that concurrency was applied to the whole of `sync_panel`, write
+# phase included. One 20k-user panel's upsert peaks around 139 MB (the existing snapshot map,
+# this month's meters, the parsed PanelData, and SQLAlchemy's unit-of-work batching the
+# UPDATEs), so three at once meant ~416 MB of simultaneous Python allocation in a 768 MB
+# container — the largest single term in the scheduler's budget.
+#
+# Since Wave 4/B10 the network fetch happens BEFORE the lock, and the fetch (45–90 s per panel)
+# is what dominates wall clock; the upsert is ~3.5 s. Gating only the write phase therefore
+# keeps the fan-out benefit almost entirely while making the peak ONE upsert instead of three:
+# ~175 MB rather than ~416 MB. This sits OUTSIDE the per-panel advisory lock, the F12 recency
+# guard and the superseded guard, none of which change.
+#
+# Keyed by running loop, NOT a module-level singleton: an asyncio primitive binds itself to the
+# first loop that awaits it and then raises "bound to a different event loop" everywhere else.
+# Production runs one long-lived loop, but the test suite (and any `asyncio.run` tool path)
+# creates a fresh one per case, so a singleton would be a latent trap. Weak keys let a finished
+# loop's gate be collected. Same shape as storefront_provision._customer_locks.
+_write_gates: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Semaphore
+] = weakref.WeakKeyDictionary()
+
+
+def write_gate() -> asyncio.Semaphore:
+    """The write-phase gate for the currently running loop (created on first use)."""
+    loop = asyncio.get_running_loop()
+    gate = _write_gates.get(loop)
+    if gate is None:
+        gate = asyncio.Semaphore(1)
+        _write_gates[loop] = gate
+    return gate
 
 
 def _now() -> dt.datetime:
@@ -79,78 +114,90 @@ async def sync_panel(
     # so different panels never wait on each other; released on commit/rollback. No-op on SQLite.
     bind = session.get_bind()
     is_postgres = getattr(bind.dialect, "name", "") == "postgresql"
-    if is_postgres:
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
-            {"ns": _SYNC_LOCK_NS, "pid": panel_id},
-        )
-    run = SyncRun(panel_id=panel_id, source=source, status=SyncStatus.running)
-    session.add(run)
-    await session.flush()
-
-    try:
-        if fetch_exc is not None:
-            raise fetch_exc
-        assert data is not None
-        # Superseded guard (new with fetch-outside-lock): if another sync COMMITTED after
-        # this attempt began, its data is fresher than what we fetched — writing ours,
-        # stamped with a later last_synced_at, would regress the snapshots. Abort through
-        # the failure path; the recency guard there keeps the panel's ok status intact.
-        await session.refresh(panel)
-        if _newer_success_since(panel.last_synced_at, attempt_started):
-            raise RuntimeError("superseded by a newer concurrent sync (kept its data)")
-
-        now = _now()
-        await _upsert_resellers(session, panel, data, now)
-        await _upsert_users(session, panel, data, now)
-
-        # Capture/refresh the end-user (client) secret path used to build customers' sub links
-        # (differs from the admin proxy path in Hiddify v12).
-        if data.client_proxy_path and data.client_proxy_path != panel.client_proxy_path:
-            panel.client_proxy_path = data.client_proxy_path
-
-        panel.last_synced_at = now
-        panel.status = PanelStatus.ok
-        panel.last_error = None
-
-        run.status = SyncStatus.success
-        run.admin_count = len(data.admins)
-        run.user_count = len(data.users)
-        run.finished_at = now
-        await session.commit()
-        log.info(
-            "Synced panel '%s': %d admins, %d users", panel.key, run.admin_count, run.user_count
-        )
-    except Exception as exc:  # noqa: BLE001
-        # The flushed run row is gone after rollback; record a fresh failure row.
-        await session.rollback()   # ends the txn → releases the per-panel advisory lock
-        err = str(exc)[:1000]
-        # F12: the rollback dropped the advisory lock, so failure bookkeeping would otherwise run
-        # UNSERIALIZED and could overwrite a newer concurrent success's `ok`. Re-acquire the same
-        # per-panel lock, then only downgrade to `error` if NO successful sync has landed since this
-        # attempt began (recency guard) — a newer success must always win. The failed SyncRun row is
-        # always recorded for audit.
+    # Everything from here is the WRITE phase — the memory-heavy part. Hold the process-wide
+    # write gate across it (including the failure bookkeeping, which also opens a transaction)
+    # so at most one panel's upsert is resident at a time. Acquired OUTSIDE the per-panel
+    # advisory lock and released in `finally`, so it can neither deadlock nor leak.
+    async with write_gate():
         if is_postgres:
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
                 {"ns": _SYNC_LOCK_NS, "pid": panel_id},
             )
-        current_panel = await session.get(Panel, panel_id)  # re-attach after rollback
-        if current_panel is not None and not _newer_success_since(
-            current_panel.last_synced_at, attempt_started
-        ):
-            current_panel.status = PanelStatus.error
-            current_panel.last_error = err
-        run = SyncRun(
-            panel_id=panel_id,
-            source=source,
-            status=SyncStatus.failed,
-            error=err,
-            finished_at=_now(),
-        )
+        run = SyncRun(panel_id=panel_id, source=source, status=SyncStatus.running)
         session.add(run)
-        await session.commit()
-        log.exception("Sync failed for panel '%s'", getattr(current_panel, "key", "?"))
+        await session.flush()
+
+        try:
+            if fetch_exc is not None:
+                raise fetch_exc
+            assert data is not None
+            # Superseded guard (new with fetch-outside-lock): if another sync COMMITTED after
+            # this attempt began, its data is fresher than what we fetched — writing ours,
+            # stamped with a later last_synced_at, would regress the snapshots. Abort through
+            # the failure path; the recency guard there keeps the panel's ok status intact.
+            await session.refresh(panel)
+            if _newer_success_since(panel.last_synced_at, attempt_started):
+                raise RuntimeError("superseded by a newer concurrent sync (kept its data)")
+
+            now = _now()
+            await _upsert_resellers(session, panel, data, now)
+            await _upsert_users(session, panel, data, now)
+
+            # Capture/refresh the end-user (client) secret path used to build customers' sub
+            # links (differs from the admin proxy path in Hiddify v12).
+            if data.client_proxy_path and data.client_proxy_path != panel.client_proxy_path:
+                panel.client_proxy_path = data.client_proxy_path
+
+            panel.last_synced_at = now
+            panel.status = PanelStatus.ok
+            panel.last_error = None
+
+            run.status = SyncStatus.success
+            run.admin_count = len(data.admins)
+            run.user_count = len(data.users)
+            run.finished_at = now
+            await session.commit()
+            log.info(
+                "Synced panel '%s': %d admins, %d users",
+                panel.key, run.admin_count, run.user_count,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # The flushed run row is gone after rollback; record a fresh failure row.
+            await session.rollback()   # ends the txn → releases the per-panel advisory lock
+            err = str(exc)[:1000]
+            # F12: the rollback dropped the advisory lock, so failure bookkeeping would otherwise
+            # run UNSERIALIZED and could overwrite a newer concurrent success's `ok`. Re-acquire
+            # the same per-panel lock, then only downgrade to `error` if NO successful sync has
+            # landed since this attempt began (recency guard) — a newer success must always win.
+            # The failed SyncRun row is always recorded for audit.
+            if is_postgres:
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
+                    {"ns": _SYNC_LOCK_NS, "pid": panel_id},
+                )
+            current_panel = await session.get(Panel, panel_id)  # re-attach after rollback
+            if current_panel is not None and not _newer_success_since(
+                current_panel.last_synced_at, attempt_started
+            ):
+                current_panel.status = PanelStatus.error
+                current_panel.last_error = err
+            run = SyncRun(
+                panel_id=panel_id,
+                source=source,
+                status=SyncStatus.failed,
+                error=err,
+                finished_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+            log.exception("Sync failed for panel '%s'", getattr(current_panel, "key", "?"))
+        finally:
+            # Drop the parsed backup before releasing the gate: `data` holds one PanelUser
+            # dataclass per end-user (~12 MB for a 20k-user panel) and the caller's frame keeps
+            # it alive until `sync_panel` returns, so the next panel through the gate would
+            # otherwise start while this one's document is still resident.
+            data = None
 
     return run
 

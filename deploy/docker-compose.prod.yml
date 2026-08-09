@@ -33,6 +33,27 @@ services:
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 512m
+    # Explicit limits instead of the image defaults. THREE app processes (backend, scheduler,
+    # bot) each hold their own SQLAlchemy pool of `pool_size + max_overflow` connections
+    # (app/core/db.py), so the app's hard ceiling is 3 x 30 = 90 — against a default
+    # `max_connections` of 100, with pg_dump, the healthcheck and any manual psql competing for
+    # the remaining 10. That is too thin to leave implicit: a burst of storefront buyers could
+    # exhaust it and the failure mode is "the whole panel stops answering", not a slow query.
+    #
+    # 120 leaves 30 spare above the app's provable worst case. tests/test_pool_arithmetic.py
+    # pins this relationship so the two numbers can never drift apart again.
+    #
+    # Memory fits the 512m cap: shared_buffers is the one big shared allocation, and idle
+    # backends cost ~2 MB private each (90 x 2 + 128 ~= 310 MB). work_mem is PER SORT, so it
+    # stays at the 4 MB default deliberately — raising it multiplies by the connection count.
+    # effective_cache_size only informs the planner; it allocates nothing.
+    command: >
+      postgres
+      -c max_connections=120
+      -c shared_buffers=128MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c effective_cache_size=256MB
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-invoice}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -120,13 +141,20 @@ services:
     build: ../backend
     restart: unless-stopped
     logging: *default-logging
-    # One process polls the main bot AND every storefront bot (151 and growing), and it sat at
-    # 366/512 MB — close enough to the cap that one busy broadcast would OOM the WHOLE fleet.
-    # Raised again to 1024m: measured ~1.8 MB of resident state per bot (Bot + aiohttp session +
-    # poll task), so 768m would run out around ~350 shops. This buys room to ~500 while keeping
-    # the cap total under host RAM. Sharding the fleet across containers is the answer past that,
-    # NOT a bigger cap — but it needs token-ownership enforcement first, or the 409 double-delivery
-    # bug documented in app/bot/storefront/manager.py comes back.
+    # One process polls the main bot AND every storefront bot (151 and growing).
+    #
+    # Per-bot residency was 690 KB, almost all of it a private OpenSSL trust store: aiogram builds
+    # `ssl.create_default_context(cafile=certifi.where())` per AiohttpSession, so certifi's CA
+    # bundle was re-parsed once per bot. That is what made the fleet look like it needed sharding
+    # past ~350 shops. v1.112.1 shares ONE TLS context process-wide (app/bot/session.py) and
+    # measured 690 KB/bot → 25 KB/bot: 151 bots now cost 3.8 MB instead of 101.8 MB, and 400 bots
+    # 7.5 MB instead of 270 MB. The fleet is no longer the memory constraint here.
+    #
+    # The cap stays 1024m: it is a runaway ceiling, not a budget, and the sum of all caps must
+    # remain under host RAM. If this ever needs raising again, re-check that arithmetic first.
+    # Sharding across containers is still the answer to a Telegram-throughput limit — but it needs
+    # token-ownership enforcement, or the 409 double-delivery bug documented in
+    # app/bot/storefront/manager.py comes back.
     mem_limit: 1024m
     env_file: ../.env
     environment:

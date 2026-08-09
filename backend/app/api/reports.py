@@ -81,15 +81,26 @@ def _sales_row(inv: Invoice, name: str, key: str) -> SalesRow:
 
 
 async def _period_rows(session: AsyncSession, period_label: str, panel_id: int | None):
+    """The period's counted invoices, as (invoice-shaped row, reseller name, panel key).
+
+    Selects COLUMNS, not `Invoice` entities: every consumer here reads the same six fields, so
+    hydrating full ORM instances (~1.5 KB each, plus identity-map bookkeeping) bought nothing.
+    The returned rows are SQLAlchemy `Row`s with the same attribute names the callers already
+    use, so `_sales_row` / `_panel_sales_from_rows` / the dashboard aggregation are unchanged.
+    """
     q = (
-        select(Invoice, Reseller.name, Panel.key)
+        select(
+            Invoice.id, Invoice.reseller_id, Invoice.panel_id,
+            Invoice.usage_gb, Invoice.amount_toman, Invoice.status,
+            Reseller.name, Panel.key,
+        )
         .join(Reseller, Invoice.reseller_id == Reseller.id)
         .join(Panel, Invoice.panel_id == Panel.id)
         .where(Invoice.period_label == period_label, Invoice.status.in_(COUNTED))
     )
     if panel_id is not None:
         q = q.where(Invoice.panel_id == panel_id)
-    return (await session.execute(q)).all()
+    return [(r, r.name, r.key) for r in (await session.execute(q)).all()]
 
 
 @router.get("/sales", response_model=list[SalesRow])
