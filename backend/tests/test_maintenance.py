@@ -69,7 +69,7 @@ async def _count(s, model) -> int:
 def test_prune_keeps_recent_and_live_drops_aged(tmp_path):
     async def body(s):
         now = dt.datetime.now(dt.timezone.utc)
-        old = now - dt.timedelta(days=120)   # past the 90-day default window
+        old = now - dt.timedelta(days=120)   # past the 60-day default window
         recent = now - dt.timedelta(days=10)  # inside the window
 
         s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="o"))
@@ -121,7 +121,7 @@ def test_prune_keeps_recent_and_live_drops_aged(tmp_path):
         assert counts["sync_runs"] == 1
         assert counts["delivery_log"] == 2          # paid-reminder + broadcast
         assert counts["enforcement_actions"] == 3   # done + dry_run + reverted (aged)
-        assert counts["retention_days"] == 90
+        assert counts["retention_days"] == 60
 
         assert await _count(s, SyncRun) == 1
         assert await _count(s, DeliveryLog) == 2     # owed-reminder + recent invoice

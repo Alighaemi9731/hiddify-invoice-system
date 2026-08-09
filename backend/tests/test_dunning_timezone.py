@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 
 from app.models import Invoice, Panel, Reseller  # noqa: E402
 from app.models.enums import InvoiceStatus  # noqa: E402
-from app.services import dunning, periods  # noqa: E402
+from app.services import dunning, periods, settings_service  # noqa: E402
 
 UTC = dt.timezone.utc
 
@@ -59,6 +59,9 @@ def test_reminder_not_fired_a_day_early(tmp_path):
                     sent_at=dt.datetime(2026, 6, 30, 22, 0, tzinfo=UTC),  # Tehran 07-01 01:30
                 )
                 s.add(inv)
+                # Pin the reminder day this test's Tehran-vs-UTC arithmetic is written
+                # against, independent of the shipped default.
+                await settings_service.set_value(s, "reminder1_day", 2)
                 await s.commit()
 
                 # Tehran 2026-07-02 15:30 → 1 Tehran day since sent. The pre-fix UTC

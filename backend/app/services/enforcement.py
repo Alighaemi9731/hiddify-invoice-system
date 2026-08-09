@@ -266,7 +266,7 @@ async def _notify_zero_capture(
 
 async def _lockout_config(session: AsyncSession) -> tuple[bool, str, str]:
     """(enabled, lock_password, restore_password) for the admin-login lockout feature."""
-    enabled = bool(await settings_service.get(session, "enforcement_admin_lockout_enabled", False))
+    enabled = bool(await settings_service.get(session, "enforcement_admin_lockout_enabled", True))
     lock_pw = str(await settings_service.get(session, "enforcement_lock_password", "blocked-node"))
     restore_pw = str(await settings_service.get(session, "enforcement_restore_password", "123"))
     return enabled, lock_pw, restore_pw
@@ -422,7 +422,7 @@ async def _unstamp_invoices_enforced(session: AsyncSession, reseller: Reseller) 
     if not invoices:
         return 0
     cfg = await settings_service.get_many(session, ["warning_day"])
-    dw = int(cfg.get("warning_day") or 5)
+    dw = int(cfg.get("warning_day") or 10)
     today = tehran_today()
     for inv in invoices:
         if inv.deferred_until:
@@ -2583,7 +2583,7 @@ async def process_enforcement_queue(
     limit = max(1, int(action_limit or cfg.get("enforcement_action_batch_limit") or 1))
     chunk = max(1, int(user_chunk_size or cfg.get("enforcement_user_chunk_size") or 500))
     para = max(1, int(admin_chunk_size or cfg.get("enforcement_admin_chunk_size") or 10))
-    panel_para = max(1, int(cfg.get("enforcement_panel_concurrency") or 6))
+    panel_para = max(1, int(cfg.get("enforcement_panel_concurrency") or 20))
 
     # Each lane needs its OWN session (an AsyncSession is NOT safe to share across tasks). Derive the
     # factory from the caller's bind so it uses the same engine in production AND in tests; fall back

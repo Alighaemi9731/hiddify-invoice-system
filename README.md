@@ -59,7 +59,7 @@ all money is Toman with live crypto conversion.
   so there is no portal-only mutation bypass.
 
 ### Enforcement (dunning)
-- Configurable D+2 / D+4 / D+5 reminder → warning → suspension timeline per unpaid
+- Configurable D+3 / D+5 / D+10 / D+30 reminder → warning → suspension timeline per unpaid
   invoice, re-anchored automatically when the owner grants a payment deadline.
 - Suspension and restore are **durable queue actions** processed in bounded, resumable
   chunks using Hiddify's native bulk operations — safe at thousands-of-users scale, with

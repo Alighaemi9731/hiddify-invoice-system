@@ -30,7 +30,7 @@ from app.services import (
     storefront_pricing,
 )
 
-DEFAULT_COST = 1000   # the registered `default_price_per_gb`
+DEFAULT_COST = 1000   # `default_price_per_gb`, registered by `_seed` below
 
 
 def _run(body):  # noqa: ANN001, ANN202
@@ -49,6 +49,9 @@ def _run(body):  # noqa: ANN001, ANN202
 
 
 async def _seed(session, *, price_per_gb=None, chat_id=111):  # noqa: ANN001, ANN202
+    # Pin the global price these cases compute against, so the shipped default can move
+    # without rewriting every expected floor here.
+    await settings_service.set_value(session, "default_price_per_gb", DEFAULT_COST)
     panel = Panel(key="p1", host="p1.invalid", proxy_path_enc="secret", owner_uuid="owner")
     session.add(panel)
     await session.flush()

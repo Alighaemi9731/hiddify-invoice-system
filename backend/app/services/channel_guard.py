@@ -3,7 +3,7 @@ Daily channel/group guard: remove people who started the bot but are NOT registe
 resellers from the announcement channel AND the group (so randoms can't sit in a
 private channel/group).
 
-Safety: controlled by `channel_kick_enabled` (default False) — the SAME switch guards
+Safety: controlled by `channel_kick_enabled` (default True) — the SAME switch guards
 both the channel and the group. When off it runs in DRY-RUN and only reports how many
 WOULD be kicked. Admins/creators are never touched. Needs the bot to be an admin with
 "ban users" permission in each chat.

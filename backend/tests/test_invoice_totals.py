@@ -30,7 +30,7 @@ from app.models import (  # noqa: E402
     Reseller,
     StorefrontBot,
 )
-from app.services import invoicing, storefront  # noqa: E402
+from app.services import invoicing, settings_service, storefront  # noqa: E402
 from app.services.periods import Period  # noqa: E402
 
 PERIOD = Period(dt.date(2026, 6, 1), dt.date(2026, 6, 30))
@@ -53,6 +53,9 @@ def _run(coro_fn, tmp_path, name):
 
 
 async def _seed(s, *, users_gb=(), fee=FEE, with_bot=True, bot_status="active"):
+    # Pin the per-GB price these totals are computed from, so the shipped default can move
+    # without rewriting every expected amount here.
+    await settings_service.set_value(s, "default_price_per_gb", 1000)
     now = dt.datetime.now(dt.timezone.utc)
     p = Panel(key="p1", host="p1.invalid", proxy_path_enc=crypto.encrypt("x"),
               owner_uuid="o", last_synced_at=now)

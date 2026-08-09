@@ -54,8 +54,10 @@ class Settings(BaseSettings):
     usdt_master_xpub: str = ""
 
     # ---- Pricing ----
-    default_price_per_gb_toman: int = 1000
-    toman_per_usdt: int = 70000
+    # Seed values for the DB `settings` rows of the same name (a live install edits them in the
+    # panel, so these only matter on a fresh install). Kept in step with the production install.
+    default_price_per_gb_toman: int = 2000
+    toman_per_usdt: int = 175000  # manual/fallback rate — only used when the live rate is stale
 
     # ---- Runtime toggles ----
     run_scheduler: bool = False  # the `backend` service sets this true

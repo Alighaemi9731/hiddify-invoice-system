@@ -110,8 +110,9 @@ DEFS: list[SettingDef] = [
     SettingDef("announcement_group_link", "", False, "telegram"),
     SettingDef("group_membership_required", False, False, "telegram"),
     # Guard: kick people who started the bot but are NOT registered resellers from the
-    # channel AND the group. Default OFF (dry-run reports only) for safety.
-    SettingDef("channel_kick_enabled", False, False, "telegram"),
+    # channel AND the group. ON by default (the production install runs it live); set to
+    # False for dry-run reports only.
+    SettingDef("channel_kick_enabled", True, False, "telegram"),
     # Grace period (MINUTES) before the guard removes a NON-registered bot user. Default 15:
     # short on purpose — the guard runs every 10 min, so a newcomer who joins right at a
     # check tick is skipped that round and removed on the NEXT one (the "second 10-minute
@@ -164,7 +165,7 @@ DEFS: list[SettingDef] = [
     # Pricing
     SettingDef("default_price_per_gb", boot.default_price_per_gb_toman, False, "pricing"),
     SettingDef("toman_per_usdt", boot.toman_per_usdt, False, "pricing"),  # manual rate / fallback
-    SettingDef("rate_mode", "manual", False, "pricing"),  # manual | auto (live)
+    SettingDef("rate_mode", "auto", False, "pricing"),  # manual | auto (live)
     # Where the live USDT (and TON) rate is read from: wallex | tetherland. TON exists only on
     # Wallex, so TON always uses Wallex; this picks the USDT source (the other is the fallback).
     SettingDef("rate_source", "wallex", False, "pricing"),
@@ -192,7 +193,9 @@ DEFS: list[SettingDef] = [
     # Any config whose quota is <= this many GB is a free test config and is NOT
     # billed (e.g. 1 → both 0.5 GB and 1 GB are free; 1.5+ GB is billed).
     SettingDef("free_under_gb", 1, False, "pricing"),
-    SettingDef("min_sale_toman", 0, False, "pricing"),  # 0 = no minimum-sale floor
+    # Minimum-sale floor: an invoice below this is raised to it (0 = no floor). Per-reseller
+    # override on the Reseller row wins.
+    SettingDef("min_sale_toman", 300_000, False, "pricing"),
     # Default monthly fee billed to a reseller running a storefront bot (per-reseller override on
     # the Reseller row wins; 0 = free).
     SettingDef("storefront_monthly_fee_toman", 0, False, "pricing"),
@@ -203,7 +206,7 @@ DEFS: list[SettingDef] = [
     # xray "soft-cutoff" slack (consuming a bit for a couple of minutes after the quota is hit)
     # and billed NOTHING; above it, the FULL overage is billed as real over-consumption. Real
     # reset-abuse is many GB, so it's always billed.
-    SettingDef("overage_tolerance_gb", 0.5, False, "pricing"),
+    SettingDef("overage_tolerance_gb", 3.0, False, "pricing"),
     # A user DELETED from the panel that consumed >= this many GB is billed its full SOLD quota
     # (not just consumption) — so a reseller can't delete a config to be charged only the used
     # part. Below it, the deleted config is billed on consumption. 0 disables. Default 5 GB.
@@ -215,15 +218,15 @@ DEFS: list[SettingDef] = [
     SettingDef("invoice_day_of_month", 1, False, "schedule"),   # monthly invoice: day (1=run on the 1st for prev month)
     SettingDef("invoice_hour", 9, False, "schedule"),            # monthly invoice: hour
     SettingDef("dunning_hour", 10, False, "schedule"),           # daily reminders/enforcement: hour
-    SettingDef("sync_interval_hours", 6, False, "schedule"),     # panel sync: every N hours
+    SettingDef("sync_interval_hours", 1, False, "schedule"),     # panel sync: every N hours
     SettingDef("guard_interval_minutes", 10, False, "schedule"), # channel/group guard: every N minutes
     SettingDef("backup_enabled", True, False, "schedule"),       # auto-backup on/off
     SettingDef("backup_interval_hours", 2, False, "schedule"),   # auto-backup: every N hours
     # Log retention: the daily maintenance job deletes sync_runs, delivery_log, and
     # terminal enforcement_actions older than this many days (keeps the DB lean). Live
     # rows — an owed invoice's reminder logs, in-flight enforcement queue work — are never
-    # pruned. Default 90 days; minimum 7. Does NOT touch the financial ledger or invoices.
-    SettingDef("log_retention_days", 90, False, "schedule"),
+    # pruned. Default 60 days; minimum 7. Does NOT touch the financial ledger or invoices.
+    SettingDef("log_retention_days", 60, False, "schedule"),
     # Owner-side disk/PII hygiene (daily): delete payment-proof screenshots of terminal payments +
     # cached invoice PDFs + tire-kicker bot_users older than this. The DB rows (money facts) stay;
     # only files/aged non-registered bot users go. 0 = off. Default 180.
@@ -276,11 +279,13 @@ DEFS: list[SettingDef] = [
     # restore requires the same passphrase. Keep it somewhere safe OUTSIDE the system.
     SettingDef("backup_passphrase", "", True, "schedule"),
     # Dunning / enforcement
-    SettingDef("reminder1_day", 2, False, "dunning"),
-    SettingDef("reminder2_day", 4, False, "dunning"),
-    SettingDef("warning_day", 5, False, "dunning"),
-    SettingDef("enforcement_day", 5, False, "dunning"),
-    SettingDef("enforcement_enabled", False, False, "dunning"),  # False = dry-run
+    # Days after the invoice was sent (or after a granted payment deadline). The production
+    # cadence: reminders on D+3 / D+5, hard warning («سررسید گذشته») on D+10, suspension D+30.
+    SettingDef("reminder1_day", 3, False, "dunning"),
+    SettingDef("reminder2_day", 5, False, "dunning"),
+    SettingDef("warning_day", 10, False, "dunning"),
+    SettingDef("enforcement_day", 30, False, "dunning"),
+    SettingDef("enforcement_enabled", True, False, "dunning"),  # False = dry-run
     # Live enforcement is queued and chunked. The dunning job only plans work; this worker
     # processes a small, resumable slice at a time so large panels never block a scheduler tick.
     SettingDef("enforcement_worker_interval_minutes", 5, False, "dunning"),
@@ -290,15 +295,16 @@ DEFS: list[SettingDef] = [
     SettingDef("enforcement_admin_chunk_size", 10, False, "dunning"),
     # How many panels are processed concurrently per tick. Panels are independent, so cross-panel
     # suspensions/restores run in parallel; each panel stays sequential (never hammered).
-    SettingDef("enforcement_panel_concurrency", 6, False, "dunning"),
+    SettingDef("enforcement_panel_concurrency", 20, False, "dunning"),
     SettingDef("auto_restore_on_payment", True, False, "dunning"),
     # Admin panel-login lockout on full suspension. Hiddify's UUID-link login is refused once an
     # admin has a non-empty password, so on a FULL suspend we also set every suspended admin's
     # (subtree) Flask-Admin password to `enforcement_lock_password` — this kills their existing
     # UUID link so they cannot log in and bulk-re-enable their own users. On restore/payment the
-    # password is set back to `enforcement_restore_password`. OFF by default; NOT applied on freeze
-    # (freeze intentionally keeps existing users online, so login-lockout isn't wanted there).
-    SettingDef("enforcement_admin_lockout_enabled", False, False, "dunning"),
+    # password is set back to `enforcement_restore_password`. ON by default (the production install
+    # runs it); NOT applied on freeze (freeze intentionally keeps existing users online, so
+    # login-lockout isn't wanted there).
+    SettingDef("enforcement_admin_lockout_enabled", True, False, "dunning"),
     SettingDef("enforcement_lock_password", "blocked-node", False, "dunning"),
     SettingDef("enforcement_restore_password", "123", False, "dunning"),
     # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
@@ -329,7 +335,7 @@ DEFS: list[SettingDef] = [
     # Bot user-creation: top-level resellers create end-users from the bot. The owner curates the
     # bounded option lists; an empty/zero value uses the default. Master toggle gates the feature.
     SettingDef("user_create_enabled", True, False, "usercreate"),
-    SettingDef("user_create_gb_options", [20, 30, 50, 100], False, "usercreate"),
+    SettingDef("user_create_gb_options", [20, 30, 40, 50, 80, 100], False, "usercreate"),
     SettingDef("user_create_day_options", [30, 60], False, "usercreate"),
     SettingDef("user_create_bulk_counts", [5, 10, 20], False, "usercreate"),
     # Message templates

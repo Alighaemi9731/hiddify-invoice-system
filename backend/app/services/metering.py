@@ -509,7 +509,7 @@ async def bundle_extra_many(
             )
         )
     ).scalars().all()
-    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 0.5) or 0)
+    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 3.0) or 0)
     by_label: dict[str, list] = {lbl: [] for lbl in period_labels}
     for m in rows:
         if m.period_label in by_label:
@@ -559,7 +559,7 @@ async def bundle_extra_for_bundles(
             )
         )
     ).scalars().all()
-    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 0.5) or 0)
+    overage_tol = float(await settings_service.get(session, "overage_tolerance_gb", 3.0) or 0)
     events_by_label = await _load_events(
         session, panel_id, [period_label], {m.user_uuid for m in rows}
     )

@@ -85,7 +85,7 @@ sequenceDiagram
     E->>E: bundle sub-resellers; Σ usage_limit_GB of services created in month (skip 1GB); ×price; →USDT
     E->>B: send invoice
     B->>R: invoice text + exact-invoice payment button
-    Note over S,R: if unpaid → D+2 reminder, D+4 reminder, D+5 warning + enforcement (dry-run unless enabled)
+    Note over S,R: if unpaid → D+3 reminder, D+5 reminder, D+10 warning, D+30 enforcement (dry-run unless enabled)
     R->>B: choose invoice; submit TXID/receipt
     B->>V: create pending payment for that invoice
     V->>V: owner reviews manually

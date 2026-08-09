@@ -87,7 +87,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
         invoice_hour=_clamp(s.get("invoice_hour"), 0, 23, 9),
         dunning_hour=_clamp(s.get("dunning_hour"), 0, 23, 10),
-        sync_hours=_clamp(s.get("sync_interval_hours"), 1, 24, 6),
+        sync_hours=_clamp(s.get("sync_interval_hours"), 1, 24, 1),
         guard_minutes=_clamp(s.get("guard_interval_minutes"), 1, 60, 10),
         backup_hours=_clamp(s.get("backup_interval_hours"), 1, 24, 2),
         rate_hours=_clamp(s.get("rate_refresh_hours"), 1, 24, 1),

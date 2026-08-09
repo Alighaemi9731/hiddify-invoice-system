@@ -19,7 +19,12 @@ from app.models import (
     StorefrontPlan,
     StorefrontWalletTxn,
 )
-from app.services import storefront, storefront_admin, storefront_audit
+from app.services import (
+    settings_service,
+    storefront,
+    storefront_admin,
+    storefront_audit,
+)
 from tests.pg_barrier import make_engine, requires_pg
 
 
@@ -39,6 +44,9 @@ def _run(body):  # noqa: ANN001, ANN202
 
 
 async def _seed(session):  # noqa: ANN001, ANN202
+    # Pin the global price the below-cost floor is computed from, so the shipped default
+    # can move without rewriting the plan prices below.
+    await settings_service.set_value(session, "default_price_per_gb", 1000)
     panel = Panel(key="p1", host="p1.invalid", proxy_path_enc="panel-secret", owner_uuid="owner")
     session.add(panel)
     await session.flush()

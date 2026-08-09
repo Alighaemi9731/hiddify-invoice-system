@@ -14,6 +14,7 @@ from app.core.db import Base  # noqa: E402
 from app.models import EndUserSnapshot, Invoice, Panel, Reseller  # noqa: E402
 from app.models.enums import InvoiceStatus, PanelStatus  # noqa: E402
 from app.services import broadcast as bc  # noqa: E402
+from app.services import settings_service  # noqa: E402
 
 NOW = dt.datetime.now(dt.timezone.utc)
 
@@ -33,6 +34,10 @@ def _run(body, tmp_path):
 
 
 async def _seed(s):
+    # Pin the per-GB price the «invoice_above» thresholds below are computed from, and
+    # switch off the minimum-sale floor (which would raise every bundle to the same amount).
+    await settings_service.set_value(s, "default_price_per_gb", 1000)
+    await settings_service.set_value(s, "min_sale_toman", 0)
     panel = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="own",
                   status=PanelStatus.ok, last_synced_at=NOW)
     s.add(panel)

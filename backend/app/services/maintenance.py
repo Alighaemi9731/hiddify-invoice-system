@@ -97,7 +97,7 @@ async def prune_old_logs(
     now = now or dt.datetime.now(dt.timezone.utc)
     # NOTE: a missing/invalid value falls back to 90, but an explicit 0 must stay 0 (it
     # disables pruning) — so do NOT use `value or 90`, which would turn 0 into 90.
-    raw = await settings_service.get(session, "log_retention_days", 90)
+    raw = await settings_service.get(session, "log_retention_days", 60)
     try:
         days = int(raw)
     except (TypeError, ValueError):

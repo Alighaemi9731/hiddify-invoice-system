@@ -165,10 +165,10 @@ async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = 
         ["reminder1_day", "reminder2_day", "warning_day", "enforcement_day",
          "enforcement_enabled", "pending_payment_hold_days"],
     )
-    d1 = int(cfg.get("reminder1_day") or 2)
-    d2 = int(cfg.get("reminder2_day") or 4)
-    dw = int(cfg.get("warning_day") or 5)
-    de = int(cfg.get("enforcement_day") or 5)
+    d1 = int(cfg.get("reminder1_day") or 3)
+    d2 = int(cfg.get("reminder2_day") or 5)
+    dw = int(cfg.get("warning_day") or 10)
+    de = int(cfg.get("enforcement_day") or 30)
 
     invoices = (
         await session.execute(

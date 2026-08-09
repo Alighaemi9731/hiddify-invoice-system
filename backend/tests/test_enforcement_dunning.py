@@ -432,6 +432,10 @@ def test_dunning_queues_live_enforcement_instead_of_blocking(tmp_path):
     async def body(s):
         now = dt.datetime.now(dt.timezone.utc)
         await settings_service.set_value(s, "enforcement_enabled", True)
+        # Pin the day-counts this 5-day-old invoice is written against (the shipped
+        # defaults are longer): warning and cutoff both land on D+5.
+        await settings_service.set_value(s, "warning_day", 5)
+        await settings_service.set_value(s, "enforcement_day", 5)
         s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
         r = Reseller(panel_id=1, admin_uuid="A", name="R", bot_chat_id=123,
                      enforcement_state=EnforcementState.active)
@@ -490,7 +494,7 @@ def test_live_queue_is_not_blocked_by_prior_dry_run(tmp_path):
 
 
 def test_completed_restore_moves_enforced_invoice_back_to_overdue(tmp_path, monkeypatch):
-    from app.services import enforcement
+    from app.services import enforcement, settings_service
 
     async def body(s):
         s.add(Panel(id=1, key="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
@@ -499,6 +503,8 @@ def test_completed_restore_moves_enforced_invoice_back_to_overdue(tmp_path, monk
                      max_users_snapshot=100, max_active_users_snapshot=100)
         s.add(r)
         await s.flush()
+        # 8 days old, warning day pinned at 5 → restore must hand it back as past-due.
+        await settings_service.set_value(s, "warning_day", 5)
         invoice = _invoice(r.id, label="2026-05", status=InvoiceStatus.enforced,
                            sent_days_ago=8)
         s.add(invoice)

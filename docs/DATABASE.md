@@ -50,7 +50,7 @@ the rollback target is known without reading the code.
 |-------|--------|--------|---------|
 | **Permanent records** | `panels`, `resellers`, `invoices`, `invoice_lines`, `payments`, `financial_records`, `app_users`, `webauthn_credentials`, `settings`, `bot_users` | Bounded by the business (panels, resellers, months billed, login accounts) | Never auto-deleted |
 | **Operational state** | `end_user_snapshots`, `usage_meters` | One row per current end-user / per user-month | Upserted, not appended; see notes |
-| **Logs / audit** | `sync_runs`, `delivery_log`, `enforcement_actions` | Append-only — would grow forever | **Pruned daily** by `log_retention_days` (default 90), see below |
+| **Logs / audit** | `sync_runs`, `delivery_log`, `enforcement_actions` | Append-only — would grow forever | **Pruned daily** by `log_retention_days` (default 60), see below |
 
 ### Log retention (the daily maintenance sweep)
 

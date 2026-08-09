@@ -26,7 +26,7 @@ async def get_rate(session: AsyncSession) -> int:
 
 
 async def get_default_price_per_gb(session: AsyncSession) -> int:
-    value = await settings_service.get(session, "default_price_per_gb", 1000)
+    value = await settings_service.get(session, "default_price_per_gb", 2000)
     try:
         return int(value)
     except (TypeError, ValueError):

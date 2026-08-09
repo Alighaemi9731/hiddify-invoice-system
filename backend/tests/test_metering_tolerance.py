@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.db import Base
 from app.models import UsageMeter
-from app.services import metering
+from app.services import metering, settings_service
 
 R = "reseller-uuid"
 
@@ -18,6 +18,9 @@ async def test_overage_tolerance_ignores_soft_cutoff(tmp_path):
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
     async with Session() as s:
+        # Pin the tolerance this test's arithmetic is written against (the shipped default is
+        # higher); the property under test is the threshold's semantics, not its value.
+        await settings_service.set_value(s, "overage_tolerance_gb", 0.5)
         s.add_all([
             # xray soft-cutoff: 0.13 GB over → below the 0.5 default tolerance → NOT billed.
             UsageMeter(panel_id=1, user_uuid="soft", period_label="2026-06", added_by_uuid=R,

@@ -29,6 +29,7 @@ from app.core.security import (  # noqa: E402
 )
 from app.models import Invoice, Panel, Payment, Reseller  # noqa: E402
 from app.models.enums import InvoiceStatus, PaymentMethod, PaymentStatus  # noqa: E402
+from app.services import settings_service  # noqa: E402
 
 # Payments now reject malformed tx hashes (payments.BSC_TXID_RE / TON_TXID_RE), so tests use
 # well-formed values: BSC = 0x + 64 hex, TON = a bounded base64/hex string.
@@ -65,6 +66,8 @@ def _run(body):
 
 
 async def _seed(s, with_payments: bool = True):
+    # Pin the per-GB price the expected amounts below are computed from.
+    await settings_service.set_value(s, "default_price_per_gb", 1000)
     p = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o")
     s.add(p)
     await s.flush()

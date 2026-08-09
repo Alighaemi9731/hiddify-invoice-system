@@ -10,6 +10,7 @@ from app.core.db import Base, get_session
 from app.core.portal_auth import ResellerContext, get_current_reseller
 from app.main import app
 from app.models import Panel, Reseller, StorefrontBot, StorefrontPlan
+from app.services import settings_service
 
 
 def _run(body):  # noqa: ANN001, ANN202
@@ -29,6 +30,9 @@ def _run(body):  # noqa: ANN001, ANN202
 
 
 async def _seed(session):  # noqa: ANN001, ANN202
+    # Pin the global price the below-cost floor is computed from, so the shipped default
+    # can move without rewriting the plan prices below.
+    await settings_service.set_value(session, "default_price_per_gb", 1000)
     panel = Panel(key="p1", name="P1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o")
     session.add(panel)
     await session.flush()
