@@ -358,6 +358,91 @@ async def _has_due_invoice(session: AsyncSession, reseller_id: int) -> bool:
     return any(not (inv.deferred_until and inv.deferred_until > today) for inv in invoices)
 
 
+async def _stamp_invoices_enforced(session: AsyncSession, reseller: Reseller) -> int:
+    """Mark EVERY still-owed invoice of a suspended reseller `enforced`.
+
+    Suspension is a RESELLER-level fact — all of that reseller's unpaid months are blocked by
+    the same action — so the invoice list must not label the one invoice that happened to
+    trigger the queue «مسدود» while the reseller's other unpaid months still read
+    «ارسال‌شده»/«سررسید گذشته». (A manual suspend carries no `invoice_id` at all, so it used to
+    stamp nothing.) This is the exact mirror of `_unstamp_invoices_enforced` on restore.
+
+    Only OWED invoices are touched: a payment can land while chunks are still flying, and
+    flipping a PAID invoice to enforced would resurrect it as owed on restore — dunning would
+    then chase settled debt. Returns how many rows actually changed (does NOT commit).
+    """
+    from app.models import Invoice
+    from app.models.enums import InvoiceStatus
+    from app.services import financial_archive, invoice_state
+
+    invoices = (
+        await session.execute(
+            select(Invoice).where(
+                Invoice.reseller_id == reseller.id,
+                Invoice.status.in_(invoice_state.OWED),
+            )
+        )
+    ).scalars().all()
+    changed = 0
+    for inv in invoices:
+        if inv.status == InvoiceStatus.enforced:
+            continue
+        inv.status = InvoiceStatus.enforced
+        # Mirror the flip into the ledger so «تاریخچهٔ مالی» reflects the real state.
+        await financial_archive.record(session, inv, reseller=reseller)
+        changed += 1
+    return changed
+
+
+async def _unstamp_invoices_enforced(session: AsyncSession, reseller: Reseller) -> int:
+    """Reverse of `_stamp_invoices_enforced`: a restored reseller has no `enforced` invoice.
+
+    Each one goes back to the state dunning would give it on its own clock — `overdue` once the
+    hard-warning day has passed (same anchor dunning uses: a payment deadline restarts the
+    cycle, otherwise `sent_at`), `sent` before that. Blanket-`overdue` was fine while only the
+    invoice that triggered enforcement was stamped, but it would now label a month that was
+    issued days ago as past-due; and blanket-`sent` would strand a genuinely overdue invoice,
+    because dunning only flips `sent → overdue` in the warning branch, which never re-fires
+    once the warning is in the delivery log.
+    """
+    import datetime as dt
+
+    from app.models import Invoice
+    from app.models.enums import InvoiceStatus
+    from app.services import financial_archive, periods
+
+    invoices = (
+        await session.execute(
+            select(Invoice).where(
+                Invoice.reseller_id == reseller.id,
+                Invoice.status == InvoiceStatus.enforced,
+            )
+        )
+    ).scalars().all()
+    if not invoices:
+        return 0
+    cfg = await settings_service.get_many(session, ["warning_day"])
+    dw = int(cfg.get("warning_day") or 5)
+    today = tehran_today()
+    for inv in invoices:
+        if inv.deferred_until:
+            anchor = inv.deferred_until
+        elif inv.sent_at is not None:
+            sent_at = inv.sent_at
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
+            anchor = periods.to_local_date(sent_at)
+        else:
+            anchor = None
+        inv.status = (
+            InvoiceStatus.overdue
+            if anchor is not None and (today - anchor).days >= dw
+            else InvoiceStatus.sent
+        )
+        await financial_archive.record(session, inv, reseller=reseller)
+    return len(invoices)
+
+
 _LIVE_ACTION_STATUSES = (
     EnforcementActionStatus.planned,
     EnforcementActionStatus.partial,
@@ -1208,13 +1293,22 @@ async def reassert_enforced(session: AsyncSession, *, limit: int = 50) -> dict:
     users enabled again, queue a USERS-ONLY re-disable. Deliberately users-only — `admins`/`limits`
     are left empty so the limits phase no-ops and the captured pre-suspension limits (the restore
     source) are never overwritten, which is the very thing the re-enforcement guard protects.
+
+    It also repairs DISPLAY drift on the same sweep — every enforced reseller here is one whose
+    unpaid months must all read «مسدود» (see `_stamp_invoices_enforced`). This is the daily
+    catch-all: it heals rows that predate the rule and any path that stamped only the invoice an
+    enforcement action was queued against.
     """
-    out = {"checked": 0, "requeued": 0}
+    out = {"checked": 0, "requeued": 0, "restamped": 0}
     rows = (await session.execute(
         select(Reseller).where(Reseller.enforcement_state == EnforcementState.enforced)
     )).scalars().all()
     for reseller in rows:
         out["checked"] += 1
+        restamped = await _stamp_invoices_enforced(session, reseller)
+        if restamped:
+            await session.commit()
+            out["restamped"] += restamped
         if not await _has_due_invoice(session, reseller.id):
             continue          # debt settled; a restore is that path's job, not ours
         descendants = await _bundle(session, reseller)
@@ -1764,21 +1858,9 @@ async def _process_enforcement_action(
     action.snapshot = snapshot
     flag_modified(action, "snapshot")
 
-    if action.invoice_id:
-        from app.models import Invoice
-        from app.models.enums import InvoiceStatus
-        from app.services import invoice_state
-
-        inv = await session.get(Invoice, action.invoice_id)
-        # Stamp only a still-OWED invoice: a payment can land while chunks are flying, and
-        # flipping a PAID invoice to enforced would resurrect it as overdue on restore —
-        # dunning would then chase settled debt.
-        if inv is not None and inv.status in invoice_state.OWED:
-            inv.status = InvoiceStatus.enforced
-            # Mirror the flip into the ledger so «تاریخچهٔ مالی» reflects the real state.
-            from app.services import financial_archive
-
-            await financial_archive.record(session, inv, reseller=reseller)
+    # Every owed month of this reseller — not just `action.invoice_id` — is blocked by this one
+    # suspension, so every one of them says so.
+    await _stamp_invoices_enforced(session, reseller)
 
     await session.commit()
     log.info(
@@ -1946,19 +2028,7 @@ async def _process_restore_action(
         if descendant.id != reseller.id:
             descendant.enforcement_state = EnforcementState.active
 
-    from app.models import Invoice
-    from app.models.enums import InvoiceStatus
-
-    enforced_invoices = (
-        await session.execute(
-            select(Invoice).where(
-                Invoice.reseller_id == reseller.id,
-                Invoice.status == InvoiceStatus.enforced,
-            )
-        )
-    ).scalars().all()
-    for invoice in enforced_invoices:
-        invoice.status = InvoiceStatus.overdue
+    await _unstamp_invoices_enforced(session, reseller)
 
     source_id = snapshot.get("source_action_id")
     if source_id:

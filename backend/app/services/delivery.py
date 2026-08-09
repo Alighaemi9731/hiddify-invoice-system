@@ -15,7 +15,12 @@ from app.bot import texts
 from app.bot.rtl import rtl
 from app.bot.telegram import build_bot
 from app.models import DeliveryLog, Invoice, Reseller
-from app.models.enums import DeliveryKind, DeliveryStatus, InvoiceStatus
+from app.models.enums import (
+    DeliveryKind,
+    DeliveryStatus,
+    EnforcementState,
+    InvoiceStatus,
+)
 from app.services import invoice_pdf, notifier
 
 log = logging.getLogger("delivery")
@@ -232,7 +237,15 @@ async def send_invoice(
 
     notify_abuse = False
     if status == DeliveryStatus.sent and inv.status == InvoiceStatus.draft:
-        inv.status = InvoiceStatus.sent
+        # A reseller who is ALREADY suspended is suspended for this new month too — no fresh
+        # enforcement action will ever run for it (dunning only queues one while the reseller is
+        # `active`), so without this the newest invoice would sit on «ارسال‌شده»/«سررسید گذشته»
+        # next to the older «مسدود» one and read as if only one month were blocked.
+        inv.status = (
+            InvoiceStatus.enforced
+            if reseller.enforcement_state == EnforcementState.enforced
+            else InvoiceStatus.sent
+        )
         inv.sent_at = dt.datetime.now(dt.timezone.utc)
         # Now it's a real, delivered invoice → enter the durable financial ledger.
         from app.services import financial_archive

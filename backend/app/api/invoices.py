@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
@@ -45,6 +46,8 @@ from app.services import (
 )
 from app.services.periods import parse_period
 from app.services.periods import today as tehran_today
+
+log = logging.getLogger("invoices")
 
 router = APIRouter(
     prefix="/api/invoices", tags=["invoices"], dependencies=[Depends(get_current_subject)]
@@ -521,6 +524,12 @@ async def send_period(period: str, session: AsyncSession = Depends(get_session))
 
 @router.post("/{invoice_id}/cancel", response_model=InvoiceOut)
 async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) -> InvoiceOut:
+    """Void an invoice: it stops being debt but stays in «تاریخچهٔ مالی» as `canceled` (unlike
+    «بازگردانی به پیش‌نویس», which erases it from the ledger). A paid invoice must be un-paid first.
+
+    Canceling REMOVES debt, so it must be able to lift a suspension exactly like a payment does —
+    otherwise voiding a debtor's only invoice would leave them blocked forever with nothing left to
+    pay. Restore is queued only when no other still-due (non-deferred) invoice remains."""
     inv = await session.get(Invoice, invoice_id, with_for_update=True, populate_existing=True)
     if not inv:
         raise HTTPException(404, "Invoice not found")
@@ -528,6 +537,29 @@ async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) 
     inv.status = InvoiceStatus.canceled
     reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
+    if reseller.enforcement_state in (EnforcementState.enforced, EnforcementState.frozen):
+        today = tehran_today()
+        others = (
+            await session.execute(
+                select(Invoice).where(
+                    Invoice.reseller_id == reseller.id,
+                    Invoice.id != inv.id,
+                    Invoice.status.in_(
+                        (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
+                    ),
+                )
+            )
+        ).scalars().all()
+        still_owes = any(not (o.deferred_until and o.deferred_until > today) for o in others)
+        if not still_owes:
+            try:
+                from app.services import enforcement
+
+                await enforcement.queue_restore(
+                    session, reseller, require_no_due=True, reason="cancel"
+                )
+            except Exception:  # noqa: BLE001 — panel creds may be absent; the cancel still stands
+                log.warning("cancel: queue_restore failed for reseller %s", reseller.id, exc_info=True)
     await session.commit()
     return _to_out(inv, reseller.name, panel.key)
 

@@ -15,6 +15,7 @@ import VisibilityIcon from "@mui/icons-material/esm/Visibility";
 import ScheduleIcon from "@mui/icons-material/esm/Schedule";
 import AutorenewIcon from "@mui/icons-material/esm/Autorenew";
 import RestartAltIcon from "@mui/icons-material/esm/RestartAlt";
+import DoDisturbIcon from "@mui/icons-material/esm/DoDisturb";
 import ReceiptLongIcon from "@mui/icons-material/esm/ReceiptLong";
 import PersonOffIcon from "@mui/icons-material/esm/PersonOff";
 import SearchIcon from "@mui/icons-material/esm/Search";
@@ -26,6 +27,7 @@ import {
   listInvoices, listInvoicesPaged, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
   listResellers, bulkDeferInvoices, discardDrafts, recomputeInvoice, revertInvoiceToDraft,
+  cancelInvoice,
 } from "../api/client";
 import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
@@ -168,6 +170,8 @@ export default function Invoices() {
   );
   const unpay = moneyMut((id: number) => unmarkInvoicePaid(id), "پرداخت لغو شد (بازگشت به وضعیت پیشین)");
   const toDraft = moneyMut((id: number) => revertInvoiceToDraft(id), "به پیش‌نویس بازگردانده شد");
+  // Voiding removes debt, so the backend also lifts a suspension the invoice was holding up.
+  const cancel = moneyMut((id: number) => cancelInvoice(id), "فاکتور لغو شد");
   // Takes the deadline as an argument so «حذف مهلت» can pass "" directly instead of relying on
   // a setState + setTimeout(0) landing before the mutation reads it (fragile under concurrent
   // React scheduling — the old code could submit the STALE deadline). Money-relevant (a defer
@@ -242,6 +246,15 @@ export default function Invoices() {
       acts.push({ key: "todraft", label: "بازگردانی به پیش‌نویس", tooltip: "بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از تاریخچهٔ مالی هم حذف می‌شود)", color: "warning", icon: <RestartAltIcon fontSize="small" />, disabled: toDraft.isPending, onClick: () => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id) });
     if (i.status === "paid")
       acts.push({ key: "unpay", label: "لغو پرداخت", color: "warning", icon: <UndoIcon fontSize="small" />, onClick: () => unpay.mutate(i.id) });
+    // Only for a delivered, unpaid invoice: a draft is thrown away with «حذف پیش‌نویس‌ها»
+    // (canceling one would put a never-delivered invoice into the financial ledger).
+    if (owed)
+      acts.push({
+        key: "cancel", label: "لغو فاکتور", color: "error", icon: <DoDisturbIcon fontSize="small" />,
+        tooltip: "باطل‌کردن فاکتور: دیگر بدهی نیست و قابل پرداخت نیست، ولی در تاریخچهٔ مالی به‌عنوان «لغو» می‌ماند. اگر تنها بدهی این نماینده باشد، مسدودی‌اش هم برداشته می‌شود.",
+        disabled: cancel.isPending,
+        onClick: () => confirm(`فاکتور دورهٔ ${i.period_label} برای «${i.reseller_name}» باطل شود؟ مبلغ آن دیگر بدهی حساب نمی‌شود.`) && cancel.mutate(i.id),
+      });
     if (owed)
       acts.push({ key: "defer", label: i.deferred_until ? `مهلت تا ${i.deferred_until}` : "مهلت پرداخت", color: i.deferred_until ? "info" : undefined, icon: <ScheduleIcon fontSize="small" />, onClick: () => deferDlg.openWith({ id: i.id, deferred_until: i.deferred_until || "", defer_note: i.defer_note || "", name: i.reseller_name }) });
     return acts;

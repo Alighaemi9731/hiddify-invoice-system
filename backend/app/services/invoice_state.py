@@ -29,7 +29,9 @@ _TRANSITIONS: dict[S, set[S]] = {
     S.draft:    {S.sent, S.canceled},
     S.sent:     {S.paid, S.overdue, S.enforced, S.canceled, S.draft},
     S.overdue:  {S.paid, S.sent, S.enforced, S.canceled, S.draft},
-    S.enforced: {S.paid, S.sent, S.canceled, S.draft},
+    # A restore hands an invoice back to its own dunning clock — `overdue` if the warning day
+    # has passed, `sent` if not — so both are legal exits from `enforced`.
+    S.enforced: {S.paid, S.sent, S.overdue, S.canceled, S.draft},
     # paid leaves only by an explicit "unmark paid" (→ sent/draft); never directly to
     # canceled/overdue/enforced.
     S.paid:     {S.sent, S.draft},
