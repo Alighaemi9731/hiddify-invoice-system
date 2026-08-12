@@ -63,6 +63,7 @@ _POST_BASELINE_TABLES = {
     "storefront_broadcast_jobs", "storefront_delivery_recipients",
     "payment_settlements",
     "usage_meter_events",
+    "reseller_crm_state", "reseller_followups",
 }
 
 

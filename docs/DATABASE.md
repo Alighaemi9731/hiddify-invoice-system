@@ -48,7 +48,7 @@ the rollback target is known without reading the code.
 
 | Class | Tables | Growth | Cleanup |
 |-------|--------|--------|---------|
-| **Permanent records** | `panels`, `resellers`, `invoices`, `invoice_lines`, `payments`, `financial_records`, `app_users`, `webauthn_credentials`, `settings`, `bot_users` | Bounded by the business (panels, resellers, months billed, login accounts) | Never auto-deleted |
+| **Permanent records** | `panels`, `resellers`, `invoices`, `invoice_lines`, `payments`, `financial_records`, `reseller_crm_state`, `reseller_followups`, `app_users`, `webauthn_credentials`, `settings`, `bot_users` | Bounded by the business (panels, resellers, months billed, login accounts, follow-ups logged) | Never auto-deleted |
 | **Operational state** | `end_user_snapshots`, `usage_meters` | One row per current end-user / per user-month | Upserted, not appended; see notes |
 | **Logs / audit** | `sync_runs`, `delivery_log`, `enforcement_actions` | Append-only — would grow forever | **Pruned daily** by `log_retention_days` (default 60), see below |
 
@@ -238,6 +238,45 @@ reset and panel/reseller deletion — the permanent «تاریخچهٔ مالی�
 | `usage_gb` / `price_per_gb` / `amount_toman` / `amount_usdt` | money facts |
 | `status` | invoice status snapshot |
 | `paid_at` / `txid` | settlement facts (txid cleared if not paid) |
+
+---
+
+## Reseller follow-up («پیگیری»)
+
+The owner's manual outreach memory for the churn board. Written **only** by
+`/api/crm/*`; nothing here affects billing, dunning, or enforcement, and nothing here
+sends a message. Segments themselves are computed live by `app/services/crm.py` and are
+never stored — only the human decisions are.
+
+### `reseller_crm_state` — current follow-up state (1:1, lazily created)
+Created on a reseller's first follow-up. The board LEFT JOINs it, so "hide who I already
+contacted" is one indexed join rather than a correlated MAX() over a growing log. Read
+**fresh on every request** (never cached), so a logged follow-up drops the row off the
+queue immediately.
+
+| Column | Meaning |
+|--------|---------|
+| `id` | PK |
+| `reseller_id` | FK → `resellers` (CASCADE), **unique** |
+| `snoozed_until` | hidden from the default view while ≥ today; expires by date only |
+| `muted` | permanent "never show me this one"; outranks `snoozed_until` |
+| `last_touch_at` / `touch_count` | outreach stamps (clearing a snooze is not a touch) |
+| `note` | the owner's pinned note — **not** `resellers.comment`, which sync overwrites |
+
+### `reseller_followups` — append-only outreach log
+Never updated, never pruned. Denormalized like `financial_records` so the history stays
+readable after the reseller row is gone — hence `ON DELETE SET NULL`, not CASCADE.
+
+| Column | Meaning |
+|--------|---------|
+| `id` | PK |
+| `reseller_id` | FK → `resellers` (**SET NULL**) |
+| `reseller_admin_uuid` / `reseller_name` / `panel_key` | denormalized labels (kept after deletion) |
+| `segment` | the bucket at the moment of the touch (segments are recomputed live, so this is the only record of *why* they were contacted) |
+| `note` | what happened |
+| `snoozed_until` / `muted` | what was chosen at the time |
+| `actor` | the web-panel username that logged it |
+| `created_at` | timestamp (indexed for the paged log and the per-reseller timeline) |
 
 ---
 

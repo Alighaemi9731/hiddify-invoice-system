@@ -338,6 +338,20 @@ DEFS: list[SettingDef] = [
     SettingDef("user_create_gb_options", [20, 30, 40, 50, 80, 100], False, "usercreate"),
     SettingDef("user_create_day_options", [30, 60], False, "usercreate"),
     SettingDef("user_create_bulk_counts", [5, 10, 20], False, "usercreate"),
+    # Reseller follow-up board («پیگیری») — the owner's churn thresholds. Panel-only: nothing
+    # here sends a message or changes billing; they only decide which bucket a reseller lands
+    # in on the board. "Days" are counted from the reseller's LAST BILLABLE SALE.
+    SettingDef("crm_dormant_days", 14, False, "crm"),
+    SettingDef("crm_churned_days", 45, False, "crm"),
+    # A brand-new admin has legitimately sold nothing yet; below this age they are not called
+    # "never activated". Above `crm_onboarding_days` they stop being excused as newcomers.
+    SettingDef("crm_never_active_min_age_days", 14, False, "crm"),
+    SettingDef("crm_onboarding_days", 30, False, "crm"),
+    # Month-to-date volume is projected to a full month, then compared with the mean of the
+    # previous 3 months: under `declining` percent = shrinking, over `growing` = expanding.
+    SettingDef("crm_declining_pct", 50, False, "crm"),
+    SettingDef("crm_growing_pct", 125, False, "crm"),
+    SettingDef("crm_snooze_default_days", 15, False, "crm"),
     # Message templates
     SettingDef("tpl_welcome", _TPL_WELCOME, False, "templates"),
     SettingDef("tpl_membership", _TPL_MEMBERSHIP, False, "templates"),
@@ -410,6 +424,18 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "enforcement_admin_chunk_size": (1, 50),
     "enforcement_panel_concurrency": (1, 20),
     "pending_payment_hold_days": (1, 365),
+    # Follow-up board. Lower bound 1 for the same reason as `storefront_usage_alert_percent`
+    # above: the `.get(key, (0, None))` fallback admits 0, and a 0 here is not a mild setting
+    # — `crm_dormant_days = 0` buckets every reseller as dormant, `crm_declining_pct = 0`
+    # turns the shrink rule off invisibly. `crm_growing_pct` starts at 100 because "growing"
+    # means "above the previous 3-month mean"; under 100 it would fire on a decline.
+    "crm_dormant_days": (1, 365),
+    "crm_churned_days": (1, 365),
+    "crm_never_active_min_age_days": (1, 365),
+    "crm_onboarding_days": (1, 365),
+    "crm_declining_pct": (1, 100),
+    "crm_growing_pct": (100, 1000),
+    "crm_snooze_default_days": (1, 365),
     "kick_grace_minutes": (0, 24 * 60),
     "min_confirmations": (0, 10_000),
     "ton_amount_tolerance_pct": (0, 100),

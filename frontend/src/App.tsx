@@ -19,6 +19,7 @@ const Invoices = lazy(() => import("./pages/Invoices"));
 const Payments = lazy(() => import("./pages/Payments"));
 const Debts = lazy(() => import("./pages/Debts"));
 const Sales = lazy(() => import("./pages/Sales"));
+const Followups = lazy(() => import("./pages/Followups"));
 const StorefrontAnalytics = lazy(() => import("./pages/StorefrontAnalytics"));
 const FinancialHistory = lazy(() => import("./pages/FinancialHistory"));
 const Logs = lazy(() => import("./pages/Logs"));
@@ -117,6 +118,7 @@ export default function App() {
         <Route path="/payments" element={<Payments />} />
         <Route path="/debts" element={<Debts />} />
         <Route path="/sales" element={<Sales />} />
+        <Route path="/followups" element={<Followups />} />
         <Route path="/storefront-analytics" element={<StorefrontAnalytics />} />
         <Route path="/financial-history" element={<FinancialHistory />} />
         <Route path="/broadcast" element={<Broadcast />} />

@@ -17,6 +17,7 @@ import DnsIcon from "@mui/icons-material/esm/Dns";
 import ChatBubbleOutlineIcon from "@mui/icons-material/esm/ChatBubbleOutline";
 import TuneRoundedIcon from "@mui/icons-material/esm/TuneRounded";
 import StorefrontIcon from "@mui/icons-material/esm/Storefront";
+import TrackChangesIcon from "@mui/icons-material/esm/TrackChanges";
 import ExpandMoreIcon from "@mui/icons-material/esm/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/esm/CheckCircle";
 import InfoOutlinedIcon from "@mui/icons-material/esm/InfoOutlined";
@@ -347,6 +348,43 @@ const SECTIONS: Section[] = [
           { key: "user_create_gb_options", label: "حجم‌های مجاز (گیگابایت، با کاما)", help: "مثلاً: 20, 30, 50, 100", type: "csv", dir: "ltr" },
           { key: "user_create_day_options", label: "مدت‌های مجاز (روز، با کاما)", help: "مثلاً: 30, 60", type: "csv", dir: "ltr" },
           { key: "user_create_bulk_counts", label: "تعدادهای گروهی مجاز (با کاما)", help: "مثلاً: 5, 10, 20", type: "csv", dir: "ltr" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "crm",
+    title: "پیگیری نمایندگان",
+    icon: <TrackChangesIcon fontSize="small" />,
+    note:
+      "این آستانه‌ها فقط تعیین می‌کنند هر نماینده در صفحهٔ «پیگیری» در کدام دسته بیفتد. " +
+      "هیچ‌کدام روی فاکتور، مسدودسازی یا ارسال پیام اثر ندارند. «روز» از آخرین سرویسِ " +
+      "قابل‌فاکتوری که فروخته شمرده می‌شود.",
+    subs: [
+      {
+        title: "بی‌فروشی",
+        fields: [
+          { key: "crm_dormant_days", label: "بعد از چند روز بی‌فروشی «خوابیده» شود؟", type: "number", min: 1, max: 365, help: "پیش‌فرض ۱۴ روز. هرچه کمتر، فهرست پیگیری شلوغ‌تر ولی زودهنگام‌تر." },
+          { key: "crm_churned_days", label: "بعد از چند روز «ریزش‌کرده» شود؟", type: "number", min: 1, max: 365, help: "پیش‌فرض ۴۵ روز. باید از عدد بالا بزرگ‌تر باشد." },
+        ],
+      },
+      {
+        title: "حساب‌های تازه",
+        fields: [
+          { key: "crm_never_active_min_age_days", label: "حداقل سن حساب برای برچسب «هرگز فعال نشده» (روز)", type: "number", min: 1, max: 365, help: "زیر این سن، نفروختن طبیعی است و «تازه‌وارد» شمرده می‌شود." },
+          { key: "crm_onboarding_days", label: "تا چند روز «تازه‌وارد» بماند؟", type: "number", min: 1, max: 365, help: "در این مدت هیچ برچسب هشداری نمی‌گیرد." },
+        ],
+      },
+      {
+        title: "روند فروش",
+        fields: [
+          { key: "crm_declining_pct", label: "«رو به افول» زیر چند درصدِ میانگین ۳ ماه؟", type: "number", min: 1, max: 100, help: "فروش این ماه به کل ماه تعمیم داده می‌شود و با میانگین سه ماه قبل مقایسه می‌شود. پیش‌فرض ۵۰٪.", advanced: true },
+          { key: "crm_growing_pct", label: "«در حال رشد» بالای چند درصد؟", type: "number", min: 100, max: 1000, help: "پیش‌فرض ۱۲۵٪.", advanced: true },
+        ],
+      },
+      {
+        fields: [
+          { key: "crm_snooze_default_days", label: "مهلت پیش‌فرض تعویق بعد از هر پیگیری (روز)", type: "number", min: 1, max: 365, help: "هنگام ثبت پیگیری همین عدد از پیش انتخاب می‌شود؛ برای هر مورد قابل تغییر است." },
         ],
       },
     ],

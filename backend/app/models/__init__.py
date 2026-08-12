@@ -23,6 +23,7 @@ from app.models.payment import Payment, PaymentSettlement
 from app.models.portal_login_nonce import PortalLoginNonce
 from app.models.portal_session_epoch import PortalSessionEpoch
 from app.models.reseller import Reseller
+from app.models.reseller_crm import ResellerCrmState, ResellerFollowup
 from app.models.setting import Setting
 from app.models.storefront import (
     StorefrontApiCommand,
@@ -47,6 +48,8 @@ __all__ = [
     "BotUser",
     "Panel",
     "Reseller",
+    "ResellerCrmState",
+    "ResellerFollowup",
     "EndUserSnapshot",
     "Invoice",
     "InvoiceLine",

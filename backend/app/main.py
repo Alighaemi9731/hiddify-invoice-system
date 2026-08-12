@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app import __version__
 from app.api import (
     auth,
+    crm,
     invoices,
     meta,
     operations,
@@ -144,6 +145,7 @@ app.include_router(resellers.router)
 app.include_router(invoices.router)
 app.include_router(payments.router)
 app.include_router(reports.router)
+app.include_router(crm.router)
 app.include_router(operations.router)
 app.include_router(recovery.router)
 app.include_router(settings_api.router)

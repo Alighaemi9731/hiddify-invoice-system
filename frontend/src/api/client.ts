@@ -417,6 +417,57 @@ export const getDashboard = (period?: string) =>
   api.get("/api/reports/dashboard", { params: { period } })
     .then((r) => r.data as DashboardSummary);
 
+// ---- reseller follow-up board (churn segmentation + snooze-able work queue) ----
+// Nothing here sends a message: the owner DMs the reseller themselves and only records that
+// they did, so the same person stops resurfacing on the next pass.
+export type CrmSegment =
+  | "suspended" | "frozen" | "debtor" | "never_active" | "onboarding"
+  | "churned" | "dormant" | "declining" | "growing" | "healthy";
+
+export interface CrmBoardRow {
+  reseller_id: number; reseller_name: string; admin_uuid: string;
+  panel_id: number; panel_key: string;
+  segment: CrmSegment; sub_resellers: number; registered: boolean;
+  value_at_risk_toman: number;
+  mtd_services: number; mtd_gb: number; projected_gb: number; avg_prev_gb: number;
+  last_sale_date: string | null; days_since_last_sale: number | null; account_age_days: number;
+  outstanding_toman: number; outstanding_count: number; oldest_unpaid_period: string | null;
+  last_touch_at: string | null; touch_count: number;
+  snoozed_until: string | null; muted: boolean; note: string; due: boolean;
+  trend_gb: number[];
+}
+export interface CrmSummary {
+  counts: Record<string, number>;
+  total: number; due: number; snoozed: number; muted: number;
+  snooze_default_days: number; generated_at: string;
+}
+export interface CrmMonthPoint { label: string; gb: number; services: number; amount_toman: number }
+export interface CrmFollowupRow {
+  id: number; reseller_id: number | null; reseller_name: string; reseller_admin_uuid: string;
+  panel_key: string; segment: string; note: string; snoozed_until: string | null;
+  muted: boolean; actor: string; created_at: string;
+}
+export interface CrmResellerDetail {
+  row: CrmBoardRow; months: CrmMonthPoint[]; followups: CrmFollowupRow[];
+}
+export interface CrmFollowupBody {
+  note?: string; snooze_days?: number | null; snooze_until?: string | null;
+  muted?: boolean; pinned_note?: string | null;
+}
+
+export const getCrmBoardPaged = (params: any = {}, signal?: AbortSignal) =>
+  pagedGet<CrmBoardRow>("/api/crm/board", params, signal);
+export const getCrmSummary = (signal?: AbortSignal) =>
+  api.get("/api/crm/summary", { signal }).then((r) => r.data as CrmSummary);
+export const getCrmReseller = (id: number, signal?: AbortSignal) =>
+  api.get(`/api/crm/reseller/${id}`, { signal }).then((r) => r.data as CrmResellerDetail);
+export const logCrmFollowup = (id: number, body: CrmFollowupBody) =>
+  api.post(`/api/crm/reseller/${id}/followup`, body).then((r) => r.data);
+export const logCrmFollowupsBulk = (body: CrmFollowupBody & { reseller_ids: number[] }) =>
+  api.post("/api/crm/followups/bulk", body).then((r) => r.data);
+export const clearCrmSnooze = (id: number) =>
+  api.delete(`/api/crm/reseller/${id}/snooze`).then((r) => r.data);
+
 // ---- storefront-bot analytics (fleet-wide, owner side) ----
 export interface SalesWindow {
   gross_toman: number; reversals_toman: number; net_toman: number; orders: number;

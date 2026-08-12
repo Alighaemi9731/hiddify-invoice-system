@@ -222,7 +222,7 @@ One accent hex per destination, shared by the sidebar icon chips (admin + portal
 | Tools | `#8b5cf6` | `src/components/Layout.tsx:51` |
 | Settings | `#64748b` | `src/components/Layout.tsx:52` |
 | Help | `#06b6d4` | `src/components/Layout.tsx:53`, `src/portal/PortalLayout.tsx:40` |
-| Support (portal) | `#a855f7` | `src/portal/PortalLayout.tsx:39` |
+| Follow-ups «پیگیری» / Support (portal) | `#a855f7` | `src/components/Layout.tsx:59`, `src/portal/PortalLayout.tsx:39` |
 
 The chip renders the icon in the hex over `alpha(hex, dark 0.22 / light 0.14)`
 (`src/components/Layout.tsx:186`, `src/portal/PortalLayout.tsx:149`).
@@ -243,6 +243,14 @@ the palette in §2.1):
 | Storefront order | provisioned→`success`, failed→`error`, disabled→`warning`, else `default` | `src/portal/storefront/CustomerDetailPage.tsx:42-45` |
 | Storefront campaign | completed→`success`, canceled→`warning`, running→`info`, else `default` | `src/portal/storefront/StorefrontCampaignsPage.tsx:27-28` |
 | Portal notification severity | info/success/warning/error → same palette color, rendered as a 3px inline-start edge + `alpha(color, 0.05)` bg | `src/portal/NotificationsBell.tsx:13-15,66-68` |
+| Reseller follow-up segment | `color` × `variant` — suspended→`error`/filled, frozen→`error`/outlined, debtor→`warning`/filled, churned→`warning`/outlined, never_active→`default`/filled, dormant→`default`/outlined, onboarding→`info`/filled, declining→`info`/outlined, healthy→`success`/filled, growing→`success`/outlined | `src/pages/Followups/segments.tsx` |
+
+The follow-up board is the one place with **more statuses than palette colors**: MUI's
+`color` prop offers six visually distinct values in this theme (`secondary` resolves to the
+same `#ff9500` as `warning`) and the board has ten mutually exclusive segments. Pairing each
+color with `filled` / `outlined` covers all ten without introducing a single hex — filled
+reads as the more urgent half of each pair. Per-segment accent hexes are allowed only on the
+summary `StatCard` row, which already takes `navPalette` values.
 
 **StatusPill** (resellers) is palette-derived since DS02 (`v1.100.6`):
 `statusPillColors(palette)` in `src/themeTokens.ts` — active → `success`,

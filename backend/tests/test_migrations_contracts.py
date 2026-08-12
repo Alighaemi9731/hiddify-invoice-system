@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "a4e7c2b9f1d6"
+HEAD = "b3f6a1d94c27"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -111,6 +111,37 @@ def test_storefront_credits_communications_schema_contract(tmp_path):
     indexes = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='index'")}
     assert {"ix_sfdr_claimable", "ix_sfdr_job_status", "ix_sfbjob_shop_created"} <= indexes
+    conn.close()
+
+
+def test_reseller_crm_schema_contract(tmp_path):
+    """The follow-up board's two tables, their indexes, and the `muted` boolean default all
+    reach a fresh HEAD database. `muted` must default to a real false — a NULL/absent default
+    would make an untouched reseller's state row unfilterable in the "due" view."""
+    db = tmp_path / "crm.db"
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"reseller_crm_state", "reseller_followups"} <= tables
+    state_cols = {row[1]: row for row in conn.execute("PRAGMA table_info(reseller_crm_state)")}
+    assert {"reseller_id", "snoozed_until", "muted", "last_touch_at", "touch_count",
+            "note"} <= set(state_cols)
+    assert state_cols["muted"][3] == 1                                  # NOT NULL
+    assert str(state_cols["muted"][4]).strip("'\"").lower() in {"0", "false"}
+    assert str(state_cols["touch_count"][4]).strip("'\"") == "0"
+    followup_cols = {row[1] for row in conn.execute("PRAGMA table_info(reseller_followups)")}
+    assert {"reseller_id", "reseller_admin_uuid", "reseller_name", "panel_key", "segment",
+            "note", "snoozed_until", "muted", "actor"} <= followup_cols
+    indexes = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert {"ix_crmfollowup_reseller_created", "ix_crmfollowup_created",
+            "ix_reseller_crm_state_reseller_id"} <= indexes
+    # SET NULL, not CASCADE: an outreach record must outlive the reseller row it points at.
+    followup_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reseller_followups'"
+    ).fetchone()[0]
+    assert "SET NULL" in followup_sql
     conn.close()
 
 
