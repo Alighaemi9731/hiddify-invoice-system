@@ -96,11 +96,18 @@ class StorefrontBot(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True)
     channel_verification_error: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
-    # One-time free trial (each customer can claim it once). Default ON for everyone, 1 GB · 1 day —
-    # at/under the owner's free-config threshold, so the trial config is free for the reseller too.
+    # Free trial (each customer can claim it once per "trial generation"). Default ON for everyone,
+    # 1 GB · 1 day. The quota is excluded from the reseller's invoice entirely (see
+    # `storefront.trial_user_uuids`), so the trial is free for the reseller and paid for by the
+    # platform owner — which is why `storefront_trial_max_gb` caps what a shop may set here.
     free_trial_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     free_trial_gb: Mapped[int] = mapped_column(Integer, default=1)
     free_trial_days: Mapped[int] = mapped_column(Integer, default=1)
+    # The `YYYY-MM` Gregorian billing month in which this shop last re-armed its customers' trials.
+    # A shop admin may do that AT MOST ONCE PER MONTH; NULL = never. Same string-period idiom as
+    # `Reseller.gb_cap_alerted_period` — the month is derived in Asia/Tehran via `periods`, never
+    # from a raw UTC `.date()`.
+    trial_reset_period: Mapped[str | None] = mapped_column(String(7), nullable=True)
 
     # Extra Telegram user-ids allowed to manage this shop (comma-separated), in addition to the
     # owning reseller's own `bot_chat_id`. Lets the shop owner appoint co-managers.

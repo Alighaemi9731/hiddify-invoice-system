@@ -33,6 +33,8 @@ from app.models import (
     StorefrontWalletTxn,
 )
 from app.services import (
+    periods,
+    settings_service,
     storefront,
     storefront_audit,
     storefront_credit,
@@ -730,8 +732,12 @@ async def update_trial(
         intent["enabled"] = bool(enabled)
     if gb is not _UNSET:
         intent["gb"] = int(gb)  # type: ignore[arg-type]
-        if not 1 <= intent["gb"] <= 1000:
-            raise AdminCommandError("validation", "trial gb out of range")
+        # Bounded by the OWNER's cap, not a constant: a trial's quota is excluded from the
+        # reseller's invoice entirely, so the platform owner pays for whatever a shop puts here.
+        max_gb = await storefront.trial_max_gb(session)
+        if not 1 <= intent["gb"] <= max_gb:
+            raise AdminCommandError(
+                "validation", f"حجم تست رایگان باید بین ۱ و {max_gb} گیگابایت باشد")
     if days is not _UNSET:
         intent["days"] = int(days)  # type: ignore[arg-type]
         if not 1 <= intent["days"] <= 90:
@@ -757,6 +763,144 @@ async def update_trial(
         session, shop, ctx, action="settings.trial", command=command,
         before=before, mutate=mutate,
     )
+
+
+async def trial_reset_status(session: AsyncSession, shop: StorefrontBot) -> dict:
+    """What the trial-reset button should render: whether it is available, why not, and how many
+    customers a reset would actually re-arm. Read-only — safe to call from a GET."""
+    period = periods.current_month().label
+    eligible = int((await session.execute(
+        select(func.count()).select_from(StorefrontCustomer).where(
+            StorefrontCustomer.storefront_bot_id == shop.id,
+            StorefrontCustomer.free_trial_used.is_(True),
+        )
+    )).scalar_one() or 0)
+    enabled = await storefront.trial_reset_enabled(session)
+    done_this_month = shop.trial_reset_period == period
+    return {
+        "period": period,
+        "last_reset_period": shop.trial_reset_period,
+        "available": enabled and not done_this_month,
+        "reason": (None if enabled and not done_this_month
+                   else ("disabled" if not enabled else "already_reset_this_month")),
+        "eligible_count": eligible,
+        "max_gb": await storefront.trial_max_gb(session),
+    }
+
+
+async def reset_free_trials(
+    session: AsyncSession, shop_id: int, ctx: CommandContext,
+) -> CommandResult:
+    """Re-arm every customer's free trial for one shop, AT MOST ONCE PER GREGORIAN MONTH, and
+    announce it to the shop's customers.
+
+    Why once a month, enforced by a stored `YYYY-MM` rather than a rolling timestamp: the trial's
+    quota is excluded from the reseller's invoice entirely, so every reset is quota the platform
+    owner gives away. Pinning it to the billing month makes the cost per shop countable in the
+    same units the invoices use, and makes "have I already done it?" answerable without clock math.
+
+    The announcement is enqueued INSIDE this transaction as a durable delivery job (the same
+    machinery a normal broadcast uses, drained by the `storefront_delivery` worker) — so it can
+    never fire for a rolled-back reset, and a committed reset can never lose its announcement.
+    A replayed idempotency key returns the cached response without re-running any of this, so no
+    customer is re-armed twice and nobody is messaged twice.
+    """
+    from app.services import storefront_delivery
+
+    if not await storefront.trial_reset_enabled(session):
+        raise AdminCommandError(
+            "trial_reset_disabled", "ریست تست رایگان توسط مدیر سامانه غیرفعال شده است",
+            response_status=422)
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    period = periods.current_month().label
+    # The idempotency claim comes FIRST, before the once-a-month check. The other way round, a
+    # retried request (dropped response, tapped-twice button) would be answered
+    # "already reset this month" by the reset it had itself just performed, instead of replaying
+    # its own cached success. Same reason `enqueue_broadcast` claims before counting its audience.
+    command, replay = await _claim_db_command(
+        session, shop, ctx, action="trial.reset", intent={"period": period})
+    if replay is not None:
+        return replay
+    if shop.trial_reset_period == period:
+        exc = AdminCommandError(
+            "already_reset_this_month",
+            f"تست‌های این فروشگاه در دورهٔ {period} یک بار ریست شده‌اند؛ "
+            "ریست بعدی از ماه میلادی آینده ممکن است.",
+            response_status=409,
+            response_body={"error": "already_reset_this_month", "period": period})
+        await _cache_known_failure(
+            session, shop, ctx, action="trial.reset", command=command, exc=exc)
+        raise exc
+
+    customers = await storefront.customers_in_segment(session, shop.id, "all")
+    if len(customers) > storefront.AUDIENCE_CAP:
+        exc = AdminCommandError(
+            "audience_too_large", f"audience exceeds {storefront.AUDIENCE_CAP}",
+            response_status=422,
+            response_body={"error": "audience_too_large", "count": len(customers)})
+        await _cache_known_failure(
+            session, shop, ctx, action="trial.reset", command=command, exc=exc)
+        raise exc
+    text = await _trial_reset_announcement(session, shop)
+    before = {"trial_reset_period": shop.trial_reset_period}
+
+    async def mutate(_version: int) -> _Mutation:
+        # synchronize_session=False: a bulk UPDATE must not try to reconcile the ORM identity map
+        # (the customer rows are not loaded here, and matching them one by one would turn one
+        # statement into thousands).
+        result = await session.execute(
+            update(StorefrontCustomer)
+            .where(
+                StorefrontCustomer.storefront_bot_id == shop.id,
+                StorefrontCustomer.free_trial_used.is_(True),
+            )
+            .values(free_trial_used=False)
+            .execution_options(synchronize_session=False)
+        )
+        reset_count = int(getattr(result, "rowcount", 0) or 0)
+        # …but a bulk UPDATE the ORM didn't synchronize leaves every already-loaded customer
+        # reporting the OLD flag. `customers` above are exactly the rows just changed, so expire
+        # that one attribute: anything reading it later in this session (or a caller reusing the
+        # session) sees the truth, and nothing else is re-fetched.
+        for customer in customers:
+            session.expire(customer, ["free_trial_used"])
+        shop.trial_reset_period = period
+        job = await storefront_delivery.snapshot_job(
+            session, storefront_bot_id=shop.id, kind="broadcast", segment="all",
+            message_text=text, actor_telegram_id=ctx.actor_telegram_id,
+            idempotency_key=f"trial-reset-notify:{ctx.idempotency_key}", customers=customers)
+        await session.flush()
+        body = {"reset_count": reset_count, "notified": int(job.total_count or 0),
+                "job_id": job.id, "period": period}
+        return _Mutation(body, {"trial_reset_period": period, **body}, "settings", "trial_reset")
+
+    return await _execute(
+        session, shop, ctx, action="trial.reset", command=command,
+        before=before, mutate=mutate,
+    )
+
+
+async def _trial_reset_announcement(session: AsyncSession, shop: StorefrontBot) -> str:
+    """The owner-editable customer announcement, rendered for this shop.
+
+    Falls back to the registered default when the template has been edited into something with an
+    unknown placeholder — a shop's customers getting a raw `{oops}` is worse than losing the
+    owner's wording, and a KeyError here would roll back the whole reset.
+    """
+    tpl = await settings_service.get(session, "tpl_storefront_trial_reset", "") or ""
+    fields = {
+        "shop": (f"@{shop.bot_username}" if shop.bot_username else "فروشگاه ما"),
+        "gb": min(int(shop.free_trial_gb or 1), await storefront.trial_max_gb(session)),
+        "days": int(shop.free_trial_days or 1),
+    }
+    for candidate in (tpl, settings_service.default_for("tpl_storefront_trial_reset") or ""):
+        try:
+            rendered = candidate.format(**fields).strip()
+        except (KeyError, IndexError, ValueError):
+            continue
+        if rendered:
+            return rendered[:4000]
+    return "🎁 تست رایگان دوباره برای شما فعال شد."
 
 
 async def update_messages(

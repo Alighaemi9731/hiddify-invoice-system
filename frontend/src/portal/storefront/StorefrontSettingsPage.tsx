@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
-  Alert, Box, Button, Chip, FormControlLabel, Grid, Stack, Switch, TextField, Typography,
+  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  FormControlLabel, Grid, Stack, Switch, TextField, Typography,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import SaveIcon from "@mui/icons-material/esm/Save";
@@ -10,7 +11,7 @@ import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
 import { SectionCard } from "../ui";
 import {
-  deleteStorefrontChannel, getStorefrontSettings, saveStorefrontChannel,
+  deleteStorefrontChannel, getStorefrontSettings, resetStorefrontTrials, saveStorefrontChannel,
   setStorefrontChannelEnabled, storefrontQueryKeys, updateStorefrontSettings,
 } from "./api";
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
@@ -18,7 +19,7 @@ import type { StorefrontOutletContext } from "./StorefrontShell";
 import type {
   StorefrontMessageSettings, StorefrontPaymentSettings, StorefrontSettings,
   StorefrontSettingsByGroup, StorefrontSettingsGroup, StorefrontShopStateSettings,
-  StorefrontTrialSettings, Versioned,
+  StorefrontTrialReset, StorefrontTrialSettings, Versioned,
 } from "./types";
 import { commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
 
@@ -26,7 +27,8 @@ type SettingsCommand =
   | { type: "settings"; group: StorefrontSettingsGroup; body: Partial<StorefrontSettingsByGroup[StorefrontSettingsGroup]>; etag?: string }
   | { type: "channel-save"; channelId: string; etag?: string }
   | { type: "channel-enabled"; enabled: boolean; etag?: string }
-  | { type: "channel-delete"; etag?: string };
+  | { type: "channel-delete"; etag?: string }
+  | { type: "trial-reset"; etag?: string };
 
 const translateCardDigits = (value: string) => value
   .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
@@ -77,13 +79,16 @@ export default function StorefrontSettingsPage() {
       if (input.type === "settings") {
         return updateStorefrontSettings(shop.id, input.group, input.body, etag, key);
       }
+      if (input.type === "trial-reset") return resetStorefrontTrials(shop.id, etag, key);
       if (input.type === "channel-save") return saveStorefrontChannel(shop.id, input.channelId, etag, key);
       if (input.type === "channel-enabled") return setStorefrontChannelEnabled(shop.id, input.enabled, etag, key);
       return deleteStorefrontChannel(shop.id, etag, key);
     },
     {
       onSuccess: async (result, variables) => {
-        resetAfterSave.current.add(variables.type === "settings" ? variables.group : "channel");
+        resetAfterSave.current.add(
+          variables.type === "settings" ? variables.group
+            : variables.type === "trial-reset" ? "trial" : "channel");
         if (result.etag) {
           queryClient.setQueryData<Versioned<StorefrontSettings>>(queryKey, (current) =>
             current ? { ...current, etag: result.etag } : current);
@@ -121,7 +126,10 @@ export default function StorefrontSettingsPage() {
         && (payment.card_holder?.trim().length || 0) <= 128)
   ) && (!payment.pay_usdt_enabled || validUsdtAddress(payment.usdt_address))
     && (!payment.pay_ton_enabled || validTonAddress(payment.ton_address));
-  const trialValid = !!trial && trial.free_trial_gb >= 1 && trial.free_trial_gb <= 1000
+  // The ceiling comes from the server (the owner pays for every trial GB), never a constant.
+  const trialMaxGb = query.data?.data.trial.reset.max_gb ?? 1;
+  const trialReset = query.data?.data.trial.reset;
+  const trialValid = !!trial && trial.free_trial_gb >= 1 && trial.free_trial_gb <= trialMaxGb
     && trial.free_trial_days >= 1 && trial.free_trial_days <= 90;
   const messagesValid = !!messages && (messages.welcome_text?.length || 0) <= 1000
     && (messages.support_contact?.length || 0) <= 128;
@@ -177,11 +185,18 @@ export default function StorefrontSettingsPage() {
                 <Box component="form" onSubmit={(event: FormEvent) => { event.preventDefault(); if (trialValid) saveGroup("trial", trial); }}>
                   <Stack spacing={1.5}>
                     <FormControlLabel control={<Switch checked={trial.free_trial_enabled} onChange={(_, value) => setTrial({ ...trial, free_trial_enabled: value })} />} label="تست رایگان فعال باشد" />
-                    <TextField label="حجم (گیگابایت)" type="number" value={trial.free_trial_gb} error={trial.free_trial_gb < 1 || trial.free_trial_gb > 1000} inputProps={{ min: 1, max: 1000 }} onChange={(event) => setTrial({ ...trial, free_trial_gb: Number(event.target.value) })} />
+                    <TextField label="حجم (گیگابایت)" type="number" value={trial.free_trial_gb} error={trial.free_trial_gb < 1 || trial.free_trial_gb > trialMaxGb} helperText={`حداکثر ${trialMaxGb} گیگابایت`} inputProps={{ min: 1, max: trialMaxGb }} onChange={(event) => setTrial({ ...trial, free_trial_gb: Number(event.target.value) })} />
                     <TextField label="مدت (روز)" type="number" value={trial.free_trial_days} error={trial.free_trial_days < 1 || trial.free_trial_days > 90} inputProps={{ min: 1, max: 90 }} onChange={(event) => setTrial({ ...trial, free_trial_days: Number(event.target.value) })} />
                     <SaveButton disabled={!trialValid || !trialDirty || mutation.isPending} />
                   </Stack>
                 </Box>
+                {trialReset && (
+                  <TrialResetPanel
+                    reset={trialReset}
+                    busy={mutation.isPending}
+                    onReset={() => { setSaved(false); mutation.mutate({ type: "trial-reset" }); }}
+                  />
+                )}
               </SectionCard>
             </Grid>
 
@@ -275,6 +290,71 @@ export default function StorefrontSettingsPage() {
 
 function SaveButton({ disabled }: { disabled: boolean }) {
   return <Button type="submit" variant="contained" startIcon={<SaveIcon />} disabled={disabled} sx={{ alignSelf: "flex-start" }}>ذخیره</Button>;
+}
+
+/**
+ * The once-a-month free-trial re-arm. Confirmed rather than one-click: it re-arms every customer
+ * AND messages the whole shop, and it cannot be undone or repeated until next month — so the
+ * dialog states the real counts instead of a vague warning.
+ */
+function TrialResetPanel({
+  reset, busy, onReset,
+}: { reset: StorefrontTrialReset; busy: boolean; onReset: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Divider sx={{ my: 2 }} />
+      <Stack spacing={1.5}>
+        <Typography variant="body2" color="text.secondary">
+          یک بار در هر ماه میلادی می‌توانید تست رایگان همهٔ مشتریان را دوباره فعال کنید تا کسانی
+          که قبلاً تستشان را گرفته‌اند، بتوانند دوباره امتحان کنند.
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          {reset.last_reset_period
+            ? `آخرین ریست: دورهٔ ${reset.last_reset_period}`
+            : "تا امروز هیچ ریستی انجام نشده است."}
+        </Typography>
+        {reset.reason === "disabled" && (
+          <Alert severity="info">این قابلیت توسط مدیر سامانه غیرفعال شده است.</Alert>
+        )}
+        {reset.reason === "already_reset_this_month" && (
+          <Alert severity="info">
+            تست‌ها در دورهٔ {reset.period} یک بار ریست شده‌اند؛ ریست بعدی از ماه میلادی آینده
+            ممکن است.
+          </Alert>
+        )}
+        <Button
+          variant="outlined" color="warning" disabled={!reset.available || busy}
+          onClick={() => setOpen(true)} sx={{ alignSelf: "flex-start" }}
+        >
+          ریست ماهانهٔ تست‌ها
+        </Button>
+      </Stack>
+      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>ریست ماهانهٔ تست رایگان</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            <Typography variant="body2">
+              {reset.eligible_count} مشتری که تستشان را مصرف کرده‌اند، دوباره واجد شرایط می‌شوند
+              و برای همهٔ مشتریان فروشگاه یک پیام اطلاع‌رسانی ارسال خواهد شد.
+            </Typography>
+            <Alert severity="warning">
+              این کار قابل بازگشت نیست و تا پایان دورهٔ {reset.period} تکرارشدنی نیست.
+            </Alert>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpen(false)} disabled={busy}>انصراف</Button>
+          <Button
+            variant="contained" color="warning" disabled={busy}
+            onClick={() => { setOpen(false); onReset(); }}
+          >
+            ریست کن
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
 }
 
 const validUsdtAddress = (value: string | null) => /^0x[0-9a-fA-F]{40}$/.test(value?.trim() || "");

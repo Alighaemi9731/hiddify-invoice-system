@@ -95,6 +95,18 @@ _TPL_PAYMENT_REJECTED = (
     "یا برای پیگیری با پشتیبانی در تماس باشید."
 )
 
+# Sent by a SHOP's own bot to that shop's customers when its admin re-arms the free trial.
+# Placeholders: {shop} (bot @username or shop name), {gb}, {days}. Deliberately free of any
+# expiry claim or countdown — the trial stays available until the shop admin turns it off, and a
+# promise we don't enforce would be a lie the bot repeats every month.
+_TPL_SF_TRIAL_RESET = (
+    "🎁 خبر خوب!\n"
+    "تست رایگان {shop} دوباره برای شما فعال شد.\n\n"
+    "می‌توانید یک سرویس آزمایشی {gb} گیگابایتی {days} روزه دریافت کنید و کیفیت اتصال را "
+    "بدون هیچ هزینه‌ای بسنجید.\n"
+    "برای دریافت، کافی است دکمهٔ «🎁 تست رایگان» را در منوی ربات بزنید."
+)
+
 
 DEFS: list[SettingDef] = [
     # Telegram
@@ -199,6 +211,17 @@ DEFS: list[SettingDef] = [
     # Default monthly fee billed to a reseller running a storefront bot (per-reseller override on
     # the Reseller row wins; 0 = free).
     SettingDef("storefront_monthly_fee_toman", 0, False, "pricing"),
+    # A storefront's FREE TRIAL is excluded from the reseller's invoice entirely (see
+    # `storefront.trial_user_uuids` → `invoice_engine`), so its quota is paid for by YOU, not by
+    # the reseller — and the shop admin picks the size. These two keys are the only thing bounding
+    # that giveaway:
+    #   * `storefront_trial_max_gb` caps what a shop may set as `free_trial_gb`, and also clamps
+    #     the size actually provisioned, so a shop configured above the cap before it existed
+    #     stops costing more without needing a remediation sweep.
+    #   * `storefront_trial_reset_enabled` is the master switch for letting shop admins re-arm
+    #     every customer's trial once a month. OFF makes the trial lifetime-once again.
+    SettingDef("storefront_trial_max_gb", 1, False, "pricing"),
+    SettingDef("storefront_trial_reset_enabled", True, False, "pricing"),
     # Abuse-resistant metering (billing model "C"): bill usage beyond the paid quota
     # (daily-reset trick) + renew-by-edit that skips start_date. On by default.
     SettingDef("metering_enabled", True, False, "pricing"),
@@ -364,6 +387,7 @@ DEFS: list[SettingDef] = [
     SettingDef("tpl_warning", _TPL_WARNING, False, "templates"),
     SettingDef("tpl_payment_received", _TPL_PAYMENT_RECEIVED, False, "templates"),
     SettingDef("tpl_payment_rejected", _TPL_PAYMENT_REJECTED, False, "templates"),
+    SettingDef("tpl_storefront_trial_reset", _TPL_SF_TRIAL_RESET, False, "templates"),
 ]
 
 _DEF_BY_KEY = {d.key: d for d in DEFS}
@@ -413,6 +437,10 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "storefront_autorenew_fire_days": (0, 60),
     "storefront_autorenew_interval_minutes": (1, 1440),
     "storefront_max_pending_topups": (1, 50),
+    # Lower bound 1 for the same reason as `storefront_usage_alert_percent`: the
+    # `.get(key, (0, None))` fallback admits 0, and a 0 GB cap would provision an empty trial
+    # config for every customer instead of disabling the feature.
+    "storefront_trial_max_gb": (1, 100),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),
@@ -595,6 +623,14 @@ _settings_cache = proccache.TTLCache(ttl_seconds=5.0)
 def _resolve_absent(key: str, default: Any) -> Any:
     d = _DEF_BY_KEY.get(key)
     return d.default if d else default
+
+
+def default_for(key: str) -> Any:
+    """The REGISTERED default for a key, ignoring whatever is stored. Used as the fallback when a
+    stored value turns out to be unusable (e.g. a message template the owner edited into an
+    unknown placeholder), so a bad edit degrades to shipped copy instead of failing the action."""
+    d = _DEF_BY_KEY.get(key)
+    return d.default if d else None
 
 
 def clear_settings_cache() -> None:

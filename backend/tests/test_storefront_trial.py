@@ -184,3 +184,96 @@ def test_reset_over_renewed_trials(tmp_path, monkeypatch):
         assert counts["reset"] == 1 and counts["checked"] == 1   # only the 2 GB-snapshot trial
         assert calls == [("uu-1", {"usage_limit_GB": 1.0}, "a")]
     _run(body, tmp_path, "t4.db")
+
+
+# ── the owner's GB ceiling ────────────────────────────────────────────────────
+# A trial's quota is excluded from the reseller's invoice at ANY size (see the exclusion tests
+# above), so `storefront_trial_max_gb` is the only thing bounding what the platform owner gives
+# away. It is enforced twice on purpose: on the write path, and again when a config is actually
+# provisioned — so a shop configured above the cap BEFORE the cap existed stops costing more
+# without needing a remediation sweep over every shop.
+
+def test_update_trial_refuses_a_size_above_the_owner_cap(tmp_path):
+    from app.services import settings_service, storefront_admin
+
+    async def body(s, _S):
+        panel = Panel(key="p1", host="h", proxy_path_enc="x", owner_uuid="o")
+        s.add(panel)
+        await s.flush()
+        r = Reseller(panel_id=panel.id, admin_uuid="a", name="R", bot_chat_id=111,
+                     storefront_enabled=True)
+        s.add(r)
+        await s.flush()
+        sf = StorefrontBot(reseller_id=r.id, panel_id=panel.id, bot_token_enc="t",
+                           bot_username="b", config_version=1)
+        s.add(sf)
+        await s.commit()
+        ctx = storefront_admin.CommandContext(
+            actor_telegram_id=111, actor_role="owner", source="portal",
+            idempotency_key="k1", expected_version=1)
+
+        try:
+            await storefront_admin.update_trial(s, sf.id, ctx, gb=2)
+        except storefront_admin.AdminCommandError as exc:
+            assert exc.code == "validation"
+            assert "۱" in str(exc) or "1" in str(exc)     # the message teaches the ceiling
+        else:
+            raise AssertionError("a 2 GB trial must be refused under the default 1 GB cap")
+
+        # Raising the owner's cap makes the same edit legal — the bound is a setting, not a constant.
+        await settings_service.set_value(s, "storefront_trial_max_gb", 5)
+        settings_service.clear_settings_cache()
+        ctx2 = storefront_admin.CommandContext(
+            actor_telegram_id=111, actor_role="owner", source="portal",
+            idempotency_key="k2", expected_version=1)
+        await storefront_admin.update_trial(s, sf.id, ctx2, gb=5)
+        await s.refresh(sf)
+        assert sf.free_trial_gb == 5
+        settings_service.clear_settings_cache()
+    _run(body, tmp_path, "t5.db")
+
+
+def test_claim_trial_clamps_a_legacy_over_cap_shop(tmp_path):
+    """A shop whose `free_trial_gb` predates the cap must provision the CAPPED size, not its own."""
+    from app.services import storefront_provision
+
+    async def body(s, Session):
+        panel = Panel(key="p1", host="h", proxy_path_enc="x", owner_uuid="o")
+        s.add(panel)
+        await s.flush()
+        r = Reseller(panel_id=panel.id, admin_uuid="a", name="R", storefront_enabled=True)
+        s.add(r)
+        await s.flush()
+        sf = StorefrontBot(reseller_id=r.id, panel_id=panel.id, bot_token_enc="t",
+                           bot_username="b", free_trial_enabled=True, free_trial_gb=50,
+                           free_trial_days=1)
+        s.add(sf)
+        await s.flush()
+        cust = StorefrontCustomer(storefront_bot_id=sf.id, telegram_id=7, name="C")
+        s.add(cust)
+        await s.commit()
+        sf_id, cust_id = sf.id, cust.id
+
+        seen: dict = {}
+
+        async def fake_provision(_session, _bot, _customer, *, gb, days, label=None,
+                                 user_uuid=None):
+            seen["gb"], seen["days"] = gb, days
+            return storefront_provision.ProvisionResult(
+                True, sub_link="https://x/sub", uuid=user_uuid)
+
+        original = storefront_provision.provision
+        storefront_provision.provision = fake_provision
+        try:
+            res = await storefront_provision.claim_trial(
+                Session, sf_id=sf_id, customer_id=cust_id)
+        finally:
+            storefront_provision.provision = original
+
+        assert res.ok is True
+        assert seen["gb"] == 1        # clamped from the shop's stale 50, not honoured
+        async with Session() as s2:
+            order = (await s2.execute(
+                __import__("sqlalchemy").select(StorefrontOrder))).scalars().one()
+            assert order.gb == 1 and order.is_trial is True
+    _run(body, tmp_path, "t6.db")

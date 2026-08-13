@@ -42,6 +42,27 @@ async def get_bot_by_telegram_id(session: AsyncSession, bot_telegram_id: int) ->
     ).scalars().first()
 
 
+async def trial_max_gb(session: AsyncSession) -> int:
+    """The owner's ceiling on a shop's `free_trial_gb`.
+
+    A trial's quota is excluded from the reseller's invoice at ANY size (see `trial_user_uuids`
+    below), so this number is the only thing standing between the platform owner and a shop
+    that decides its free trial should be 500 GB. Enforced on the write path
+    (`storefront_admin.update_trial`) AND clamped at claim time (`storefront_provision`), so a
+    shop configured above the cap before it existed cannot keep spending.
+    """
+    try:
+        return max(1, int(await settings_service.get(session, "storefront_trial_max_gb", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+async def trial_reset_enabled(session: AsyncSession) -> bool:
+    """Master switch for the shop admin's once-a-month free-trial re-arm. OFF makes the trial
+    lifetime-once again, which is how it behaved before the feature existed."""
+    return bool(await settings_service.get(session, "storefront_trial_reset_enabled", True))
+
+
 async def trial_user_uuids(session: AsyncSession, panel_id: int) -> set[str]:
     """Panel-scoped set of live FREE-TRIAL config `panel_user_uuid`s. These are excluded from the
     reseller's invoice (a free giveaway) — passed to the billing engine + metering. Keyed on

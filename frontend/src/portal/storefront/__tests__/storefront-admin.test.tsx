@@ -44,7 +44,15 @@ const settings = {
     usdt_address: null,
     ton_address: null,
   },
-  trial: { free_trial_enabled: true, free_trial_gb: 1, free_trial_days: 1 },
+  trial: {
+    free_trial_enabled: true, free_trial_gb: 1, free_trial_days: 1,
+    reset: {
+      period: "2026-08", last_reset_period: null, available: true, reason: null,
+      // A permissive ceiling on purpose: these tests are about draft/CAS behaviour, not the
+      // owner's trial budget, and would otherwise break whenever the shipped cap moves.
+      eligible_count: 4, max_gb: 100,
+    },
+  },
   messages: { welcome_text: "خوش آمدید", support_contact: "@support" },
   shop_state: { shop_closed: false, closed_text: null },
   channel: {
@@ -735,5 +743,105 @@ describe("storefront Release B administration", () => {
     const switches = screen.getAllByRole("checkbox");
     expect(switches[0]).toBeDisabled();     // below cost → cannot be re-enabled
     expect(switches[1]).toBeEnabled();      // healthy → still freely toggleable
+  });
+});
+
+describe("storefront monthly free-trial reset", () => {
+  const settingsWithReset = (reset: Record<string, unknown>) => ({
+    ...settings, trial: { ...settings.trial, reset: { ...settings.trial.reset, ...reset } },
+  });
+
+  it("confirms before re-arming, then reports what actually happened", async () => {
+    const user = userEvent.setup();
+    let posted = 0;
+    let sentEtag = "";
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        settingsWithReset({ eligible_count: 12 }),
+        { headers: { ETag: '"sf-config-1"' } },
+      )),
+      http.post("*/api/portal/storefronts/1/settings/trial/reset", ({ request }) => {
+        posted += 1;
+        sentEtag = request.headers.get("If-Match") || "";
+        return HttpResponse.json(
+          { result: { reset_count: 12, notified: 30, job_id: 7, period: "2026-08" },
+            config_version: 2 },
+          { headers: { ETag: '"sf-config-2"' } },
+        );
+      }),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    await user.click(await screen.findByRole("button", { name: "ریست ماهانهٔ تست‌ها" }));
+
+    // The dialog states the real blast radius rather than a vague warning.
+    expect(await screen.findByText(/۱۲ مشتری|12 مشتری/)).toBeInTheDocument();
+    expect(screen.getByText(/قابل بازگشت نیست/)).toBeInTheDocument();
+    expect(posted).toBe(0);                       // nothing happens until confirmed
+
+    await user.click(screen.getByRole("button", { name: "ریست کن" }));
+    await waitFor(() => expect(posted).toBe(1));
+    expect(sentEtag).toBe('"sf-config-1"');       // rides the CAS token like every other command
+  });
+
+  it("can be abandoned from the dialog without sending anything", async () => {
+    const user = userEvent.setup();
+    let posted = 0;
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        settingsWithReset({}), { headers: { ETag: '"sf-config-1"' } },
+      )),
+      http.post("*/api/portal/storefronts/1/settings/trial/reset", () => {
+        posted += 1;
+        return HttpResponse.json({ result: {}, config_version: 2 });
+      }),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    await user.click(await screen.findByRole("button", { name: "ریست ماهانهٔ تست‌ها" }));
+    await user.click(await screen.findByRole("button", { name: "انصراف" }));
+    expect(posted).toBe(0);
+  });
+
+  it("explains why the button is unavailable instead of just hiding it", async () => {
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        settingsWithReset({
+          available: false, reason: "already_reset_this_month", last_reset_period: "2026-08",
+        }),
+        { headers: { ETag: '"sf-config-1"' } },
+      )),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    expect(await screen.findByText(/یک بار ریست شده‌اند/)).toBeInTheDocument();
+    expect(screen.getByText(/آخرین ریست: دورهٔ 2026-08/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ریست ماهانهٔ تست‌ها" })).toBeDisabled();
+  });
+
+  it("says so when the owner has switched the feature off entirely", async () => {
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        settingsWithReset({ available: false, reason: "disabled" }),
+        { headers: { ETag: '"sf-config-1"' } },
+      )),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    expect(await screen.findByText(/توسط مدیر سامانه غیرفعال شده است/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ریست ماهانهٔ تست‌ها" })).toBeDisabled();
+  });
+
+  it("caps the trial size field at the owner's ceiling, not a constant", async () => {
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        settingsWithReset({ max_gb: 1 }), { headers: { ETag: '"sf-config-1"' } },
+      )),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    const gb = await screen.findByLabelText("حجم (گیگابایت)");
+    expect(gb).toHaveAttribute("max", "1");
+    expect(screen.getByText("حداکثر 1 گیگابایت")).toBeInTheDocument();
   });
 });

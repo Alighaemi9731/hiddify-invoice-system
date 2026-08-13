@@ -28,6 +28,8 @@ from sqlalchemy import select
 # Reuse the main bot's generic membership primitives: `_is_member` (restricted-safe, fail-closed) and
 # `_join_link` (per-user one-time invite link, falls back to a static link). Safe — app.bot.handlers
 # does not import the storefront at module load.
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.bot.handlers import _is_member, _join_link
 from app.bot.rtl import rtl
 from app.bot.storefront import keyboards as kb
@@ -42,6 +44,7 @@ from app.models import (
 )
 from app.services import (
     enforcement,
+    periods,
     settings_service,
     storefront,
     storefront_admin,
@@ -747,12 +750,23 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             f"تتر: {sf.usdt_address or '—'}\nگرام/تون: {sf.ton_address or '—'}"),
             reply_markup=kb.pay_settings_kb(sf))
     elif action == "trialcfg":
+        # NOTE: the old copy here claimed «۱ گیگابایت یا کمتر رایگان است؛ بیشتر از آن در فاکتورِ
+        # شما حساب می‌شود», which was never true — a trial config is excluded from the reseller's
+        # invoice at any size (`storefront.trial_user_uuids`). What actually bounds it is the
+        # owner's `storefront_trial_max_gb`, so say that instead.
+        max_gb = await storefront.trial_max_gb(s)
+        reset_line = (
+            f"ریست ماهانه: در دورهٔ {sf.trial_reset_period} انجام شده"
+            if sf.trial_reset_period == periods.current_month().label
+            else "ریست ماهانه: در دسترس"
+        ) if await storefront.trial_reset_enabled(s) else "ریست ماهانه: غیرفعال است"
         await ans(rtl(
             f"🎁 تستِ رایگان (یک‌بار برای هر مشتری)\n"
             f"وضعیت: {'فعال ✅' if sf.free_trial_enabled else 'غیرفعال ❌'}\n"
-            f"حجم: {sf.free_trial_gb} گیگابایت · مدت: {sf.free_trial_days} روز\n\n"
-            "نکته: حجمِ ۱ گیگابایت (یا کمتر) برای شما رایگان است؛ بیشتر از آن در فاکتورِ شما حساب می‌شود."),
-            reply_markup=kb.trial_settings_kb(sf))
+            f"حجم: {sf.free_trial_gb} گیگابایت · مدت: {sf.free_trial_days} روز\n"
+            f"{reset_line}\n\n"
+            f"نکته: تستِ رایگان در فاکتورِ شما حساب نمی‌شود؛ سقفِ حجمِ آن {max_gb} گیگابایت است."),
+            reply_markup=kb.trial_settings_kb(sf, reset_available=await _trial_reset_available(s, sf)))
     elif action == "topups":
         pend = await storefront_wallet.pending_topups_for_bot(s, sf.id)
         if not pend:
@@ -2724,7 +2738,8 @@ async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
         if target is None:
-            await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
+            await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(
+                sf, reset_available=await _trial_reset_available(s, sf)))
             await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
             return
         desired, rendered_version = target
@@ -2734,10 +2749,12 @@ async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
         except storefront_admin.AdminCommandError as exc:
             if exc.code == "config_conflict":
                 await s.refresh(sf)
-                await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
+                await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(
+                    sf, reset_available=await _trial_reset_available(s, sf)))
             await cb.answer(_admin_error(exc), show_alert=True)
             return
-        await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
+        await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(
+            sf, reset_available=await _trial_reset_available(s, sf)))
     await cb.answer("فعال شد." if sf.free_trial_enabled else "غیرفعال شد.")
 
 
@@ -2783,12 +2800,81 @@ async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
         except storefront_admin.AdminCommandError as exc:
             await state.clear()
             await s.refresh(sf)
-            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.trial_settings_kb(sf))
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.trial_settings_kb(
+                sf, reset_available=await _trial_reset_available(s, sf)))
             return
         await state.clear()
         await message.answer(
             rtl(f"✅ تستِ رایگان: {sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز"),
-            reply_markup=kb.trial_settings_kb(sf))
+            reply_markup=kb.trial_settings_kb(
+                sf, reset_available=await _trial_reset_available(s, sf)))
+
+
+async def _trial_reset_available(s: AsyncSession, sf: StorefrontBot) -> bool:
+    return bool((await storefront_admin.trial_reset_status(s, sf))["available"])
+
+
+@storefront_router.callback_query(F.data.startswith("sftrialreset:"))
+async def sf_trial_reset_ask(cb: CallbackQuery, bot: Bot) -> None:
+    """Step 1 of 2. Re-arming every customer's trial is a fan-out that also messages the whole
+    shop, so it gets the same double-tap confirmation as deleting a service — and the confirm
+    screen states the real counts rather than a vague warning."""
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        status = await storefront_admin.trial_reset_status(s, sf)
+        total = len(await storefront.customers_in_segment(s, sf.id, "all"))
+    if not status["available"]:
+        await cb.answer(
+            "ریست تست رایگان توسط مدیر سامانه غیرفعال شده است."
+            if status["reason"] == "disabled" else
+            f"تست‌ها در دورهٔ {status['period']} یک بار ریست شده‌اند؛ "
+            "ریست بعدی از ماه میلادی آینده ممکن است.",
+            show_alert=True)
+        return
+    await cb.message.answer(
+        rtl(
+            "🔄 ریستِ ماهانهٔ تستِ رایگان\n\n"
+            f"• {status['eligible_count']} مشتری که تستشان را مصرف کرده‌اند، دوباره واجدِ شرایط می‌شوند.\n"
+            f"• به هر {total} مشتریِ فروشگاه یک پیامِ اطلاع‌رسانی ارسال می‌شود.\n"
+            f"• تا پایانِ دورهٔ {status['period']} دیگر نمی‌توانید این کار را تکرار کنید.\n\n"
+            "ادامه می‌دهید؟"),
+        reply_markup=kb.confirm_kb("✅ بله، ریست کن", f"sftrialresetok:{cb.data.split(':')[-1]}"))
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sftrialresetok:"))
+async def sf_trial_reset_do(cb: CallbackQuery, bot: Bot) -> None:
+    """Step 2 of 2. The `config_version` travels from the keyboard that was actually rendered, so
+    a reset tapped on a stale menu loses the CAS instead of acting on changed settings."""
+    try:
+        rendered_version = int(cb.data.split(":")[-1])
+    except (TypeError, ValueError):
+        await cb.answer("این منو قدیمی شده بود؛ لطفاً دوباره تلاش کنید.", show_alert=True)
+        return
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        try:
+            result = await storefront_admin.reset_free_trials(
+                s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version))
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
+        body = result.body if isinstance(result.body, dict) else {}
+        await s.refresh(sf)
+        markup = kb.trial_settings_kb(sf, reset_available=await _trial_reset_available(s, sf))
+    await cb.message.edit_text(
+        rtl(
+            "✅ تست‌های رایگان ریست شدند.\n"
+            f"• {body.get('reset_count', 0)} مشتری دوباره می‌توانند تستِ رایگان بگیرند.\n"
+            f"• پیامِ اطلاع‌رسانی برای {body.get('notified', 0)} مشتری در صفِ ارسال قرار گرفت."),
+        reply_markup=markup)
+    await cb.answer()
 
 
 # ── admin: manual wallet adjust, support, broadcast ──────────────────────────

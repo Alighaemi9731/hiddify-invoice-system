@@ -40,6 +40,7 @@ import type {
   StorefrontSettingsGroup,
   StorefrontSettings,
   StorefrontShop,
+  StorefrontTrialResetResult,
   TopupDecisionBody,
   TopupDecisionResult,
   TopupDetail,
@@ -211,6 +212,13 @@ export function updateStorefrontSettings<G extends StorefrontSettingsGroup>(
     headers: commandHeaders(etag, idempotencyKey),
   }).then((response) => mutationResult<StorefrontSettingsByGroup[G]>(response));
 }
+
+/** Re-arm every customer's free trial (once per Gregorian month) and announce it to the shop.
+ * Returns how many customers were re-armed and how many were queued a message. */
+export const resetStorefrontTrials = (shopId: number, etag: string, idempotencyKey: string) =>
+  portalApi.post(`/api/portal/storefronts/${shopId}/settings/trial/reset`, null, {
+    headers: commandHeaders(etag, idempotencyKey),
+  }).then((response) => mutationResult<StorefrontTrialResetResult>(response));
 
 export const saveStorefrontChannel = (
   shopId: number,

@@ -400,14 +400,28 @@ def join_prompt_kb(link: str | None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
-    """Admin toggles the one-time free trial on/off and edits its volume/duration."""
+def trial_settings_kb(
+    bot: StorefrontBot, *, reset_available: bool = False
+) -> InlineKeyboardMarkup:
+    """Admin toggles the free trial on/off, edits its volume/duration, and (at most once per
+    Gregorian month) re-arms every customer's trial.
+
+    The reset row is always PRESENT, never hidden: a button that vanishes reads as a bug, while a
+    disabled-looking one that answers "already done this month" teaches the rule."""
     state = "✅ فعال" if bot.free_trial_enabled else "❌ غیرفعال"
+    reset_button = (
+        InlineKeyboardButton(
+            text="🔄 ریستِ ماهانهٔ تست‌ها",
+            callback_data=f"sftrialreset:{bot.config_version}")
+        if reset_available else
+        InlineKeyboardButton(text="🔄 ریستِ ماهانه (فعلاً در دسترس نیست)", callback_data="sfnoop")
+    )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"وضعیت: {state} (تغییر)",
             callback_data=f"sftrialtog:{int(not bot.free_trial_enabled)}:{bot.config_version}")],
         [InlineKeyboardButton(text="✏️ تغییرِ حجم/مدت", callback_data="sftrialset")],
+        [reset_button],
     ])
 
 

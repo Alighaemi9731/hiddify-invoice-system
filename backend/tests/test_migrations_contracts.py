@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "b3f6a1d94c27"
+HEAD = "c8d5b2e047af"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -142,6 +142,19 @@ def test_reseller_crm_schema_contract(tmp_path):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='reseller_followups'"
     ).fetchone()[0]
     assert "SET NULL" in followup_sql
+    conn.close()
+
+
+def test_storefront_trial_reset_schema_contract(tmp_path):
+    """The monthly free-trial re-arm stamp reaches a fresh HEAD database. NULLable on purpose:
+    NULL means "never reset", which is the state every pre-existing shop is in."""
+    db = tmp_path / "sf-trial-reset.db"
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    cols = {row[1]: row for row in conn.execute("PRAGMA table_info(storefront_bots)")}
+    assert "trial_reset_period" in cols
+    assert cols["trial_reset_period"][3] == 0            # nullable
+    assert cols["trial_reset_period"][2].upper().startswith("VARCHAR")
     conn.close()
 
 

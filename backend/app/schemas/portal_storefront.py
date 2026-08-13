@@ -313,10 +313,23 @@ class StorefrontPaymentSettingsBody(StorefrontStrictBody):
         return self
 
 
+class StorefrontTrialResetOut(BaseModel):
+    """State of the once-a-month free-trial re-arm, so the UI can render the button honestly
+    instead of letting the shop admin discover the limit by being refused."""
+
+    period: str                        # the current Gregorian billing month, YYYY-MM
+    last_reset_period: str | None      # None = never reset
+    available: bool
+    reason: Literal["disabled", "already_reset_this_month"] | None
+    eligible_count: int                # customers who would become able to claim again
+    max_gb: int                        # the owner's ceiling on free_trial_gb
+
+
 class StorefrontTrialSettingsOut(BaseModel):
     free_trial_enabled: bool
     free_trial_gb: int
     free_trial_days: int
+    reset: StorefrontTrialResetOut
 
 
 class StorefrontTrialSettingsBody(StorefrontStrictBody):

@@ -28,7 +28,7 @@ from app.models import (
     StorefrontOrder,
     StorefrontPlan,
 )
-from app.services import storefront_ops, storefront_wallet, usercreate
+from app.services import storefront, storefront_ops, storefront_wallet, usercreate
 from app.services.panel_client.admin_api import AdminApiClient, RenewUserTarget
 
 log = logging.getLogger("bot.storefront")
@@ -421,7 +421,12 @@ async def claim_trial(
                 return PurchaseResult(False, reason="error")
             if customer.free_trial_used:
                 return PurchaseResult(False, reason="used")
-            gb, days = int(sf.free_trial_gb or 1), int(sf.free_trial_days or 1)
+            # Clamped to the owner's cap, not just validated on the write path: the trial's quota
+            # is excluded from the reseller's invoice entirely, so a shop configured above the cap
+            # before it existed would keep costing the OWNER the difference until it happened to
+            # edit its settings. Clamping here makes a remediation sweep unnecessary.
+            gb = min(int(sf.free_trial_gb or 1), await storefront.trial_max_gb(s))
+            days = int(sf.free_trial_days or 1)
             new_uuid = str(uuidlib.uuid4())
             order = StorefrontOrder(
                 customer_id=customer.id, plan_id=None, panel_id=sf.panel_id, label="تست رایگان",

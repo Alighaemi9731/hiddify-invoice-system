@@ -66,6 +66,7 @@ from app.schemas.portal_storefront import (
     StorefrontShopStateOut,
     StorefrontSummaryOut,
     StorefrontTopupDecisionBody,
+    StorefrontTrialResetOut,
     StorefrontTrialSettingsBody,
     StorefrontTrialSettingsOut,
     StorefrontWalletAdjustmentBody,
@@ -127,7 +128,12 @@ def _command_context(
 def _raise_admin_error(exc: storefront_admin.AdminCommandError) -> NoReturn:
     if exc.code == "not_found":
         status_code = 404
-    elif exc.code in {"config_conflict", "idempotency_conflict", "in_flight", "unknown"}:
+    elif exc.code in {"config_conflict", "idempotency_conflict", "in_flight", "unknown",
+                      # A once-per-month action already spent this month is a state conflict, not
+                      # a malformed request. Listed explicitly so a FRESH attempt and the cached
+                      # REPLAY of the same key return the same status (the cached-failure path
+                      # stores 409 via the exception's own response_status).
+                      "already_reset_this_month"}:
         status_code = 409
     elif exc.code in {"external_failure", "external_unknown"}:
         status_code = 502
@@ -252,7 +258,7 @@ def _channel(raw: dict[str, Any]) -> StorefrontChannelOut:
     )
 
 
-def _settings(raw: dict[str, Any]) -> StorefrontSettingsOut:
+def _settings(raw: dict[str, Any], reset: dict[str, Any]) -> StorefrontSettingsOut:
     payment = raw["payment"]
     trial = raw["trial"]
     shop_state = raw["shop_state"]
@@ -270,6 +276,9 @@ def _settings(raw: dict[str, Any]) -> StorefrontSettingsOut:
             free_trial_enabled=trial["enabled"],
             free_trial_gb=trial["gb"],
             free_trial_days=trial["days"],
+            # Derived, NOT part of `settings_snapshot()` — that dict is the audit before/after
+            # source and a computed field would show up as a phantom change in every diff.
+            reset=StorefrontTrialResetOut(**reset),
         ),
         messages=StorefrontMessageSettingsOut(**raw["messages"]),
         shop_state=StorefrontShopStateOut(
@@ -532,7 +541,7 @@ async def storefront_settings(
         raw = await storefront_admin.get_settings(session, access.shop.id, ctx.chat_id, "portal")
     except storefront_admin.AdminCommandError as exc:
         _raise_admin_error(exc)
-    result = _settings(raw)
+    result = _settings(raw, await storefront_admin.trial_reset_status(session, access.shop))
     _set_etag(response, result.config_version)
     return result
 
@@ -593,6 +602,31 @@ async def storefront_trial_settings(
     try:
         result = await storefront_admin.update_trial(
             session, access.shop.id, command, **changes)
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
+@router.post(
+    "/{shop_id}/settings/trial/reset",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_trial_reset(
+    response: Response,
+    if_match: str = Header(alias="If-Match"),
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    """Re-arm every customer's free trial (once per Gregorian month) and announce it to the shop.
+
+    All of it — the bulk re-arm, the month stamp and the durable announcement job — happens inside
+    the shared command layer, so this handler never touches the session itself (pinned by the AST
+    guard in `test_storefront_parity.py`)."""
+    command = _command_context(ctx, if_match=if_match, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.reset_free_trials(session, access.shop.id, command)
     except storefront_admin.AdminCommandError as exc:
         _raise_admin_error(exc)
     return _mutation_dict(response, result)

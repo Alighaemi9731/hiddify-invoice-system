@@ -426,6 +426,15 @@ const SECTIONS: Section[] = [
         ],
       },
       {
+        title: "تست رایگان",
+        fields: [
+          { key: "storefront_trial_max_gb", label: "سقف حجم تست رایگان (گیگابایت)", type: "number", min: 1, max: 100,
+            help: "حجم تست رایگان در فاکتور نماینده حساب نمی‌شود، یعنی هزینه‌اش با شماست. این سقف تعیین می‌کند فروشنده حداکثر چه حجمی بتواند تست بگذارد — و فروشگاه‌هایی که از قبل بالاتر تنظیم شده‌اند هم هنگام ساخت به همین عدد محدود می‌شوند." },
+          { key: "storefront_trial_reset_enabled", label: "اجازهٔ ریست ماهانهٔ تست‌ها",
+            help: "اگر روشن باشد، هر فروشنده ماهی یک بار می‌تواند تست رایگان همهٔ مشتریانش را دوباره فعال کند و به آن‌ها اطلاع بدهد. خاموش = تست رایگان دوباره یک‌بار برای همیشه می‌شود." },
+        ],
+      },
+      {
         title: "کارکرد داخلی",
         fields: [
           { key: "storefront_pending_order_reaper_minutes", label: "بازهٔ بررسیِ سفارش‌های نیمه‌کاره (دقیقه)", type: "number", min: 1, max: 1440, advanced: true,
@@ -456,6 +465,7 @@ const SECTIONS: Section[] = [
           { key: "tpl_warning", label: "اخطار نهایی", type: "multiline" },
           { key: "tpl_payment_received", label: "تأیید پرداخت", type: "multiline" },
           { key: "tpl_payment_rejected", label: "رد پرداخت", type: "multiline" },
+          { key: "tpl_storefront_trial_reset", label: "اعلان ریست تست رایگان فروشگاه", type: "multiline" },
         ],
       },
     ],

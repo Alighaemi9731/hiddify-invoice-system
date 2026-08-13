@@ -21,6 +21,8 @@ from app.models import (
     StorefrontCustomer,
     StorefrontPlan,
 )
+from app.models.setting import Setting
+from app.services import settings_service
 
 
 class _FakeBotSession:
@@ -97,7 +99,12 @@ async def _seed(session):  # noqa: ANN001, ANN202
         storefront_bot_id=shop.id, title="", gb=10, days=30, price_toman=100_000,
         enabled=True, sort_order=0,
     ))
+    # Pin the owner's trial ceiling instead of inheriting the shipped default (1 GB): these tests
+    # are about partial-patch and replay semantics, and would otherwise start failing the day the
+    # default moves. The cap itself is covered in test_storefront_trial.py.
+    session.add(Setting(key="storefront_trial_max_gb", value=100))
     await session.commit()
+    settings_service.clear_settings_cache()
     return owner, shop
 
 
@@ -293,5 +300,67 @@ def test_partial_trial_patch_replays_cleanly_after_concurrent_change(monkeypatch
                 headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "t"})
             assert retry.status_code == 200
             assert retry.json()["result"]["trial"]["enabled"] is False
+
+    _run(body)
+
+
+def test_trial_reset_endpoint_enforces_tenant_version_and_the_monthly_limit(monkeypatch):  # noqa: ANN001
+    """The reset is a shared command reached over HTTP: it must obey the same tenant scoping,
+    If-Match CAS and Idempotency-Key contract as every other storefront mutation, and refuse a
+    second run in the same month."""
+    async def body(session):  # noqa: ANN001
+        owner, shop = await _seed(session)
+        session.add(StorefrontCustomer(
+            storefront_bot_id=shop.id, telegram_id=5001, name="C1", free_trial_used=True))
+        session.add(StorefrontCustomer(
+            storefront_bot_id=shop.id, telegram_id=5002, name="C2", free_trial_used=False))
+        await session.commit()
+
+        async def session_override():
+            yield session
+
+        async def context_override():
+            return ResellerContext(chat_id=111, resellers=[owner])
+
+        app.dependency_overrides[get_session] = session_override
+        app.dependency_overrides[get_current_reseller] = context_override
+        monkeypatch.setattr(portal_storefront, "Bot", _FakeTelegramBot)
+        url = f"/api/portal/storefronts/{shop.id}/settings/trial/reset"
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test",
+            ) as client:
+                # The GET advertises the button state so the UI never has to guess.
+                before = await client.get(f"/api/portal/storefronts/{shop.id}/settings")
+                assert before.json()["trial"]["reset"]["available"] is True
+                assert before.json()["trial"]["reset"]["eligible_count"] == 1
+                assert before.json()["trial"]["reset"]["max_gb"] == 100
+
+                assert (await client.post(
+                    url, headers={"If-Match": '"sf-config-1"'})).status_code == 422  # no key
+
+                ok = await client.post(
+                    url, headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "reset-1"})
+                assert ok.status_code == 200
+                assert ok.json()["result"]["reset_count"] == 1
+                assert ok.json()["result"]["notified"] == 2      # everyone, not just the re-armed
+                assert ok.headers["etag"] == '"sf-config-2"'
+
+                after = await client.get(f"/api/portal/storefronts/{shop.id}/settings")
+                assert after.json()["trial"]["reset"]["available"] is False
+                assert after.json()["trial"]["reset"]["reason"] == "already_reset_this_month"
+
+                second = await client.post(
+                    url, headers={"If-Match": '"sf-config-2"', "Idempotency-Key": "reset-2"})
+                assert second.status_code == 409
+                assert second.json()["detail"]["code"] == "already_reset_this_month"
+
+                # A foreign shop is invisible, not merely forbidden.
+                assert (await client.post(
+                    "/api/portal/storefronts/999999/settings/trial/reset",
+                    headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "x"},
+                )).status_code == 404
+        finally:
+            app.dependency_overrides.clear()
 
     _run(body)

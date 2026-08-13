@@ -178,6 +178,29 @@ export interface StorefrontTrialSettings {
   free_trial_days: number;
 }
 
+/** State of the once-a-month free-trial re-arm. Read-only — it is derived server-side and is
+ * deliberately NOT part of the PATCH body shape above. */
+export interface StorefrontTrialReset {
+  period: string;
+  last_reset_period: string | null;
+  available: boolean;
+  reason: "disabled" | "already_reset_this_month" | null;
+  eligible_count: number;
+  max_gb: number;
+}
+
+export interface StorefrontTrialSettingsRead extends StorefrontTrialSettings {
+  reset: StorefrontTrialReset;
+}
+
+/** Result body of a successful trial reset. */
+export interface StorefrontTrialResetResult {
+  reset_count: number;
+  notified: number;
+  job_id: number;
+  period: string;
+}
+
 export interface StorefrontMessageSettings {
   welcome_text: string | null;
   support_contact: string | null;
@@ -206,7 +229,7 @@ export interface StorefrontChannel {
 
 export interface StorefrontSettings {
   payment: StorefrontPaymentSettings;
-  trial: StorefrontTrialSettings;
+  trial: StorefrontTrialSettingsRead;
   messages: StorefrontMessageSettings;
   shop_state: StorefrontShopStateSettings;
   channel: StorefrontChannel;

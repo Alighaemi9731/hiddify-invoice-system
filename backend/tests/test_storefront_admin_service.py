@@ -47,6 +47,9 @@ async def _seed(session):  # noqa: ANN001, ANN202
     # Pin the global price the below-cost floor is computed from, so the shipped default
     # can move without rewriting the plan prices below.
     await settings_service.set_value(session, "default_price_per_gb", 1000)
+    # Same reasoning for the trial ceiling: these tests are about the shared command layer, not
+    # about the owner's giveaway budget. The cap is covered by test_storefront_trial.py.
+    await settings_service.set_value(session, "storefront_trial_max_gb", 100)
     panel = Panel(key="p1", host="p1.invalid", proxy_path_enc="panel-secret", owner_uuid="owner")
     session.add(panel)
     await session.flush()
@@ -444,6 +447,10 @@ def test_pg_config_cas_and_idempotency_races():
                     pay_card_enabled=False)
                 session.add(shop)
                 await session.commit()
+                # This test races the command layer, not the owner's trial budget — pin the
+                # ceiling so the `gb=7` payload below stays legal independently of the default.
+                await settings_service.set_value(session, "storefront_trial_max_gb", 100)
+                settings_service.clear_settings_cache()
                 ids = panel.id, reseller.id, shop.id, reseller.bot_chat_id
 
             async def mutate(key: str):
