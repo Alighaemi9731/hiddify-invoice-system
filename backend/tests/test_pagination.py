@@ -60,10 +60,14 @@ async def _seed(session):
     ]
     session.add_all(invoices)
     await session.flush()
+    # Distinctive per-payment hashes (BSC shape, lowercase as submit stores them) so a search
+    # for one fragment can only hit one row; payment 1 gets a mixed-case TON-style hash.
+    txids = ["0x" + f"{i:02d}" * 32 for i in range(9)]
+    txids[1] = "AbCdEf0123456789AbCdEf0123456789AbCd"
     session.add_all([
         Payment(reseller_id=roots[i % 7].id, invoice_id=invoices[i].id,
                 status=PaymentStatus.pending if i % 2 else PaymentStatus.confirmed,
-                amount_usdt=0, amount_toman=500 * (i + 1))
+                amount_usdt=0, amount_toman=500 * (i + 1), txid=txids[i])
         for i in range(9)
     ])
     session.add_all([
@@ -150,6 +154,22 @@ def test_payments_pagination_and_search(tmp_path):
                 r5 = Response()
                 pend = await list_payments(r5, status=PaymentStatus.pending, limit=100, offset=0, session=s)
                 assert int(r5.headers["x-total-count"]) == len(pend)
+                # txid search: the full hash, and the 14-char prefix the table shows
+                r6 = Response()
+                full = await list_payments(r6, q="0x" + "03" * 32, limit=100, offset=0, session=s)
+                assert [p.txid for p in full] == ["0x" + "03" * 32]
+                r7 = Response()
+                frag = await list_payments(r7, q="0x040404040404", limit=100, offset=0, session=s)
+                assert [p.txid for p in frag] == ["0x" + "04" * 32]
+                # case-insensitive: BSC hashes are stored lowercased, TON base64 keeps its case
+                r8 = Response()
+                ton = await list_payments(r8, q="abcdef0123456789", limit=100, offset=0, session=s)
+                assert [p.txid for p in ton] == ["AbCdEf0123456789AbCdEf0123456789AbCd"]
+                # a term shorter than the 6-char floor never probes the hash column, so a short
+                # name/number search can't drag in unrelated payments
+                r9 = Response()
+                short = await list_payments(r9, q="0505", limit=100, offset=0, session=s)
+                assert short == [] and r9.headers["x-total-count"] == "0"
         finally:
             await engine.dispose()
     asyncio.run(run())

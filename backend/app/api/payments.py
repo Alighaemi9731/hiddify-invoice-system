@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
@@ -112,6 +113,12 @@ _PAY_SORT = {
 }
 
 
+# A search term that may be an on-chain hash — or a copied fragment of one (the table only
+# shows the first 14 chars). The txid alphabet only (BSC `0x…` hex, TON hex/base64), with a
+# 6-char floor so a short reseller name never probes the hash column.
+_TXID_FRAGMENT_RE = re.compile(r"[0-9A-Za-z_+/=-]{6,80}")
+
+
 def _ascii_digits(s: str) -> str:
     out = []
     for ch in s:
@@ -129,7 +136,7 @@ async def list_payments(
     response: Response,
     status: PaymentStatus | None = None,
     reseller_id: int | None = None,
-    q: str | None = Query(None, description="search: tracking number (#id) or reseller name"),
+    q: str | None = Query(None, description="search: tracking number (#id), reseller name or txid"),
     sort: str = Query("created_at"),
     order: str = Query("desc"),
     limit: int = Query(200, le=2000),
@@ -143,8 +150,9 @@ async def list_payments(
     if reseller_id is not None:
         filters.append(Payment.reseller_id == reseller_id)
     if isinstance(q, str) and q.strip():
-        needle = _ascii_digits(q.strip().lstrip("#"))
-        ors: list[ColumnElement[bool]] = [Reseller.name.ilike(f"%{q.strip()}%")]
+        raw = q.strip()
+        needle = _ascii_digits(raw.lstrip("#"))
+        ors: list[ColumnElement[bool]] = [Reseller.name.ilike(f"%{raw}%")]
         if needle.isdigit():
             ids = [int(needle)] if len(needle) < 8 else []
             decoded = decode_payment_code(needle)  # the public «شمارهٔ پیگیری»
@@ -152,6 +160,10 @@ async def list_payments(
                 ids.append(decoded)
             if ids:
                 ors.append(Payment.id.in_(ids))
+        if _TXID_FRAGMENT_RE.fullmatch(raw):
+            # Case-insensitive on purpose: BSC hashes are stored lowercased, TON base64 keeps
+            # its case, and the owner pastes whatever the explorer or the bot showed them.
+            ors.append(Payment.txid.ilike(f"%{raw}%"))
         filters.append(or_(*ors))
 
     total = (

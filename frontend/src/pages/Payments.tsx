@@ -44,8 +44,8 @@ export default function Payments() {
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   // Server-side pagination (B4): one page per request; search (public «#N» tracking
-  // number — decoded server-side, Persian digits normalized — or reseller name),
-  // sorting and the total count run in the database.
+  // number — decoded server-side, Persian digits normalized — reseller name, or a txid /
+  // any fragment of one), sorting and the total count run in the database.
   const [page, setPage] = useState(0);
   const [rpp, setRpp] = useState(50);
   const [sortState, setSortState] = useState<{ key: string; dir: "asc" | "desc" }>(
@@ -236,7 +236,7 @@ export default function Payments() {
           {Object.entries(PAYMENT_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <TextField size="small" value={search} sx={{ minWidth: { sm: 240 } }}
-          placeholder="جستجوی شماره یا نام نماینده…" onChange={(e) => setSearch(e.target.value)}
+          placeholder="جستجوی شماره، نام نماینده یا TXID…" onChange={(e) => setSearch(e.target.value)}
           InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
         <Button size="small" variant="outlined" startIcon={<DownloadIcon />}
           onClick={() => exportCsv.mutate()} disabled={exportCsv.isPending || data.length === 0}>
