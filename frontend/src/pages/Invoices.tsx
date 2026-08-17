@@ -43,6 +43,7 @@ import { nestedCardBg } from "../theme";
 import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActionsMenu";
 import { downloadCsv } from "../csv";
 import { TABLE_SCROLL_BOUND } from "../themeTokens";
+import { NumberField } from "../components/NumberField";
 
 const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
 // Delivered-but-unpaid states money is collected against (mirrors the backend state machine).
@@ -514,10 +515,10 @@ export default function Invoices() {
           <DialogTitle>ویرایش فاکتور — {editRow.reseller_name}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <TextField label="مصرف (گیگابایت)" type="number" value={editRow.usage_gb}
-                onChange={(e) => editDlg.setData({ ...editRow, usage_gb: e.target.value })} />
-              <TextField label="قیمت هر گیگابایت (تومان)" type="number" value={editRow.price_per_gb}
-                onChange={(e) => editDlg.setData({ ...editRow, price_per_gb: e.target.value })} />
+              <NumberField label="مصرف (گیگابایت)" allowDecimal value={String(editRow.usage_gb ?? "")}
+                onChange={(value) => editDlg.setData({ ...editRow, usage_gb: value })} />
+              <NumberField label="قیمت هر گیگابایت (تومان)" value={String(editRow.price_per_gb ?? "")}
+                onChange={(value) => editDlg.setData({ ...editRow, price_per_gb: value })} />
               <Typography variant="body2" color="text.secondary">
                 مبلغ جدید: {fmtToman(Number(editRow.usage_gb || 0) * Number(editRow.price_per_gb || 0))}
               </Typography>

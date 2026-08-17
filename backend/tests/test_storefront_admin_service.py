@@ -185,7 +185,7 @@ def test_plan_commands_are_cas_audited_idempotent_and_tenant_safe():
             session, shop.id, _ctx(1), gb=10, days=30, price_toman=100_000)
         assert created.response_status == 201 and created.config_version == 2
         plan_id = created.body["plan"]["id"]
-        assert created.body["plan"]["title"] == ""
+        assert "title" not in created.body["plan"]
         replay = await storefront_admin.create_plan(
             session, shop.id, _ctx(1), gb=10, days=30, price_toman=100_000)
         assert replay.replayed is True and replay.body == created.body

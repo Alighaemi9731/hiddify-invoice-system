@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
   Alert, Box, Button, Card, CardContent, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, Stack, Switch, TextField, Tooltip, Typography,
+  FormControlLabel, IconButton, Stack, Switch, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/esm/Add";
 import ArrowDownwardIcon from "@mui/icons-material/esm/ArrowDownward";
@@ -13,6 +13,7 @@ import HistoryIcon from "@mui/icons-material/esm/History";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
+import { NumberField, numberValue } from "../../components/NumberField";
 import { fmtNum, fmtToman } from "../../format";
 import {
   createStorefrontPlan, deleteStorefrontPlan, listStorefrontPlans, reorderStorefrontPlans,
@@ -21,6 +22,7 @@ import {
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
 import StorefrontPlanHistoryDialog from "./StorefrontPlanHistoryDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
+import { planLabel } from "./planLabel";
 import type { StorefrontPlan, StorefrontPlanDraft, Versioned } from "./types";
 import { belowCostMessage, commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
@@ -32,7 +34,10 @@ type PlanCommand =
   | { type: "delete"; planId: number; etag?: string }
   | { type: "reorder"; planIds: number[]; etag?: string };
 
-const EMPTY_DRAFT: StorefrontPlanDraft = { title: "", gb: 1, days: 30, price_toman: 0 };
+// The form holds TEXT, not numbers: a field being emptied mid-edit is a legal intermediate state,
+// and `Number("")` is 0 (see components/NumberField). Parsing happens once, below.
+type PlanForm = { gb: string; days: string; price_toman: string };
+const EMPTY_FORM: PlanForm = { gb: "", days: "30", price_toman: "" };
 
 export default function StorefrontPlansPage() {
   const xsFull = useXsFullScreen();
@@ -44,7 +49,7 @@ export default function StorefrontPlansPage() {
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<StorefrontPlan | null>(null);
-  const [draft, setDraft] = useState<StorefrontPlanDraft>(EMPTY_DRAFT);
+  const [form, setForm] = useState<PlanForm>(EMPTY_FORM);
   const [historyPlan, setHistoryPlan] = useState<StorefrontPlan | null>(null);
   const [conflict, setConflict] = useState<PlanCommand | null>(null);
   const [conflictReloadError, setConflictReloadError] = useState(false);
@@ -84,39 +89,43 @@ export default function StorefrontPlansPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setDraft(EMPTY_DRAFT);
+    setForm(EMPTY_FORM);
     setFormOpen(true);
   };
   const openEdit = (plan: StorefrontPlan) => {
     setEditing(plan);
-    setDraft({ title: plan.title, gb: plan.gb, days: plan.days, price_toman: plan.price_toman });
+    setForm({ gb: String(plan.gb), days: String(plan.days), price_toman: String(plan.price_toman) });
     setFormOpen(true);
   };
+
+  const gb = numberValue(form.gb);
+  const days = numberValue(form.days);
+  const price = numberValue(form.price_toman);
   // A plan may never be sold below what its quota costs this reseller. The server is authoritative
   // (see storefront_pricing); mirroring the floor here just avoids a pointless 422 round-trip.
   const costPerGb = shop.cost_per_gb_toman || 0;
-  const floorFor = (gb: number) => costPerGb * Math.max(0, gb || 0);
-  const draftFloor = floorFor(draft.gb);
+  const floorFor = (quota: number) => costPerGb * Math.max(0, quota || 0);
+  const draftFloor = gb === null ? 0 : floorFor(gb);
   const belowCost = (plan: { gb: number; price_toman: number }) =>
     floorFor(plan.gb) > 0 && plan.price_toman < floorFor(plan.gb);
-  const priceUnderFloor = draftFloor > 0 && draft.price_toman < draftFloor;
+  const priceUnderFloor = draftFloor > 0 && price !== null && price < draftFloor;
   const underpricedPlans = orderedPlans.filter(belowCost);
-  const valid = draft.gb >= 1 && draft.gb <= 100_000
-    && draft.days >= 1 && draft.days <= 3650
-    && draft.price_toman >= 0 && draft.price_toman <= 1_000_000_000_000
-    && !priceUnderFloor
-    && (draft.title?.length || 0) <= 128;
-  const planChanges = editing ? changedFields<StorefrontPlanDraft>(
-    { title: editing.title, gb: editing.gb, days: editing.days, price_toman: editing.price_toman },
-    draft,
-  ) : draft;
-  const hasPlanChanges = !editing || Object.keys(planChanges).length > 0;
+  const gbValid = gb !== null && Number.isInteger(gb) && gb >= 1 && gb <= 100_000;
+  const daysValid = days !== null && Number.isInteger(days) && days >= 1 && days <= 3650;
+  const priceValid = price !== null && Number.isInteger(price)
+    && price >= 0 && price <= 1_000_000_000_000;
+  const valid = gbValid && daysValid && priceValid && !priceUnderFloor;
+  const planChanges: Partial<StorefrontPlanDraft> = !valid ? {} : changedFields(
+    editing && { gb: editing.gb, days: editing.days, price_toman: editing.price_toman },
+    { gb: gb!, days: days!, price_toman: price! },
+  );
+  const hasPlanChanges = Object.keys(planChanges).length > 0;
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!valid || command.isPending) return;
+    if (!valid || !hasPlanChanges || command.isPending) return;
     command.mutate(editing
       ? { type: "update", planId: editing.id, draft: planChanges }
-      : { type: "create", draft: { ...draft, title: draft.title?.trim() || undefined } });
+      : { type: "create", draft: { gb: gb!, days: days!, price_toman: price! } });
   };
 
   const reorder = (plans: StorefrontPlan[]) => {
@@ -184,9 +193,11 @@ export default function StorefrontPlansPage() {
                     <Stack direction="row" alignItems="center" sx={{ flexGrow: 1, minWidth: 0 }} spacing={1}>
                       <DragIndicatorIcon color="disabled" aria-hidden />
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography sx={{ fontWeight: 800 }}>{plan.title || `پلن ${fmtNum(index + 1)}`}</Typography>
+                        {/* Identical wording to the bot's own plan button (`keyboards.plan_label`),
+                            so a reseller sees ONE description of a plan on both surfaces. */}
+                        <Typography sx={{ fontWeight: 800 }}>{planLabel(plan)}</Typography>
                         <Typography variant="body2" color="text.secondary">
-                          {fmtNum(plan.gb)} گیگابایت · {fmtNum(plan.days)} روز · {fmtToman(plan.price_toman)}
+                          {fmtToman(plan.price_toman)}
                         </Typography>
                       </Box>
                     </Stack>
@@ -197,8 +208,8 @@ export default function StorefrontPlansPage() {
                           label={plan.enabled ? "فعال" : "غیرفعال"}
                         />
                       </Tooltip>
-                      <Tooltip title="انتقال به بالا"><span><IconButton aria-label={`انتقال ${plan.title || plan.id} به بالا`} disabled={index === 0 || command.isPending} onClick={() => move(index, -1)}><ArrowUpwardIcon /></IconButton></span></Tooltip>
-                      <Tooltip title="انتقال به پایین"><span><IconButton aria-label={`انتقال ${plan.title || plan.id} به پایین`} disabled={index === orderedPlans.length - 1 || command.isPending} onClick={() => move(index, 1)}><ArrowDownwardIcon /></IconButton></span></Tooltip>
+                      <Tooltip title="انتقال به بالا"><span><IconButton aria-label={`انتقال ${planLabel(plan)} به بالا`} disabled={index === 0 || command.isPending} onClick={() => move(index, -1)}><ArrowUpwardIcon /></IconButton></span></Tooltip>
+                      <Tooltip title="انتقال به پایین"><span><IconButton aria-label={`انتقال ${planLabel(plan)} به پایین`} disabled={index === orderedPlans.length - 1 || command.isPending} onClick={() => move(index, 1)}><ArrowDownwardIcon /></IconButton></span></Tooltip>
                       <IconButton aria-label="تاریخچه پلن" onClick={() => setHistoryPlan(plan)}><HistoryIcon /></IconButton>
                       <IconButton aria-label="ویرایش پلن" onClick={() => openEdit(plan)}><EditIcon /></IconButton>
                       <IconButton
@@ -221,22 +232,34 @@ export default function StorefrontPlansPage() {
           <DialogTitle>{editing ? "ویرایش پلن" : "ساخت پلن"}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ pt: 1 }}>
-              <TextField label="عنوان (اختیاری)" value={draft.title || ""} inputProps={{ maxLength: 128 }} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
-              <TextField required label="حجم (گیگابایت)" type="number" value={draft.gb} inputProps={{ min: 1, max: 100000 }} error={draft.gb < 1 || draft.gb > 100000} onChange={(event) => setDraft({ ...draft, gb: Number(event.target.value) })} />
-              <TextField required label="مدت (روز)" type="number" value={draft.days} inputProps={{ min: 1, max: 3650 }} error={draft.days < 1 || draft.days > 3650} onChange={(event) => setDraft({ ...draft, days: Number(event.target.value) })} />
-              <TextField
+              <NumberField
+                required
+                autoFocus
+                label="حجم (گیگابایت)"
+                value={form.gb}
+                error={form.gb !== "" && !gbValid}
+                helperText="عددی بین ۱ تا ۱۰۰۰۰۰"
+                onChange={(value) => setForm({ ...form, gb: value })}
+              />
+              <NumberField
+                required
+                label="مدت (روز)"
+                value={form.days}
+                error={form.days !== "" && !daysValid}
+                helperText="عددی بین ۱ تا ۳۶۵۰"
+                onChange={(value) => setForm({ ...form, days: value })}
+              />
+              <NumberField
                 required
                 label="قیمت (تومان)"
-                type="number"
-                value={draft.price_toman}
-                inputProps={{ min: 0, max: 1000000000000 }}
-                error={draft.price_toman < 0 || draft.price_toman > 1_000_000_000_000 || priceUnderFloor}
+                value={form.price_toman}
+                error={(form.price_toman !== "" && !priceValid) || priceUnderFloor}
                 helperText={
                   draftFloor > 0
                     ? `قیمت به تومان است، نه هزار تومان (برای ۵۰ هزار تومان بنویسید 50000). کفِ مجاز برای این پلن: ${fmtToman(draftFloor)} — هزینهٔ هر گیگابایت برای شما ${fmtToman(costPerGb)}`
                     : "قیمت به تومان است، نه هزار تومان (برای ۵۰ هزار تومان بنویسید 50000)."
                 }
-                onChange={(event) => setDraft({ ...draft, price_toman: Number(event.target.value) })}
+                onChange={(value) => setForm({ ...form, price_toman: value })}
               />
             </Stack>
           </DialogContent>
@@ -259,7 +282,7 @@ export default function StorefrontPlansPage() {
             setConflictReloadError(false);
             setFormOpen(false);
             setEditing(null);
-            setDraft(EMPTY_DRAFT);
+            setForm(EMPTY_FORM);
             setOrderedPlans(fresh.data?.data || []);
           }
           else setConflictReloadError(true);
@@ -276,7 +299,9 @@ export default function StorefrontPlansPage() {
   );
 }
 
-function changedFields<T extends object>(before: T, after: T): Partial<T> {
+/** Fields that actually differ from the stored plan; every field when creating (`before` null). */
+function changedFields<T extends object>(before: T | null | undefined, after: T): Partial<T> {
+  if (!before) return after;
   return Object.fromEntries(
     (Object.keys(after) as Array<keyof T>)
       .filter((key) => before[key] !== after[key])

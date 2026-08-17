@@ -7,9 +7,9 @@ import {
   FormControlLabel,
   Stack,
   Switch,
-  TextField,
 } from "@mui/material";
 import { ResellerRow } from "../../api/client";
+import { NumberField } from "../../components/NumberField";
 import { useXsFullScreen } from "../../responsive";
 
 export default function EditResellerDialog({
@@ -31,22 +31,20 @@ export default function EditResellerDialog({
       <DialogTitle>ویرایش نماینده {form?.name}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField
+          <NumberField
             label="قیمت هر گیگابایت (تومان) — خالی برای پیش‌فرض"
-            type="number"
-            value={form?.price_per_gb ?? ""}
-            onChange={(event) => onChange(form ? {
+            value={String(form?.price_per_gb ?? "")}
+            onChange={(value) => onChange(form ? {
               ...form,
-              price_per_gb: event.target.value as any,
+              price_per_gb: value as any,
             } : null)}
           />
-          <TextField
+          <NumberField
             label="حداقل فروش (تومان) — خالی برای پیش‌فرض، ۰ برای حذف حداقل"
-            type="number"
-            value={form?.min_sale_toman ?? ""}
-            onChange={(event) => onChange(form ? {
+            value={String(form?.min_sale_toman ?? "")}
+            onChange={(value) => onChange(form ? {
               ...form,
-              min_sale_toman: event.target.value as any,
+              min_sale_toman: value as any,
             } : null)}
             helperText="برای کل مجموعهٔ این نماینده (خود نماینده و زیرمجموعه‌هایش) اعمال می‌شود."
           />
@@ -74,13 +72,12 @@ export default function EditResellerDialog({
             }
             label="ربات فروشگاهی (اجازهٔ راه‌اندازی)"
           />
-          <TextField
+          <NumberField
             label="هزینهٔ ماهانهٔ ربات فروشگاهی (تومان) — خالی برای پیش‌فرض"
-            type="number"
-            value={form?.storefront_monthly_fee_toman ?? ""}
-            onChange={(event) => onChange(form ? {
+            value={String(form?.storefront_monthly_fee_toman ?? "")}
+            onChange={(value) => onChange(form ? {
               ...form,
-              storefront_monthly_fee_toman: event.target.value as any,
+              storefront_monthly_fee_toman: value as any,
             } : null)}
             helperText="فقط در ماه‌هایی که نماینده ربات فروشگاهی فعال دارد، به فاکتور او افزوده می‌شود."
           />

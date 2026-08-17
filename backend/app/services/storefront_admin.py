@@ -324,7 +324,7 @@ async def _execute(
 
 def _plan_dict(plan: StorefrontPlan) -> dict:
     return {
-        "id": plan.id, "title": plan.title, "gb": plan.gb, "days": plan.days,
+        "id": plan.id, "gb": plan.gb, "days": plan.days,
         "price_toman": plan.price_toman, "enabled": plan.enabled, "sort_order": plan.sort_order,
     }
 
@@ -349,17 +349,18 @@ def _assert_price_covers_cost(
     )
 
 
-def _validate_plan(*, title: str, gb: int, days: int, price_toman: int) -> tuple[str, int, int, int]:
-    title = title.strip()
-    if len(title) > 128:
-        raise AdminCommandError("validation", "title exceeds 128 characters")
+def _validate_plan(*, gb: int, days: int, price_toman: int) -> tuple[int, int, int]:
+    """A plan is exactly quota + duration + price. It has no title: the field existed only in the
+    portal, was invisible in the bot on both the admin and the customer side, and left every
+    bot-made plan permanently unnamed (owner decision, 2026-08-18). The `storefront_plans.title`
+    column survives unused so old audit rows stay readable."""
     if not 1 <= int(gb) <= 100_000:
         raise AdminCommandError("validation", "gb must be between 1 and 100000")
     if not 1 <= int(days) <= 3650:
         raise AdminCommandError("validation", "days must be between 1 and 3650")
     if not 0 <= int(price_toman) <= 10**12:
         raise AdminCommandError("validation", "price_toman is out of range")
-    return title, int(gb), int(days), int(price_toman)
+    return int(gb), int(days), int(price_toman)
 
 
 async def list_plans(
@@ -371,13 +372,12 @@ async def list_plans(
 
 
 async def create_plan(
-    session: AsyncSession, shop_id: int, ctx: CommandContext, *, title: str = "",
+    session: AsyncSession, shop_id: int, ctx: CommandContext, *,
     gb: int, days: int, price_toman: int,
 ) -> CommandResult:
-    title, gb, days, price_toman = _validate_plan(
-        title=title, gb=gb, days=days, price_toman=price_toman)
+    gb, days, price_toman = _validate_plan(gb=gb, days=days, price_toman=price_toman)
     shop, reseller = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
-    request = {"title": title, "gb": gb, "days": days, "price_toman": price_toman}
+    request = {"gb": gb, "days": days, "price_toman": price_toman}
     command, replay = await _claim_db_command(
         session, shop, ctx, action="plan.create", intent=request)
     if replay is not None:
@@ -396,7 +396,7 @@ async def create_plan(
 
     async def mutate(_version: int) -> _Mutation:
         plan = StorefrontPlan(
-            storefront_bot_id=shop.id, title=title, gb=gb, days=days,
+            storefront_bot_id=shop.id, gb=gb, days=days,
             price_toman=price_toman, enabled=True, sort_order=plan_count,
         )
         session.add(plan)
@@ -410,15 +410,11 @@ async def create_plan(
 
 async def update_plan(
     session: AsyncSession, shop_id: int, plan_id: int, ctx: CommandContext, *,
-    title: str | None = None, gb: int | None = None, days: int | None = None,
-    price_toman: int | None = None,
+    gb: int | None = None, days: int | None = None, price_toman: int | None = None,
 ) -> CommandResult:
+    """Patch one or more of a plan's three fields. Every caller (portal form, bot field picker)
+    sends only what changed; the below-cost guard below judges the MERGED values."""
     intent: dict[str, Any] = {"plan_id": plan_id}
-    if title is not None:
-        normalized_title = title.strip()
-        if len(normalized_title) > 128:
-            raise AdminCommandError("validation", "title exceeds 128 characters")
-        intent["title"] = normalized_title
     for name, value, lo, hi in (
         ("gb", gb, 1, 100_000), ("days", days, 1, 3650),
         ("price_toman", price_toman, 0, 10**12),
@@ -439,7 +435,7 @@ async def update_plan(
         plan = await _owned_plan(session, shop.id, plan_id)
         before = _plan_dict(plan)
         values = _validate_plan(
-            title=str(intent.get("title", plan.title)), gb=int(intent.get("gb", plan.gb)),
+            gb=int(intent.get("gb", plan.gb)),
             days=int(intent.get("days", plan.days)),
             price_toman=int(intent.get("price_toman", plan.price_toman)),
         )
@@ -447,14 +443,14 @@ async def update_plan(
         # gb (and a PATCH of gb alone against the stored price).
         _assert_price_covers_cost(
             cost=await storefront_pricing.cost_per_gb(session, reseller),
-            gb=values[1], price_toman=values[3])
+            gb=values[0], price_toman=values[2])
     except AdminCommandError as exc:
         await _cache_known_failure(
             session, shop, ctx, action="plan.update", command=command, exc=exc)
         raise
 
     async def mutate(_version: int) -> _Mutation:
-        plan.title, plan.gb, plan.days, plan.price_toman = values
+        plan.gb, plan.days, plan.price_toman = values
         await session.flush()
         after = _plan_dict(plan)
         return _Mutation({"plan": after}, after, "plan", plan.id)

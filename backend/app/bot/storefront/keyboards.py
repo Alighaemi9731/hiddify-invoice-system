@@ -151,8 +151,28 @@ def admins_manage_kb(co_admin_ids: list[int]) -> InlineKeyboardMarkup:
 
 # ── inline keyboards ──────────────────────────────────────────────────────────
 def plan_label(p: StorefrontPlan) -> str:
-    """Customer-facing plan label — volume · duration · price, no title (owner: «عنوان نمی‌خواهیم»)."""
+    """The one name a plan has, everywhere — volume · duration · price. Plans carry no title
+    (owner, 2026-08-18): the field was portal-only and invisible here, so a bot-made plan was
+    permanently unnamed. Mirrored word-for-word by `planLabel` in the portal
+    (`frontend/src/portal/storefront/planLabel.ts`) plus the price; change one, change the other."""
     return f"{p.gb} گیگابایت · {p.days} روزه — {p.price_toman:,} تومان"
+
+
+PLAN_FIELDS: dict[str, str] = {"gb": "حجم", "days": "مدت", "price": "قیمت"}
+
+
+def plan_edit_kb(plan_id: int) -> InlineKeyboardMarkup:
+    """Pick ONE field to change. Editing used to re-ask volume → duration → price every time, so
+    correcting a price meant retyping the whole plan (and any slip rewrote a field nobody meant to
+    touch). The portal patches one field at a time; this is the same thing in the bot."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📦 حجم", callback_data=f"sfplanfield:{plan_id}:gb"),
+            InlineKeyboardButton(text="📅 مدت", callback_data=f"sfplanfield:{plan_id}:days"),
+            InlineKeyboardButton(text="💰 قیمت", callback_data=f"sfplanfield:{plan_id}:price"),
+        ],
+        [InlineKeyboardButton(text="⬅️ بازگشت به فهرست پلن‌ها", callback_data="sfplanlist")],
+    ])
 
 
 def buy_plans_kb(plans: list[StorefrontPlan]) -> InlineKeyboardMarkup:

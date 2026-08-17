@@ -5,6 +5,7 @@ import SupportAgentIcon from "@mui/icons-material/esm/SupportAgent";
 import { useQuery } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
+import { planLabel } from "./planLabel";
 import { fmtNum, fmtToman } from "../../format";
 import { getStorefrontPreview, storefrontQueryKeys } from "./api";
 import type { StorefrontOutletContext } from "./StorefrontShell";
@@ -56,9 +57,8 @@ export default function StorefrontPreviewPage() {
                         <Grid item xs={12} sm={6} key={plan.id}>
                           <Card variant="outlined" sx={{ height: "100%" }}>
                             <CardContent>
-                              <Typography sx={{ fontWeight: 800 }}>{plan.title || "پلن فروشگاه"}</Typography>
-                              <Typography variant="body2" color="text.secondary" sx={{ my: 0.75 }}>{fmtNum(plan.gb)} گیگابایت · {fmtNum(plan.days)} روز</Typography>
-                              <Typography color="primary.main" sx={{ fontWeight: 850 }}>{fmtToman(plan.price_toman)}</Typography>
+                              <Typography sx={{ fontWeight: 800 }}>{planLabel(plan)}</Typography>
+                              <Typography color="primary.main" sx={{ fontWeight: 850, mt: 0.75 }}>{fmtToman(plan.price_toman)}</Typography>
                             </CardContent>
                           </Card>
                         </Grid>

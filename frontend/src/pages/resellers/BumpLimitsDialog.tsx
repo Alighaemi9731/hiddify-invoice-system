@@ -5,10 +5,10 @@ import {
   DialogContent,
   DialogTitle,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import { ResellerRow } from "../../api/client";
+import { NumberField, numberValue } from "../../components/NumberField";
 import { fmtNum } from "../../format";
 import { useXsFullScreen } from "../../responsive";
 
@@ -21,13 +21,16 @@ export default function BumpLimitsDialog({
   pending,
 }: {
   row: ResellerRow | null;
-  amount: number;
-  onAmountChange: (amount: number) => void;
+  /** Raw text, so the field can be emptied while a new amount is typed. */
+  amount: string;
+  onAmountChange: (amount: string) => void;
   onClose: () => void;
   onSubmit: (id: number, amount: number) => void;
   pending: boolean;
 }) {
   const xsFull = useXsFullScreen();
+  const parsed = numberValue(amount);
+  const valid = parsed !== null && parsed >= 1;
   return (
     <Dialog open={!!row} onClose={onClose} fullWidth maxWidth="xs" fullScreen={xsFull}>
       {row && (
@@ -45,30 +48,29 @@ export default function BumpLimitsDialog({
                 <Button
                   key={preset}
                   size="small"
-                  variant={amount === preset ? "contained" : "outlined"}
-                  onClick={() => onAmountChange(preset)}
+                  variant={parsed === preset ? "contained" : "outlined"}
+                  onClick={() => onAmountChange(String(preset))}
                 >
                   +{fmtNum(preset)}
                 </Button>
               ))}
             </Stack>
-            <TextField
-              type="number"
+            <NumberField
               label="مقدار افزایش"
               fullWidth
               value={amount}
-              onChange={(event) =>
-                onAmountChange(Math.max(1, Number(event.target.value) || 0))}
+              error={amount !== "" && !valid}
+              onChange={onAmountChange}
             />
           </DialogContent>
           <DialogActions>
             <Button onClick={onClose}>انصراف</Button>
             <Button
               variant="contained"
-              disabled={pending || amount < 1}
-              onClick={() => onSubmit(row.id, amount)}
+              disabled={pending || !valid}
+              onClick={() => valid && onSubmit(row.id, parsed)}
             >
-              افزودن +{fmtNum(amount)}
+              افزودن +{fmtNum(parsed ?? 0)}
             </Button>
           </DialogActions>
         </>

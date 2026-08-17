@@ -19,6 +19,7 @@ import { useToast, errMsg } from "../components/Toast";
 import { DataState } from "../components/DataState";
 import { telegramHref } from "../components/TelegramLink";
 import { fmtNum, fmtToman } from "../format";
+import { NumberField } from "../components/NumberField";
 
 // Audience filters — each is applied ON TOP of the base set (resellers in the main «نمایندگان»
 // list that are not exempt from billing and are on an active panel). The panel filter is combinable.
@@ -258,11 +259,10 @@ export default function Broadcast() {
               {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}</MenuItem>)}
             </Select>
             {needsThreshold && (
-              <TextField size="small" type="number" sx={{ minWidth: 220 }}
+              <NumberField size="small" sx={{ minWidth: 220 }}
                 label={audDef!.threshold!.label}
                 value={threshold} placeholder={String(audDef!.threshold!.def)}
-                onChange={(e) => onFilterChange(() => setThreshold(e.target.value))}
-                InputProps={{ inputProps: { min: 0, dir: "ltr" } }} />
+                onChange={(value) => onFilterChange(() => setThreshold(value))} />
             )}
             <Button variant="outlined" startIcon={<GroupIcon />} disabled={preview.isPending}
               onClick={() => preview.mutate()}>پیش‌نمایشِ گیرندگان</Button>
@@ -413,10 +413,9 @@ export default function Broadcast() {
           </Typography>
 
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} useFlexGap flexWrap="wrap" alignItems="center">
-            <TextField size="small" type="number" label="آستانهٔ حجم (گیگابایت)" sx={{ minWidth: 150 }}
+            <NumberField size="small" label="آستانهٔ حجم (گیگابایت)" sx={{ minWidth: 150 }}
               value={hvThreshold} placeholder="1000"
-              onChange={(e) => setHvThreshold(e.target.value)}
-              InputProps={{ inputProps: { min: 1, dir: "ltr" } }} />
+              onChange={setHvThreshold} />
             <Select size="small" value={hvPanelId} displayEmpty
               onChange={(e) => { setHvPanelId(e.target.value); setHvData(null); }}
               renderValue={(v) => v ? (panels.find((p: any) => String(p.id) === String(v))?.key ?? v) : "همهٔ پنل‌ها"}

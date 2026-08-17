@@ -92,7 +92,7 @@ def test_plan_http_etag_idempotency_cas_reorder_delete_and_history():
             assert created.status_code == 201
             assert created.headers["etag"] == '"sf-config-2"'
             created_id = created.json()["result"]["id"]
-            assert created.json()["result"]["title"] == ""
+            assert "title" not in created.json()["result"]
 
             replay = await client.post(
                 f"/api/portal/storefronts/{shop.id}/plans", json=create_body, headers=headers)

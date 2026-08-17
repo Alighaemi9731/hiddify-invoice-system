@@ -844,7 +844,7 @@ async def storefront_preview(
         ),
         payment_methods=methods,
         enabled_plans=[StorefrontPreviewPlanOut(
-            id=item["id"], title=item["title"], gb=item["gb"], days=item["days"],
+            id=item["id"], gb=item["gb"], days=item["days"],
             price_toman=item["price_toman"],
         ) for item in raw["plans"]],
         channel_required=bool(raw.get("channel_required", False)),

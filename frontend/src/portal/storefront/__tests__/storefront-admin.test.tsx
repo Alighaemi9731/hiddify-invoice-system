@@ -30,8 +30,8 @@ const shop = {
 };
 
 const plans = [
-  { id: 1, title: "پلن اول", gb: 10, days: 30, price_toman: 100_000, enabled: true, sort_order: 0 },
-  { id: 2, title: "پلن دوم", gb: 20, days: 60, price_toman: 180_000, enabled: true, sort_order: 1 },
+  { id: 1, gb: 10, days: 30, price_toman: 100_000, enabled: true, sort_order: 0 },
+  { id: 2, gb: 20, days: 60, price_toman: 180_000, enabled: true, sort_order: 1 },
 ];
 
 const settings = {
@@ -94,13 +94,12 @@ function renderWithProviders(element: ReactElement, path: string) {
  *  something else aren't blocked by the below-cost guard on the empty draft's 0 price. */
 async function openCreateForm(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("button", { name: "پلن جدید" }));
-  const price = screen.getByLabelText(/قیمت \(تومان\)/);
-  await user.clear(price);
-  await user.type(price, "50000");
+  await user.type(screen.getByLabelText(/حجم \(گیگابایت\)/), "10");
+  await user.type(screen.getByLabelText(/قیمت \(تومان\)/), "50000");
 }
 
 describe("storefront Release B administration", () => {
-  it("uses one request for a double-click and permits an optional plan title", async () => {
+  it("uses one request for a double-click and never sends a plan title", async () => {
     const user = userEvent.setup();
     let requests = 0;
     let body: Record<string, unknown> = {};
@@ -332,7 +331,7 @@ describe("storefront Release B administration", () => {
     );
 
     renderAdmin("plans", <StorefrontPlansPage />);
-    await user.click(await screen.findByRole("button", { name: "انتقال پلن اول به پایین" }));
+    await user.click(await screen.findByRole("button", { name: "انتقال ۱۰ گیگابایت · ۳۰ روزه به پایین" }));
     await waitFor(() => expect(order).toEqual([2, 1]));
   });
 
@@ -622,13 +621,13 @@ describe("storefront Release B administration", () => {
       closed_text: null,
       free_trial: { enabled: true, gb: 2, days: 3 },
       payment_methods: ["card", "usdt"],
-      enabled_plans: [{ id: 1, title: "اقتصادی", gb: 10, days: 30, price_toman: 100_000 }],
+      enabled_plans: [{ id: 1, gb: 10, days: 30, price_toman: 100_000 }],
       channel_required: true,
     })));
 
     renderAdmin("preview", <StorefrontPreviewPage />);
     expect(await screen.findByText("به فروشگاه خوش آمدید")).toBeInTheDocument();
-    expect(screen.getByText("اقتصادی")).toBeInTheDocument();
+    expect(screen.getByText("۱۰ گیگابایت · ۳۰ روزه")).toBeInTheDocument();
     expect(screen.getByText("تست رایگان")).toBeInTheDocument();
     expect(screen.getByText(/هیچ مشتری یا داده‌ای ایجاد نمی‌کند/)).toBeInTheDocument();
   });
@@ -728,8 +727,8 @@ describe("storefront Release B administration", () => {
       http.get("*/api/portal/storefronts/1/plans", () => HttpResponse.json(
         {
           items: [
-            { id: 1, title: "ارزان", gb: 10, days: 30, price_toman: 50, enabled: false, sort_order: 0 },
-            { id: 2, title: "سالم", gb: 10, days: 30, price_toman: 50_000, enabled: true, sort_order: 1 },
+            { id: 1, gb: 10, days: 30, price_toman: 50, enabled: false, sort_order: 0 },
+            { id: 2, gb: 10, days: 30, price_toman: 50_000, enabled: true, sort_order: 1 },
           ],
           config_version: 1,
         },
@@ -841,7 +840,9 @@ describe("storefront monthly free-trial reset", () => {
 
     renderAdmin("settings", <StorefrontSettingsPage />);
     const gb = await screen.findByLabelText("حجم (گیگابایت)");
-    expect(gb).toHaveAttribute("max", "1");
+    expect(gb).toHaveAttribute("inputmode", "numeric");
     expect(screen.getByText("حداکثر 1 گیگابایت")).toBeInTheDocument();
+    await userEvent.setup().type(gb, "5");
+    expect(gb).toHaveAttribute("aria-invalid", "true");
   });
 });

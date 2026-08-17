@@ -21,6 +21,7 @@ import { errMsg, useToast } from "../components/Toast";
 import { DataState } from "../components/DataState";
 import { fmtGb, fmtNum, fmtDate, fmtDateTime } from "../format";
 import { useXsFullScreen } from "../responsive";
+import { NumberField, numberValue } from "../components/NumberField";
 
 // ── Section 1: remove a mistaken end-user from billing ────────────────────────
 function RemoveUserTool() {
@@ -414,7 +415,7 @@ function RecoverUsersTool() {
   const xsFull = useXsFullScreen();
   const { node: toast, show } = useToast();
   const [sel, setSel] = useState<Set<number>>(new Set());
-  const [lookback, setLookback] = useState(2);
+  const [lookback, setLookback] = useState("2");
   const [result, setResult] = useState<RecoveryPanel[] | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
@@ -424,7 +425,7 @@ function RecoverUsersTool() {
   const keyOf = (u: { panel_id: number; user_uuid: string }) => `${u.panel_id}|${u.user_uuid}`;
 
   const detect = useMutation({
-    mutationFn: () => recoveryCandidates([...sel], lookback),
+    mutationFn: () => recoveryCandidates([...sel], numberValue(lookback) ?? 2),
     onSuccess: (r) => {
       setResult(r);
       // Default-select NOTHING — the owner reviews and picks the cluster that is THEIR rollback (the
@@ -484,9 +485,12 @@ function RecoverUsersTool() {
           ))}
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
-          <TextField label="بازه (روزِ اخیر)" type="number" size="small" value={lookback}
-            onChange={(e) => setLookback(Math.max(1, Math.min(90, Number(e.target.value) || 7)))}
-            sx={{ width: 150 }} inputProps={{ dir: "ltr", min: 1, max: 90 }} />
+          {/* Clamped on BLUR, not per keystroke: clamping while typing turns "1" into "1" and
+              then "10" back into "1" the moment the bound is 1..90, so the field fights the user. */}
+          <NumberField label="بازه (روزِ اخیر)" size="small" value={lookback}
+            onChange={setLookback}
+            onBlur={() => setLookback(String(Math.max(1, Math.min(90, numberValue(lookback) ?? 7))))}
+            sx={{ width: 150 }} />
           <Button variant="contained" onClick={() => detect.mutate()} disabled={sel.size === 0 || detect.isPending}
             startIcon={detect.isPending ? <CircularProgress size={16} /> : <SearchIcon />}>
             ۲) بررسیِ کاربرانِ گم‌شده

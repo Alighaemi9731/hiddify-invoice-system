@@ -58,7 +58,7 @@ export default function Resellers() {
   const [page, setPage] = useState(0);
   const editDlg = useDialogState<ResellerRow>();
   const bumpDlg = useDialogState<ResellerRow>();
-  const [bumpAmount, setBumpAmount] = useState(100);
+  const [bumpAmount, setBumpAmount] = useState("100");
   const form = editDlg.data;
 
   const { data: panels = [] } = useQuery({
@@ -171,7 +171,7 @@ export default function Resellers() {
     reseller,
     onEdit: (r: ResellerRow) => editDlg.openWith({ ...r }),
     onBump: (r: ResellerRow) => {
-      setBumpAmount(100);
+      setBumpAmount("100");
       bumpDlg.openWith(r);
     },
     enforce,

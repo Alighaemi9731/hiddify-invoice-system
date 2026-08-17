@@ -32,3 +32,12 @@ describe("design lint", () => {
     expect(findings).toEqual([]);
   });
 });
+
+describe("numeric inputs (§4.3a)", () => {
+  it("flags a raw type=\"number\" anywhere but NumberField itself", () => {
+    const offending = lintText("src/pages/Thing.tsx", '<TextField type="number" value={x} />');
+    expect(offending.map((f) => f.category)).toContain("numberInput");
+    // NumberField itself is the one module allowed to mention it (it renders type="text").
+    expect(lintText("src/components/NumberField.tsx", 'const banned = \'type="number"\';').length).toBe(0);
+  });
+});

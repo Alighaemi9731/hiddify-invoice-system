@@ -22,6 +22,7 @@ import type {
   StorefrontTrialReset, StorefrontTrialSettings, Versioned,
 } from "./types";
 import { commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
+import { NumberField, numberValue } from "../../components/NumberField";
 
 type SettingsCommand =
   | { type: "settings"; group: StorefrontSettingsGroup; body: Partial<StorefrontSettingsByGroup[StorefrontSettingsGroup]>; etag?: string }
@@ -129,8 +130,15 @@ export default function StorefrontSettingsPage() {
   // The ceiling comes from the server (the owner pays for every trial GB), never a constant.
   const trialMaxGb = query.data?.data.trial.reset.max_gb ?? 1;
   const trialReset = query.data?.data.trial.reset;
-  const trialValid = !!trial && trial.free_trial_gb >= 1 && trial.free_trial_gb <= trialMaxGb
-    && trial.free_trial_days >= 1 && trial.free_trial_days <= 90;
+  // The two trial numbers are held as TEXT while they are typed (see components/NumberField) and
+  // parsed once, here — so an emptied field stays empty instead of snapping back to 0.
+  const trialGb = trial ? numberValue(String(trial.free_trial_gb ?? "")) : null;
+  const trialDays = trial ? numberValue(String(trial.free_trial_days ?? "")) : null;
+  const trialForSave = trial && trialGb !== null && trialDays !== null
+    ? { ...trial, free_trial_gb: trialGb, free_trial_days: trialDays }
+    : null;
+  const trialValid = !!trialForSave && trialGb >= 1 && trialGb <= trialMaxGb
+    && trialDays >= 1 && trialDays <= 90;
   const messagesValid = !!messages && (messages.welcome_text?.length || 0) <= 1000
     && (messages.support_contact?.length || 0) <= 128;
   const shopStateValid = !!shopState && (shopState.closed_text?.length || 0) <= 1000;
@@ -138,7 +146,8 @@ export default function StorefrontSettingsPage() {
   const paymentForSave = payment ? cleanPayment(payment) : null;
   const paymentDirty = !!paymentForSave && !!query.data
     && Object.keys(changedFields(query.data.data.payment, paymentForSave)).length > 0;
-  const trialDirty = !!trial && !!query.data && Object.keys(changedFields(query.data.data.trial, trial)).length > 0;
+  const trialDirty = !!trialForSave && !!query.data
+    && Object.keys(changedFields(query.data.data.trial, trialForSave)).length > 0;
   const messagesDirty = !!messages && !!query.data && Object.keys(changedFields(query.data.data.messages, messages)).length > 0;
   const shopStateDirty = !!shopState && !!query.data && Object.keys(changedFields(query.data.data.shop_state, shopState)).length > 0;
 
@@ -182,11 +191,11 @@ export default function StorefrontSettingsPage() {
 
             <Grid item xs={12} lg={6}>
               <SectionCard title="تست رایگان">
-                <Box component="form" onSubmit={(event: FormEvent) => { event.preventDefault(); if (trialValid) saveGroup("trial", trial); }}>
+                <Box component="form" onSubmit={(event: FormEvent) => { event.preventDefault(); if (trialValid && trialForSave) saveGroup("trial", trialForSave); }}>
                   <Stack spacing={1.5}>
                     <FormControlLabel control={<Switch checked={trial.free_trial_enabled} onChange={(_, value) => setTrial({ ...trial, free_trial_enabled: value })} />} label="تست رایگان فعال باشد" />
-                    <TextField label="حجم (گیگابایت)" type="number" value={trial.free_trial_gb} error={trial.free_trial_gb < 1 || trial.free_trial_gb > trialMaxGb} helperText={`حداکثر ${trialMaxGb} گیگابایت`} inputProps={{ min: 1, max: trialMaxGb }} onChange={(event) => setTrial({ ...trial, free_trial_gb: Number(event.target.value) })} />
-                    <TextField label="مدت (روز)" type="number" value={trial.free_trial_days} error={trial.free_trial_days < 1 || trial.free_trial_days > 90} inputProps={{ min: 1, max: 90 }} onChange={(event) => setTrial({ ...trial, free_trial_days: Number(event.target.value) })} />
+                    <NumberField label="حجم (گیگابایت)" value={String(trial.free_trial_gb ?? "")} error={trialGb === null || trialGb < 1 || trialGb > trialMaxGb} helperText={`حداکثر ${trialMaxGb} گیگابایت`} onChange={(value) => setTrial({ ...trial, free_trial_gb: value as never })} />
+                    <NumberField label="مدت (روز)" value={String(trial.free_trial_days ?? "")} error={trialDays === null || trialDays < 1 || trialDays > 90} helperText="عددی بین ۱ تا ۹۰ روز" onChange={(value) => setTrial({ ...trial, free_trial_days: value as never })} />
                     <SaveButton disabled={!trialValid || !trialDirty || mutation.isPending} />
                   </Stack>
                 </Box>

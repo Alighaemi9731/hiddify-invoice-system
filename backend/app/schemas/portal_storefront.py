@@ -187,7 +187,6 @@ class StorefrontMutationOut[T](BaseModel):
 
 class StorefrontPlanOut(BaseModel):
     id: int
-    title: str = ""
     gb: int
     days: int
     price_toman: int
@@ -205,14 +204,12 @@ class StorefrontStrictBody(BaseModel):
 
 
 class StorefrontPlanCreate(StorefrontStrictBody):
-    title: str = Field(default="", max_length=128)
     gb: int = Field(ge=1, le=100_000)
     days: int = Field(ge=1, le=3_650)
     price_toman: int = Field(ge=0, le=1_000_000_000_000)
 
 
 class StorefrontPlanUpdate(StorefrontStrictBody):
-    title: str | None = Field(default=None, max_length=128)
     gb: int | None = Field(default=None, ge=1, le=100_000)
     days: int | None = Field(default=None, ge=1, le=3_650)
     price_toman: int | None = Field(default=None, ge=0, le=1_000_000_000_000)
@@ -448,7 +445,6 @@ class StorefrontPreviewFreeTrialOut(BaseModel):
 
 class StorefrontPreviewPlanOut(BaseModel):
     id: int
-    title: str
     gb: int
     days: int
     price_toman: int

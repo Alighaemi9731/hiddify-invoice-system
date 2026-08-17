@@ -19,6 +19,7 @@ import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { CreditCode, CreditCreateBody, CreditKind, CreditUpdateBody, Versioned } from "./types";
 import { isNotFound, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
+import { NumberField } from "../../components/NumberField";
 
 type FormState = {
   code: string;
@@ -273,29 +274,29 @@ function CreditFormDialog({
               </TextField>
               {form.kind === "percent" ? (
                 <>
-                  <TextField label="درصد" type="number" value={form.percent_off}
-                    onChange={(e) => set("percent_off", e.target.value)} inputProps={{ dir: "ltr", min: 1, max: 100 }} fullWidth />
-                  <TextField label="سقفِ پاداش (تومان، اختیاری)" type="number" value={form.max_bonus_toman}
-                    onChange={(e) => set("max_bonus_toman", e.target.value)} inputProps={{ dir: "ltr", min: 1 }} fullWidth />
+                  <NumberField label="درصد" value={form.percent_off}
+                    onChange={(value) => set("percent_off", value)} fullWidth />
+                  <NumberField label="سقفِ پاداش (تومان، اختیاری)" value={form.max_bonus_toman}
+                    onChange={(value) => set("max_bonus_toman", value)} fullWidth />
                 </>
               ) : (
                 <>
-                  <TextField label="مبلغ (تومان)" type="number" value={form.amount_toman}
-                    onChange={(e) => set("amount_toman", e.target.value)} inputProps={{ dir: "ltr", min: 1 }} fullWidth />
+                  <NumberField label="مبلغ (تومان)" value={form.amount_toman}
+                    onChange={(value) => set("amount_toman", value)} fullWidth />
                   <FormControlLabel control={<Switch checked={form.is_gift}
                     onChange={(e) => set("is_gift", e.target.checked)} />}
                     label="هدیهٔ مستقیم (بدون نیاز به شارژ)" />
                 </>
               )}
               {!form.is_gift && (
-                <TextField label="حداقل شارژ لازم (تومان، اختیاری)" type="number" value={form.min_topup_toman}
-                  onChange={(e) => set("min_topup_toman", e.target.value)} inputProps={{ dir: "ltr", min: 0 }} fullWidth />
+                <NumberField label="حداقل شارژ لازم (تومان، اختیاری)" value={form.min_topup_toman}
+                  onChange={(value) => set("min_topup_toman", value)} fullWidth />
               )}
               <Stack direction="row" spacing={1.5}>
-                <TextField label="سقف کل استفاده" type="number" value={form.max_uses}
-                  onChange={(e) => set("max_uses", e.target.value)} inputProps={{ dir: "ltr", min: 1 }} fullWidth />
-                <TextField label="سقف هر مشتری" type="number" value={form.per_customer_limit}
-                  onChange={(e) => set("per_customer_limit", e.target.value)} inputProps={{ dir: "ltr", min: 1 }} fullWidth />
+                <NumberField label="سقف کل استفاده" value={form.max_uses}
+                  onChange={(value) => set("max_uses", value)} fullWidth />
+                <NumberField label="سقف هر مشتری" value={form.per_customer_limit}
+                  onChange={(value) => set("per_customer_limit", value)} fullWidth />
               </Stack>
             </>
           )}

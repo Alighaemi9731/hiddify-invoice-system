@@ -24,6 +24,7 @@ import type {
 } from "./types";
 import { commandRecoveryMessage, isConflict, isNotFound, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
+import { NumberField } from "../../components/NumberField";
 
 const TOPUP_STATUS_FA: Record<string, string> = {
   pending: "در انتظار",
@@ -284,15 +285,13 @@ export default function TopupsPage() {
               <MenuItem value="usdt">USDT</MenuItem>
               <MenuItem value="ton">تون (TON)</MenuItem>
             </TextField>
-            <TextField
-              size="small" type="number" label="حداقل مبلغ" value={minAmount}
-              onChange={(event) => setMinAmount(event.target.value)}
-              inputProps={{ dir: "ltr", min: 1 }} sx={{ minWidth: { xs: "100%", md: 130 } }}
+            <NumberField
+              size="small" label="حداقل مبلغ" value={minAmount}
+              onChange={setMinAmount} sx={{ minWidth: { xs: "100%", md: 130 } }}
             />
-            <TextField
-              size="small" type="number" label="حداکثر مبلغ" value={maxAmount}
-              onChange={(event) => setMaxAmount(event.target.value)}
-              inputProps={{ dir: "ltr", min: 1 }} sx={{ minWidth: { xs: "100%", md: 130 } }}
+            <NumberField
+              size="small" label="حداکثر مبلغ" value={maxAmount}
+              onChange={setMaxAmount} sx={{ minWidth: { xs: "100%", md: 130 } }}
             />
             <TextField
               size="small" type="date" label="از تاریخ" value={from}
@@ -374,12 +373,11 @@ export default function TopupsPage() {
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>{decisionBody(active)}</DialogContentText>
           {active?.kind === "correct" && (
-            <TextField
-              autoFocus fullWidth type="number" label="مبلغ اصلاح‌شده (تومان)" value={corrected}
-              onChange={(event) => setCorrected(event.target.value)}
+            <NumberField
+              autoFocus fullWidth label="مبلغ اصلاح‌شده (تومان)" value={corrected}
+              onChange={setCorrected}
               error={corrected !== "" && !correctedValid}
               helperText="مبلغی که واقعاً به کیف پول افزوده می‌شود"
-              inputProps={{ dir: "ltr", min: 1, max: AMOUNT_MAX }}
               disabled={busy} sx={{ mb: 2 }}
             />
           )}

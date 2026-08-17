@@ -14,6 +14,7 @@ import { useToast, errMsg } from "../../components/Toast";
 import CapacityBar from "../../components/CapacityBar";
 import { SectionCard } from "../ui";
 import { useXsFullScreen } from "../../responsive";
+import { NumberField } from "../../components/NumberField";
 
 export default function PortalPanels() {
   const xsFull = useXsFullScreen();
@@ -140,8 +141,8 @@ export default function PortalPanels() {
             این درخواست به‌همراهِ ظرفیتِ فعلیِ شما برای مالک ارسال می‌شود. مقدارِ پیشنهادی و یادداشت
             اختیاری است.
           </Typography>
-          <TextField fullWidth type="number" label="مقدارِ پیشنهادی (اختیاری)" value={reqAmount}
-            onChange={(e) => setReqAmount(e.target.value)} inputProps={{ min: 1, dir: "ltr" }} sx={{ mb: 1.5 }} />
+          <NumberField fullWidth label="مقدارِ پیشنهادی (اختیاری)" value={reqAmount}
+            onChange={setReqAmount} sx={{ mb: 1.5 }} />
           <TextField fullWidth multiline minRows={2} label="یادداشت (اختیاری)" value={reqNote}
             onChange={(e) => setReqNote(e.target.value)} inputProps={{ maxLength: 500 }} />
         </DialogContent>

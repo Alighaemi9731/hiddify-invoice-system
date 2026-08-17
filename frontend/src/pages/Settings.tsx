@@ -7,6 +7,7 @@ import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { TIER1_BLUR, TIER2_BG, TIER2_BLUR } from "../themeTokens";
 import { fmtDateTime } from "../format";
+import { NumberField, numberValue } from "../components/NumberField";
 import SmartToyIcon from "@mui/icons-material/esm/SmartToy";
 import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import SellIcon from "@mui/icons-material/esm/Sell";
@@ -491,6 +492,13 @@ export default function Settings() {
   const setVal = (key: string, value: any) => setEdits((e) => ({ ...e, [key]: value }));
   const getVal: Getter = (key) => (key in edits ? edits[key] : byKey[key]?.value);
   const dirtyCount = Object.keys(edits).length;
+  // A numeric setting is staged as TEXT while it is being typed (see components/NumberField), so an
+  // emptied or half-typed field is a normal intermediate state. It must never reach the API as 0 or
+  // NaN — block the save instead, with the offending field already marked in error.
+  const numericEdit = (key: string) =>
+    typeof byKey[key]?.value === "number" && typeof edits[key] === "string";
+  const badNumberKeys = Object.keys(edits).filter(
+    (key) => numericEdit(key) && numberValue(edits[key]) === null);
 
   // Any non-hidden setting not covered by a curated field falls into a "متفرقه" section, so a
   // newly-added backend setting is never silently lost from the panel. This is a SAFETY NET, not
@@ -530,6 +538,7 @@ export default function Settings() {
       const items = Object.entries(edits).map(([key, value]) => {
         if (byKey[key] && Array.isArray(byKey[key].value) && typeof value === "string")
           value = value.split(",").map((x) => parseFloat(x.trim())).filter((n) => !isNaN(n));
+        else if (numericEdit(key)) value = numberValue(value);
         return { key, value };
       });
       return updateSettings(items);
@@ -584,12 +593,15 @@ export default function Settings() {
     if (type === "number") {
       const bounded = f.min !== undefined || f.max !== undefined;
       const range = bounded ? `مجاز: ${f.min ?? "?"} تا ${f.max ?? "?"}` : "";
-      return <TextField key={f.key} label={f.label} type="number" value={v ?? 0} fullWidth size="small"
-        inputProps={bounded ? { min: f.min, max: f.max } : undefined}
+      const staged = numericEdit(f.key) ? (edits[f.key] as string) : String(v ?? "");
+      const parsed = numberValue(staged);
+      const outOfRange = parsed !== null
+        && ((f.min !== undefined && parsed < f.min) || (f.max !== undefined && parsed > f.max));
+      return <NumberField key={f.key} label={f.label} value={staged} fullWidth size="small"
+        allowDecimal allowNegative={(f.min ?? 0) < 0}
+        error={parsed === null || outOfRange}
         helperText={[f.help, range].filter(Boolean).join(" — ") || undefined}
-        // An emptied field must stay UNTOUCHED, not silently stage 0 — `Number("")` is 0, and
-        // saving a spuriously-zeroed rate/threshold is easy to miss. Ignore the empty string.
-        onChange={(e) => { if (e.target.value !== "") setVal(f.key, Number(e.target.value)); }} />;
+        onChange={(next) => setVal(f.key, next)} />;
     }
     return <TextField key={f.key} label={f.label} value={v ?? ""} fullWidth size="small"
       inputProps={f.dir === "ltr" ? { dir: "ltr" } : undefined}
@@ -719,7 +731,8 @@ export default function Settings() {
             پیکربندی ربات، پرداخت، قیمت و زمان‌بندی — مقادیر حساس رمزنگاری می‌شوند.
           </Typography>
         </Box>
-        <Button variant="contained" onClick={() => save.mutate()} disabled={save.isPending || dirtyCount === 0}>
+        <Button variant="contained" onClick={() => save.mutate()}
+          disabled={save.isPending || dirtyCount === 0 || badNumberKeys.length > 0}>
           ذخیره تغییرات{dirtyCount ? ` (${dirtyCount})` : ""}
         </Button>
       </Stack>

@@ -819,6 +819,8 @@ Desktop table scroll bound: `maxHeight: calc(100vh - 300px)`
    (`src/pages/Login.tsx:123,136,151`).
 5. Charts render Persian digits/labels; ECharts tooltips are HTML strings built from
    already-localized values (`src/pages/Dashboard.tsx:170-174`).
+6. **Every numeric input is `NumberField`** — see §4.3a. `<TextField type="number">` is
+   banned app-wide: inside `dir="rtl"` it mis-places the caret and reverses Backspace.
 
 ### 4.3 Dates & numbers
 
@@ -841,6 +843,31 @@ Desktop table scroll bound: `maxHeight: calc(100vh - 300px)`
 - Identifiers («#N» tracking, 8-digit invoice numbers) stay ASCII in monospace;
   search inputs accept Persian digits (normalized server-side, comments
   `src/pages/Invoices.tsx:77-79`, `src/pages/Payments.tsx:45-47`).
+
+### 4.3a Numeric inputs — `NumberField` (hard rule)
+
+`src/components/NumberField.tsx` is the ONLY numeric input in the app (27 call sites,
+migrated 2026-08-18). Never render `<TextField type="number">`; the three reasons are
+structural, not cosmetic, and each one was a real complaint:
+
+1. **`type="text"` + `inputMode`, never `type="number"`.** A number input inherits the
+   page's `dir="rtl"`, which puts the caret on the wrong side of the digits and makes
+   Backspace delete the wrong end; it also reports `""` for a half-typed value and
+   changes on scroll-wheel. Digits are constrained by the component's own `sanitize`
+   instead — stricter than the browser, and it strips a pasted «۵۰٬۰۰۰ تومان» to `50000`.
+2. **Text in, text out** (`value: string`, `onChange: (raw: string) => void`). Holding a
+   `number` and doing `Number(event.target.value)` turns an emptied field back into `0`
+   on the next render, so the field cannot be cleared at all. Parse ONCE, at submit,
+   with `numberValue()` — it returns `null` for empty/unparseable, never `0`. Range
+   clamping belongs on blur or submit, never per keystroke.
+3. **A click selects the whole value.** Tapping a field that already holds a number means
+   "replace this"; the second click still places a caret for a one-digit fix.
+
+Persian/Arabic-Indic digits are accepted everywhere and normalized to ASCII — the
+Telegram bot has always done this (`app/bot/storefront/handlers.py` `_digits`), and the
+panel now matches. `dir: "ltr"` is applied to the input element only (§4.2 rule 2), so
+the Persian label and helper text stay RTL. Behaviour is pinned by
+`src/test/number-field.test.tsx`.
 
 ### 4.4 Confirmation & mutation conventions
 

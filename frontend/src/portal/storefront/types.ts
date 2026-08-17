@@ -135,7 +135,6 @@ export interface Versioned<T> {
 
 export interface StorefrontPlan {
   id: number;
-  title: string;
   gb: number;
   days: number;
   price_toman: number;
@@ -144,7 +143,6 @@ export interface StorefrontPlan {
 }
 
 export interface StorefrontPlanDraft {
-  title?: string;
   gb: number;
   days: number;
   price_toman: number;
@@ -260,7 +258,7 @@ export interface StorefrontCustomerPreview {
     days: number;
   };
   payment_methods: string[];
-  enabled_plans: Array<Pick<StorefrontPlan, "id" | "title" | "gb" | "days" | "price_toman">>;
+  enabled_plans: Array<Pick<StorefrontPlan, "id" | "gb" | "days" | "price_toman">>;
   channel_required: boolean;
 }
 

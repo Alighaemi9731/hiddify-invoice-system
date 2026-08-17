@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DataState } from "../../components/DataState";
 import { fmtDateTime, fmtNum, fmtToman } from "../../format";
 import { getStorefrontPlanHistory, storefrontQueryKeys } from "./api";
+import { planLabel } from "./planLabel";
 import type { StorefrontPlan } from "./types";
 import { useXsFullScreen } from "../../responsive";
 
@@ -24,7 +25,7 @@ export default function StorefrontPlanHistoryDialog({
 
   return (
     <Dialog open={!!plan} onClose={onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
-      <DialogTitle>تاریخچهٔ پلن {plan?.title || `#${plan?.id || ""}`}</DialogTitle>
+      <DialogTitle>تاریخچهٔ پلن {plan ? planLabel(plan) : ""}</DialogTitle>
       <DialogContent>
         <DataState isLoading={query.isLoading} isError={query.isError} rows={4} onRetry={() => query.refetch()}>
           {!query.data?.length ? (
@@ -56,9 +57,10 @@ export default function StorefrontPlanHistoryDialog({
   );
 }
 
+// Audit rows written before plans lost their title still carry one; it is deliberately not
+// rendered, so history reads in today's vocabulary rather than resurrecting a dead field.
 function planSnapshot(value: Partial<StorefrontPlan>) {
   const parts = [];
-  if (value.title !== undefined) parts.push(value.title || "بدون عنوان");
   if (value.gb !== undefined) parts.push(`${fmtNum(value.gb)} گیگابایت`);
   if (value.days !== undefined) parts.push(`${fmtNum(value.days)} روز`);
   if (value.price_toman !== undefined) parts.push(fmtToman(value.price_toman));

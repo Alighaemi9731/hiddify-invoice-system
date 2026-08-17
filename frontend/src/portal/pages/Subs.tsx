@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Box, Button, Card, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, Grid, LinearProgress, Menu, MenuItem, Skeleton, Stack, Switch, TextField, Typography,
+  FormControlLabel, Grid, LinearProgress, Menu, MenuItem, Skeleton, Stack, Switch, Typography,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import BlockIcon from "@mui/icons-material/esm/Block";
@@ -23,6 +23,7 @@ import { dailyTrendOption } from "../dailyTrend";
 import { fmtGb, fmtNum, fmtToman } from "../../format";
 import { EmptyState } from "../ui";
 import { useXsFullScreen } from "../../responsive";
+import { NumberField } from "../../components/NumberField";
 
 const BUMP_CHIPS = [50, 100, 200, 500];
 
@@ -279,8 +280,8 @@ export default function PortalSubs() {
             سقفِ حجمِ ماهانه (گیگابایت). برای حذفِ سقف، عدد ۰ را وارد کنید. این سقف تنها برای هشدار است و
             مسدودسازیِ خودکار در پی ندارد.
           </Typography>
-          <TextField autoFocus fullWidth type="number" label="سقف (گیگابایت)" value={capValue}
-            onChange={(e) => setCapValue(e.target.value)} inputProps={{ min: 0, dir: "ltr" }} />
+          <NumberField autoFocus fullWidth label="سقف (گیگابایت)" value={capValue}
+            onChange={setCapValue} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCapSub(null)} disabled={busy}>انصراف</Button>
@@ -303,8 +304,8 @@ export default function PortalSubs() {
                 variant={bumpValue === String(n) ? "filled" : "outlined"} />
             ))}
           </Stack>
-          <TextField fullWidth type="number" label="مقدار افزایش" value={bumpValue}
-            onChange={(e) => setBumpValue(e.target.value)} inputProps={{ min: 1, max: 5000, dir: "ltr" }} />
+          <NumberField fullWidth label="مقدار افزایش" value={bumpValue}
+            onChange={setBumpValue} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setBumpSub(null)} disabled={busy}>انصراف</Button>

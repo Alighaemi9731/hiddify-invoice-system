@@ -50,6 +50,8 @@ const ZINDEX_OK = new Set(["-1", "0", "1", "2", "3"]);
 const skipFile = (rel) => rel.includes(".test.") || rel.includes("/test/");
 const loginException = (rel) => rel.endsWith("pages/Login.tsx");
 const tokensModule = (rel) => rel.endsWith("themeTokens.ts");
+// The one file allowed to name `type="number"` — its doc comment explains why nobody else may.
+const numberFieldModule = (rel) => rel.endsWith("components/NumberField.tsx");
 
 // ── Extraction (ported from the Phase-2 audit sweep) ────────────────────────
 const BLUR_RE = /(?:blur\((\d+)px\)\s*saturate\((\d+)%\)(?:\s*brightness\(([\d.]+)\))?|saturate\((\d+)%\)\s*blur\((\d+)px\))/g;
@@ -99,6 +101,11 @@ export function lintText(rel, text) {
     }
     for (const m of line.matchAll(/zIndex:\s*(-?\d+)/g)) {
       if (!ZINDEX_OK.has(m[1])) flag(n, "zIndex", m[1]);
+    }
+    // §4.3a hard rule: a raw number input mis-places the caret in this RTL app and cannot be
+    // cleared. Numeric inputs go through `NumberField`.
+    if (!numberFieldModule(rel) && /type=\{?["']number["']\}?/.test(line)) {
+      flag(n, "numberInput", 'type="number" — use components/NumberField');
     }
     for (const m of line.matchAll(/calc\(100vh - (\d+)px\)/g)) {
       if (!(tokensModule(rel) && m[1] === "300")) flag(n, "scrollBound", `calc(100vh - ${m[1]}px)`);

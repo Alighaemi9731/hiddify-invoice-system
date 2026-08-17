@@ -84,9 +84,10 @@ class SF(StatesGroup):
     plan_gb = State()
     plan_days = State()
     plan_price = State()
-    edit_gb = State()          # edit an existing plan; data: edit_plan_id
-    edit_days = State()        # data: edit_plan_id, e_gb
-    edit_price = State()       # data: edit_plan_id, e_gb, e_days
+    # ONE field at a time: data carries edit_plan_id + edit_field ("gb"|"days"|"price"). The old
+    # flow re-asked gb → days → price on every edit, so fixing a price meant retyping the whole
+    # plan and a typo in step 1 silently rewrote a field nobody meant to touch.
+    edit_value = State()
     pay_value = State()        # data: method (+ card sub-step)
     trial_gb = State()         # admin sets free-trial volume
     trial_days = State()       # admin sets free-trial duration; data: t_gb
@@ -247,8 +248,7 @@ async def _send_customer_preview(answer, preview: dict) -> None:  # noqa: ANN001
     if plans:
         lines.extend(["", "📦 پلن‌های فعال:"])
         lines.extend(
-            f"• {plan['title'] or 'پلن فروشگاه'}: {plan['gb']} گیگابایت · {plan['days']} روز · "
-            f"{_toman(plan['price_toman'])} تومان"
+            f"• {plan['gb']} گیگابایت · {plan['days']} روزه — {_toman(plan['price_toman'])} تومان"
             for plan in plans[:10]
         )
     methods = [
@@ -2171,7 +2171,7 @@ async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
             return
         try:
             await storefront_admin.create_plan(
-                s, sf.id, _fsm_ctx(message.from_user.id, data, sf), title="",
+                s, sf.id, _fsm_ctx(message.from_user.id, data, sf),
                 gb=int(data.get("p_gb", 0)), days=int(data.get("p_days", 0)),
                 price_toman=int(raw))
         except storefront_admin.AdminCommandError as exc:
@@ -2289,6 +2289,7 @@ async def _sf_plan_move(cb: CallbackQuery, bot: Bot, direction: str) -> None:
 
 @storefront_router.callback_query(F.data.startswith("sfplanedit:"))
 async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Open the field picker. Nothing is asked yet — the admin says WHICH field first."""
     plan_id = int(cb.data.split(":")[1])
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
@@ -2299,64 +2300,95 @@ async def sf_plan_edit(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         if plan is None or plan.storefront_bot_id != sf.id:
             await cb.answer("پلن یافت نشد.", show_alert=True)
             return
-        cur = f"{plan.gb} گیگابایت · {plan.days} روز · {plan.price_toman:,} تومان"
-        cost = await storefront_pricing.cost_per_gb(s, _r) if _r is not None else 0
-    await state.set_state(SF.edit_gb)
-    await _start_admin_fsm(state, sf)
-    await state.update_data(edit_plan_id=plan_id, e_cost=cost)
+        current = kb.plan_label(plan)
+    await state.clear()
     await cb.message.answer(
-        rtl(f"ویرایش پلن ({cur})\n\nحجمِ جدید به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
+        rtl(f"ویرایش پلن\n{current}\n\nکدام مورد را تغییر می‌دهید؟"),
+        reply_markup=kb.plan_edit_kb(plan_id))
     await cb.answer()
 
 
-@storefront_router.message(SF.edit_gb, F.text)
-async def sf_edit_gb(message: Message, state: FSMContext) -> None:
-    raw = _digits(message.text)
-    if not raw.isdigit():
-        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
+@storefront_router.callback_query(F.data == "sfplanlist")
+async def sf_plan_list(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        plans = await storefront.list_plans(s, sf.id)
+    await state.clear()
+    await cb.message.answer(rtl("🧩 پلن‌های فروشگاه:"), reply_markup=kb.plans_manage_kb(plans))
+    await cb.answer()
+
+
+@storefront_router.callback_query(F.data.startswith("sfplanfield:"))
+async def sf_plan_field(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Ask for ONE new value. The plan's other two fields are never re-read from this flow — the
+    PATCH carries only `field`, so a concurrent edit elsewhere is not silently overwritten."""
+    _, raw_id, field = (cb.data or "").split(":")
+    if field not in kb.PLAN_FIELDS:
+        await cb.answer()
         return
-    await state.update_data(e_gb=int(raw))
-    await state.set_state(SF.edit_days)
-    await message.answer(rtl("مدتِ جدید به روز (عدد):"), reply_markup=kb.flow_cancel_kb())
+    plan_id = int(raw_id)
+    async with SessionLocal() as s:
+        sf, reseller, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        plan = await s.get(StorefrontPlan, plan_id)
+        if plan is None or plan.storefront_bot_id != sf.id:
+            await cb.answer("پلن یافت نشد.", show_alert=True)
+            return
+        cost = await storefront_pricing.cost_per_gb(s, reseller) if reseller is not None else 0
+        gb, days, price = plan.gb, plan.days, plan.price_toman
+    await state.set_state(SF.edit_value)
+    await _start_admin_fsm(state, sf)
+    await state.update_data(edit_plan_id=plan_id, edit_field=field, e_cost=cost, e_gb=gb)
+    prompt = {
+        "gb": f"حجمِ فعلی: {gb} گیگابایت\n\nحجمِ جدید به گیگابایت (عدد):",
+        "days": f"مدتِ فعلی: {days} روز\n\nمدتِ جدید به روز (عدد):",
+        # The price prompt keeps the unit warning + this shop's floor, computed from the plan's
+        # OWN volume (`e_gb`) — the field picker never asks for a new volume alongside it.
+        "price": _price_prompt(
+            f"قیمتِ فعلی: {_toman(price)} تومان\n\nقیمتِ جدید به تومان (عدد):",
+            {"e_cost": cost, "e_gb": gb}, "e_cost", "e_gb"),
+    }[field]
+    await cb.message.answer(rtl(prompt), reply_markup=kb.flow_cancel_kb())
+    await cb.answer()
 
 
-@storefront_router.message(SF.edit_days, F.text)
-async def sf_edit_days(message: Message, state: FSMContext) -> None:
-    raw = _digits(message.text)
-    if not raw.isdigit():
-        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
-        return
-    await state.update_data(e_days=int(raw))
-    data = await state.get_data()
-    await state.set_state(SF.edit_price)
-    await message.answer(
-        rtl(_price_prompt("قیمتِ جدید به تومان (عدد):", data, "e_cost", "e_gb")),
-        reply_markup=kb.flow_cancel_kb())
-
-
-@storefront_router.message(SF.edit_price, F.text)
-async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
+@storefront_router.message(SF.edit_value, F.text)
+async def sf_edit_value(message: Message, state: FSMContext, bot: Bot) -> None:
     raw = _digits(message.text)
     if not raw.isdigit():
         await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
         return
     data = await state.get_data()
     plan_id = int(data.get("edit_plan_id", 0))
+    field = str(data.get("edit_field") or "")
+    if field not in kb.PLAN_FIELDS:
+        await state.clear()
+        return
+    patch = {"gb": "gb", "days": "days", "price": "price_toman"}[field]
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
         try:
             await storefront_admin.update_plan(
-                s, sf.id, plan_id, _fsm_ctx(message.from_user.id, data, sf),
-                gb=int(data.get("e_gb", 0)), days=int(data.get("e_days", 0)),
-                price_toman=int(raw))
+                s, sf.id, plan_id, _fsm_ctx(message.from_user.id, data, sf), **{patch: int(raw)})
             ok = True
         except storefront_admin.AdminCommandError as exc:
             ok = False
             if exc.code == "below_cost":
                 await _rotate_command_key(state)
                 await message.answer(rtl(_admin_error(exc)), reply_markup=kb.flow_cancel_kb())
+                return
+            if exc.code == "validation":
+                # Out of range — recoverable by retyping, exactly like a below-cost price.
+                await _rotate_command_key(state)
+                await message.answer(
+                    rtl(_plan_range_hint(field)), reply_markup=kb.flow_cancel_kb())
                 return
             if exc.code != "not_found":
                 await state.clear()
@@ -2367,8 +2399,16 @@ async def sf_edit_price(message: Message, state: FSMContext, bot: Bot) -> None:
         plans = await storefront.list_plans(s, sf.id)
     await state.clear()
     await message.answer(
-        rtl("✅ پلن ویرایش شد." if ok else "پلن یافت نشد."),
+        rtl(f"✅ {kb.PLAN_FIELDS[field]}ِ پلن تغییر کرد." if ok else "پلن یافت نشد."),
         reply_markup=kb.plans_manage_kb(plans))
+
+
+def _plan_range_hint(field: str) -> str:
+    return {
+        "gb": "حجم باید عددی بین ۱ تا ۱۰۰۰۰۰ گیگابایت باشد.",
+        "days": "مدت باید عددی بین ۱ تا ۳۶۵۰ روز باشد.",
+        "price": "قیمت خارج از محدودهٔ مجاز است.",
+    }[field]
 
 
 # ── admin: credit codes (کد شارژ) CRUD — a guided, mistake-proof wizard ─────────

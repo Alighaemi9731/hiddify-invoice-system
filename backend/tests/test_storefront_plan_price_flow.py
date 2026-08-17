@@ -156,23 +156,105 @@ def test_editing_a_plan_to_a_below_cost_price_is_refused_the_same_way(tmp_path):
 
         storage = MemoryStorage()
         state = _state(storage)
-        await state.set_state(H.SF.edit_price)
+        await state.set_state(H.SF.edit_value)
         await state.update_data(
-            edit_plan_id=plan.id, e_cost=2000, e_gb=10, e_days=30,
+            edit_plan_id=plan.id, edit_field="price", e_cost=2000, e_gb=10,
             sf_config_version=1, sf_command_key="tg-fsm:edit",
         )
 
         rejected = _Message("60", _User())
-        await H.sf_edit_price(rejected, state, _Bot())
+        await H.sf_edit_value(rejected, state, _Bot())
         assert "50000" in rejected.replies[-1]
-        assert await state.get_state() == H.SF.edit_price.state
+        assert await state.get_state() == H.SF.edit_value.state
         async with factory() as check:
             assert (await check.get(StorefrontPlan, plan.id)).price_toman == 50_000
 
         accepted = _Message("60000", _User())
-        await H.sf_edit_price(accepted, state, _Bot())
-        assert "✅ پلن ویرایش شد." in accepted.replies[-1]
+        await H.sf_edit_value(accepted, state, _Bot())
+        assert "✅ قیمتِ پلن تغییر کرد." in accepted.replies[-1]
         async with factory() as check:
             assert (await check.get(StorefrontPlan, plan.id)).price_toman == 60_000
 
     _run(body, tmp_path, "edit.db")
+
+
+class _CallbackMessage(_Message):
+    def __init__(self) -> None:
+        super().__init__("", _User())
+        self.markups: list[object] = []
+
+    async def answer(self, text, reply_markup=None):  # noqa: ANN001, ANN202
+        self.replies.append(text)
+        self.markups.append(reply_markup)
+
+
+class _Callback:
+    def __init__(self, data: str) -> None:
+        self.id = "cb-1"
+        self.data = data
+        self.from_user = _User()
+        self.message = _CallbackMessage()
+        self.answers: list[str] = []
+
+    async def answer(self, text: str = "", show_alert: bool = False):  # noqa: ANN202, ARG002
+        self.answers.append(text)
+
+
+def test_editing_one_field_leaves_the_other_two_exactly_as_they_were(tmp_path):
+    """The whole point of the field picker: correcting a price must not re-ask (and so must not
+    silently rewrite) the plan's volume and duration."""
+    async def body(session, factory):  # noqa: ANN001
+        _reseller, shop = await _seed(session)
+        plan = StorefrontPlan(
+            storefront_bot_id=shop.id, gb=10, days=30, price_toman=50_000,
+            enabled=True, sort_order=0,
+        )
+        session.add(plan)
+        await session.commit()
+
+        state = _state(MemoryStorage())
+        picker = _Callback(f"sfplanedit:{plan.id}")
+        await H.sf_plan_edit(picker, state, _Bot())
+        # Nothing is asked yet — the admin picks WHICH field first, and no FSM is entered.
+        assert "کدام مورد را تغییر می‌دهید؟" in picker.message.replies[-1]
+        assert await state.get_state() is None
+
+        chosen = _Callback(f"sfplanfield:{plan.id}:price")
+        await H.sf_plan_field(chosen, state, _Bot())
+        assert await state.get_state() == H.SF.edit_value.state
+        prompt = chosen.message.replies[-1]
+        assert "قیمتِ فعلی" in prompt
+        assert "20,000" in prompt          # the floor, from the plan's OWN 10 GB
+
+        await H.sf_edit_value(_Message("90000", _User()), state, _Bot())
+        async with factory() as check:
+            after = await check.get(StorefrontPlan, plan.id)
+            assert (after.gb, after.days, after.price_toman) == (10, 30, 90_000)
+
+    _run(body, tmp_path, "one_field.db")
+
+
+def test_an_out_of_range_value_is_retryable_in_place(tmp_path):
+    async def body(session, factory):  # noqa: ANN001
+        _reseller, shop = await _seed(session)
+        plan = StorefrontPlan(
+            storefront_bot_id=shop.id, gb=10, days=30, price_toman=50_000,
+            enabled=True, sort_order=0,
+        )
+        session.add(plan)
+        await session.commit()
+
+        state = _state(MemoryStorage())
+        await H.sf_plan_field(_Callback(f"sfplanfield:{plan.id}:days"), state, _Bot())
+
+        rejected = _Message("9999", _User())          # over the 3650-day ceiling
+        await H.sf_edit_value(rejected, state, _Bot())
+        assert "۳۶۵۰" in rejected.replies[-1]
+        assert await state.get_state() == H.SF.edit_value.state
+
+        await H.sf_edit_value(_Message("60", _User()), state, _Bot())
+        async with factory() as check:
+            after = await check.get(StorefrontPlan, plan.id)
+            assert (after.gb, after.days, after.price_toman) == (10, 60, 50_000)
+
+    _run(body, tmp_path, "range.db")
