@@ -10,6 +10,7 @@ import EChart from "../../components/EChart";
 import { chartTooltip } from "../../components/chartTooltip";
 import { DataState } from "../../components/DataState";
 import { fmtDate, fmtDateTime, fmtGb, fmtNum, fmtToman } from "../../format";
+import SegmentMessage from "./SegmentMessage";
 import { SegmentChip, segmentLabel } from "./segments";
 
 function Fact({ label, value }: { label: string; value: React.ReactNode }) {
@@ -125,6 +126,9 @@ export default function ResellerDrawer({
                 <Typography sx={{ whiteSpace: "pre-wrap" }}>{row.note}</Typography>
               </Box>
             )}
+
+            {/* Here the greeting carries the reseller's own name — one chat, one reader. */}
+            <SegmentMessage segment={row.segment} name={row.reseller_name} dense />
 
             <Stack direction="row" spacing={1}>
               <Button variant="contained" size="small"

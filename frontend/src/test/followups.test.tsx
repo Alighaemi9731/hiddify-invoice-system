@@ -8,6 +8,10 @@ import { describe, expect, it, vi } from "vitest";
 import { makeTheme } from "../theme";
 import { server } from "./setup";
 import Followups from "../pages/Followups";
+import {
+  SEGMENT_MESSAGES, SEGMENT_MESSAGE_HINTS, segmentMessage,
+} from "../pages/Followups/messages";
+import { SEGMENTS } from "../pages/Followups/segments";
 
 vi.mock("../components/EChart", () => ({
   default: ({ ariaLabel }: { ariaLabel?: string }) =>
@@ -89,6 +93,14 @@ function renderPage(opts: { rows?: any[]; onFollowup?: (body: any) => void } = {
   return render(tree);
 }
 
+/** jsdom exposes `navigator.clipboard` as a getter-only property (and user-event installs
+ * its own stub), so it has to be redefined, not assigned. */
+function mockClipboard() {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  return writeText;
+}
+
 describe("reseller follow-up board", () => {
   it("leads with the work queue and the churn buckets behind it", async () => {
     renderPage();
@@ -128,6 +140,41 @@ describe("reseller follow-up board", () => {
     await user.click(await screen.findByText("خوابیده (۵)"));
     expect(await screen.findByText("نمایندهٔ ج")).toBeInTheDocument();
     expect(screen.queryByText("نمایندهٔ الف")).not.toBeInTheDocument();
+  });
+
+  it("offers the bucket's ready-made message, copyable, only once a bucket is picked", async () => {
+    const user = userEvent.setup();
+    const writeText = mockClipboard();
+    renderPage();
+
+    // "همه" spans all ten buckets, so no single text could be true for the list.
+    expect(await screen.findByText("نمایندهٔ الف")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /کپی متن پیام/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("خوابیده (۵)"));
+    expect(await screen.findByText("پیام آمادهٔ «خوابیده»")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /کپی متن پیام/ }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0][0] as string;
+    // Bulk copy → a neutral greeting; nobody's name may be baked into a text sent to 5 people.
+    expect(copied.startsWith("سلام، وقت بخیر")).toBe(true);
+    expect(copied).toContain("سرویس جدیدی روی پنل‌تان ثبت نشده");
+    expect(copied).not.toContain("نمایندهٔ ج");
+    expect(await screen.findByRole("button", { name: /کپی شد/ })).toBeInTheDocument();
+  });
+
+  it("personalizes the greeting in one reseller's card", async () => {
+    const user = userEvent.setup();
+    const writeText = mockClipboard();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "نمایندهٔ الف" }));
+    const drawer = await screen.findByRole("presentation");
+    await user.click(within(drawer).getByRole("button", { name: /کپی متن پیام/ }));
+
+    // The drawer knows exactly who is being written to — the churn text, addressed by name.
+    expect((writeText.mock.calls[0][0] as string).startsWith("نمایندهٔ الف عزیز، سلام")).toBe(true);
   });
 
   it("records a follow-up with a note and the owner's default snooze", async () => {
@@ -173,6 +220,19 @@ describe("reseller follow-up board", () => {
     expect(within(drawer).getByRole("img", { name: /نمودار حجم فروش ماهانهٔ/ })).toBeInTheDocument();
     expect(within(drawer).getByText("مشتری قدیمی")).toBeInTheDocument();
     expect(within(drawer).getByText("زنگ زدم، جواب نداد")).toBeInTheDocument();
+  });
+
+  it("has a ready-made message for every segment the backend can return", () => {
+    // A missing bucket would show a chip that silently drops the card — the one thing this
+    // feature exists for. `SEGMENTS` mirrors `crm.py::SEGMENTS`, which is asserted exhaustive
+    // on the backend side (tests/test_crm_segments.py).
+    for (const s of SEGMENTS) {
+      expect(SEGMENT_MESSAGES[s.key]?.length ?? 0).toBeGreaterThan(80);
+      expect(SEGMENT_MESSAGE_HINTS[s.key]).toBeTruthy();
+      // Plain text only: it is pasted into Telegram by hand, where markup would render.
+      expect(SEGMENT_MESSAGES[s.key]).not.toMatch(/[<>*_`]/);
+      expect(segmentMessage(s.key, "علی").startsWith("علی عزیز، سلام")).toBe(true);
+    }
   });
 
   it("says so plainly when nothing is left to chase", async () => {

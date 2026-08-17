@@ -22,6 +22,7 @@ import { fmtDate, fmtDateTime, fmtGb, fmtNum, fmtToman } from "../../format";
 import { TABLE_SCROLL_BOUND } from "../../themeTokens";
 import FollowupDialog, { type FollowupDraft } from "./FollowupDialog";
 import ResellerDrawer from "./ResellerDrawer";
+import SegmentMessage from "./SegmentMessage";
 import { SEGMENTS, SegmentChip } from "./segments";
 
 const VIEWS = [
@@ -148,8 +149,10 @@ export default function Followups() {
     <Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         هر نمایندهٔ سطح‌یک دقیقاً در یک دسته قرار می‌گیرد، بر اساس آخرین سرویسی که فروخته است.
-        بعد از اینکه دستی در تلگرام به کسی پیام دادید، «ثبت پیگیری» بزنید تا تا پایان مهلت
-        تعویق دوباره در این فهرست نیاید. آستانه‌ها در «تنظیمات → پیگیری نمایندگان» قابل تغییرند.
+        با انتخاب هر دسته، یک پیام آمادهٔ مخصوص همان دسته نمایش داده می‌شود که می‌توانید کپی
+        کنید و در تلگرام بفرستید. بعد از اینکه دستی در تلگرام به کسی پیام دادید، «ثبت پیگیری»
+        بزنید تا تا پایان مهلت تعویق دوباره در این فهرست نیاید. آستانه‌ها در «تنظیمات →
+        پیگیری نمایندگان» قابل تغییرند.
       </Typography>
 
       <Box sx={{ display: "grid", gap: 2, mb: 2.5,
@@ -201,6 +204,10 @@ export default function Followups() {
           </Tooltip>
         ))}
       </Stack>
+
+      {/* Only with a bucket selected: the whole value of the text is that it is true for
+        * everyone on screen, which "همه" (all ten segments at once) can never be. */}
+      {segment && <SegmentMessage segment={segment} count={counts[segment] || 0} />}
 
       {selected.length > 0 && (
         <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 2 }}>
