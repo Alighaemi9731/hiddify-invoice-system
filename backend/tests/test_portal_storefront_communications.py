@@ -175,6 +175,7 @@ def _m() -> SendMessage:
 class _FakeBot:
     behavior: dict[int, str] = {}     # chat_id -> sent|blocked|fail|429
     built: list[str] = []
+    markups: dict[int, object] = {}   # chat_id -> reply_markup the worker attached
 
     def __init__(self, token: str) -> None:
         self.token = token
@@ -202,6 +203,7 @@ class _FakeBot:
         if beh == "429":
             raise TelegramRetryAfter(method=_m(), message="flood", retry_after=0)
         self.sent.append(int(chat_id))
+        _FakeBot.markups[int(chat_id)] = reply_markup
 
 
 def _worker_run(monkeypatch, body):  # noqa: ANN001, ANN202
@@ -213,6 +215,7 @@ def _worker_run(monkeypatch, body):  # noqa: ANN001, ANN202
         factory = async_sessionmaker(engine, expire_on_commit=False)
         _FakeBot.behavior = {}
         _FakeBot.built = []
+        _FakeBot.markups = {}
         monkeypatch.setattr(storefront_delivery, "SessionLocal", factory)
         monkeypatch.setattr(storefront, "bot_token", lambda bot: f"tok-{bot.id}")
         monkeypatch.setattr(storefront_delivery, "_build_bot", lambda token: _FakeBot(token))
@@ -243,14 +246,43 @@ async def _seed_shop(factory, *, chat_ids):  # noqa: ANN001, ANN202
         return shop.id, [c.id for c in custs]
 
 
-async def _enqueue(factory, shop_id, cust_ids, text="hello"):  # noqa: ANN001, ANN202
+async def _enqueue(factory, shop_id, cust_ids, text="hello", kind="broadcast"):  # noqa: ANN001, ANN202
     async with factory() as s:
         custs = [await s.get(StorefrontCustomer, cid) for cid in cust_ids]
         job = await storefront_delivery.snapshot_job(
-            s, storefront_bot_id=shop_id, kind="broadcast", segment="all", message_text=text,
+            s, storefront_bot_id=shop_id, kind=kind, segment="all", message_text=text,
             actor_telegram_id=111, idempotency_key=None, customers=custs)
         await s.commit()
         return job.id
+
+
+def test_only_the_trial_reset_job_redocks_the_customer_menu(monkeypatch):
+    """The monthly free-trial notice carries the customer keyboard; nothing else does.
+
+    A reply keyboard lives on the customer's phone until a message replaces it, so a customer who
+    claimed a trial while the button was still hidden would read «دکمهٔ «🎁 تست رایگان» را بزنید»
+    beside a menu that has no such button. Attaching it to THIS message is the one moment the
+    trial is known to be available again.
+
+    The negative half matters just as much: a reseller's own broadcast must not silently re-dock
+    a menu — a customer could be mid-flow, and replacing their cancel-only keyboard would change
+    what the shop's message does to them."""
+    from app.bot.storefront import keyboards as sfkb
+
+    async def body(factory):  # noqa: ANN001
+        shop_id, cust_ids = await _seed_shop(factory, chat_ids=[10, 11])
+        await _enqueue(factory, shop_id, cust_ids[:1], text="گیفت", kind="trial_reset")
+        await _enqueue(factory, shop_id, cust_ids[1:], text="تخفیف", kind="broadcast")
+        summary = await storefront_delivery.run_once(worker_id="w1")
+        assert summary["sent"] == 2
+
+        trial_markup = _FakeBot.markups[10]
+        assert trial_markup is not None
+        labels = [b.text for row in trial_markup.keyboard for b in row]
+        assert sfkb.FREE_TRIAL_LABEL in labels
+        assert _FakeBot.markups[11] is None
+
+    _worker_run(monkeypatch, body)
 
 
 def test_worker_delivers_classifies_and_completes(monkeypatch):

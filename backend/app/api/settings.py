@@ -13,20 +13,24 @@ router = APIRouter(
     prefix="/api/settings", tags=["settings"], dependencies=[Depends(get_current_subject)]
 )
 
-# Keys whose change must re-program the running scheduler's triggers immediately.
-_SCHEDULE_KEYS = {
-    "invoice_day_of_month", "invoice_hour", "dunning_hour",
-    "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
-    "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
-    "storefront_pending_order_reaper_minutes",
-}
+
+def _schedule_keys() -> set[str]:
+    """Keys whose change must re-program the running scheduler's triggers immediately.
+
+    Read from what the scheduler ACTUALLY reads (`jobs.load_config`) instead of a hand-kept copy:
+    the copy drifted once and left two live cadences (storefront delivery, auto-renew) silently
+    needing a restart. Imported lazily for the same reason the reschedule below is — `jobs` pulls
+    in every service module, which the settings API has no business loading at import time."""
+    from app.scheduler import jobs
+
+    return set(jobs.SCHEDULE_SETTING_KEYS)
 
 
 async def _reschedule_if_needed(session: AsyncSession, changed_keys: set[str]) -> None:
     """Live-apply scheduler timing changes so the owner doesn't need a restart."""
-    if not (changed_keys & _SCHEDULE_KEYS):
-        return
     try:
+        if not (changed_keys & _schedule_keys()):
+            return
         from app.scheduler import scheduler
 
         await scheduler.apply_settings(session)

@@ -52,6 +52,8 @@ class ScheduleConfig:
     storefront_reaper_minutes: int = 15  # storefront pending-order reaper cadence (1–1440)
     storefront_delivery_minutes: int = 1  # storefront broadcast/direct delivery worker cadence (1–60)
     storefront_autorenew_minutes: int = 15  # deferred auto-renew fire-sweep cadence (1–1440)
+    trial_reset_day: int = 1   # fleet-wide free-trial re-arm: day of month (1–28)
+    trial_reset_hour: int = 8  # fleet-wide free-trial re-arm: hour (0–23)
 
 
 def _anchor(tz, minute_offset: int) -> datetime:  # noqa: ANN001
@@ -74,15 +76,23 @@ def _clamp(value, lo: int, hi: int, default: int) -> int:
         return default
 
 
+# Every setting `load_config` reads. Exported because `api/settings.py` must live-apply exactly
+# this set — the two lists used to be maintained separately and drifted: the storefront delivery
+# and auto-renew cadences were readable here but absent there, so editing them in the panel
+# appeared to work and then quietly needed a restart. One list, no drift.
+SCHEDULE_SETTING_KEYS: tuple[str, ...] = (
+    "invoice_day_of_month", "invoice_hour", "dunning_hour",
+    "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
+    "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
+    "storefront_pending_order_reaper_minutes", "storefront_delivery_worker_interval_minutes",
+    "storefront_autorenew_interval_minutes",
+    "storefront_trial_reset_day", "storefront_trial_reset_hour",
+)
+
+
 async def load_config(session: AsyncSession) -> ScheduleConfig:
     """Read the owner-configured scheduler timings (clamped to safe ranges)."""
-    s = await settings_service.get_many(session, [
-        "invoice_day_of_month", "invoice_hour", "dunning_hour",
-        "sync_interval_hours", "guard_interval_minutes", "backup_interval_hours",
-        "rate_refresh_hours", "enforcement_worker_interval_minutes", "daily_digest_hour",
-        "storefront_pending_order_reaper_minutes", "storefront_delivery_worker_interval_minutes",
-        "storefront_autorenew_interval_minutes",
-    ])
+    s = await settings_service.get_many(session, list(SCHEDULE_SETTING_KEYS))
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
         invoice_hour=_clamp(s.get("invoice_hour"), 0, 23, 9),
@@ -99,6 +109,10 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
             s.get("storefront_delivery_worker_interval_minutes"), 1, 60, 1),
         storefront_autorenew_minutes=_clamp(
             s.get("storefront_autorenew_interval_minutes"), 1, 1440, 15),
+        # 28, not 31: the re-arm day must exist in February too, or the sweep would silently skip
+        # a month and the whole feature would be «چرا این ماه ریست نشد؟».
+        trial_reset_day=_clamp(s.get("storefront_trial_reset_day"), 1, 28, 1),
+        trial_reset_hour=_clamp(s.get("storefront_trial_reset_hour"), 0, 23, 8),
     )
 
 
@@ -386,6 +400,23 @@ async def storefront_expiry_job() -> None:
             log.exception("storefront_expiry_job: %s failed", name)
 
 
+async def storefront_trial_reset_job() -> None:
+    """Fleet-wide automatic monthly free-trial re-arm (+ the customer announcement).
+
+    Registered on the configured day AND the two days after it (see `_trial_reset_days`). Those
+    extra days are a RETRY window, not extra resets: a shop already stamped with the current
+    period is filtered out before anything is called, so a healed run touches only what the first
+    one could not finish."""
+    try:
+        from app.services import storefront_trial_reset
+
+        summary = await storefront_trial_reset.sweep()
+        if summary.get("shops") or summary.get("failed"):
+            log.info("storefront trial auto-reset: %s", summary)
+    except Exception:  # noqa: BLE001
+        log.exception("storefront_trial_reset_job failed")
+
+
 async def rate_refresh_job() -> None:
     """Refresh the live USDT→Toman rate (auto mode), the TON→Toman rate (when TON payment is
     enabled), and the AVAX→Toman rate (when AVAX payment is enabled). All independent and
@@ -400,6 +431,18 @@ async def rate_refresh_job() -> None:
                 await rates.refresh_avax_rate(session)
     except Exception:  # noqa: BLE001
         log.exception("rate_refresh_job failed")
+
+
+def _trial_reset_days(day: int) -> str:
+    """The cron `day` field for the fleet-wide trial re-arm: the configured day plus two.
+
+    The extra days exist because a once-a-month cron fire is the one shape with no second chance:
+    if the scheduler is mid-deploy at that minute, or the sweep dies halfway through 150 shops,
+    the fleet waits a MONTH. The `trial_reset_period` stamp already makes a completed shop a
+    no-op, so the retry days cost one cheap query and can never double-reset. Capped at 28 so
+    every day in the expression exists in February."""
+    day = max(1, min(28, int(day or 1)))
+    return f"{day}-{min(day + 2, 28)}" if day < 28 else "28"
 
 
 def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None:
@@ -495,6 +538,12 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         # threshold in days is the `storefront_expiry_notify_days` setting, 0 = off).
         ("storefront_expiry", storefront_expiry_job,
          CronTrigger(hour=11, minute=15, timezone=tz), 6 * 3600),
+        # Fleet-wide automatic monthly free-trial re-arm. A calendar event like the invoicing run,
+        # so cron — and the same generous 12h grace, for the same reason: a missed monthly tick has
+        # no next chance. Minute :25 is unused by every other cron job here at any owner-set hour.
+        ("storefront_trial_reset", storefront_trial_reset_job,
+         CronTrigger(day=_trial_reset_days(cfg.trial_reset_day), hour=cfg.trial_reset_hour,
+                     minute=25, timezone=tz), 12 * 3600),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,

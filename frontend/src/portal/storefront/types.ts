@@ -191,14 +191,6 @@ export interface StorefrontTrialSettingsRead extends StorefrontTrialSettings {
   reset: StorefrontTrialReset;
 }
 
-/** Result body of a successful trial reset. */
-export interface StorefrontTrialResetResult {
-  reset_count: number;
-  notified: number;
-  job_id: number;
-  period: string;
-}
-
 export interface StorefrontMessageSettings {
   welcome_text: string | null;
   support_contact: string | null;
@@ -569,7 +561,9 @@ export interface CreditRedemptionsPage {
 
 // ── communications: broadcasts + direct messages (plan 006) ───────────────────
 export type AudienceSegment = "all" | "expired" | "inactive30" | "trial_no_purchase";
-export type BroadcastKind = "broadcast" | "direct";
+// `trial_reset` is the PLATFORM's monthly free-trial notice, not something the shop wrote —
+// it also tells the delivery worker to re-dock the customer menu with the message.
+export type BroadcastKind = "broadcast" | "direct" | "trial_reset";
 export type BroadcastStatus = "queued" | "running" | "completed" | "canceled";
 
 export interface AudiencePreview {

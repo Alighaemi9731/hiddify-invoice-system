@@ -218,8 +218,10 @@ DEFS: list[SettingDef] = [
     #   * `storefront_trial_max_gb` caps what a shop may set as `free_trial_gb`, and also clamps
     #     the size actually provisioned, so a shop configured above the cap before it existed
     #     stops costing more without needing a remediation sweep.
-    #   * `storefront_trial_reset_enabled` is the master switch for letting shop admins re-arm
-    #     every customer's trial once a month. OFF makes the trial lifetime-once again.
+    #   * `storefront_trial_reset_enabled` is the master switch for the AUTOMATIC monthly re-arm
+    #     of every customer's trial, fleet-wide (`storefront_trial_reset.sweep`). OFF makes the
+    #     trial lifetime-once again. There is no per-shop trigger: shop admins never asked for the
+    #     re-arm often enough for the feature to do its job, so the platform runs it for them.
     SettingDef("storefront_trial_max_gb", 1, False, "pricing"),
     SettingDef("storefront_trial_reset_enabled", True, False, "pricing"),
     # Abuse-resistant metering (billing model "C"): bill usage beyond the paid quota
@@ -295,6 +297,12 @@ DEFS: list[SettingDef] = [
     SettingDef("storefront_autorenew_interval_minutes", 15, False, "schedule"),
     # Max simultaneous PENDING top-ups one customer may have (anti-spam on the admin review queue).
     SettingDef("storefront_max_pending_topups", 3, False, "schedule"),
+    # Fleet-wide automatic monthly free-trial re-arm: day of the Gregorian month + local hour it
+    # runs at. The sweep also runs on the two following days, because the `trial_reset_period`
+    # stamp makes an already-done shop a no-op — that is the retry window, not a second reset.
+    # Gated by `storefront_trial_reset_enabled` above.
+    SettingDef("storefront_trial_reset_day", 1, False, "schedule"),
+    SettingDef("storefront_trial_reset_hour", 8, False, "schedule"),
     # Daily owner digest to the owner's Telegram PV (KPIs + health). On by default at 09:00.
     SettingDef("daily_digest_enabled", True, False, "schedule"),
     SettingDef("daily_digest_hour", 9, False, "schedule"),
@@ -441,6 +449,9 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     # `.get(key, (0, None))` fallback admits 0, and a 0 GB cap would provision an empty trial
     # config for every customer instead of disabling the feature.
     "storefront_trial_max_gb": (1, 100),
+    # 28, not 31: the sweep must land in EVERY month, and its two retry days must exist too.
+    "storefront_trial_reset_day": (1, 28),
+    "storefront_trial_reset_hour": (0, 23),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),

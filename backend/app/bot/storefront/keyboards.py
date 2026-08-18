@@ -42,8 +42,11 @@ CUSTOMER_MENU: list[tuple[str, str]] = [
     ("📦 سرویس‌های من", "orders"),
     ("💬 پشتیبانی", "support"),
 ]
-# Shown only when the admin enabled it AND the customer hasn't claimed it yet (added to the keyboard
-# dynamically), but always routable so a tap is never a dead end.
+# Shown whenever the SHOP has the free trial switched on — deliberately NOT hidden once the
+# customer has claimed it. A button that disappears reads as a bug, and it broke the monthly
+# re-arm outright: the trial came back but the customer's docked keyboard (which Telegram keeps
+# until something replaces it) still had no button to press. Claiming twice is refused by
+# `storefront_provision.claim_trial` with a message that says when the next one arrives.
 FREE_TRIAL_LABEL = "🎁 تست رایگان"
 ADMIN_LABEL_TO_ACTION = dict(ADMIN_MENU)
 CUSTOMER_LABEL_TO_ACTION = {**dict(CUSTOMER_MENU), FREE_TRIAL_LABEL: "trial"}
@@ -420,29 +423,29 @@ def join_prompt_kb(link: str | None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def trial_settings_kb(
-    bot: StorefrontBot, *, reset_available: bool = False
-) -> InlineKeyboardMarkup:
-    """Admin toggles the free trial on/off, edits its volume/duration, and (at most once per
-    Gregorian month) re-arms every customer's trial.
+def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
+    """Admin toggles the free trial on/off and edits its volume/duration.
 
-    The reset row is always PRESENT, never hidden: a button that vanishes reads as a bug, while a
-    disabled-looking one that answers "already done this month" teaches the rule."""
+    The monthly re-arm used to be a third button here. It is gone: too few shops ever pressed it
+    for the feature to win anybody back, so the platform now runs the re-arm for the whole fleet on
+    a schedule (`storefront_trial_reset`). The screen states that instead of offering a button that
+    would answer "already done this month" every time."""
     state = "✅ فعال" if bot.free_trial_enabled else "❌ غیرفعال"
-    reset_button = (
-        InlineKeyboardButton(
-            text="🔄 ریستِ ماهانهٔ تست‌ها",
-            callback_data=f"sftrialreset:{bot.config_version}")
-        if reset_available else
-        InlineKeyboardButton(text="🔄 ریستِ ماهانه (فعلاً در دسترس نیست)", callback_data="sfnoop")
-    )
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"وضعیت: {state} (تغییر)",
             callback_data=f"sftrialtog:{int(not bot.free_trial_enabled)}:{bot.config_version}")],
         [InlineKeyboardButton(text="✏️ تغییرِ حجم/مدت", callback_data="sftrialset")],
-        [reset_button],
     ])
+
+
+def trial_used_kb() -> InlineKeyboardMarkup:
+    """Under «you already have this month's trial»: the one useful next step.
+
+    `sfbuylist` is the same callback the «free trial ended → buy» proactive nudge uses, so the
+    customer lands on the real plan list rather than being told to go find a menu button."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🛒 دیدنِ پلن‌ها", callback_data="sfbuylist")]])
 
 
 def broadcast_segment_kb() -> InlineKeyboardMarkup:

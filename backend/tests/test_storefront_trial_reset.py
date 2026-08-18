@@ -1,11 +1,15 @@
-"""The once-a-month free-trial re-arm.
+"""The once-a-month free-trial re-arm command.
 
-A shop's free trial used to be one-per-customer FOR LIFE, so a lapsed customer could never be
-won back. A shop admin may now re-arm every customer — but the quota of every trial is excluded
-from the reseller's invoice, i.e. paid for by the platform owner, so the rate limit and the
-owner's master switch are not cosmetics: they are the entire cost control. These tests pin them,
-plus the two things a careless refactor would break — that the announcement rides the SAME
-transaction as the reset, and that a replayed idempotency key does neither twice.
+A shop's free trial used to be one-per-customer FOR LIFE, so a lapsed customer could never be won
+back. Every customer is now re-armed monthly — by the scheduled fleet sweep
+(`storefront_trial_reset`, covered in its own file), which is the sole caller of this command; the
+per-shop button it was built for is gone because shop admins almost never pressed it.
+
+The quota of every trial is excluded from the reseller's invoice, i.e. paid for by the platform
+owner, so the once-a-month limit and the owner's master switch are not cosmetics: they are the
+entire cost control, and an unattended sweep leans on them harder than a human ever did. These
+tests pin them, plus the two things a careless refactor would break — that the announcement rides
+the SAME transaction as the reset, and that a replayed idempotency key does neither twice.
 """
 from __future__ import annotations
 
@@ -103,7 +107,10 @@ def test_reset_rearms_every_used_customer_and_announces_to_all(tmp_path):
         # Exactly ONE announcement, to the whole shop — not just the re-armed customers.
         jobs = (await session.execute(select(StorefrontBroadcastJob))).scalars().all()
         assert len(jobs) == 1
-        assert jobs[0].kind == "broadcast" and jobs[0].segment == "all"
+        # kind is `trial_reset`, NOT `broadcast`: the delivery worker keys the customer-menu
+        # re-dock off it, and the reseller's campaign history must not credit them with a notice
+        # the platform sent.
+        assert jobs[0].kind == "trial_reset" and jobs[0].segment == "all"
         assert jobs[0].total_count == 3 and result.body["notified"] == 3
         recipients = (await session.execute(select(StorefrontDeliveryRecipient))).scalars().all()
         assert {r.customer_id for r in recipients} == {c.id for c in customers}

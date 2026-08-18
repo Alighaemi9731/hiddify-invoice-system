@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.api.settings import _SCHEDULE_KEYS
-from app.scheduler.jobs import ScheduleConfig, _clamp, register
+from app.api.settings import _schedule_keys
+from app.scheduler.jobs import SCHEDULE_SETTING_KEYS, ScheduleConfig, _clamp, register
 
 
 def test_clamp_ranges_and_bad_values():
@@ -19,9 +19,19 @@ def test_clamp_ranges_and_bad_values():
     assert _clamp("oops", 1, 60, 10) == 10  # unparseable -> default
 
 
-def test_live_reschedule_includes_rate_refresh():
-    assert "rate_refresh_hours" in _SCHEDULE_KEYS
-    assert "enforcement_worker_interval_minutes" in _SCHEDULE_KEYS
+def test_live_reschedule_covers_every_setting_the_scheduler_reads():
+    """The API's live-apply set is derived from `load_config`'s key list, not hand-copied.
+
+    The copy drifted once: `storefront_delivery_worker_interval_minutes` and
+    `storefront_autorenew_interval_minutes` were readable by the scheduler but absent from the API
+    set, so editing either in the panel appeared to save and then silently needed a restart."""
+    keys = _schedule_keys()
+    assert keys == set(SCHEDULE_SETTING_KEYS)
+    assert {
+        "rate_refresh_hours", "enforcement_worker_interval_minutes",
+        "storefront_delivery_worker_interval_minutes", "storefront_autorenew_interval_minutes",
+        "storefront_trial_reset_day", "storefront_trial_reset_hour",
+    } <= keys
 
 
 def _jobs(cfg):
@@ -62,7 +72,12 @@ def test_register_defaults_when_no_config():
     assert "hour='9'" in t["daily_digest"]
     assert t["scheduler_heartbeat"] == "interval[0:02:00]"
     assert "hour='11'" in t["storefront_expiry"] and "minute='15'" in t["storefront_expiry"]
-    assert len(t) == 14
+    # Fleet-wide free-trial re-arm: the configured day plus two RETRY days, not three resets —
+    # the `trial_reset_period` stamp makes an already-done shop a no-op.
+    assert "day='1-3'" in t["storefront_trial_reset"]
+    assert "hour='8'" in t["storefront_trial_reset"]
+    assert "minute='25'" in t["storefront_trial_reset"]
+    assert len(t) == 15
 
 
 def test_non_divisor_interval_keeps_true_spacing_across_boundaries():

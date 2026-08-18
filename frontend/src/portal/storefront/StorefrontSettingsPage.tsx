@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
-  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  Alert, Box, Button, Chip, Divider,
   FormControlLabel, Grid, Stack, Switch, TextField, Typography,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
@@ -11,7 +11,7 @@ import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
 import { SectionCard } from "../ui";
 import {
-  deleteStorefrontChannel, getStorefrontSettings, resetStorefrontTrials, saveStorefrontChannel,
+  deleteStorefrontChannel, getStorefrontSettings, saveStorefrontChannel,
   setStorefrontChannelEnabled, storefrontQueryKeys, updateStorefrontSettings,
 } from "./api";
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
@@ -28,8 +28,7 @@ type SettingsCommand =
   | { type: "settings"; group: StorefrontSettingsGroup; body: Partial<StorefrontSettingsByGroup[StorefrontSettingsGroup]>; etag?: string }
   | { type: "channel-save"; channelId: string; etag?: string }
   | { type: "channel-enabled"; enabled: boolean; etag?: string }
-  | { type: "channel-delete"; etag?: string }
-  | { type: "trial-reset"; etag?: string };
+  | { type: "channel-delete"; etag?: string };
 
 const translateCardDigits = (value: string) => value
   .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
@@ -80,7 +79,6 @@ export default function StorefrontSettingsPage() {
       if (input.type === "settings") {
         return updateStorefrontSettings(shop.id, input.group, input.body, etag, key);
       }
-      if (input.type === "trial-reset") return resetStorefrontTrials(shop.id, etag, key);
       if (input.type === "channel-save") return saveStorefrontChannel(shop.id, input.channelId, etag, key);
       if (input.type === "channel-enabled") return setStorefrontChannelEnabled(shop.id, input.enabled, etag, key);
       return deleteStorefrontChannel(shop.id, etag, key);
@@ -88,8 +86,7 @@ export default function StorefrontSettingsPage() {
     {
       onSuccess: async (result, variables) => {
         resetAfterSave.current.add(
-          variables.type === "settings" ? variables.group
-            : variables.type === "trial-reset" ? "trial" : "channel");
+          variables.type === "settings" ? variables.group : "channel");
         if (result.etag) {
           queryClient.setQueryData<Versioned<StorefrontSettings>>(queryKey, (current) =>
             current ? { ...current, etag: result.etag } : current);
@@ -199,13 +196,7 @@ export default function StorefrontSettingsPage() {
                     <SaveButton disabled={!trialValid || !trialDirty || mutation.isPending} />
                   </Stack>
                 </Box>
-                {trialReset && (
-                  <TrialResetPanel
-                    reset={trialReset}
-                    busy={mutation.isPending}
-                    onReset={() => { setSaved(false); mutation.mutate({ type: "trial-reset" }); }}
-                  />
-                )}
+                {trialReset && <TrialResetPanel reset={trialReset} />}
               </SectionCard>
             </Grid>
 
@@ -302,66 +293,34 @@ function SaveButton({ disabled }: { disabled: boolean }) {
 }
 
 /**
- * The once-a-month free-trial re-arm. Confirmed rather than one-click: it re-arms every customer
- * AND messages the whole shop, and it cannot be undone or repeated until next month — so the
- * dialog states the real counts instead of a vague warning.
+ * The monthly free-trial re-arm — REPORTED, not triggered.
+ *
+ * This used to be a confirmed button. It is gone: too few shops ever pressed it, so the win-back
+ * it exists for barely happened, and the platform now re-arms every shop on a schedule. Leaving a
+ * button would be worse than none — it would consume the month's single reset and make the sweep
+ * skip the shop, all for a customer announcement that was going out anyway.
  */
-function TrialResetPanel({
-  reset, busy, onReset,
-}: { reset: StorefrontTrialReset; busy: boolean; onReset: () => void }) {
-  const [open, setOpen] = useState(false);
+function TrialResetPanel({ reset }: { reset: StorefrontTrialReset }) {
   return (
     <>
       <Divider sx={{ my: 2 }} />
       <Stack spacing={1.5}>
-        <Typography variant="body2" color="text.secondary">
-          یک بار در هر ماه میلادی می‌توانید تست رایگان همهٔ مشتریان را دوباره فعال کنید تا کسانی
-          که قبلاً تستشان را گرفته‌اند، بتوانند دوباره امتحان کنند.
-        </Typography>
+        {reset.reason === "disabled" ? (
+          <Typography variant="body2" color="text.secondary">
+            تست رایگان برای هر مشتری یک‌بار است و به‌صورت خودکار تمدید نمی‌شود.
+          </Typography>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            ابتدای هر ماه میلادی، تست رایگان همهٔ مشتریان به‌صورت خودکار دوباره فعال می‌شود و یک
+            پیام اطلاع‌رسانی برایشان ارسال می‌شود. کاری از شما لازم نیست.
+          </Typography>
+        )}
         <Typography variant="body2" color="text.secondary">
           {reset.last_reset_period
-            ? `آخرین ریست: دورهٔ ${reset.last_reset_period}`
-            : "تا امروز هیچ ریستی انجام نشده است."}
+            ? `آخرین فعال‌سازی: دورهٔ ${reset.last_reset_period}`
+            : "تا امروز فعال‌سازی خودکاری برای این فروشگاه انجام نشده است."}
         </Typography>
-        {reset.reason === "disabled" && (
-          <Alert severity="info">این قابلیت توسط مدیر سامانه غیرفعال شده است.</Alert>
-        )}
-        {reset.reason === "already_reset_this_month" && (
-          <Alert severity="info">
-            تست‌ها در دورهٔ {reset.period} یک بار ریست شده‌اند؛ ریست بعدی از ماه میلادی آینده
-            ممکن است.
-          </Alert>
-        )}
-        <Button
-          variant="outlined" color="warning" disabled={!reset.available || busy}
-          onClick={() => setOpen(true)} sx={{ alignSelf: "flex-start" }}
-        >
-          ریست ماهانهٔ تست‌ها
-        </Button>
       </Stack>
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="xs">
-        <DialogTitle>ریست ماهانهٔ تست رایگان</DialogTitle>
-        <DialogContent>
-          <Stack spacing={1.5} sx={{ mt: 1 }}>
-            <Typography variant="body2">
-              {reset.eligible_count} مشتری که تستشان را مصرف کرده‌اند، دوباره واجد شرایط می‌شوند
-              و برای همهٔ مشتریان فروشگاه یک پیام اطلاع‌رسانی ارسال خواهد شد.
-            </Typography>
-            <Alert severity="warning">
-              این کار قابل بازگشت نیست و تا پایان دورهٔ {reset.period} تکرارشدنی نیست.
-            </Alert>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpen(false)} disabled={busy}>انصراف</Button>
-          <Button
-            variant="contained" color="warning" disabled={busy}
-            onClick={() => { setOpen(false); onReset(); }}
-          >
-            ریست کن
-          </Button>
-        </DialogActions>
-      </Dialog>
     </>
   );
 }

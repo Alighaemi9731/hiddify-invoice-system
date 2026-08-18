@@ -1,5 +1,5 @@
-"""Durable, resumable, tenant-scoped Telegram delivery queue for storefront broadcasts + direct
-messages (plan 006).
+"""Durable, resumable, tenant-scoped Telegram delivery queue for storefront broadcasts, direct
+messages, and the platform's monthly free-trial notice (plan 006).
 
 A broadcast/direct message is enqueued as a `StorefrontBroadcastJob` with a create-time SNAPSHOT of
 its recipients (`StorefrontDeliveryRecipient` rows). The scheduler worker (`run_once`) then claims
@@ -153,10 +153,10 @@ async def _reclaim_expired(worker_id: str) -> int:
         return len(rows)
 
 
-async def _claim_batch(worker_id: str) -> tuple[list[_Claim], dict[int, tuple[int, str]]]:
+async def _claim_batch(worker_id: str) -> tuple[list[_Claim], dict[int, tuple[int, str, str]]]:
     """Atomically claim up to `_BATCH` due recipients: stamp 'sending' + lease + attempt++, commit,
-    and return plain claim tuples plus a {job_id: (shop_id, message_text)} map (extracted BEFORE the
-    commit expires the ORM rows)."""
+    and return plain claim tuples plus a {job_id: (shop_id, message_text, kind)} map (extracted
+    BEFORE the commit expires the ORM rows)."""
     async with SessionLocal() as session:
         now = _now()
         stmt = select(StorefrontDeliveryRecipient).where(
@@ -177,7 +177,7 @@ async def _claim_batch(worker_id: str) -> tuple[list[_Claim], dict[int, tuple[in
         job_ids = {r.job_id for r in rows}
         jobs = {j.id: j for j in (await session.execute(
             select(StorefrontBroadcastJob).where(StorefrontBroadcastJob.id.in_(job_ids)))).scalars().all()}
-        job_meta: dict[int, tuple[int, str]] = {}
+        job_meta: dict[int, tuple[int, str, str]] = {}
         for r in rows:
             job = jobs.get(r.job_id)
             if job is None:
@@ -188,7 +188,7 @@ async def _claim_batch(worker_id: str) -> tuple[list[_Claim], dict[int, tuple[in
             r.attempt_count = int(r.attempt_count or 0) + 1
             if job.status == "queued":
                 job.status = "running"
-            job_meta[r.job_id] = (job.storefront_bot_id, job.message_text)
+            job_meta[r.job_id] = (job.storefront_bot_id, job.message_text, str(job.kind or ""))
             claims.append(_Claim(r.id, r.job_id, int(r.chat_id), int(r.attempt_count)))
         await session.commit()
         return claims, job_meta
@@ -208,16 +208,33 @@ async def _shop_tokens(shop_ids: set[int]) -> dict[int, str | None]:
         return out
 
 
+def _menu_markup(kind: str):  # noqa: ANN202 — returns a ReplyKeyboardMarkup or None
+    """The reply keyboard to dock along with a message, or None to leave the customer's keyboard as
+    it is (the normal case for a broadcast or a direct message).
+
+    Only the platform's monthly free-trial notice docks one. A reply keyboard lives on the
+    customer's phone until something replaces it, so a customer whose menu was last rendered while
+    «🎁 تست رایگان» was still hidden would read "press the free-trial button" next to a menu that
+    has no such button. Docking it with the announcement is the one moment we know the trial is
+    available. Safe mid-flow: the FSM lock lives server-side (`handlers.sf_menu`), so a fresh
+    keyboard cannot let a customer fire a command inside an active flow."""
+    if kind != "trial_reset":
+        return None
+    from app.bot.storefront import keyboards as kb
+
+    return kb.customer_reply_kb(show_free_trial=True)
+
+
 async def _dispatch(
-    claims: list[_Claim], job_meta: dict[int, tuple[int, str]]
+    claims: list[_Claim], job_meta: dict[int, tuple[int, str, str]]
 ) -> dict[int, tuple[str, str | None]]:
     """Send each claimed recipient with NO DB connection held. Groups by shop, builds one temp Bot per
     shop (shared flood-control limiter), and classifies each outcome. Returns
     {recipient_id: (outcome, error_class)} where outcome ∈ sent|blocked|failed|park."""
-    by_shop: dict[int, list[tuple[_Claim, str]]] = defaultdict(list)
+    by_shop: dict[int, list[tuple[_Claim, str, str]]] = defaultdict(list)
     for c in claims:
-        shop_id, text = job_meta[c.job_id]
-        by_shop[shop_id].append((c, text))
+        shop_id, text, kind = job_meta[c.job_id]
+        by_shop[shop_id].append((c, text, kind))
     tokens = await _shop_tokens(set(by_shop))
     outcomes: dict[int, tuple[str, str | None]] = {}
     for shop_id, items in by_shop.items():
@@ -230,13 +247,15 @@ async def _dispatch(
                 await _mark_shop_revoked(shop_id, f"malformed token: {exc}")
                 bot = None
         if bot is None:
-            for c, _t in items:
+            for c, _t, _k in items:
                 outcomes[c.recipient_id] = ("park", "bot_unavailable")
             continue
         limiter = broadcast.rate_limiter()
         try:
-            for c, text in items:
-                res = await broadcast.send_with_flood_control(bot, c.chat_id, text, limiter, max_retry=1)
+            for c, text, kind in items:
+                res = await broadcast.send_with_flood_control(
+                    bot, c.chat_id, text, limiter, max_retry=1,
+                    reply_markup=_menu_markup(kind))
                 outcomes[c.recipient_id] = (res, None if res == "sent" else res)
         finally:
             await _safe_close(bot)

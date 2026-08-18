@@ -762,8 +762,12 @@ async def update_trial(
 
 
 async def trial_reset_status(session: AsyncSession, shop: StorefrontBot) -> dict:
-    """What the trial-reset button should render: whether it is available, why not, and how many
-    customers a reset would actually re-arm. Read-only — safe to call from a GET."""
+    """The state of this shop's monthly free-trial re-arm, for the bot and portal to REPORT.
+
+    There is no longer a button behind it: the re-arm runs for the whole fleet on a schedule
+    (`storefront_trial_reset`), because leaving it to shop admins meant it barely ever ran.
+    `available` therefore reads as "the sweep still has this shop to do this month" rather than
+    "you may press something". Read-only — safe to call from a GET."""
     period = periods.current_month().label
     eligible = int((await session.execute(
         select(func.count()).select_from(StorefrontCustomer).where(
@@ -789,6 +793,11 @@ async def reset_free_trials(
 ) -> CommandResult:
     """Re-arm every customer's free trial for one shop, AT MOST ONCE PER GREGORIAN MONTH, and
     announce it to the shop's customers.
+
+    Called by the scheduled fleet sweep (`storefront_trial_reset.sweep`, `source="system"`), which
+    is now the only caller: the per-shop button this was built for was removed because shop admins
+    almost never pressed it, so the win-back it exists for never happened. Nothing about the
+    command changed with that — the guards below are what make an unattended fleet loop safe.
 
     Why once a month, enforced by a stored `YYYY-MM` rather than a rolling timestamp: the trial's
     quota is excluded from the reseller's invoice entirely, so every reset is quota the platform
@@ -861,8 +870,12 @@ async def reset_free_trials(
         for customer in customers:
             session.expire(customer, ["free_trial_used"])
         shop.trial_reset_period = period
+        # kind="trial_reset", not "broadcast": the worker docks the customer menu with THIS message
+        # (the free-trial button may be missing from a keyboard rendered before it became
+        # permanent), and the reseller's campaign history must not show a platform notice as
+        # something they wrote.
         job = await storefront_delivery.snapshot_job(
-            session, storefront_bot_id=shop.id, kind="broadcast", segment="all",
+            session, storefront_bot_id=shop.id, kind="trial_reset", segment="all",
             message_text=text, actor_telegram_id=ctx.actor_telegram_id,
             idempotency_key=f"trial-reset-notify:{ctx.idempotency_key}", customers=customers)
         await session.flush()

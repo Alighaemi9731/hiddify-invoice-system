@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "c8d5b2e047af"
+HEAD = "a7c1e9d3b5f2"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -155,6 +155,34 @@ def test_storefront_trial_reset_schema_contract(tmp_path):
     assert "trial_reset_period" in cols
     assert cols["trial_reset_period"][3] == 0            # nullable
     assert cols["trial_reset_period"][2].upper().startswith("VARCHAR")
+    conn.close()
+
+
+def test_broadcast_job_kind_admits_trial_reset(tmp_path):
+    """The platform's monthly free-trial notice rides the delivery queue as its own `kind`.
+
+    Both checks are asserted, not just the widened one: the widening is done in SQLite's batch
+    mode, which REBUILDS the table, and a reflected CHECK comes back unnamed — so a careless
+    rebuild silently drops `ck_sfbjob_status` and nothing else in the suite would notice."""
+    db = tmp_path / "sf-job-kind.db"
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    job_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='storefront_broadcast_jobs'"
+    ).fetchone()[0]
+    assert "ck_sfbjob_kind" in job_sql and "ck_sfbjob_status" in job_sql
+    assert "trial_reset" in job_sql
+    # No parent rows needed: sqlite3 leaves foreign keys OFF, so the CHECK is what's under test.
+    for kind in ("broadcast", "direct", "trial_reset"):
+        conn.execute(
+            "INSERT INTO storefront_broadcast_jobs "
+            "(storefront_bot_id, actor_telegram_id, kind, message_text, status) "
+            "VALUES (1, 1, ?, 't', 'queued')", (kind,))
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO storefront_broadcast_jobs "
+            "(storefront_bot_id, actor_telegram_id, kind, message_text, status) "
+            "VALUES (1, 1, 'nonsense', 't', 'queued')")
     conn.close()
 
 

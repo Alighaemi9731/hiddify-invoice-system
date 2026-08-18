@@ -304,10 +304,13 @@ def test_partial_trial_patch_replays_cleanly_after_concurrent_change(monkeypatch
     _run(body)
 
 
-def test_trial_reset_endpoint_enforces_tenant_version_and_the_monthly_limit(monkeypatch):  # noqa: ANN001
-    """The reset is a shared command reached over HTTP: it must obey the same tenant scoping,
-    If-Match CAS and Idempotency-Key contract as every other storefront mutation, and refuse a
-    second run in the same month."""
+def test_trial_reset_has_no_reseller_endpoint_but_the_state_is_still_reported(monkeypatch):  # noqa: ANN001
+    """The re-arm TRIGGER left the portal; the state it reported did not.
+
+    The monthly free-trial re-arm is a scheduled fleet job now, so no reseller-facing route may
+    run it: a shop that could still fire it by hand would consume the month's single reset and
+    make the sweep skip the very shop that just used it. The settings GET keeps serving
+    `trial.reset` so the page can still say when it last happened."""
     async def body(session):  # noqa: ANN001
         owner, shop = await _seed(session)
         session.add(StorefrontCustomer(
@@ -330,36 +333,20 @@ def test_trial_reset_endpoint_enforces_tenant_version_and_the_monthly_limit(monk
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test",
             ) as client:
-                # The GET advertises the button state so the UI never has to guess.
-                before = await client.get(f"/api/portal/storefronts/{shop.id}/settings")
-                assert before.json()["trial"]["reset"]["available"] is True
-                assert before.json()["trial"]["reset"]["eligible_count"] == 1
-                assert before.json()["trial"]["reset"]["max_gb"] == 100
+                state = await client.get(f"/api/portal/storefronts/{shop.id}/settings")
+                assert state.json()["trial"]["reset"]["available"] is True
+                assert state.json()["trial"]["reset"]["eligible_count"] == 1
+                assert state.json()["trial"]["reset"]["max_gb"] == 100
 
-                assert (await client.post(
-                    url, headers={"If-Match": '"sf-config-1"'})).status_code == 422  # no key
-
-                ok = await client.post(
+                gone = await client.post(
                     url, headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "reset-1"})
-                assert ok.status_code == 200
-                assert ok.json()["result"]["reset_count"] == 1
-                assert ok.json()["result"]["notified"] == 2      # everyone, not just the re-armed
-                assert ok.headers["etag"] == '"sf-config-2"'
+                assert gone.status_code == 404   # the route is gone, not merely refused
 
-                after = await client.get(f"/api/portal/storefronts/{shop.id}/settings")
-                assert after.json()["trial"]["reset"]["available"] is False
-                assert after.json()["trial"]["reset"]["reason"] == "already_reset_this_month"
-
-                second = await client.post(
-                    url, headers={"If-Match": '"sf-config-2"', "Idempotency-Key": "reset-2"})
-                assert second.status_code == 409
-                assert second.json()["detail"]["code"] == "already_reset_this_month"
-
-                # A foreign shop is invisible, not merely forbidden.
-                assert (await client.post(
-                    "/api/portal/storefronts/999999/settings/trial/reset",
-                    headers={"If-Match": '"sf-config-1"', "Idempotency-Key": "x"},
-                )).status_code == 404
+                # And nothing was re-armed by the attempt.
+                used = await session.scalar(
+                    select(func.count(StorefrontCustomer.id)).where(
+                        StorefrontCustomer.free_trial_used.is_(True)))
+                assert used == 1
         finally:
             app.dependency_overrides.clear()
 

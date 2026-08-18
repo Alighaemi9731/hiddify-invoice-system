@@ -607,29 +607,11 @@ async def storefront_trial_settings(
     return _mutation_dict(response, result)
 
 
-@router.post(
-    "/{shop_id}/settings/trial/reset",
-    response_model=StorefrontMutationOut[dict[str, Any]],
-)
-async def storefront_trial_reset(
-    response: Response,
-    if_match: str = Header(alias="If-Match"),
-    idempotency_key: str = Header(alias="Idempotency-Key"),
-    access: StorefrontAccess = Depends(get_storefront_access),
-    ctx: ResellerContext = Depends(get_current_reseller),
-    session: AsyncSession = Depends(get_session),
-) -> StorefrontMutationOut[dict[str, Any]]:
-    """Re-arm every customer's free trial (once per Gregorian month) and announce it to the shop.
-
-    All of it — the bulk re-arm, the month stamp and the durable announcement job — happens inside
-    the shared command layer, so this handler never touches the session itself (pinned by the AST
-    guard in `test_storefront_parity.py`)."""
-    command = _command_context(ctx, if_match=if_match, idempotency_key=idempotency_key)
-    try:
-        result = await storefront_admin.reset_free_trials(session, access.shop.id, command)
-    except storefront_admin.AdminCommandError as exc:
-        _raise_admin_error(exc)
-    return _mutation_dict(response, result)
+# NOTE: there is no `POST /{shop_id}/settings/trial/reset`. The monthly free-trial re-arm used to
+# be a reseller-triggered command here (and a matching button in the bot). Both are gone: too few
+# shops ever ran it for the win-back to happen, so the platform now re-arms the whole fleet on a
+# schedule (`storefront_trial_reset`). The GET above still reports the state; only the trigger
+# left. The owner's manual escape hatch is `POST /api/ops/storefront/trial-reset-sweep`.
 
 
 @router.patch(

@@ -162,9 +162,13 @@ function CampaignRow({ job, onTrack }: { job: BroadcastJob; onTrack: () => void 
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Chip size="small" variant="outlined" color={statusColor(job.status)}
             label={STATUS_FA[job.status] || job.status} />
+          {/* A `trial_reset` job is the platform's monthly free-trial notice. Without its own
+              chip it would show as a plain «همه» broadcast and read as something the shop sent. */}
           {job.kind === "direct"
             ? <Chip size="small" variant="outlined" label="مستقیم" />
-            : <Chip size="small" variant="outlined" label={SEGMENT_FA[(job.segment ?? "all") as AudienceSegment] || job.segment} />}
+            : job.kind === "trial_reset"
+              ? <Chip size="small" variant="outlined" color="info" label="تست رایگان (خودکار)" />
+              : <Chip size="small" variant="outlined" label={SEGMENT_FA[(job.segment ?? "all") as AudienceSegment] || job.segment} />}
           <Typography variant="caption" color="text.secondary">
             {job.created_at ? fmtDateTime(job.created_at) : ""}
           </Typography>

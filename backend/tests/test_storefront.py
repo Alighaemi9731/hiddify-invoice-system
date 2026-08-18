@@ -525,6 +525,20 @@ def test_customer_kb_shows_free_trial_only_when_flagged():
     on = [b.text for row in sfkb.customer_reply_kb(show_free_trial=True).keyboard for b in row]
     off = [b.text for row in sfkb.customer_reply_kb(show_free_trial=False).keyboard for b in row]
     assert sfkb.FREE_TRIAL_LABEL in on and sfkb.FREE_TRIAL_LABEL not in off
+    # Routable either way — a tap from a stale keyboard must reach a handler, never a dead end.
+    assert sfkb.CUSTOMER_LABEL_TO_ACTION[sfkb.FREE_TRIAL_LABEL] == "trial"
+
+
+def test_trial_settings_kb_has_no_manual_reset_button():
+    """The monthly re-arm is a scheduled fleet job now, not a per-shop button.
+
+    A button that could only ever answer «قبلاً در این ماه انجام شده» is worse than no button, and
+    leaving one would imply shop admins still control the timing — they don't."""
+    bot = StorefrontBot(id=1, reseller_id=1, free_trial_enabled=True, config_version=1)
+    data = [b.callback_data for row in sfkb.trial_settings_kb(bot).inline_keyboard for b in row]
+    assert not any(str(d).startswith("sftrialreset") for d in data)
+    assert any(str(d).startswith("sftrialtog") for d in data)   # on/off still belongs to the shop
+    assert "sftrialset" in data                                 # so does volume/duration
 
 
 def test_customer_detail_kb_relay_button_for_everyone():
@@ -831,14 +845,25 @@ def test_tg_pv_url_precedence():
     assert sfkb.clean_username("bob123") == "bob123"                # re-exported from keyboards
 
 
-def test_trial_available_logic():
-    from app.bot.storefront.handlers import _trial_available
-    assert _trial_available(SimpleNamespace(free_trial_enabled=True),
-                            SimpleNamespace(free_trial_used=False)) is True
-    assert _trial_available(SimpleNamespace(free_trial_enabled=True),
-                            SimpleNamespace(free_trial_used=True)) is False
-    assert _trial_available(SimpleNamespace(free_trial_enabled=False),
-                            SimpleNamespace(free_trial_used=False)) is False
+def test_trial_button_visibility_ignores_whether_it_was_claimed():
+    """VISIBILITY follows the shop's switch alone; CLAIMABILITY additionally follows the customer.
+
+    They used to be one predicate, and the button vanished on claim. That silently broke the
+    monthly re-arm: Telegram keeps a reply keyboard on the phone until something docks a new one,
+    so a customer whose trial came back still saw a menu without the button — while the
+    announcement told them to press it. A tap after claiming is answered in words instead."""
+    from app.bot.storefront.handlers import _trial_claimable, _trial_visible
+
+    on, off = SimpleNamespace(free_trial_enabled=True), SimpleNamespace(free_trial_enabled=False)
+    used, fresh = SimpleNamespace(free_trial_used=True), SimpleNamespace(free_trial_used=False)
+
+    assert _trial_visible(on) is True
+    assert _trial_visible(off) is False
+    assert _trial_visible(on) is True, "claiming must not hide the button"
+
+    assert _trial_claimable(on, fresh) is True
+    assert _trial_claimable(on, used) is False
+    assert _trial_claimable(off, fresh) is False
 
 
 def _fake_create_factory(calls):  # noqa: ANN001, ANN202
@@ -1853,6 +1878,22 @@ def test_bot_stale_config_version_yields_conflict_and_single_retry(tmp_path):
 
 # ─────────────────── plan 007: compact owner home + safe deep links ────────────
 
+class _SessionCtx:
+    """`async with SessionLocal() as s` over an ALREADY-open test session.
+
+    The handlers under test open their own short sessions around Telegram I/O; sharing the one
+    in-memory session keeps the seeded rows visible without a second engine."""
+
+    def __init__(self, session) -> None:  # noqa: ANN001
+        self._s = session
+
+    async def __aenter__(self):  # noqa: ANN204
+        return self._s
+
+    async def __aexit__(self, *_exc):  # noqa: ANN002
+        return None
+
+
 class _FakeMsg:
     """Records .answer(text, reply_markup=…) calls so we can assert the menu shape."""
     def __init__(self, user_id: int) -> None:
@@ -2076,3 +2117,69 @@ def test_sf_home_preview_uses_caller_not_bot_id(tmp_path, monkeypatch):
         await engine.dispose()
 
     asyncio.run(go())
+
+
+def test_claimed_trial_answers_in_words_instead_of_vanishing(tmp_path, monkeypatch):
+    """The «🎁 تست رایگان» button is permanent now, so a second tap is a NORMAL path.
+
+    It has to say why nothing happened and when the next one arrives — and it must only promise a
+    next one when the platform's monthly re-arm is actually switched on. Under it sits the plan
+    list, because "I want more" is the real intent behind a second tap."""
+    async def body(s):
+        from app.bot.storefront import handlers as H
+        from app.services import settings_service, storefront_provision
+
+        _r, bot, cust = await _seed(s, tag="71")
+
+        async def used(*_a, **_k):  # noqa: ANN002, ANN003
+            return SimpleNamespace(ok=False, reason="used", sub_link=None, gb=0, days=0, label="")
+
+        monkeypatch.setattr(storefront_provision, "claim_trial", used)
+        monkeypatch.setattr(H.storefront_provision, "claim_trial", used)
+        monkeypatch.setattr(H, "SessionLocal", lambda: _SessionCtx(s))
+
+        # Monthly re-arm ON → the message promises the next one.
+        settings_service.clear_settings_cache()
+        m = _FakeMsg(555)
+        await H._claim_free_trial(m, bot.id, cust.id, SimpleNamespace(id=1))
+        text = m.answers[-1][0]
+        assert "این ماه" in text and "ماه" in text
+        assert "🛒" in str(m.answers[-1][1].inline_keyboard[0][0].text)
+        assert m.answers[-1][1].inline_keyboard[0][0].callback_data == "sfbuylist"
+
+        # Master switch OFF → lifetime-once again, so no next-month promise.
+        await settings_service.set_value(s, "storefront_trial_reset_enabled", False)
+        await s.commit()
+        settings_service.clear_settings_cache()
+        m2 = _FakeMsg(555)
+        await H._claim_free_trial(m2, bot.id, cust.id, SimpleNamespace(id=1))
+        assert "یک‌بار" in m2.answers[-1][0]
+        assert "ماهِ آینده" not in m2.answers[-1][0]
+        settings_service.clear_settings_cache()
+
+    _run(body, tmp_path, "trial-used.db")
+
+
+def test_suspended_branch_gets_its_own_trial_message(tmp_path, monkeypatch):
+    """`reason="suspended"` used to fall through to «❌ ساختِ تستِ رایگان ناموفق بود», which reads
+    as a broken bot rather than a temporary state of the shop."""
+    async def body(s):
+        from app.bot.storefront import handlers as H
+        from app.services import storefront_provision
+
+        _r, bot, cust = await _seed(s, tag="72")
+
+        async def suspended(*_a, **_k):  # noqa: ANN002, ANN003
+            return SimpleNamespace(
+                ok=False, reason="suspended", sub_link=None, gb=0, days=0, label="")
+
+        monkeypatch.setattr(storefront_provision, "claim_trial", suspended)
+        monkeypatch.setattr(H.storefront_provision, "claim_trial", suspended)
+        monkeypatch.setattr(H, "SessionLocal", lambda: _SessionCtx(s))
+
+        m = _FakeMsg(555)
+        await H._claim_free_trial(m, bot.id, cust.id, SimpleNamespace(id=1))
+        assert "ناموفق" not in m.answers[-1][0]
+        assert "پشتیبانی" in m.answers[-1][0]
+
+    _run(body, tmp_path, "trial-susp.db")

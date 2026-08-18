@@ -141,6 +141,31 @@ async def below_cost_sweep(
     return await storefront_belowcost.run_sweep(session, dry_run=dry_run, limit=limit)
 
 
+@router.get("/storefront/trial-reset-report")
+async def trial_reset_report() -> dict:
+    """Which shops the next monthly free-trial re-arm would touch. Pure read.
+
+    The re-arm itself is a scheduled job (`storefront_trial_reset`); this exists so the owner can
+    see the fleet-wide cost of the giveaway BEFORE it happens — every re-armed customer who claims
+    is quota the platform, not the reseller, pays for."""
+    from app.services import storefront_trial_reset
+
+    return await storefront_trial_reset.report()
+
+
+@router.post("/storefront/trial-reset-sweep")
+async def trial_reset_sweep(dry_run: bool = True) -> dict:
+    """Run the monthly free-trial re-arm now, instead of waiting for its scheduled day.
+
+    The manual escape hatch for the scheduled job — for the OWNER, not for shop admins (whose
+    button was removed). Idempotent by construction: a shop already stamped with the current
+    period is skipped, so re-running never double-announces. `dry_run` defaults to TRUE, so an
+    accidental POST reports instead of messaging thousands of customers."""
+    from app.services import storefront_trial_reset
+
+    return await storefront_trial_reset.sweep(dry_run=dry_run)
+
+
 @router.post("/storefront/reset-trial-quota")
 async def reset_trial_quota(session: AsyncSession = Depends(get_session)) -> dict:
     """One-time cleanup: reset over-renewed free-trial configs back to 1 GB on their panels

@@ -475,13 +475,18 @@ class StorefrontCreditRedemption(Base, TimestampMixin):
 
 
 class StorefrontBroadcastJob(Base, TimestampMixin):
-    """A durable delivery job (plan 006): a one-shot broadcast to a customer segment, OR a single
-    `direct` message (same model, kind='direct'). Recipients are snapshotted at create time into
-    StorefrontDeliveryRecipient and delivered by the scheduler's delivery worker. Aggregate counts +
-    audit are kept permanently; recipient detail rows are pruned after a retention window."""
+    """A durable delivery job (plan 006): a one-shot broadcast to a customer segment, a single
+    `direct` message, or the platform's monthly free-trial announcement (`trial_reset`) — same
+    model throughout. Recipients are snapshotted at create time into StorefrontDeliveryRecipient
+    and delivered by the scheduler's delivery worker. Aggregate counts + audit are kept
+    permanently; recipient detail rows are pruned after a retention window.
+
+    `trial_reset` is not cosmetic: it is what tells the worker to re-dock the customer menu with
+    the message (see `storefront_delivery._dispatch`), and it keeps a notice the PLATFORM sent
+    from reading as a broadcast the reseller wrote."""
     __tablename__ = "storefront_broadcast_jobs"
     __table_args__ = (
-        CheckConstraint("kind in ('broadcast','direct')", name="ck_sfbjob_kind"),
+        CheckConstraint("kind in ('broadcast','direct','trial_reset')", name="ck_sfbjob_kind"),
         CheckConstraint("status in ('queued','running','completed','canceled')",
                         name="ck_sfbjob_status"),
         Index("ix_sfbjob_shop_created", "storefront_bot_id", "created_at"),
@@ -492,7 +497,7 @@ class StorefrontBroadcastJob(Base, TimestampMixin):
     storefront_bot_id: Mapped[int] = mapped_column(
         ForeignKey("storefront_bots.id", ondelete="CASCADE"), index=True)
     actor_telegram_id: Mapped[int] = mapped_column(BigInteger)
-    kind: Mapped[str] = mapped_column(String(16))                # broadcast | direct
+    kind: Mapped[str] = mapped_column(String(16))       # broadcast | direct | trial_reset
     segment: Mapped[str | None] = mapped_column(String(32), nullable=True)
     message_text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), server_default=text("'queued'"))

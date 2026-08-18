@@ -88,6 +88,27 @@ describe("storefront campaigns", () => {
     expect(await screen.findByText(/در صف ارسال قرار گرفت/)).toBeInTheDocument();
   });
 
+  it("labels the platform's automatic free-trial notice as its own kind", async () => {
+    // A `trial_reset` job appears in the reseller's own history because it went out under their
+    // bot — but it is sent by the platform every month, not written by them. Without its own chip
+    // it falls through to the segment label «همه» and reads as a broadcast they composed.
+    mockAudience(0);
+    mockHistory([
+      { id: 7, kind: "trial_reset", segment: "all", status: "completed",
+        text: "🎁 تست رایگان دوباره فعال شد", total: 30, sent: 30, blocked: 0, failed: 0,
+        pending: 0, created_at: "2026-09-01T05:25:00Z", canceled_at: null },
+      { id: 8, kind: "broadcast", segment: "all", status: "completed", text: "تخفیف پاییزی",
+        total: 30, sent: 30, blocked: 0, failed: 0, pending: 0,
+        created_at: "2026-09-02T05:25:00Z", canceled_at: null },
+    ]);
+
+    renderPage();
+    expect(await screen.findByText("تست رایگان (خودکار)")).toBeInTheDocument();
+    // …and exactly one row still carries the ordinary segment label (the audience picker above
+    // the list renders that same word, hence the count rather than a presence check).
+    expect(screen.getAllByText("همهٔ مشتری‌ها").length).toBeGreaterThan(1);
+  });
+
   it("blocks sending to an empty audience", async () => {
     mockAudience(0);
     mockHistory();

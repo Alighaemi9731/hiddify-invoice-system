@@ -209,7 +209,7 @@ async def _redock_sf_menu_for(msg, user, bot: Bot) -> None:  # noqa: ANN001
             await _send_admin_menu(msg, sf, session=s, reseller=reseller, user_id=user.id)
         else:
             cust = await storefront.get_or_create_customer(s, sf.id, user)
-            await _send_customer_menu(msg.answer, sf, cust)
+            await _send_customer_menu(msg.answer, sf, cust, session=s)
 
 
 async def _redock_sf_menu(message, bot: Bot) -> None:  # noqa: ANN001
@@ -217,20 +217,48 @@ async def _redock_sf_menu(message, bot: Bot) -> None:  # noqa: ANN001
     await _redock_sf_menu_for(message, message.from_user, bot)
 
 
-def _trial_available(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
-    return bool(sf.free_trial_enabled) and not customer.free_trial_used
+def _trial_visible(sf: StorefrontBot) -> bool:
+    """Whether «🎁 تست رایگان» sits on the customer's keyboard — the SHOP's switch only.
+
+    Split from `_trial_claimable` on purpose. Hiding the button once the customer had claimed made
+    the monthly re-arm invisible: a reply keyboard stays on the phone until a new one is docked, so
+    a customer whose trial came back still saw a menu without it and had to stumble into some other
+    interaction first. The button now stays and a second tap is answered in words."""
+    return bool(sf.free_trial_enabled)
 
 
-async def _send_customer_menu(answer, sf: StorefrontBot, customer: StorefrontCustomer, *, preview=False) -> None:  # noqa: ANN001
+async def _monthly_trial_reset(session: AsyncSession | None = None) -> bool:
+    """Is the platform re-arming free trials every month? Decides whether customer-facing copy may
+    promise a next one. Reuses the caller's session when it has one — the menu is a hot path and
+    the setting is behind a short TTL cache anyway."""
+    if session is not None:
+        return await storefront.trial_reset_enabled(session)
+    async with SessionLocal() as s:
+        return await storefront.trial_reset_enabled(s)
+
+
+def _trial_claimable(sf: StorefrontBot, customer: StorefrontCustomer) -> bool:
+    """Whether a tap would actually mint a config right now (drives the menu's status line only —
+    `claim_trial` re-checks this under a row lock)."""
+    return _trial_visible(sf) and not customer.free_trial_used
+
+
+async def _send_customer_menu(  # noqa: ANN001
+    answer, sf: StorefrontBot, customer: StorefrontCustomer, *, preview=False,
+    session: AsyncSession | None = None,
+) -> None:
     bal = _toman(storefront_wallet.balance(customer))
     text = sf.welcome_text or "🛍 به فروشگاهِ ما خوش آمدید!"
     lines = [text, "", f"👛 موجودیِ کیفِ پولِ شما: {bal} تومان"]
-    show_trial = _trial_available(sf, customer)
-    if show_trial:
+    if _trial_claimable(sf, customer):
         lines.append(f"🎁 تستِ رایگان ({sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز) فعال است.")
+    elif _trial_visible(sf) and await _monthly_trial_reset(session):
+        # The button stays on the keyboard either way; this line is what stops it reading as broken.
+        lines.append("🎁 تستِ رایگانِ این ماه را دریافت کرده‌اید؛ ماهِ آینده دوباره فعال می‌شود.")
     await answer(
         rtl("\n".join(lines)),
-        reply_markup=kb.customer_reply_kb(is_admin_preview=preview, show_free_trial=show_trial),
+        reply_markup=kb.customer_reply_kb(
+            is_admin_preview=preview, show_free_trial=_trial_visible(sf)),
     )
 
 
@@ -615,7 +643,7 @@ async def sf_start(message: Message, state: FSMContext, bot: Bot) -> None:
     async with SessionLocal() as s:
         sf = await storefront.get_bot_by_telegram_id(s, bot.id)
         customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-        await _send_customer_menu(message.answer, sf, customer)
+        await _send_customer_menu(message.answer, sf, customer, session=s)
 
 
 @storefront_router.message.outer_middleware
@@ -755,18 +783,28 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
         # invoice at any size (`storefront.trial_user_uuids`). What actually bounds it is the
         # owner's `storefront_trial_max_gb`, so say that instead.
         max_gb = await storefront.trial_max_gb(s)
-        reset_line = (
-            f"ریست ماهانه: در دورهٔ {sf.trial_reset_period} انجام شده"
-            if sf.trial_reset_period == periods.current_month().label
-            else "ریست ماهانه: در دسترس"
-        ) if await storefront.trial_reset_enabled(s) else "ریست ماهانه: غیرفعال است"
+        # The re-arm has no button any more — it runs for the whole fleet on a schedule — so this
+        # line REPORTS rather than invites, and says whether it already happened this month.
+        monthly = await storefront.trial_reset_enabled(s)
+        if monthly:
+            done = sf.trial_reset_period == periods.current_month().label
+            reset_line = (
+                f"ریستِ ماهانه: خودکار — در دورهٔ {sf.trial_reset_period} انجام شد"
+                if done else "ریستِ ماهانه: خودکار — ابتدای هر ماهِ میلادی"
+            )
+        else:
+            reset_line = "ریستِ ماهانه: غیرفعال است (تست، یک‌بار برای همیشه)"
+        headline = (
+            "🎁 تستِ رایگان (ماهی یک‌بار برای هر مشتری)" if monthly
+            else "🎁 تستِ رایگان (یک‌بار برای هر مشتری)"
+        )
         await ans(rtl(
-            f"🎁 تستِ رایگان (یک‌بار برای هر مشتری)\n"
+            f"{headline}\n"
             f"وضعیت: {'فعال ✅' if sf.free_trial_enabled else 'غیرفعال ❌'}\n"
             f"حجم: {sf.free_trial_gb} گیگابایت · مدت: {sf.free_trial_days} روز\n"
             f"{reset_line}\n\n"
             f"نکته: تستِ رایگان در فاکتورِ شما حساب نمی‌شود؛ سقفِ حجمِ آن {max_gb} گیگابایت است."),
-            reply_markup=kb.trial_settings_kb(sf, reset_available=await _trial_reset_available(s, sf)))
+            reply_markup=kb.trial_settings_kb(sf))
     elif action == "topups":
         pend = await storefront_wallet.pending_topups_for_bot(s, sf.id)
         if not pend:
@@ -1032,9 +1070,33 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
                       "پاسخ بگیرید."))
 
 
+def _already_claimed_text(monthly: bool) -> str:
+    """What a customer reads when they tap «🎁 تست رایگان» after already claiming it.
+
+    The button no longer disappears on claim, so this is a NORMAL screen now, not an edge case —
+    it has to answer "why can't I?" and "when can I?" without sounding like a refusal, and it must
+    not promise a next trial when the platform's monthly re-arm is switched off."""
+    if monthly:
+        return (
+            "🎁 تستِ رایگانِ این ماه را قبلاً دریافت کرده‌اید.\n\n"
+            "هر ماه یک تستِ رایگانِ تازه برایتان فعال می‌شود و همان لحظه با پیام خبرتان می‌کنیم؛ "
+            "لازم نیست چیزی را دنبال کنید.\n\n"
+            "تا آن وقت، سرویسِ فعلی‌تان در «📦 سرویس‌های من» است — و اگر به حجم یا مدتِ بیشتری "
+            "نیاز دارید، یکی از پلن‌های فروشگاه را بگیرید."
+        )
+    return (
+        "🎁 شما تستِ رایگانِ خود را قبلاً دریافت کرده‌اید.\n\n"
+        "تستِ رایگان برای هر مشتری یک‌بار است. سرویسِ فعلی‌تان در «📦 سرویس‌های من» است — و برای "
+        "ادامهٔ استفاده می‌توانید یکی از پلن‌های فروشگاه را بگیرید."
+    )
+
+
 async def _claim_free_trial(message, sf_id: int, customer_id: int, bot: Bot) -> None:  # noqa: ANN001
-    """Claim the one-time free trial via the concurrency-safe service (compare-and-set + atomic
-    provision), then deliver the config. No DB connection is held across the panel/Telegram I/O."""
+    """Claim the free trial via the concurrency-safe service (compare-and-set + atomic provision),
+    then deliver the config. No DB connection is held across the panel/Telegram I/O.
+
+    Every refusal answers in words rather than silence: the menu button is permanent now, so a
+    customer who already has this month's trial lands here on purpose, not by accident."""
     async with SessionLocal() as s:
         sf = await s.get(StorefrontBot, sf_id)
     if sf is not None and sf.shop_closed:  # closed → no new configs, incl. free trials
@@ -1046,9 +1108,16 @@ async def _claim_free_trial(message, sf_id: int, customer_id: int, bot: Bot) -> 
         await _deliver_config(bot, message.from_user.id, gb=res.gb, days=res.days,
                               sub_link=res.sub_link, name=res.label)
     elif res.reason == "used":
-        await message.answer(rtl("شما قبلاً تستِ رایگان دریافت کرده‌اید."))
+        text = _already_claimed_text(await _monthly_trial_reset())
+        await message.answer(rtl(text), reply_markup=kb.trial_used_kb())
     elif res.reason == "disabled":
         await message.answer(rtl("تستِ رایگان فعلاً فعال نیست."))
+    elif res.reason == "suspended":
+        # Had no branch of its own and fell through to «ناموفق بود», which reads as a bug in the
+        # bot rather than a temporary state of the shop.
+        await message.answer(rtl(
+            "🎁 ساختِ تستِ رایگان در این فروشگاه فعلاً ممکن نیست. کمی بعد دوباره تلاش کنید یا با "
+            "پشتیبانیِ فروشگاه در تماس باشید."))
     else:
         await message.answer(rtl("❌ ساختِ تستِ رایگان ناموفق بود. لطفاً بعداً دوباره تلاش کنید."))
 
@@ -2778,8 +2847,7 @@ async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer("دسترسی ندارید.", show_alert=True)
             return
         if target is None:
-            await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(
-                sf, reset_available=await _trial_reset_available(s, sf)))
+            await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
             await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
             return
         desired, rendered_version = target
@@ -2789,12 +2857,10 @@ async def sf_trial_toggle(cb: CallbackQuery, bot: Bot) -> None:
         except storefront_admin.AdminCommandError as exc:
             if exc.code == "config_conflict":
                 await s.refresh(sf)
-                await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(
-                    sf, reset_available=await _trial_reset_available(s, sf)))
+                await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
             await cb.answer(_admin_error(exc), show_alert=True)
             return
-        await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(
-            sf, reset_available=await _trial_reset_available(s, sf)))
+        await cb.message.edit_reply_markup(reply_markup=kb.trial_settings_kb(sf))
     await cb.answer("فعال شد." if sf.free_trial_enabled else "غیرفعال شد.")
 
 
@@ -2840,81 +2906,12 @@ async def sf_trial_days(message: Message, state: FSMContext, bot: Bot) -> None:
         except storefront_admin.AdminCommandError as exc:
             await state.clear()
             await s.refresh(sf)
-            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.trial_settings_kb(
-                sf, reset_available=await _trial_reset_available(s, sf)))
+            await message.answer(rtl(_admin_error(exc)), reply_markup=kb.trial_settings_kb(sf))
             return
         await state.clear()
         await message.answer(
             rtl(f"✅ تستِ رایگان: {sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز"),
-            reply_markup=kb.trial_settings_kb(
-                sf, reset_available=await _trial_reset_available(s, sf)))
-
-
-async def _trial_reset_available(s: AsyncSession, sf: StorefrontBot) -> bool:
-    return bool((await storefront_admin.trial_reset_status(s, sf))["available"])
-
-
-@storefront_router.callback_query(F.data.startswith("sftrialreset:"))
-async def sf_trial_reset_ask(cb: CallbackQuery, bot: Bot) -> None:
-    """Step 1 of 2. Re-arming every customer's trial is a fan-out that also messages the whole
-    shop, so it gets the same double-tap confirmation as deleting a service — and the confirm
-    screen states the real counts rather than a vague warning."""
-    async with SessionLocal() as s:
-        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-        if sf is None or not is_admin:
-            await cb.answer("دسترسی ندارید.", show_alert=True)
-            return
-        status = await storefront_admin.trial_reset_status(s, sf)
-        total = len(await storefront.customers_in_segment(s, sf.id, "all"))
-    if not status["available"]:
-        await cb.answer(
-            "ریست تست رایگان توسط مدیر سامانه غیرفعال شده است."
-            if status["reason"] == "disabled" else
-            f"تست‌ها در دورهٔ {status['period']} یک بار ریست شده‌اند؛ "
-            "ریست بعدی از ماه میلادی آینده ممکن است.",
-            show_alert=True)
-        return
-    await cb.message.answer(
-        rtl(
-            "🔄 ریستِ ماهانهٔ تستِ رایگان\n\n"
-            f"• {status['eligible_count']} مشتری که تستشان را مصرف کرده‌اند، دوباره واجدِ شرایط می‌شوند.\n"
-            f"• به هر {total} مشتریِ فروشگاه یک پیامِ اطلاع‌رسانی ارسال می‌شود.\n"
-            f"• تا پایانِ دورهٔ {status['period']} دیگر نمی‌توانید این کار را تکرار کنید.\n\n"
-            "ادامه می‌دهید؟"),
-        reply_markup=kb.confirm_kb("✅ بله، ریست کن", f"sftrialresetok:{cb.data.split(':')[-1]}"))
-    await cb.answer()
-
-
-@storefront_router.callback_query(F.data.startswith("sftrialresetok:"))
-async def sf_trial_reset_do(cb: CallbackQuery, bot: Bot) -> None:
-    """Step 2 of 2. The `config_version` travels from the keyboard that was actually rendered, so
-    a reset tapped on a stale menu loses the CAS instead of acting on changed settings."""
-    try:
-        rendered_version = int(cb.data.split(":")[-1])
-    except (TypeError, ValueError):
-        await cb.answer("این منو قدیمی شده بود؛ لطفاً دوباره تلاش کنید.", show_alert=True)
-        return
-    async with SessionLocal() as s:
-        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
-        if sf is None or not is_admin:
-            await cb.answer("دسترسی ندارید.", show_alert=True)
-            return
-        try:
-            result = await storefront_admin.reset_free_trials(
-                s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version))
-        except storefront_admin.AdminCommandError as exc:
-            await cb.answer(_admin_error(exc), show_alert=True)
-            return
-        body = result.body if isinstance(result.body, dict) else {}
-        await s.refresh(sf)
-        markup = kb.trial_settings_kb(sf, reset_available=await _trial_reset_available(s, sf))
-    await cb.message.edit_text(
-        rtl(
-            "✅ تست‌های رایگان ریست شدند.\n"
-            f"• {body.get('reset_count', 0)} مشتری دوباره می‌توانند تستِ رایگان بگیرند.\n"
-            f"• پیامِ اطلاع‌رسانی برای {body.get('notified', 0)} مشتری در صفِ ارسال قرار گرفت."),
-        reply_markup=markup)
-    await cb.answer()
+            reply_markup=kb.trial_settings_kb(sf))
 
 
 # ── admin: manual wallet adjust, support, broadcast ──────────────────────────
@@ -3353,7 +3350,7 @@ async def sf_join_check(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer()
             return
         cust = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
-        await _send_customer_menu(cb.message.answer, sf, cust)
+        await _send_customer_menu(cb.message.answer, sf, cust, session=s)
     await cb.answer("✅ عضویت تأیید شد.")
 
 
@@ -3472,7 +3469,7 @@ async def sf_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
                 cb.message, sf, session=s, reseller=reseller, user_id=cb.from_user.id)
         else:
             cust = await storefront.get_or_create_customer(s, sf.id, cb.from_user)
-            await _send_customer_menu(cb.message.answer, sf, cust)
+            await _send_customer_menu(cb.message.answer, sf, cust, session=s)
     await cb.answer("لغو شد.")
 
 
@@ -3512,4 +3509,4 @@ async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
                 message, sf, session=s, reseller=reseller, user_id=message.from_user.id)
             return
         cust = await storefront.get_or_create_customer(s, sf.id, message.from_user)
-        await _send_customer_menu(message.answer, sf, cust)
+        await _send_customer_menu(message.answer, sf, cust, session=s)
