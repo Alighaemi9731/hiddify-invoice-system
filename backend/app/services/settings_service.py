@@ -369,6 +369,13 @@ DEFS: list[SettingDef] = [
     SettingDef("user_create_gb_options", [20, 30, 40, 50, 80, 100], False, "usercreate"),
     SettingDef("user_create_day_options", [30, 60], False, "usercreate"),
     SettingDef("user_create_bulk_counts", [5, 10, 20], False, "usercreate"),
+    # The OWNER's own one-tap test config («🧪 کانفیگ تست» in the admin bot). The panel is an
+    # explicit choice, never a guess: 0 means "not chosen yet" and the bot asks once. The config is
+    # created under the panel's own super-admin, so it lands in nobody's invoice (the owner pays).
+    SettingDef("test_config_panel_id", 0, False, "testconfig"),
+    SettingDef("test_config_gb", 2, False, "testconfig"),
+    SettingDef("test_config_days", 2, False, "testconfig"),
+    SettingDef("test_config_name", "test", False, "testconfig"),
     # Reseller follow-up board («پیگیری») — the owner's churn thresholds. Panel-only: nothing
     # here sends a message or changes billing; they only decide which bucket a reseller lands
     # in on the board. "Days" are counted from the reseller's LAST BILLABLE SALE.
@@ -452,6 +459,11 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     # 28, not 31: the sweep must land in EVERY month, and its two retry days must exist too.
     "storefront_trial_reset_day": (1, 28),
     "storefront_trial_reset_hour": (0, 23),
+    # The owner's test config. `test_config_panel_id` starts at 0 = "no panel chosen yet" (the bot
+    # asks), so 0 is a meaningful value here rather than the usual disabled-by-accident hazard.
+    "test_config_panel_id": (0, None),
+    "test_config_gb": (1, 1000),
+    "test_config_days": (1, 365),
     "daily_digest_hour": (0, 23),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),

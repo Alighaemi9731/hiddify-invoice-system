@@ -116,6 +116,59 @@ async def _begin_storefront_setup(answer, chat_id: int, session, state: FSMConte
     await answer(rtl("🏪 برای کدام حساب/پنل؟ (هر پنل یک ربات جداگانه)"),
                  reply_markup=keyboards.storefront_setup_panels_keyboard(items))
 
+
+# --------------------------- owner: one-tap test config ---------------------------
+async def _send_test_config(answer, chat_id: int, session, *, bot, name: str | None = None) -> None:  # noqa: ANN001
+    """«🧪 کانفیگ تست»: build ONE test config on the configured panel and send its link + QR.
+
+    Owner-only (the caller checks). No FSM: the panel is a saved setting, so the everyday path is a
+    single tap. When no panel is chosen yet — or the chosen one is gone — the picker is shown INSTEAD
+    of quietly building on some other panel; which panel the customer's test comes from is exactly
+    what the setting exists to pin down."""
+    from app.services import testconfig, usercreate
+
+    panel, reason = await testconfig.resolve_panel(session)
+    if panel is None:
+        items = await testconfig.panel_choices(session)
+        if not items:
+            await answer(rtl("هیچ پنلِ فعالی ثبت نشده است؛ ابتدا از پنلِ تحت وب یک پنل اضافه کنید."))
+            return
+        head = ("🧪 کانفیگ تست\nروی کدام پنل ساخته شود؟ (انتخابِ شما ذخیره می‌شود)"
+                if reason == "unset" else
+                "🧪 پنلِ قبلیِ تست دیگر در دسترس نیست؛ یک پنلِ دیگر انتخاب کنید:")
+        await answer(rtl(head), reply_markup=keyboards.test_config_panels_keyboard(items))
+        return
+
+    opts = await testconfig.load_options(session)
+    label = (name or "").strip() or opts.name
+    await answer(rtl("⏳ در حال ساختِ کانفیگ تست…"))
+    result = await testconfig.create(session, panel, gb=opts.gb, days=opts.days, name=label[:40])
+    if not result.ok or not result.sub_link:
+        problem = {
+            "limit": "سقفِ کاربرِ این پنل پُر است.",
+            "no_admin": "شناسهٔ ادمینِ این پنل ثبت نشده است.",
+        }.get(result.reason or "", "خطا در ارتباط با پنل.")
+        await answer(rtl(f"❌ ساختِ کانفیگ تست ناموفق بود — {problem}"))
+        return
+    link = html.escape(result.sub_link)
+    caption = rtl(
+        f"🧪 کانفیگ تست ساخته شد — {result.gb} گیگابایت · {result.days} روز\n"
+        f"🖥 پنل: {iso_html(panel.key)}\n\n"
+        f"🔗 لینکِ اشتراک:\n<code>{link}</code>"
+    )
+    kb = keyboards.test_config_result_keyboard()
+    try:
+        from aiogram.types import BufferedInputFile
+
+        png = usercreate.qr_png(result.sub_link)
+        await bot.send_photo(chat_id, BufferedInputFile(png, filename="test.png"),
+                             caption=caption, parse_mode="HTML", reply_markup=kb)
+    except Exception:  # noqa: BLE001 — a QR/photo hiccup must never swallow a config we just made
+        log.warning("failed to send test-config QR", exc_info=True)
+        await bot.send_message(chat_id, caption, parse_mode="HTML",
+                               disable_web_page_preview=True, reply_markup=kb)
+
+
 async def _dispatch_owner(action: str, answer, session) -> None:
     """Run an owner action. Shared by the menu buttons (cb_owner) AND the owner `/` commands,
     so the slash-command list and the inline menu always do the exact same thing."""

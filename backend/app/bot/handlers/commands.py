@@ -55,6 +55,7 @@ async def cmd_help(message: Message) -> None:
                 "/health — سلامت سامانه\n"
                 "/payments — پرداخت‌های در انتظار\n"
                 "/debtors — بدهکاران\n"
+                "/test — کانفیگ تست (می‌توانید نام هم بدهید: /test نامِ مشتری)\n"
                 "/search — جستجوی نماینده\n"
                 "/broadcast — پیام همگانی به نمایندگان\n"
                 "/sync — همگام‌سازی پنل‌ها\n"

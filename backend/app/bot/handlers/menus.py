@@ -25,6 +25,7 @@ from app.bot.handlers.views import (
     _send_removelink,
     _send_self_interim,
     _send_sub_panels,
+    _send_test_config,
 )
 
 
@@ -123,5 +124,10 @@ async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) ->
     if action == "search":
         await state.set_state(OwnerSearchState.waiting)
         await ans("🔎 نام یا شناسهٔ نماینده را بفرستید.", reply_markup=keyboards.flow_cancel_kb())
+        return
+    if action == "testconfig":
+        # Handled here rather than in `_dispatch_owner`: sending the QR photo needs the bot and the
+        # chat id, and the dispatcher only carries `answer`.
+        await _send_test_config(ans, message.chat.id, s, bot=message.bot)
         return
     await _dispatch_owner(action, ans, s)

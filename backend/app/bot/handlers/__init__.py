@@ -25,6 +25,7 @@ from app.bot.handlers import subs
 from app.bot.handlers import usercreate
 from app.bot.handlers import storefront_setup
 from app.bot.handlers import owner
+from app.bot.handlers import testconfig
 from app.bot.handlers import misc
 from app.bot.handlers import text_fallback
 # isort: on
@@ -192,6 +193,7 @@ from app.bot.handlers.support import (
     on_owner_reply,
     on_support_text,
 )
+from app.bot.handlers.testconfig import cb_tc_new, cb_tc_panel, cb_tc_pick, cmd_test
 from app.bot.handlers.text_fallback import on_document, on_photo, on_text
 from app.bot.handlers.usercreate import cb_cu_cancel, cb_menu_newuser, cmd_newuser
 from app.bot.handlers.views import (
@@ -216,6 +218,7 @@ from app.bot.handlers.views import (
     _send_sub_invoice,
     _send_sub_list,
     _send_sub_panels,
+    _send_test_config,
     _storefront_target_line,
 )
 from app.bot.matching import normalize_host, normalize_path, parse_link
@@ -236,8 +239,8 @@ from app.services.periods import today as tehran_today
 __all__ = [
     # submodules
     "common", "views", "intake", "commands", "broadcast", "menus", "support",
-    "reseller_cb", "subs", "usercreate", "storefront_setup", "owner", "misc",
-    "text_fallback",
+    "reseller_cb", "subs", "usercreate", "storefront_setup", "owner", "testconfig",
+    "misc", "text_fallback",
     # first-party imports of the original module
     "keyboards", "texts", "normalize_host", "normalize_path", "parse_link", "rtl",
     "payment_code", "SessionLocal", "BotUser", "Invoice", "Panel", "Payment",
@@ -294,6 +297,8 @@ __all__ = [
     "cb_cap_more", "cb_bump_type", "cb_owner_reseller_invoices",
     "_OWNER_CMD_ACTION", "cmd_owner_action", "cmd_search", "_owner_stats",
     "_owner_debtors", "_owner_pending_payments",
+    # owner: one-tap test config
+    "_send_test_config", "cmd_test", "cb_tc_new", "cb_tc_pick", "cb_tc_panel",
     # shared reseller views
     "_pending_payment_for_invoice", "_pending_invoice_ids", "_send_invoices",
     "_send_self_interim", "_send_pay", "_send_removelink", "_send_panels",

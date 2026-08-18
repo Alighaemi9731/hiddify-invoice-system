@@ -83,6 +83,7 @@ OWNER_MAIN: list[tuple[str, str]] = [
     ("📊 آمار", "stats"),
     ("💳 پرداخت‌ها", "payments"),
     ("💰 بدهکاران", "debtors"),
+    ("🧪 کانفیگ تست", "testconfig"),
 ]
 OWNER_MORE: list[tuple[str, str]] = [
     ("🩺 سلامت سامانه", "health"),
@@ -281,6 +282,23 @@ def storefront_setup_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyb
     rows = [[InlineKeyboardButton(text=label, callback_data=f"sfsetup:{rid}")] for rid, label in items]
     rows.append([InlineKeyboardButton(text="✖️ انصراف", callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def test_config_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Owner-only: pick the panel every «🧪 کانفیگ تست» is built on. The choice is SAVED (a setting),
+    so this asks once and the button is one tap afterwards. data: tcpanel:<panel_id>."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"tcpanel:{pid}")] for pid, label in items]
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
+    )
+
+
+def test_config_result_keyboard() -> InlineKeyboardMarkup:
+    """Under a freshly-built test config: make another one, or move to a different panel."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🧪 یکی دیگر", callback_data="tcnew"),
+        InlineKeyboardButton(text="🖥 تغییر پنل", callback_data="tcpick"),
+    ]])
 
 
 def create_user_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:

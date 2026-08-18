@@ -19,11 +19,12 @@ import ChatBubbleOutlineIcon from "@mui/icons-material/esm/ChatBubbleOutline";
 import TuneRoundedIcon from "@mui/icons-material/esm/TuneRounded";
 import StorefrontIcon from "@mui/icons-material/esm/Storefront";
 import TrackChangesIcon from "@mui/icons-material/esm/TrackChanges";
+import ScienceIcon from "@mui/icons-material/esm/Science";
 import ExpandMoreIcon from "@mui/icons-material/esm/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/esm/CheckCircle";
 import InfoOutlinedIcon from "@mui/icons-material/esm/InfoOutlined";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listSettings, updateSettings, refreshRate } from "../api/client";
+import { listSettings, updateSettings, refreshRate, listPanels } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 
 // A curated, hand-authored settings UI. Each field carries its own label/help/visibility,
@@ -40,6 +41,11 @@ type Field = {
   min?: number;
   max?: number;
   options?: { value: string; label: string }[];
+  // A select whose choices are rows from another table (fetched at render time) rather than a fixed
+  // list. `numeric` sends the picked value back as a number — the API validates a setting against
+  // the type of its default, so an id-valued select must not save the option's string.
+  optionsFrom?: "panels";
+  numeric?: boolean;
   when?: (v: Getter) => boolean;
 };
 type Sub = { title?: string; fields: Field[] };
@@ -366,6 +372,25 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "testconfig",
+    title: "کانفیگ تست",
+    icon: <ScienceIcon fontSize="small" />,
+    note:
+      "دکمهٔ «🧪 کانفیگ تست» در منوی مدیرِ ربات (یا دستور /test): با یک ضربه یک سرویسِ تست می‌سازد و لینک و QR آن را همان‌جا می‌فرستد. این کانفیگ‌ها با ادمینِ خودِ پنل ساخته می‌شوند، پس در فاکتور هیچ نماینده‌ای نمی‌آیند و هزینه‌شان با شماست.",
+    subs: [
+      {
+        fields: [
+          { key: "test_config_panel_id", label: "پنلِ ساختِ تست", type: "select", optionsFrom: "panels", numeric: true,
+            help: "تست‌ها همیشه از همین پنل ساخته می‌شوند (هیچ‌وقت تصادفی). در ربات هم با دکمهٔ «🖥 تغییر پنل» قابل تغییر است." },
+          { key: "test_config_gb", label: "حجم تست (گیگابایت)", type: "number", min: 1, max: 1000 },
+          { key: "test_config_days", label: "مدت تست (روز)", type: "number", min: 1, max: 365 },
+          { key: "test_config_name", label: "نام کانفیگ روی پنل", dir: "ltr",
+            help: "با /test نامِ دلخواه هم می‌توانید برای یک مشتریِ خاص نامِ دیگری بدهید." },
+        ],
+      },
+    ],
+  },
+  {
     id: "crm",
     title: "پیگیری نمایندگان",
     icon: <TrackChangesIcon fontSize="small" />,
@@ -489,6 +514,9 @@ export default function Settings() {
   const compact = useMediaQuery(theme.breakpoints.down("md"));
   const { node, show } = useToast();
   const { data = [] } = useQuery({ queryKey: ["settings"], queryFn: listSettings });
+  // Feeds the dynamic selects (currently only the test-config panel). Same query key as the Panels
+  // page, so it is served from the cache when the owner has already been there.
+  const { data: panels = [] } = useQuery({ queryKey: ["panels"], queryFn: listPanels });
   const [edits, setEdits] = useState<Record<string, any>>({});
   const [active, setActive] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState<Record<string, boolean>>({});
@@ -583,13 +611,24 @@ export default function Settings() {
           }
         />
       );
-    if (type === "select")
+    if (type === "select") {
+      let options = f.optionsFrom === "panels"
+        ? [{ value: "0", label: "— انتخاب نشده —" },
+           ...panels.filter((p: any) => p.enabled)
+             .map((p: any) => ({ value: String(p.id), label: p.name ? `${p.key} — ${p.name}` : p.key }))]
+        : (f.options || []);
+      // A saved value the list no longer offers (a panel that was deleted or disabled) would render
+      // as an empty box — say so instead, so the owner knows their choice needs re-picking.
+      if (v !== undefined && v !== null && v !== "" && !options.some((o) => o.value === String(v)))
+        options = [...options, { value: String(v), label: `نامعتبر (#${v})` }];
       return (
-        <TextField key={f.key} select label={f.label} value={v ?? ""} fullWidth size="small"
-          helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)}>
-          {(f.options || []).map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+        <TextField key={f.key} select label={f.label} value={String(v ?? "")} fullWidth size="small"
+          helperText={f.help}
+          onChange={(e) => setVal(f.key, f.numeric ? Number(e.target.value) : e.target.value)}>
+          {options.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
         </TextField>
       );
+    }
     if (type === "multiline")
       return <TextField key={f.key} label={f.label} value={v ?? ""} multiline minRows={2} fullWidth size="small"
         helperText={f.help} onChange={(e) => setVal(f.key, e.target.value)} />;

@@ -114,7 +114,7 @@ async def create_for_reseller(
     # captured during sync; if a panel hasn't been re-synced since the feature shipped, fetch it once
     # now so the very first create still produces the correct link.
     if not panel.client_proxy_path:
-        await _ensure_client_proxy_path(session, panel)
+        await ensure_client_proxy_path(session, panel)
     if reseller.panel_max_users:
         current = await current_user_count(session, reseller)
         res.remaining = max(0, reseller.panel_max_users - current)
@@ -142,7 +142,7 @@ async def create_for_reseller(
     return res
 
 
-async def _ensure_client_proxy_path(session: AsyncSession, panel: Panel) -> None:
+async def ensure_client_proxy_path(session: AsyncSession, panel: Panel) -> None:
     """Best-effort one-off fetch of the panel's client proxy path from its backup (when sync hasn't
     captured it yet). Never raises — a failure just leaves `user_sub_link` on the admin-path fallback."""
     from app.services.panel_client import BackupJsonClient

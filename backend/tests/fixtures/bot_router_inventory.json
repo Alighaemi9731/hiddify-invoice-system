@@ -32,6 +32,7 @@
       "on_owner_search",
       "cmd_owner_action",
       "cmd_search",
+      "cmd_test",
       "on_forward",
       "on_document",
       "on_photo",
@@ -97,7 +98,10 @@
       "cb_cap_reject",
       "cb_cap_more",
       "cb_bump_type",
-      "cb_owner_reseller_invoices"
+      "cb_owner_reseller_invoices",
+      "cb_tc_new",
+      "cb_tc_pick",
+      "cb_tc_panel"
     ],
     "outer_middleware": [
       "_membership_gate_mw",
