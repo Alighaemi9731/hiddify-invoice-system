@@ -32,7 +32,7 @@ const row = (id: number, name: string, segment: string, extra: Partial<any> = {}
 
 const summary = {
   counts: {
-    suspended: 1, frozen: 0, debtor: 2, never_active: 4, onboarding: 0,
+    suspended: 1, frozen: 0, debtor: 2, unregistered: 6, never_active: 4, onboarding: 0,
     churned: 3, dormant: 5, declining: 0, growing: 0, healthy: 20,
   },
   total: 35, due: 12, snoozed: 2, muted: 1, snooze_default_days: 15,
@@ -118,6 +118,18 @@ describe("reseller follow-up board", () => {
     expect(await tileValue("هرگز فعال نشده", "۴")).toBeInTheDocument();
     // suspended + frozen + debtor
     expect(await tileValue("مسدود و بدهکار", "۳")).toBeInTheDocument();
+
+    // Each tile carries its own badge in StatCard's icon slot, like the dashboard KPI row —
+    // four bare numbers in one accent read as one blob.
+    for (const [label, icon] of [
+      ["نیازمند پیگیری", "NotificationsActiveIcon"],
+      ["خوابیده و ریزش‌کرده", "TrendingDownIcon"],
+      ["هرگز فعال نشده", "HourglassEmptyIcon"],
+      ["مسدود و بدهکار", "PaymentsIcon"],
+    ]) {
+      const card = (await screen.findAllByText(label))[0].closest(".MuiCard-root")!;
+      expect(within(card as HTMLElement).getByTestId(icon)).toBeInTheDocument();
+    }
   });
 
   it("shows every reseller exactly once, in one segment", async () => {
@@ -233,6 +245,29 @@ describe("reseller follow-up board", () => {
       expect(SEGMENT_MESSAGES[s.key]).not.toMatch(/[<>*_`]/);
       expect(segmentMessage(s.key, "علی").startsWith("علی عزیز، سلام")).toBe(true);
     }
+  });
+
+  it("gives the resellers who never linked the bot their own bucket and text", async () => {
+    // They cannot be DMed by the bot at all, so every other bucket's text ("look in the bot")
+    // is a lie to them — the whole reason this is a segment and not a footnote.
+    const user = userEvent.setup();
+    const writeText = mockClipboard();
+    renderPage({
+      rows: [
+        row(1, "نمایندهٔ الف", "churned"),
+        row(9, "نمایندهٔ بی‌ربات", "unregistered", { registered: false }),
+      ],
+    });
+
+    await user.click(await screen.findByText("وصل‌نشده به ربات (۶)"));
+    expect(await screen.findByText("نمایندهٔ بی‌ربات")).toBeInTheDocument();
+    expect(screen.queryByText("نمایندهٔ الف")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /کپی متن پیام/ }));
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("هنوز به ربات ما وصل نشده");
+    // It must NOT send them to the bot for the details — that is exactly what they lack.
+    expect(copied).not.toContain("در ربات موجود است");
   });
 
   it("says so plainly when nothing is left to chase", async () => {

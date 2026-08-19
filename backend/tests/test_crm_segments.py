@@ -49,23 +49,56 @@ def test_priority_order_first_match_wins():
     assert _classify(_m(has_due_debt=True, days_since_last_sale=900)) == "debtor"
 
 
+def test_no_bot_link_outranks_every_lifecycle_bucket_but_not_the_money_ones():
+    """A reseller who never gave the bot their panel link cannot be DMed at all, and every
+    other bucket's ready-made text tells them to look in the bot. So «وصل‌نشده به ربات» wins
+    over never_active / onboarding / churned / dormant / the trend rules — but stays BELOW
+    suspension, freeze and due debt, which are true whether or not anyone can reach them."""
+    for lifecycle in (
+        dict(ever_sold=False, days_since_last_sale=None, account_age_days=400),  # never_active
+        dict(account_age_days=3),                                               # onboarding
+        dict(days_since_last_sale=900),                                         # churned
+        dict(days_since_last_sale=20),                                          # dormant
+        dict(projected_gb=1.0, avg_prev_gb=100.0),                              # declining
+        dict(projected_gb=500.0, avg_prev_gb=100.0),                            # growing
+        dict(),                                                                 # healthy
+    ):
+        assert _classify(_m(bot_chat_id=None, **lifecycle)) == "unregistered"
+
+    assert _classify(_m(bot_chat_id=None, enforcement_state="enforced")) == "suspended"
+    assert _classify(_m(bot_chat_id=None, enforcement_state="frozen")) == "frozen"
+    # Only reachable after the owner unlinks an already-billed reseller: an undelivered
+    # invoice never leaves `draft`, and the debt query ignores drafts.
+    assert _classify(_m(bot_chat_id=None, has_due_debt=True)) == "debtor"
+
+
+def test_a_linked_reseller_is_never_called_unregistered():
+    """The whole segment hangs on one nullable column; a falsy-vs-None slip (chat id 0) would
+    quietly move a reachable reseller into the "cannot be contacted" list."""
+    assert _classify(_m(bot_chat_id=0)) != "unregistered"
+    assert _classify(_m(bot_chat_id=100)) != "unregistered"
+
+
 def test_every_shape_lands_in_exactly_one_known_segment():
     """Exhaustive-ish sweep: whatever the metric combination, the result is always one of the
     declared segments — `classify` has no fall-through hole."""
     seen = set()
     for state in ("active", "frozen", "enforced"):
         for due in (False, True):
-            for sold in (False, True):
-                for days in (0, 13, 14, 44, 45, 900):
-                    for age in (1, 13, 14, 29, 30, 400):
-                        for proj, avg in ((0.0, 0.0), (10.0, 100.0), (400.0, 100.0), (100.0, 100.0)):
-                            seg = _classify(_m(
-                                enforcement_state=state, has_due_debt=due, ever_sold=sold,
-                                days_since_last_sale=days if sold else None,
-                                account_age_days=age, projected_gb=proj, avg_prev_gb=avg,
-                            ))
-                            assert seg in crm.SEGMENTS
-                            seen.add(seg)
+            for chat in (None, 100):
+                for sold in (False, True):
+                    for days in (0, 13, 14, 44, 45, 900):
+                        for age in (1, 13, 14, 29, 30, 400):
+                            for proj, avg in ((0.0, 0.0), (10.0, 100.0), (400.0, 100.0),
+                                              (100.0, 100.0)):
+                                seg = _classify(_m(
+                                    enforcement_state=state, has_due_debt=due, bot_chat_id=chat,
+                                    ever_sold=sold,
+                                    days_since_last_sale=days if sold else None,
+                                    account_age_days=age, projected_gb=proj, avg_prev_gb=avg,
+                                ))
+                                assert seg in crm.SEGMENTS
+                                seen.add(seg)
     # Every declared segment is actually reachable — a dead branch would be a silent bug.
     assert seen == set(crm.SEGMENTS)
 

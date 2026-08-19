@@ -1,9 +1,10 @@
 """
 Reseller follow-up board — lifecycle segmentation + churn metrics.
 
-The owner works ~400 top-level resellers by hand and needs three answers the rest of the
-system never gave: who never started, who stopped, and who did I already chase. This module
-computes the first two; `reseller_crm_state` / `reseller_followups` remember the third.
+The owner works ~400 top-level resellers by hand and needs four answers the rest of the
+system never gave: who never connected to the bot, who never started, who stopped, and who
+did I already chase. This module computes the first three; `reseller_crm_state` /
+`reseller_followups` remember the fourth.
 
 Two design rules everything here follows:
 
@@ -61,6 +62,7 @@ SEGMENTS: tuple[str, ...] = (
     "suspended",      # enforcement_state == enforced
     "frozen",         # enforcement_state == frozen
     "debtor",         # owes money that is actually due
+    "unregistered",   # never linked their panel to the bot — unreachable
     "never_active",   # old enough to have sold something, never did
     "onboarding",     # too new to judge
     "churned",        # no sale for a long time
@@ -170,6 +172,19 @@ def classify(m: RootMetrics, t: Thresholds, *, elapsed_days: int) -> str:
         return "frozen"
     if m.has_due_debt:
         return "debtor"
+    if m.bot_chat_id is None:
+        # No bot link = no channel. The board's whole output is "DM this reseller", and for
+        # these there is nobody to DM: `delivery.deliver_invoice` bails before sending, so
+        # their invoice never even leaves `draft`. Every other bucket's ready-made text tells
+        # them to look in the bot — a lie for someone who has never opened it. So this outranks
+        # every lifecycle/trend bucket: fix the channel first, judge the business after.
+        #
+        # It sits BELOW the money block on purpose. Suspension/freeze/debt are facts with a
+        # deadline that hold whether or not the reseller can be reached, and (`debtor` aside —
+        # an undelivered invoice is never `sent`) they only co-occur here after the owner
+        # unlinks an already-billed reseller, where the debt is still the more urgent half of
+        # the same conversation.
+        return "unregistered"
     if not m.ever_sold:
         # A brand-new admin who has legitimately not sold yet is not a problem — only one that
         # has had time to. Below the age floor they fall through to `onboarding`.

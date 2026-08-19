@@ -7,6 +7,7 @@ subtree roll-up, and the fact that a month with no invoice row means ZERO — no
 """
 import asyncio
 import datetime as dt
+import itertools
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/crmboard.db")
@@ -57,7 +58,14 @@ async def _panel(s, key, owner_uuid="owner"):
     return p
 
 
+_CHAT_IDS = itertools.count(50_000)
+
+
 async def _reseller(s, panel, uuid, *, name=None, parent=None, created=LONG_AGO, **kw):
+    # Linked to the bot unless a test says `bot_chat_id=None`. An unlinked reseller is its own
+    # segment («وصل‌نشده به ربات»), which outranks every lifecycle bucket — leaving the default
+    # unset would silently turn every churn assertion below into an unregistered assertion.
+    kw.setdefault("bot_chat_id", next(_CHAT_IDS))
     r = Reseller(panel_id=panel.id, admin_uuid=uuid, name=name or uuid,
                  parent_admin_uuid=parent, last_seen_at=NOW, created_at=created, **kw)
     s.add(r)
@@ -256,6 +264,29 @@ def test_a_future_payment_deadline_is_not_currently_due(tmp_path):
         t = crm.Thresholds()
         assert crm.classify(m["Due"], t, elapsed_days=20) == "debtor"
         assert crm.classify(m["Deferred"], t, elapsed_days=20) != "debtor"
+    _run(body, tmp_path)
+
+
+def test_a_reseller_who_never_linked_the_bot_is_its_own_bucket(tmp_path):
+    """The owner cannot DM someone the bot has never met, and `delivery.deliver_invoice` bails
+    before sending, so their invoice never leaves `draft`. They need a different conversation
+    («وصل شو») from everyone else — hence a bucket, not a footnote on `never_active`."""
+    async def body(s):
+        p = await _panel(s, "p1")
+        await _reseller(s, p, "linked", name="Linked")
+        await _reseller(s, p, "nobot", name="NoBot", bot_chat_id=None)
+        # Sold long ago on both sides: without the new rule BOTH would read as «ریزش‌کرده».
+        s.add_all([
+            _user(p, "linked", "u1", 50, dt.date(2026, 5, 1)),
+            _user(p, "nobot", "u2", 50, dt.date(2026, 5, 1)),
+        ])
+        await s.commit()
+
+        m = _by_name(await crm.load_board_metrics(s, today_=TODAY))
+        t = crm.Thresholds()
+        assert m["NoBot"].bot_chat_id is None
+        assert crm.classify(m["NoBot"], t, elapsed_days=20) == "unregistered"
+        assert crm.classify(m["Linked"], t, elapsed_days=20) == "churned"
     _run(body, tmp_path)
 
 

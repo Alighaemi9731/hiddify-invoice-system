@@ -243,14 +243,17 @@ the palette in §2.1):
 | Storefront order | provisioned→`success`, failed→`error`, disabled→`warning`, else `default` | `src/portal/storefront/CustomerDetailPage.tsx:42-45` |
 | Storefront campaign | completed→`success`, canceled→`warning`, running→`info`, else `default` | `src/portal/storefront/StorefrontCampaignsPage.tsx:27-28` |
 | Portal notification severity | info/success/warning/error → same palette color, rendered as a 3px inline-start edge + `alpha(color, 0.05)` bg | `src/portal/NotificationsBell.tsx:13-15,66-68` |
-| Reseller follow-up segment | `color` × `variant` — suspended→`error`/filled, frozen→`error`/outlined, debtor→`warning`/filled, churned→`warning`/outlined, never_active→`default`/filled, dormant→`default`/outlined, onboarding→`info`/filled, declining→`info`/outlined, healthy→`success`/filled, growing→`success`/outlined | `src/pages/Followups/segments.tsx` |
+| Reseller follow-up segment | `color` × `variant` — suspended→`error`/filled, frozen→`error`/outlined, debtor→`warning`/filled, churned→`warning`/outlined, unregistered→`primary`/outlined, never_active→`default`/filled, dormant→`default`/outlined, onboarding→`info`/filled, declining→`info`/outlined, healthy→`success`/filled, growing→`success`/outlined | `src/pages/Followups/segments.tsx` |
 
 The follow-up board is the one place with **more statuses than palette colors**: MUI's
 `color` prop offers six visually distinct values in this theme (`secondary` resolves to the
-same `#ff9500` as `warning`) and the board has ten mutually exclusive segments. Pairing each
-color with `filled` / `outlined` covers all ten without introducing a single hex — filled
-reads as the more urgent half of each pair. Per-segment accent hexes are allowed only on the
-summary `StatCard` row, which already takes `navPalette` values.
+same `#ff9500` as `warning`) and the board has eleven mutually exclusive segments. Pairing
+each color with `filled` / `outlined` covers all eleven without introducing a single hex —
+filled reads as the more urgent half of each pair. `primary`/filled is the one combination
+that stays reserved: the filter chip row paints the SELECTED chip `primary`/filled, so a
+segment wearing it would read as permanently selected — `unregistered` takes only the
+`outlined` half. Per-segment accent hexes are allowed only on the summary `StatCard` row,
+which already takes `navPalette` values.
 
 **StatusPill** (resellers) is palette-derived since DS02 (`v1.100.6`):
 `statusPillColors(palette)` in `src/themeTokens.ts` — active → `success`,
@@ -273,7 +276,9 @@ sent→`info.main`, overdue→`warning.main`, enforced→`error.main`, fallback�
 (`src/pages/Dashboard.tsx:325,332,339,346`); portal dashboard `#10b981`, `#0071e3`,
 `#f43f5e`, `#0ea5e9` (`src/portal/pages/Dashboard.tsx:139,146,153,160`); storefront
 `#10b981`, `#0ea5e9` (was violet `#7c5cff` — fixed DS05/§5-C1), `#0071e3`, `#f43f5e`
-(`src/portal/storefront/StorefrontDashboardPage.tsx`). StatCard default
+(`src/portal/storefront/StorefrontDashboardPage.tsx`); follow-up board `#f43f5e`,
+`#f59e0b`, `#a855f7`, `#0071e3` with the §3.4 icon tile
+(`src/pages/Followups/index.tsx`). StatCard default
 accent `#0071e3` (`src/components/StatCard.tsx:6`).
 
 **Brand-external color:** Telegram icon `#229ED9` (`src/components/TelegramLink.tsx:32`).

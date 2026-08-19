@@ -59,8 +59,10 @@ async def _seed(s, count=3):
                    last_seen_at=NOW, created_at=LONG_AGO))
     made = []
     for i in range(count):
+        # Linked to the bot: an unlinked reseller lands in «وصل‌نشده به ربات», which outranks
+        # the churn buckets these queue tests are written against.
         r = Reseller(panel_id=p.id, admin_uuid=f"r{i}", name=f"R{i}", last_seen_at=NOW,
-                     created_at=LONG_AGO)
+                     created_at=LONG_AGO, bot_chat_id=50_000 + i)
         s.add(r)
         made.append(r)
     await s.flush()

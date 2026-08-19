@@ -421,7 +421,7 @@ export const getDashboard = (period?: string) =>
 // Nothing here sends a message: the owner DMs the reseller themselves and only records that
 // they did, so the same person stops resurfacing on the next pass.
 export type CrmSegment =
-  | "suspended" | "frozen" | "debtor" | "never_active" | "onboarding"
+  | "suspended" | "frozen" | "debtor" | "unregistered" | "never_active" | "onboarding"
   | "churned" | "dormant" | "declining" | "growing" | "healthy";
 
 export interface CrmBoardRow {

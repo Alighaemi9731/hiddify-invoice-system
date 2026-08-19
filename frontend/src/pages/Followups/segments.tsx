@@ -9,8 +9,10 @@ type ChipColor = "default" | "primary" | "error" | "info" | "success" | "warning
  *
  * Colour comes from the MUI `color` prop, never a hex (DESIGN_SYSTEM §2.5: semantic status is
  * expressed through the palette, not literal values). There are only six visually distinct
- * `color` values but ten segments, so each colour is paired with a `variant`: filled reads as
- * the more urgent half of its pair.
+ * `color` values but eleven segments, so each colour is paired with a `variant`: filled reads
+ * as the more urgent half of its pair. `primary`/filled is the ONE combination left unused —
+ * the filter chips paint the SELECTED chip that way, so a segment wearing it would read as
+ * permanently selected. `unregistered` therefore takes `primary`/outlined only.
  */
 export const SEGMENTS: {
   key: CrmSegment; label: string; color: ChipColor; variant: "filled" | "outlined"; help: string;
@@ -21,6 +23,8 @@ export const SEGMENTS: {
     help: "سقف کاربرشان صفر شده؛ کاربران فعلی آنلاین‌اند ولی کاربر جدید نمی‌توانند بسازند." },
   { key: "debtor", label: "بدهکار", color: "warning", variant: "filled",
     help: "فاکتور پرداخت‌نشدهٔ سررسیدشده دارند (مهلت پرداخت آینده حساب نمی‌شود)." },
+  { key: "unregistered", label: "وصل‌نشده به ربات", color: "primary", variant: "outlined",
+    help: "هنوز لینک پنلشان را به ربات نداده‌اند؛ فاکتور، یادآوری و پیام به دستشان نمی‌رسد." },
   { key: "churned", label: "ریزش‌کرده", color: "warning", variant: "outlined",
     help: "خیلی وقت است هیچ سرویس جدیدی نساخته‌اند — عملاً از دستمان رفته‌اند." },
   { key: "never_active", label: "هرگز فعال نشده", color: "default", variant: "filled",

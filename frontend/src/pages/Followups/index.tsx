@@ -5,7 +5,11 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import DownloadIcon from "@mui/icons-material/esm/Download";
+import HourglassEmptyIcon from "@mui/icons-material/esm/HourglassEmpty";
+import NotificationsActiveIcon from "@mui/icons-material/esm/NotificationsActive";
+import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import SearchIcon from "@mui/icons-material/esm/Search";
+import TrendingDownIcon from "@mui/icons-material/esm/TrendingDown";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearCrmSnooze, getCrmBoardPaged, getCrmSummary, listPanels, logCrmFollowup,
@@ -132,23 +136,31 @@ export default function Followups() {
     ]),
   );
 
+  // Each tile carries the badge of what it MEANS, in its own accent — the same icon-tile
+  // idiom the dashboard KPI row uses (`StatCard`'s `icon` slot, DESIGN_SYSTEM §3.4), so the
+  // four numbers are told apart at a glance instead of being read left to right.
   const tiles = useMemo(() => ([
     { label: "نیازمند پیگیری", value: fmtNum(summary?.due ?? 0), color: "#f43f5e",
-      sub: `از ${fmtNum(summary?.total ?? 0)} نمایندهٔ سطح‌یک` },
+      sub: `از ${fmtNum(summary?.total ?? 0)} نمایندهٔ سطح‌یک`,
+      icon: <NotificationsActiveIcon /> },
     { label: "خوابیده و ریزش‌کرده", color: "#f59e0b",
       value: fmtNum((counts.dormant || 0) + (counts.churned || 0)),
-      sub: "سرویس جدید نمی‌سازند" },
+      sub: "سرویس جدید نمی‌سازند",
+      icon: <TrendingDownIcon /> },
     { label: "هرگز فعال نشده", value: fmtNum(counts.never_active || 0), color: "#a855f7",
-      sub: "پنل گرفته‌اند و کاربری نساخته‌اند" },
+      sub: "پنل گرفته‌اند و کاربری نساخته‌اند",
+      icon: <HourglassEmptyIcon /> },
     { label: "مسدود و بدهکار", color: "#0071e3",
       value: fmtNum((counts.suspended || 0) + (counts.frozen || 0) + (counts.debtor || 0)),
-      sub: "پول از دستشان طلب داریم" },
+      sub: "پول از دستشان طلب داریم",
+      icon: <PaymentsIcon /> },
   ]), [summary, counts]);
 
   return (
     <Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        هر نمایندهٔ سطح‌یک دقیقاً در یک دسته قرار می‌گیرد، بر اساس آخرین سرویسی که فروخته است.
+        هر نمایندهٔ سطح‌یک دقیقاً در یک دسته قرار می‌گیرد — بر اساس وضعیت حسابش، اتصالش به
+        ربات و آخرین سرویسی که فروخته است.
         با انتخاب هر دسته، یک پیام آمادهٔ مخصوص همان دسته نمایش داده می‌شود که می‌توانید کپی
         کنید و در تلگرام بفرستید. بعد از اینکه دستی در تلگرام به کسی پیام دادید، «ثبت پیگیری»
         بزنید تا تا پایان مهلت تعویق دوباره در این فهرست نیاید. آستانه‌ها در «تنظیمات →
@@ -158,7 +170,8 @@ export default function Followups() {
       <Box sx={{ display: "grid", gap: 2, mb: 2.5,
         gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(4, 1fr)" } }}>
         {tiles.map((t) => (
-          <StatCard key={t.label} label={t.label} value={t.value} sub={t.sub} color={t.color} />
+          <StatCard key={t.label} label={t.label} value={t.value} sub={t.sub} color={t.color}
+            icon={t.icon} />
         ))}
       </Box>
 
@@ -206,7 +219,7 @@ export default function Followups() {
       </Stack>
 
       {/* Only with a bucket selected: the whole value of the text is that it is true for
-        * everyone on screen, which "همه" (all ten segments at once) can never be. */}
+        * everyone on screen, which "همه" (all eleven segments at once) can never be. */}
       {segment && <SegmentMessage segment={segment} count={counts[segment] || 0} />}
 
       {selected.length > 0 && (
