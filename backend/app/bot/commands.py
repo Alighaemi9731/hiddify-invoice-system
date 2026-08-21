@@ -50,12 +50,12 @@ RESELLER_COMMANDS = [
 # Mirrors the owner reply-keyboard menu (main + «بیشتر»).
 OWNER_COMMANDS = [
     BotCommand(command="menu", description="🏠 منوی مدیریت"),
-    BotCommand(command="stats", description="📊 آمار دوره"),
-    BotCommand(command="health", description="🩺 سلامت سامانه"),
+    BotCommand(command="newadmin", description="➕ نمایندهٔ جدید"),
     BotCommand(command="payments", description="💳 پرداخت‌های در انتظار"),
     BotCommand(command="debtors", description="💰 بدهکاران"),
     BotCommand(command="test", description="🧪 کانفیگ تست"),
-    BotCommand(command="newadmin", description="➕ نمایندهٔ جدید"),
+    BotCommand(command="stats", description="📊 آمار دوره"),
+    BotCommand(command="health", description="🩺 سلامت سامانه"),
     BotCommand(command="search", description="🔎 جستجوی نماینده"),
     BotCommand(command="broadcast", description="📢 پیام همگانی"),
     BotCommand(command="sync", description="🔄 همگام‌سازی پنل‌ها"),

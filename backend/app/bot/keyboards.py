@@ -80,13 +80,13 @@ RESELLER_MORE: list[tuple[str, str]] = [
     ("🗑 حذف لینک‌ها", "removelink"),
 ]
 OWNER_MAIN: list[tuple[str, str]] = [
-    ("📊 آمار", "stats"),
+    ("➕ نمایندهٔ جدید", "newadmin"),
     ("💳 پرداخت‌ها", "payments"),
     ("💰 بدهکاران", "debtors"),
     ("🧪 کانفیگ تست", "testconfig"),
 ]
 OWNER_MORE: list[tuple[str, str]] = [
-    ("➕ نمایندهٔ جدید", "newadmin"),
+    ("📊 آمار", "stats"),
     ("🩺 سلامت سامانه", "health"),
     ("🔎 جستجوی نماینده", "search"),
     ("📢 پیام همگانی", "broadcast"),
