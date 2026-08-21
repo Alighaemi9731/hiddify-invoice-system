@@ -82,6 +82,13 @@ class StorefrontSetupState(StatesGroup):
     token = State()
 
 
+class NewResellerState(StatesGroup):
+    """The owner is creating a reseller from the admin bot: the chosen panel is held in FSM data
+    as `na_panel_id`, and `name` waits for the typed reseller name."""
+
+    name = State()
+
+
 log = logging.getLogger("bot.handlers")
 router = Router()
 

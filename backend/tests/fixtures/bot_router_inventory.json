@@ -33,6 +33,8 @@
       "cmd_owner_action",
       "cmd_search",
       "cmd_test",
+      "cmd_new_admin",
+      "on_new_admin_name",
       "on_forward",
       "on_document",
       "on_photo",
@@ -101,7 +103,8 @@
       "cb_owner_reseller_invoices",
       "cb_tc_new",
       "cb_tc_pick",
-      "cb_tc_panel"
+      "cb_tc_panel",
+      "cb_new_admin_panel"
     ],
     "outer_middleware": [
       "_membership_gate_mw",

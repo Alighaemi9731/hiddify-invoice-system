@@ -86,6 +86,7 @@ OWNER_MAIN: list[tuple[str, str]] = [
     ("🧪 کانفیگ تست", "testconfig"),
 ]
 OWNER_MORE: list[tuple[str, str]] = [
+    ("➕ نمایندهٔ جدید", "newadmin"),
     ("🩺 سلامت سامانه", "health"),
     ("🔎 جستجوی نماینده", "search"),
     ("📢 پیام همگانی", "broadcast"),
@@ -291,6 +292,15 @@ def test_config_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardM
     return InlineKeyboardMarkup(
         inline_keyboard=rows or [[InlineKeyboardButton(text="—", callback_data="noop")]]
     )
+
+
+def new_admin_panels_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Owner-only: pick the panel a new reseller is created on. Unlike «کانفیگ تست» the choice is
+    NOT saved — which panel a reseller lives on is permanent, so it is asked every time.
+    data: napanel:<panel_id>."""
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"napanel:{pid}")] for pid, label in items]
+    rows.append([InlineKeyboardButton(text=CANCEL_LABEL, callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def test_config_result_keyboard() -> InlineKeyboardMarkup:

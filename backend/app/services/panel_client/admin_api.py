@@ -34,6 +34,10 @@ class UserLimitError(RuntimeError):
     """Raised when the panel rejects a create because the admin's max_users is reached."""
 
 
+class AdminExistsError(RuntimeError):
+    """The panel already has an admin with the uuid we tried to create ("The admin exists")."""
+
+
 class PanelAuthError(RuntimeError):
     """The panel refused the credentials we authenticated a WEB-UI request with.
 
@@ -492,6 +496,57 @@ class AdminApiClient(PanelClient):
         = the OWNING admin's uuid — deletion is unrecoverable, so panel-side scoping matters most
         here."""
         await self._user_bulk_action(panel, user_ids, "delete", api_key=api_key)
+
+    async def create_admin(  # noqa: ANN001
+        self, panel, *, name: str, api_key: str, parent_admin_uuid: str,
+        admin_uuid: str | None = None, max_users: int = 100, max_active_users: int = 100,
+    ) -> str:
+        """Create ONE admin (a reseller) via `POST /api/v2/admin/admin_user/` and return its uuid.
+
+        `api_key` and `parent_admin_uuid` are REQUIRED and must both be the panel's super-admin
+        (`panel.owner_uuid`). Hiddify's `AdminUser.add_or_update` parents the new admin on the
+        uuid we send — and, when we send none, on whatever account the API key belongs to. The
+        header fallback in `_headers` is `panel.admin_api_key`, which may be a DIFFERENT admin;
+        parenting a new reseller under it would make it a SUB-reseller (barred from registering in
+        the bot, and billed inside that other reseller's bundle). Never pass a guessed parent
+        either: an unknown uuid makes Hiddify create a phantom admin named "unknown"
+        (`by_uuid(create=True)`).
+
+        `name`, `mode`, `can_add_admin` and `lang` are all REQUIRED by the panel's `AdminSchema`;
+        a body missing any of them is rejected. We supply our own uuid4 so the caller can write
+        the local row (and the admin link) without trusting the response shape.
+
+        NOTE — deliberately no password. A fresh admin's password is empty (Hiddify's own
+        `gen_password` is commented out in `before_insert`), and `auth_before_request` logs out any
+        UUID-link visit when `account.password != ""`. Setting one here would hand the reseller a
+        panel link that cannot open. Passwords stay the enforcement lockout's business
+        (`set_admin_password`)."""
+        uid = (admin_uuid or str(uuidlib.uuid4())).strip().lower()
+        url = f"{panel.admin_api_base}/admin_user/"
+        body = {
+            "uuid": uid,
+            "name": name,
+            "mode": "agent",
+            "can_add_admin": False,
+            "lang": "fa",
+            "parent_admin_uuid": parent_admin_uuid,
+            "max_users": int(max_users),
+            "max_active_users": int(max_active_users),
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, headers=self._headers(panel, api_key), json=body)
+        if resp.status_code < 400:
+            try:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("uuid"):
+                    return str(data["uuid"]).strip().lower()
+            except Exception:  # noqa: BLE001 — response may not be JSON; our uuid is authoritative
+                pass
+            return uid
+        text = resp.text[:300]
+        if resp.status_code in (400, 409) and "exist" in text.lower():
+            raise AdminExistsError(text)
+        raise RuntimeError(f"POST admin_user {resp.status_code}: {text}")
 
     async def get_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None

@@ -56,6 +56,7 @@ async def cmd_help(message: Message) -> None:
                 "/payments — پرداخت‌های در انتظار\n"
                 "/debtors — بدهکاران\n"
                 "/test — کانفیگ تست (می‌توانید نام هم بدهید: /test نامِ مشتری)\n"
+                "/newadmin — ساخت نمایندهٔ جدید (می‌توانید نام هم بدهید: /newadmin نامِ نماینده)\n"
                 "/search — جستجوی نماینده\n"
                 "/broadcast — پیام همگانی به نمایندگان\n"
                 "/sync — همگام‌سازی پنل‌ها\n"

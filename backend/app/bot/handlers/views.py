@@ -169,6 +169,52 @@ async def _send_test_config(answer, chat_id: int, session, *, bot, name: str | N
                                disable_web_page_preview=True, reply_markup=kb)
 
 
+# --------------------------- owner: create a reseller ---------------------------
+async def _begin_new_reseller(answer, session, state: FSMContext) -> None:  # noqa: ANN001
+    """Entry point for «➕ نمایندهٔ جدید»: ask which panel first (the picker carries its own cancel).
+
+    The panel is asked EVERY time and never remembered: unlike the test config, which panel a
+    reseller is created on is a permanent fact about that reseller."""
+    from app.services import resellercreate
+
+    await state.clear()
+    items = await resellercreate.panel_choices(session)
+    if not items:
+        await answer(rtl("هیچ پنلِ فعالی ثبت نشده است؛ ابتدا از پنلِ تحت وب یک پنل اضافه کنید."))
+        return
+    await answer(rtl("➕ نمایندهٔ جدید روی کدام پنل ساخته شود؟"),
+                 reply_markup=keyboards.new_admin_panels_keyboard(items))
+
+
+async def _send_new_reseller(answer, session, panel, name: str) -> None:  # noqa: ANN001
+    """Create the reseller on `panel` and reply with its panel link (or a clean failure)."""
+    from app.services import resellercreate
+
+    await answer(rtl("⏳ در حال ساختِ نماینده…"))
+    result = await resellercreate.create(session, panel, name=name)
+    if not result.ok or not result.link:
+        problem = {
+            "no_admin": "شناسهٔ ادمینِ این پنل ثبت نشده است.",
+            "exists": "این شناسه از قبل روی پنل وجود دارد؛ دوباره تلاش کنید.",
+        }.get(result.reason or "", "خطا در ارتباط با پنل.")
+        await answer(rtl(f"❌ ساختِ نماینده ناموفق بود — {problem}"))
+        return
+    note = "" if result.saved else (
+        "\n\n⚠️ نماینده روی پنل ساخته شد، اما ثبتش در سامانه ناموفق بود؛ "
+        "پس از همگام‌سازیِ بعدی قابلِ ثبت در ربات خواهد بود."
+    )
+    await answer(
+        rtl(
+            f"✅ نمایندهٔ «{iso_html(name)}» روی پنلِ {iso_html(panel.key)} ساخته شد.\n\n"
+            f"🔗 لینکِ پنلِ نماینده:\n<code>{html.escape(result.link)}</code>\n\n"
+            "همین لینک را برای نماینده بفرستید؛ می‌تواند همین حالا در ربات ثبتش کند."
+            + note
+        ),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 async def _dispatch_owner(action: str, answer, session) -> None:
     """Run an owner action. Shared by the menu buttons (cb_owner) AND the owner `/` commands,
     so the slash-command list and the inline menu always do the exact same thing."""

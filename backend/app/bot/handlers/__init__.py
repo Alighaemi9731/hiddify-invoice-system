@@ -26,6 +26,7 @@ from app.bot.handlers import usercreate
 from app.bot.handlers import storefront_setup
 from app.bot.handlers import owner
 from app.bot.handlers import testconfig
+from app.bot.handlers import newadmin
 from app.bot.handlers import misc
 from app.bot.handlers import text_fallback
 # isort: on
@@ -67,6 +68,7 @@ from app.bot.handlers.common import (
     _UNPAID,
     BroadcastState,
     CreateUserState,
+    NewResellerState,
     OwnerCapBumpState,
     OwnerReplyState,
     OwnerSearchState,
@@ -112,6 +114,11 @@ from app.bot.handlers.intake import (
 )
 from app.bot.handlers.menus import _do_owner_menu, _do_reseller_menu, on_menu_label
 from app.bot.handlers.misc import on_forward
+from app.bot.handlers.newadmin import (
+    cb_new_admin_panel,
+    cmd_new_admin,
+    on_new_admin_name,
+)
 from app.bot.handlers.owner import (
     _OWNER_CMD_ACTION,
     _finalize_review_message,
@@ -199,6 +206,7 @@ from app.bot.handlers.usercreate import cb_cu_cancel, cb_menu_newuser, cmd_newus
 from app.bot.handlers.views import (
     _BOTFATHER_GUIDE,
     _begin_create_user,
+    _begin_new_reseller,
     _begin_storefront_setup,
     _cap_bar,
     _dispatch_owner,
@@ -209,6 +217,7 @@ from app.bot.handlers.views import (
     _pending_invoice_ids,
     _pending_payment_for_invoice,
     _send_invoices,
+    _send_new_reseller,
     _send_panels,
     _send_pay,
     _send_portal_link,
@@ -240,7 +249,7 @@ __all__ = [
     # submodules
     "common", "views", "intake", "commands", "broadcast", "menus", "support",
     "reseller_cb", "subs", "usercreate", "storefront_setup", "owner", "testconfig",
-    "misc", "text_fallback",
+    "newadmin", "misc", "text_fallback",
     # first-party imports of the original module
     "keyboards", "texts", "normalize_host", "normalize_path", "parse_link", "rtl",
     "payment_code", "SessionLocal", "BotUser", "Invoice", "Panel", "Payment",
@@ -250,7 +259,8 @@ __all__ = [
     # states / router / shared core
     "BroadcastState", "SupportState", "OwnerReplyState", "SubCapState",
     "OwnerCapBumpState", "PayState", "OwnerSearchState", "CreateUserState",
-    "StorefrontSetupState", "log", "router", "_GATE_EXEMPT_CALLBACKS",
+    "StorefrontSetupState", "NewResellerState", "log", "router",
+    "_GATE_EXEMPT_CALLBACKS",
     "_GATE_EXEMPT_COMMANDS", "_membership_gate_mw", "_message_command",
     "_membership_gate_message_mw", "_TXID_RE", "_TON_EXPLORERS", "_parse_txid",
     "_proof_wanted_fa", "_UNPAID", "_OWED", "_STATUS_FA", "_resellers_for_chat",
@@ -299,6 +309,9 @@ __all__ = [
     "_owner_debtors", "_owner_pending_payments",
     # owner: one-tap test config
     "_send_test_config", "cmd_test", "cb_tc_new", "cb_tc_pick", "cb_tc_panel",
+    # owner: create a reseller
+    "_begin_new_reseller", "_send_new_reseller", "cmd_new_admin",
+    "cb_new_admin_panel", "on_new_admin_name",
     # shared reseller views
     "_pending_payment_for_invoice", "_pending_invoice_ids", "_send_invoices",
     "_send_self_interim", "_send_pay", "_send_removelink", "_send_panels",

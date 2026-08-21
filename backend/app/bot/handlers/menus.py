@@ -16,6 +16,7 @@ from app.bot.handlers.common import (
 )
 from app.bot.handlers.views import (
     _begin_create_user,
+    _begin_new_reseller,
     _begin_storefront_setup,
     _dispatch_owner,
     _send_invoices,
@@ -124,6 +125,9 @@ async def _do_owner_menu(action: str, message: Message, state: FSMContext, s) ->
     if action == "search":
         await state.set_state(OwnerSearchState.waiting)
         await ans("🔎 نام یا شناسهٔ نماینده را بفرستید.", reply_markup=keyboards.flow_cancel_kb())
+        return
+    if action == "newadmin":
+        await _begin_new_reseller(ans, s, state)
         return
     if action == "testconfig":
         # Handled here rather than in `_dispatch_owner`: sending the QR photo needs the bot and the

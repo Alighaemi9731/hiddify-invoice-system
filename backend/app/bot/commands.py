@@ -55,6 +55,7 @@ OWNER_COMMANDS = [
     BotCommand(command="payments", description="💳 پرداخت‌های در انتظار"),
     BotCommand(command="debtors", description="💰 بدهکاران"),
     BotCommand(command="test", description="🧪 کانفیگ تست"),
+    BotCommand(command="newadmin", description="➕ نمایندهٔ جدید"),
     BotCommand(command="search", description="🔎 جستجوی نماینده"),
     BotCommand(command="broadcast", description="📢 پیام همگانی"),
     BotCommand(command="sync", description="🔄 همگام‌سازی پنل‌ها"),
