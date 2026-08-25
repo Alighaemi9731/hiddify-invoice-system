@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { Snackbar, Alert } from "@mui/material";
+import { apiErrorMessage } from "../api/errors";
 
 type Sev = "success" | "error" | "info" | "warning";
 
@@ -25,5 +26,7 @@ export function useToast() {
   return { node, show };
 }
 
-export const errMsg = (e: any) =>
-  e?.response?.data?.detail || e?.message || "خطایی رخ داد";
+// Delegates to the shared map. It used to return `detail` straight through, which for a FastAPI
+// validation error is a LIST of dicts — rendered into a React child that throws, so a 422 took the
+// whole page down via the ErrorBoundary instead of showing a message.
+export const errMsg = (e: unknown) => apiErrorMessage(e, "خطایی رخ داد");

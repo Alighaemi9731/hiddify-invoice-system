@@ -17,11 +17,11 @@ import {
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type {
-  StorefrontMessageSettings, StorefrontPaymentSettings, StorefrontSettings,
-  StorefrontSettingsByGroup, StorefrontSettingsGroup, StorefrontShopStateSettings,
-  StorefrontTrialReset, StorefrontTrialSettings, Versioned,
+  StorefrontMessageSettings, StorefrontNotificationSettings, StorefrontPaymentSettings,
+  StorefrontSettings, StorefrontSettingsByGroup, StorefrontSettingsGroup,
+  StorefrontShopStateSettings, StorefrontTrialReset, StorefrontTrialSettings, Versioned,
 } from "./types";
-import { commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
+import { isVersionConflict, storefrontErrorMessage, useIdempotentMutation } from "./mutation";
 import { NumberField, numberValue } from "../../components/NumberField";
 
 type SettingsCommand =
@@ -49,6 +49,7 @@ export default function StorefrontSettingsPage() {
   const [trial, setTrial] = useState<StorefrontTrialSettings | null>(null);
   const [messages, setMessages] = useState<StorefrontMessageSettings | null>(null);
   const [shopState, setShopState] = useState<StorefrontShopStateSettings | null>(null);
+  const [notifications, setNotifications] = useState<StorefrontNotificationSettings | null>(null);
   const [channelId, setChannelId] = useState("");
   const [conflict, setConflict] = useState<SettingsCommand | null>(null);
   const [conflictReloadError, setConflictReloadError] = useState(false);
@@ -65,6 +66,7 @@ export default function StorefrontSettingsPage() {
     setTrial((draft) => shouldReplaceDraft(previous?.trial, draft, resets.has("trial")) ? next.trial : draft);
     setMessages((draft) => shouldReplaceDraft(previous?.messages, draft, resets.has("messages")) ? next.messages : draft);
     setShopState((draft) => shouldReplaceDraft(previous?.shop_state, draft, resets.has("shop-state")) ? next.shop_state : draft);
+    setNotifications((draft) => shouldReplaceDraft(previous?.notifications, draft, resets.has("notifications")) ? next.notifications : draft);
     setChannelId((draft) => !previous || resets.has("channel") || draft === (previous.channel.channel_id || "")
       ? next.channel.channel_id || ""
       : draft);
@@ -84,6 +86,10 @@ export default function StorefrontSettingsPage() {
       return deleteStorefrontChannel(shop.id, etag, key);
     },
     {
+      // One lane per settings group (and per channel command): saving «تست رایگان» and then
+      // «پیام خوش‌آمد» in quick succession are unrelated edits, and a single shared lane rejected
+      // the second one outright — which the page then reported as a connection failure.
+      commandKey: (input) => (input.type === "settings" ? `settings:${input.group}` : input.type),
       onSuccess: async (result, variables) => {
         resetAfterSave.current.add(
           variables.type === "settings" ? variables.group : "channel");
@@ -131,8 +137,16 @@ export default function StorefrontSettingsPage() {
   // parsed once, here — so an emptied field stays empty instead of snapping back to 0.
   const trialGb = trial ? numberValue(String(trial.free_trial_gb ?? "")) : null;
   const trialDays = trial ? numberValue(String(trial.free_trial_days ?? "")) : null;
+  // Built from the three NAMED fields, never by spreading `trial`. The draft is seeded from the
+  // server object, which also carries the read-only `reset` block; spreading it sent `reset` in the
+  // PATCH body whenever the draft outlived a refetch, and the strict (`extra="forbid"`) schema
+  // answered with a 422 that the UI reported as a connection problem.
   const trialForSave = trial && trialGb !== null && trialDays !== null
-    ? { ...trial, free_trial_gb: trialGb, free_trial_days: trialDays }
+    ? {
+      free_trial_enabled: trial.free_trial_enabled,
+      free_trial_gb: trialGb,
+      free_trial_days: trialDays,
+    }
     : null;
   const trialValid = !!trialForSave && trialGb >= 1 && trialGb <= trialMaxGb
     && trialDays >= 1 && trialDays <= 90;
@@ -147,6 +161,8 @@ export default function StorefrontSettingsPage() {
     && Object.keys(changedFields(query.data.data.trial, trialForSave)).length > 0;
   const messagesDirty = !!messages && !!query.data && Object.keys(changedFields(query.data.data.messages, messages)).length > 0;
   const shopStateDirty = !!shopState && !!query.data && Object.keys(changedFields(query.data.data.shop_state, shopState)).length > 0;
+  const notificationsDirty = !!notifications && !!query.data
+    && Object.keys(changedFields(query.data.data.notifications, notifications)).length > 0;
 
   return (
     <Box>
@@ -156,12 +172,12 @@ export default function StorefrontSettingsPage() {
       </Stack>
       {saved && <Alert severity="success" onClose={() => setSaved(false)} sx={{ mb: 2 }}>تنظیمات ذخیره شد.</Alert>}
       {mutation.isError && !isVersionConflict(mutation.error) && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {commandRecoveryMessage(mutation.error) || "ذخیره انجام نشد. ورودی‌ها یا اتصال را بررسی کنید."}
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: "pre-line" }}>
+          {storefrontErrorMessage(mutation.error, "ذخیره انجام نشد؛ دوباره تلاش کنید.")}
         </Alert>
       )}
-      <DataState isLoading={query.isLoading} isError={query.isError} rows={8} onRetry={() => query.refetch()}>
-        {query.data && payment && trial && messages && shopState && (
+      <DataState isLoading={query.isLoading} isError={query.isError} error={query.error} rows={8} onRetry={() => query.refetch()}>
+        {query.data && payment && trial && messages && shopState && notifications && (
           <Box component="fieldset" disabled={mutation.isPending} sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}>
           <Grid container spacing={2}>
             <Grid item xs={12} lg={6}>
@@ -225,6 +241,33 @@ export default function StorefrontSettingsPage() {
                     <FormControlLabel control={<Switch checked={shopState.shop_closed} onChange={(_, value) => setShopState({ ...shopState, shop_closed: value })} />} label={shopState.shop_closed ? "فروشگاه بسته است" : "فروشگاه باز است"} />
                     <TextField multiline minRows={3} label="پیام زمان بسته بودن" value={shopState.closed_text || ""} error={(shopState.closed_text?.length || 0) > 1000} helperText={`${shopState.closed_text?.length || 0}/1000`} onChange={(event) => setShopState({ ...shopState, closed_text: event.target.value })} />
                     <SaveButton disabled={!shopStateValid || !shopStateDirty || mutation.isPending} />
+                  </Stack>
+                </Box>
+              </SectionCard>
+            </Grid>
+
+            <Grid item xs={12} lg={6}>
+              <SectionCard title="اطلاع‌رسانی فروش">
+                <Box component="form" onSubmit={(event: FormEvent) => {
+                  event.preventDefault();
+                  saveGroup("notifications", notifications);
+                }}>
+                  <Stack spacing={1.5}>
+                    <Typography variant="body2" color="text.secondary">
+                      با هر خرید، تمدید و تأیید شارژ کیف پول، یک پیام برای شما و مدیران فروشگاه در
+                      تلگرام ارسال می‌شود. اگر فروش روزانهٔ شما زیاد است می‌توانید آن را خاموش کنید؛
+                      همهٔ گزارش‌ها همچنان در داشبورد و صفحهٔ مالی در دسترس است.
+                    </Typography>
+                    <FormControlLabel
+                      control={(
+                        <Switch
+                          checked={notifications.admin_events}
+                          onChange={(_, value) => setNotifications({ ...notifications, admin_events: value })}
+                        />
+                      )}
+                      label={notifications.admin_events ? "اطلاع‌رسانی روشن است" : "اطلاع‌رسانی خاموش است"}
+                    />
+                    <SaveButton disabled={!notificationsDirty || mutation.isPending} />
                   </Stack>
                 </Box>
               </SectionCard>

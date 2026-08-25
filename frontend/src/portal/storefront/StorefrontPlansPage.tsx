@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
   Alert, Box, Button, Card, CardContent, Dialog, DialogActions, DialogContent, DialogTitle,
-  FormControlLabel, IconButton, Stack, Switch, Tooltip, Typography,
+  FormControlLabel, IconButton, Stack, Switch, TextField, Tooltip, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/esm/Add";
 import ArrowDownwardIcon from "@mui/icons-material/esm/ArrowDownward";
@@ -24,7 +24,7 @@ import StorefrontPlanHistoryDialog from "./StorefrontPlanHistoryDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import { planLabel } from "./planLabel";
 import type { StorefrontPlan, StorefrontPlanDraft, Versioned } from "./types";
-import { belowCostMessage, commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
+import { isVersionConflict, storefrontErrorMessage, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
 
 type PlanCommand =
@@ -34,10 +34,12 @@ type PlanCommand =
   | { type: "delete"; planId: number; etag?: string }
   | { type: "reorder"; planIds: number[]; etag?: string };
 
-// The form holds TEXT, not numbers: a field being emptied mid-edit is a legal intermediate state,
-// and `Number("")` is 0 (see components/NumberField). Parsing happens once, below.
-type PlanForm = { gb: string; days: string; price_toman: string };
-const EMPTY_FORM: PlanForm = { gb: "", days: "30", price_toman: "" };
+// The three NUMERIC fields hold TEXT, not numbers: a field being emptied mid-edit is a legal
+// intermediate state, and `Number("")` is 0 (see components/NumberField). Parsing happens once,
+// below. `title` is genuinely text — optional, and `""` means "unnamed".
+type PlanForm = { title: string; gb: string; days: string; price_toman: string };
+const EMPTY_FORM: PlanForm = { title: "", gb: "", days: "30", price_toman: "" };
+const TITLE_MAX = 64;
 
 export default function StorefrontPlansPage() {
   const xsFull = useXsFullScreen();
@@ -68,6 +70,9 @@ export default function StorefrontPlansPage() {
       return reorderStorefrontPlans(shop.id, input.planIds, etag, key);
     },
     {
+      // One lane per command TYPE: nudging a plan up while a toggle is still in flight is a normal
+      // thing to do, and used to be rejected outright (silently, as a "connection" error).
+      commandKey: (input) => input.type,
       onSuccess: async (result) => {
         if (result.etag) {
           queryClient.setQueryData<Versioned<StorefrontPlan[]>>(queryKey, (current) =>
@@ -94,7 +99,10 @@ export default function StorefrontPlansPage() {
   };
   const openEdit = (plan: StorefrontPlan) => {
     setEditing(plan);
-    setForm({ gb: String(plan.gb), days: String(plan.days), price_toman: String(plan.price_toman) });
+    setForm({
+      title: plan.title || "", gb: String(plan.gb), days: String(plan.days),
+      price_toman: String(plan.price_toman),
+    });
     setFormOpen(true);
   };
 
@@ -114,10 +122,17 @@ export default function StorefrontPlansPage() {
   const daysValid = days !== null && Number.isInteger(days) && days >= 1 && days <= 3650;
   const priceValid = price !== null && Number.isInteger(price)
     && price >= 0 && price <= 1_000_000_000_000;
-  const valid = gbValid && daysValid && priceValid && !priceUnderFloor;
+  const title = form.title.trim().replace(/\s+/g, " ");
+  const titleValid = title.length <= TITLE_MAX;
+  const valid = gbValid && daysValid && priceValid && titleValid && !priceUnderFloor;
+  // Clearing a name is a real change: `title` goes to `""`, which the server accepts as "unnamed".
+  // (It refuses `null` — that would be indistinguishable from "field not sent".)
   const planChanges: Partial<StorefrontPlanDraft> = !valid ? {} : changedFields(
-    editing && { gb: editing.gb, days: editing.days, price_toman: editing.price_toman },
-    { gb: gb!, days: days!, price_toman: price! },
+    editing && {
+      title: editing.title || "", gb: editing.gb, days: editing.days,
+      price_toman: editing.price_toman,
+    },
+    { title, gb: gb!, days: days!, price_toman: price! },
   );
   const hasPlanChanges = Object.keys(planChanges).length > 0;
   const submit = (event: FormEvent) => {
@@ -125,7 +140,7 @@ export default function StorefrontPlansPage() {
     if (!valid || !hasPlanChanges || command.isPending) return;
     command.mutate(editing
       ? { type: "update", planId: editing.id, draft: planChanges }
-      : { type: "create", draft: { gb: gb!, days: days!, price_toman: price! } });
+      : { type: "create", draft: { title, gb: gb!, days: days!, price_toman: price! } });
   };
 
   const reorder = (plans: StorefrontPlan[]) => {
@@ -162,9 +177,7 @@ export default function StorefrontPlansPage() {
       {message && <Alert severity="success" onClose={() => setMessage(null)} sx={{ mb: 2 }}>{message}</Alert>}
       {command.isError && !isVersionConflict(command.error) && (
         <Alert severity="error" sx={{ mb: 2, whiteSpace: "pre-line" }}>
-          {belowCostMessage(command.error)
-            || commandRecoveryMessage(command.error)
-            || "ذخیرهٔ تغییرات انجام نشد. ورودی‌ها و اتصال را بررسی کنید."}
+          {storefrontErrorMessage(command.error, "ذخیرهٔ تغییرات انجام نشد؛ دوباره تلاش کنید.")}
         </Alert>
       )}
       {underpricedPlans.length > 0 && (
@@ -173,7 +186,7 @@ export default function StorefrontPlansPage() {
           دارد. قیمت به تومان است، نه هزار تومان — برای ۵۰ هزار تومان باید بنویسید 50000.
         </Alert>
       )}
-      <DataState isLoading={plansQuery.isLoading} isError={plansQuery.isError} rows={5} onRetry={() => plansQuery.refetch()}>
+      <DataState isLoading={plansQuery.isLoading} isError={plansQuery.isError} error={plansQuery.error} rows={5} onRetry={() => plansQuery.refetch()}>
         {!orderedPlans.length ? (
           <Alert severity="info">هنوز پلنی ساخته نشده است.</Alert>
         ) : (
@@ -232,9 +245,19 @@ export default function StorefrontPlansPage() {
           <DialogTitle>{editing ? "ویرایش پلن" : "ساخت پلن"}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ pt: 1 }}>
+              {/* Optional, and a plain TextField on purpose: NumberField exists for the RTL caret
+                  and empty-value problems of numeric inputs, none of which apply to a name. */}
+              <TextField
+                autoFocus
+                label="نام پلن (اختیاری)"
+                value={form.title}
+                error={!titleValid}
+                helperText={`برای بی‌نام‌ماندن خالی بگذارید — حداکثر ${fmtNum(TITLE_MAX)} نویسه`}
+                inputProps={{ maxLength: TITLE_MAX }}
+                onChange={(event) => setForm({ ...form, title: event.target.value })}
+              />
               <NumberField
                 required
-                autoFocus
                 label="حجم (گیگابایت)"
                 value={form.gb}
                 error={form.gb !== "" && !gbValid}

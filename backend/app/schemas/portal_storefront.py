@@ -187,6 +187,7 @@ class StorefrontMutationOut[T](BaseModel):
 
 class StorefrontPlanOut(BaseModel):
     id: int
+    title: str = ""          # optional name; "" = unnamed
     gb: int
     days: int
     price_toman: int
@@ -204,12 +205,21 @@ class StorefrontStrictBody(BaseModel):
 
 
 class StorefrontPlanCreate(StorefrontStrictBody):
+    title: str = Field(default="", max_length=64)
     gb: int = Field(ge=1, le=100_000)
     days: int = Field(ge=1, le=3_650)
     price_toman: int = Field(ge=0, le=1_000_000_000_000)
 
 
 class StorefrontPlanUpdate(StorefrontStrictBody):
+    """A partial plan patch. **Omit** `title` to leave the name alone; send **`""`** to clear it.
+
+    `null` is deliberately not a way to clear: `require_change` treats an all-`None` body as "no
+    change at all", so `{"title": null}` is refused rather than silently wiping a name the caller
+    only meant to leave untouched. The route sends `exclude_unset=True`, so an omitted title never
+    reaches the service as anything but `_UNSET`.
+    """
+    title: str | None = Field(default=None, max_length=64)
     gb: int | None = Field(default=None, ge=1, le=100_000)
     days: int | None = Field(default=None, ge=1, le=3_650)
     price_toman: int | None = Field(default=None, ge=0, le=1_000_000_000_000)
@@ -389,6 +399,20 @@ class StorefrontShopStateBody(StorefrontStrictBody):
         return self
 
 
+class StorefrontNotificationsOut(BaseModel):
+    admin_events: bool
+
+
+class StorefrontNotificationsBody(StorefrontStrictBody):
+    admin_events: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> StorefrontNotificationsBody:
+        if not self.model_fields_set or self.admin_events is None:
+            raise ValueError("admin_events is required")
+        return self
+
+
 class StorefrontChannelOut(BaseModel):
     channel_id: str | None
     channel_link: str | None
@@ -416,6 +440,7 @@ class StorefrontSettingsOut(BaseModel):
     trial: StorefrontTrialSettingsOut
     messages: StorefrontMessageSettingsOut
     shop_state: StorefrontShopStateOut
+    notifications: StorefrontNotificationsOut
     channel: StorefrontChannelOut
     config_version: int = Field(ge=1)
 
@@ -445,6 +470,7 @@ class StorefrontPreviewFreeTrialOut(BaseModel):
 
 class StorefrontPreviewPlanOut(BaseModel):
     id: int
+    title: str = ""
     gb: int
     days: int
     price_toman: int

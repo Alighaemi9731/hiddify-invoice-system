@@ -13,7 +13,7 @@ import {
 } from "./api";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { AudienceSegment, BroadcastCreateResult, BroadcastJob, Versioned } from "./types";
-import { useIdempotentMutation } from "./mutation";
+import { storefrontErrorMessage, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
 
 const SEGMENT_FA: Record<AudienceSegment, string> = {
@@ -81,7 +81,11 @@ export default function StorefrontCampaignsPage() {
       </Stack>
 
       {message && <Alert severity="success" onClose={() => setMessage(null)} sx={{ mb: 2 }}>{message}</Alert>}
-      {sendMut.isError && <Alert severity="error" sx={{ mb: 2 }}>ارسال ناموفق بود. ورودی‌ها را بررسی کنید.</Alert>}
+      {sendMut.isError && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: "pre-line" }}>
+          {storefrontErrorMessage(sendMut.error, "ارسال ناموفق بود؛ دوباره تلاش کنید.")}
+        </Alert>
+      )}
 
       <Card sx={{ mb: 2 }}>
         <CardContent>
@@ -227,7 +231,11 @@ function CampaignProgressDialog({
                 <Metric label="ناموفق" value={job.failed} />
                 <Metric label="باقی‌مانده" value={job.pending} />
               </Stack>
-              {cancelMut.isError && <Alert severity="error">لغو ناموفق بود.</Alert>}
+              {cancelMut.isError && (
+                <Alert severity="error" sx={{ whiteSpace: "pre-line" }}>
+                  {storefrontErrorMessage(cancelMut.error, "لغو ناموفق بود؛ دوباره تلاش کنید.")}
+                </Alert>
+              )}
             </Stack>
           )}
         </DataState>

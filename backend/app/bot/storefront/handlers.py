@@ -50,6 +50,7 @@ from app.services import (
     storefront_admin,
     storefront_autorenew,
     storefront_credit,
+    storefront_notify,
     storefront_ops,
     storefront_pricing,
     storefront_provision,
@@ -81,6 +82,10 @@ storefront_router.message.filter(F.chat.type == "private")
 
 
 class SF(StatesGroup):
+    # The optional plan name is asked FIRST, not last: `sf_plan_price` is the step that calls
+    # `create_plan` and stays in place on a below-cost rejection (rotating the command key to
+    # retype). A name step after it would move that call into the name handler and break the retry.
+    plan_title = State()
     plan_gb = State()
     plan_days = State()
     plan_price = State()
@@ -103,7 +108,12 @@ class SF(StatesGroup):
     topup_proof = State()      # data: amount, method
     confirm_amount = State()   # admin sets credited Toman; data: txn_id
     adjust_amount = State()    # admin manual wallet edit; data: customer_id, sign
-    support = State()
+    support = State()          # ADMIN sets the shop's support handle
+    # CUSTOMER writes one message to the shop's admins. A dedicated state is what makes the relay
+    # deliberate: stray chatter is NOT forwarded (that buried resellers in noise and is why the
+    # relay was unhooked), but a message typed after tapping «💬 پشتیبانی» is — which is what the
+    # bot has been promising all along.
+    cust_support = State()
     welcome = State()          # admin sets the storefront welcome text
     closed_text = State()      # admin sets the «shop temporarily closed» message
     join_channel = State()     # admin sets the forced-join channel (forward a post / send @id)
@@ -262,6 +272,16 @@ async def _send_customer_menu(  # noqa: ANN001
     )
 
 
+def _preview_plan(raw: dict) -> StorefrontPlan:
+    """A detached `StorefrontPlan` over a `storefront_admin._plan_dict` row, purely so the admin's
+    customer-preview can render through `keyboards.plan_label` instead of re-implementing the label
+    a fourth time. Never added to a session."""
+    return StorefrontPlan(
+        title=str(raw.get("title") or ""), gb=int(raw.get("gb") or 0),
+        days=int(raw.get("days") or 0), price_toman=int(raw.get("price_toman") or 0),
+    )
+
+
 async def _send_customer_preview(answer, preview: dict) -> None:  # noqa: ANN001
     """Render the admin preview from a pure DTO; never creates/updates a customer row."""
     lines = [preview["welcome_text"], "", "👛 موجودیِ کیفِ پولِ شما: ۰ تومان"]
@@ -275,10 +295,10 @@ async def _send_customer_preview(answer, preview: dict) -> None:  # noqa: ANN001
     plans = preview["plans"]
     if plans:
         lines.extend(["", "📦 پلن‌های فعال:"])
-        lines.extend(
-            f"• {plan['gb']} گیگابایت · {plan['days']} روزه — {_toman(plan['price_toman'])} تومان"
-            for plan in plans[:10]
-        )
+        # Rendered by the SAME helper the customer's buy button uses, so a named plan cannot show
+        # its name on one screen and not the other. `plan_label` reads attributes, and this DTO is
+        # a dict — hence the tiny adapter rather than a fourth copy of the format string.
+        lines.extend(f"• {kb.plan_label(_preview_plan(plan))}" for plan in plans[:10])
     methods = [
         label for name, label in (("card", "کارت"), ("usdt", "USDT"), ("ton", "TON"))
         if preview["payment_methods"].get(name)
@@ -395,7 +415,10 @@ def _admin_chat_ids(reseller: Reseller | None, sf: StorefrontBot | None) -> list
 async def _notify_admin(  # noqa: ANN003
     bot: Bot, reseller: Reseller | None, text: str, *, sf: StorefrontBot | None = None, **kw
 ) -> None:
-    """Send an admin notification to the owner AND every co-admin (pass `sf` to include co-admins)."""
+    """Send an OPERATIONAL admin notification to the owner AND every co-admin (pass `sf` to include
+    co-admins). Deliberately NOT gated by the shop's «اطلاع‌رسانی فروش» switch: that switch mutes
+    the sale/renewal/top-up cards, and a failed provisioning is not something a shop may opt out of
+    hearing about. Those gated messages go through `storefront_notify.notify_shop_admins`."""
     for chat_id in _admin_chat_ids(reseller, sf):
         try:
             await bot.send_message(chat_id, rtl(text), **kw)
@@ -880,6 +903,15 @@ async def _admin_action(action, message, state, s, sf, reseller) -> None:  # noq
             "روشن می‌ماند و «سرویس‌های من» و «کیف پول» همچنان کار می‌کند.\n\n"
             f"پیامِ فعلی: {sf.closed_text or _SHOP_CLOSED_DEFAULT}"),
             reply_markup=kb.shop_state_kb(sf))
+    elif action == "notifycfg":
+        state_fa = "🔔 روشن" if sf.notify_admin_events else "🔕 خاموش"
+        await ans(rtl(
+            f"اطلاع‌رسانی فروش: {state_fa}\n\n"
+            "وقتی روشن باشد، با هر «خرید»، «تمدید» و «تأییدِ شارژِ کیفِ پول» یک پیام برای شما و "
+            "مدیرانِ فروشگاه فرستاده می‌شود.\n"
+            "اگر فروشگاهِ پرفروشی دارید و پیام‌ها زیاد است، می‌توانید آن را خاموش کنید؛ همهٔ "
+            "گزارش‌ها همچنان در «📊 آمار» و پنلِ فروشگاه در دسترس است."),
+            reply_markup=kb.notifications_kb(sf))
     elif action == "preview":
         await state.update_data(sf_preview=True)
         preview = await storefront_admin.customer_preview(
@@ -1066,8 +1098,10 @@ async def _customer_action(action, message, state, s, sf, customer, bot) -> None
             await ans(rtl("\n".join(lines)))
     elif action == "support":
         contact = f"💬 پشتیبانی: {sf.support_contact}\n" if sf.support_contact else ""
-        await ans(rtl(f"{contact}✍️ هر پیامی همین‌جا بنویسید تا مستقیم به پشتیبانیِ فروشگاه برسد و "
-                      "پاسخ بگیرید."))
+        await state.set_state(SF.cust_support)
+        await ans(rtl(f"{contact}✍️ پیام‌تان را همین‌جا بنویسید تا مستقیم به پشتیبانیِ فروشگاه "
+                      "برسد. می‌توانید عکس هم بفرستید."),
+                  reply_markup=kb.flow_cancel_kb())
 
 
 def _already_claimed_text(monthly: bool) -> str:
@@ -1183,6 +1217,40 @@ async def sf_buy(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.answer()
 
 
+@storefront_router.message(SF.cust_support)
+async def sf_customer_support(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Deliver a customer's support message to the shop's admins, with a «پاسخ» button.
+
+    This is the missing half of a promise the bot has always made («…تا مستقیم به پشتیبانیِ فروشگاه
+    برسد و پاسخ بگیرید»): `_relay_to_admins` and its reply keyboard existed, but nothing ever called
+    them, so a customer's message went nowhere and no one knew. Relaying only from this state keeps
+    the property that made the old blanket relay unusable — a typo or a stray «سلام» is still not a
+    support ticket.
+    """
+    await state.clear()
+    async with SessionLocal() as s:
+        sf, reseller, _is_admin = await _resolve(s, bot, message.from_user)
+        if sf is None:
+            return
+        customer = await storefront.get_or_create_customer(s, sf.id, message.from_user)
+        admin_ids = _admin_chat_ids(reseller, sf)
+        cust_name = customer.name or str(customer.telegram_id)
+        customer_id = customer.id
+        owner_id = reseller.bot_chat_id if reseller is not None else None
+        from app.bot.handlers.common import portal_stable_url
+        owner_url = (await portal_stable_url(
+            s, owner_id, with_login_token=True,
+            next_path=f"/portal/storefront/{sf.id}/customers/{customer_id}") if owner_id else None)
+    delivered = await _relay_to_admins(
+        bot, admin_ids, cust_name, customer_id, message,
+        owner_id=owner_id, portal_url=owner_url)
+    await message.answer(rtl(
+        "✅ پیام شما به پشتیبانیِ فروشگاه رسید؛ پاسخ را همین‌جا دریافت می‌کنید."
+        if delivered else
+        "⚠️ در حالِ حاضر پیام به پشتیبانی نرسید. کمی بعد دوباره تلاش کنید."))
+    await _redock_sf_menu(message, bot)
+
+
 @storefront_router.message(SF.buy_name, F.text)
 async def sf_buy_name(message: Message, state: FSMContext, bot: Bot) -> None:
     """Step 2: validate the chosen name and show a final confirm card before charging."""
@@ -1259,6 +1327,9 @@ async def sf_buy_ok(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     if res.ok and res.sub_link:
         await _deliver_config(bot, cb.from_user.id, gb=res.gb, days=res.days,
                               sub_link=res.sub_link, name=res.label)
+        # The sale is already committed and the customer already has their config — the shop's
+        # notification is a courtesy that runs afterwards and can never undo any of that.
+        await storefront_notify.notify_purchase(sf_id=sf_id, order_id=res.order_id, bot=bot)
         return
     if res.reason == "insufficient":
         await cb.message.answer(rtl(
@@ -1782,6 +1853,12 @@ async def sf_admin_renew(cb: CallbackQuery, bot: Bot) -> None:
         SessionLocal, order_id=oid, by_admin=True, expected_sf_id=sf_id)
     await cb.message.answer(
         rtl(f"✅ تمدید شد — {res.gb} گیگابایت · {res.days} روز." if res.ok else "❌ تمدید ناموفق بود."))
+    if res.ok:
+        # The acting admin already read the confirmation above; this reaches the shop's OTHER
+        # admins, who would otherwise never learn the service was renewed.
+        await storefront_notify.notify_renewal(
+            sf_id=sf_id, order_id=oid, automatic=False, bot=bot,
+            exclude_chat_id=cb.from_user.id)
 
 
 @storefront_router.callback_query(F.data.startswith("sfatgl:"))
@@ -2073,6 +2150,7 @@ async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
             return
         txn = await s.get(StorefrontWalletTxn, txn_id)
         cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
+        sf_id = sf.id
     await _strip_buttons(cb)
     await cb.message.answer(rtl(f"✅ شارژِ #{txn_id} تأیید و کیفِ پول شارژ شد."))
     if cust:
@@ -2081,6 +2159,10 @@ async def sf_topup_ok(cb: CallbackQuery, bot: Bot) -> None:
                 f"✅ شارژِ شما تأیید شد. موجودیِ جدید: {_toman(cust.wallet_balance_toman)} تومان."))
         except Exception:  # noqa: BLE001
             pass
+        await storefront_notify.notify_topup(
+            sf_id=sf_id, customer_id=cust.id, amount_toman=body.get("credited"),
+            bonus_toman=body.get("credit_bonus_toman") or 0, bot=bot,
+            exclude_chat_id=cb.from_user.id)
     await cb.answer()
 
 
@@ -2151,10 +2233,13 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
     await state.clear()
     changed = False
     cust = None
+    sf_id = 0
+    bonus = 0
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if not (is_admin and sf):
             return
+        sf_id = sf.id
         ctx = storefront_admin.CommandContext(
             actor_telegram_id=message.from_user.id, actor_role="admin", source="bot",
             idempotency_key=key, expected_version=1, correlation_id=key)
@@ -2164,6 +2249,7 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
                 reason=_BOT_CORRECTION_REASON)
             body = result.body if isinstance(result.body, dict) else {}
             changed = bool(body.get("changed"))
+            bonus = int(body.get("credit_bonus_toman") or 0)
             if changed:
                 txn = await s.get(StorefrontWalletTxn, txn_id)
                 cust = await s.get(StorefrontCustomer, txn.customer_id) if txn else None
@@ -2178,6 +2264,9 @@ async def sf_confirm_amount(message: Message, state: FSMContext, bot: Bot) -> No
                     f"{_toman(cust.wallet_balance_toman)} تومان."))
             except Exception:  # noqa: BLE001
                 pass
+            await storefront_notify.notify_topup(
+                sf_id=sf_id, customer_id=cust.id, amount_toman=int(raw), bonus_toman=bonus,
+                bot=bot, exclude_chat_id=message.from_user.id)
     else:
         await message.answer(rtl("این تراکنش قبلاً رسیدگی شده است."))
 
@@ -2194,12 +2283,25 @@ async def sf_plan_add(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         # Resolved once here so the price prompt can show this shop's own floor without opening
         # another session mid-flow.
         cost = await storefront_pricing.cost_per_gb(s, r) if r is not None else 0
-    # No title (owner: «عنوان نمی‌خواهیم») — collect volume → days → price only.
     await _start_admin_fsm(state, sf)
     await state.update_data(p_cost=cost)
-    await state.set_state(SF.plan_gb)
-    await cb.message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
+    await state.set_state(SF.plan_title)
+    await cb.message.answer(
+        rtl("نامِ پلن (اختیاری) — مثلاً «طلایی».\n\n"
+            f"اگر نمی‌خواهید نامی بگذارید، «{kb.PLAN_NO_TITLE}» را بزنید."),
+        reply_markup=kb.plan_title_kb())
     await cb.answer()
+
+
+@storefront_router.message(SF.plan_title, F.text)
+async def sf_plan_title(message: Message, state: FSMContext) -> None:
+    title = _plan_title_value(message.text)
+    if title is None:
+        await message.answer(rtl(_plan_range_hint("title")), reply_markup=kb.plan_title_kb())
+        return
+    await state.update_data(p_title=title)
+    await state.set_state(SF.plan_gb)
+    await message.answer(rtl("حجم به گیگابایت (عدد):"), reply_markup=kb.flow_cancel_kb())
 
 
 @storefront_router.message(SF.plan_gb, F.text)
@@ -2241,6 +2343,7 @@ async def sf_plan_price(message: Message, state: FSMContext, bot: Bot) -> None:
         try:
             await storefront_admin.create_plan(
                 s, sf.id, _fsm_ctx(message.from_user.id, data, sf),
+                title=str(data.get("p_title") or ""),
                 gb=int(data.get("p_gb", 0)), days=int(data.get("p_days", 0)),
                 price_toman=int(raw))
         except storefront_admin.AdminCommandError as exc:
@@ -2410,10 +2513,14 @@ async def sf_plan_field(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             return
         cost = await storefront_pricing.cost_per_gb(s, reseller) if reseller is not None else 0
         gb, days, price = plan.gb, plan.days, plan.price_toman
+        title = (plan.title or "").strip()
     await state.set_state(SF.edit_value)
     await _start_admin_fsm(state, sf)
     await state.update_data(edit_plan_id=plan_id, edit_field=field, e_cost=cost, e_gb=gb)
     prompt = {
+        "title": (f"نامِ فعلی: {title or '—'}\n\nنامِ جدیدِ پلن "
+                  f"(حداکثر {storefront_admin.PLAN_TITLE_MAX} نویسه):\n"
+                  f"برای حذفِ نام، «{kb.PLAN_NO_TITLE}» را بزنید."),
         "gb": f"حجمِ فعلی: {gb} گیگابایت\n\nحجمِ جدید به گیگابایت (عدد):",
         "days": f"مدتِ فعلی: {days} روز\n\nمدتِ جدید به روز (عدد):",
         # The price prompt keeps the unit warning + this shop's floor, computed from the plan's
@@ -2422,42 +2529,56 @@ async def sf_plan_field(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             f"قیمتِ فعلی: {_toman(price)} تومان\n\nقیمتِ جدید به تومان (عدد):",
             {"e_cost": cost, "e_gb": gb}, "e_cost", "e_gb"),
     }[field]
-    await cb.message.answer(rtl(prompt), reply_markup=kb.flow_cancel_kb())
+    markup = kb.plan_title_kb() if field == "title" else kb.flow_cancel_kb()
+    await cb.message.answer(rtl(prompt), reply_markup=markup)
     await cb.answer()
 
 
 @storefront_router.message(SF.edit_value, F.text)
 async def sf_edit_value(message: Message, state: FSMContext, bot: Bot) -> None:
-    raw = _digits(message.text)
-    if not raw.isdigit():
-        await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=kb.flow_cancel_kb())
-        return
+    # The field is resolved BEFORE any validation: a plan's name is free text, so the digit gate
+    # below must apply to the three numeric fields only. Widening it for all four would have let
+    # «abc» through as a volume.
     data = await state.get_data()
     plan_id = int(data.get("edit_plan_id", 0))
     field = str(data.get("edit_field") or "")
     if field not in kb.PLAN_FIELDS:
         await state.clear()
         return
-    patch = {"gb": "gb", "days": "days", "price": "price_toman"}[field]
+    markup = kb.plan_title_kb() if field == "title" else kb.flow_cancel_kb()
+    if field in kb.PLAN_NUMERIC_FIELDS:
+        raw = _digits(message.text)
+        if not raw.isdigit():
+            await message.answer(rtl("لطفاً یک عددِ معتبر وارد کنید."), reply_markup=markup)
+            return
+        patch: dict[str, object] = {
+            {"gb": "gb", "days": "days", "price": "price_toman"}[field]: int(raw)}
+    else:
+        title = _plan_title_value(message.text)
+        if title is None:
+            # Refused before any server call, so the command key must NOT rotate — nothing was
+            # claimed, and rotating would strand the key the retry is about to reuse.
+            await message.answer(rtl(_plan_range_hint("title")), reply_markup=markup)
+            return
+        patch = {"title": title}
     async with SessionLocal() as s:
         sf, _r, is_admin = await _resolve(s, bot, message.from_user)
         if sf is None or not is_admin:
             return
         try:
             await storefront_admin.update_plan(
-                s, sf.id, plan_id, _fsm_ctx(message.from_user.id, data, sf), **{patch: int(raw)})
+                s, sf.id, plan_id, _fsm_ctx(message.from_user.id, data, sf), **patch)
             ok = True
         except storefront_admin.AdminCommandError as exc:
             ok = False
             if exc.code == "below_cost":
                 await _rotate_command_key(state)
-                await message.answer(rtl(_admin_error(exc)), reply_markup=kb.flow_cancel_kb())
+                await message.answer(rtl(_admin_error(exc)), reply_markup=markup)
                 return
             if exc.code == "validation":
                 # Out of range — recoverable by retyping, exactly like a below-cost price.
                 await _rotate_command_key(state)
-                await message.answer(
-                    rtl(_plan_range_hint(field)), reply_markup=kb.flow_cancel_kb())
+                await message.answer(rtl(_plan_range_hint(field)), reply_markup=markup)
                 return
             if exc.code != "not_found":
                 await state.clear()
@@ -2472,8 +2593,20 @@ async def sf_edit_value(message: Message, state: FSMContext, bot: Bot) -> None:
         reply_markup=kb.plans_manage_kb(plans))
 
 
+def _plan_title_value(text: str | None) -> str | None:
+    """The typed plan name, or `""` when the admin tapped «بدون نام». `None` means "too long, ask
+    again" — the caller re-prompts in place rather than dropping them back to the plan list."""
+    value = " ".join((text or "").split())
+    if value == kb.PLAN_NO_TITLE:
+        return ""
+    if len(value) > storefront_admin.PLAN_TITLE_MAX:
+        return None
+    return value
+
+
 def _plan_range_hint(field: str) -> str:
     return {
+        "title": f"نامِ پلن باید حداکثر {storefront_admin.PLAN_TITLE_MAX} نویسه باشد.",
         "gb": "حجم باید عددی بین ۱ تا ۱۰۰۰۰۰ گیگابایت باشد.",
         "days": "مدت باید عددی بین ۱ تا ۳۶۵۰ روز باشد.",
         "price": "قیمت خارج از محدودهٔ مجاز است.",
@@ -3286,6 +3419,31 @@ async def sf_shop_toggle(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer("فروشگاه بسته شد." if now_closed else "فروشگاه باز شد.")
 
 
+@storefront_router.callback_query(F.data.startswith("sfnotiftog"))
+async def sf_notify_toggle(cb: CallbackQuery, bot: Bot) -> None:
+    """Admin flips «اطلاع‌رسانی فروش» on/off — the purchase / renewal / top-up DMs."""
+    target = _absolute_toggle(cb.data)
+    async with SessionLocal() as s:
+        sf, _r, is_admin = await _resolve(s, bot, cb.from_user)
+        if sf is None or not is_admin:
+            await cb.answer("دسترسی ندارید.", show_alert=True)
+            return
+        if target is None:
+            await cb.message.edit_reply_markup(reply_markup=kb.notifications_kb(sf))
+            await cb.answer("این منو قدیمی شده بود و به‌روزرسانی شد؛ لطفاً دوباره انتخاب کنید.", show_alert=True)
+            return
+        now_on, rendered_version = target
+        try:
+            await storefront_admin.update_notifications(
+                s, sf.id, _callback_ctx(cb, sf, rendered_version=rendered_version),
+                admin_events=now_on)
+        except storefront_admin.AdminCommandError as exc:
+            await cb.answer(_admin_error(exc), show_alert=True)
+            return
+        await cb.message.edit_reply_markup(reply_markup=kb.notifications_kb(sf))
+    await cb.answer("اطلاع‌رسانی فروش روشن شد." if now_on else "اطلاع‌رسانی فروش خاموش شد.")
+
+
 @storefront_router.callback_query(F.data == "sfshopmsg")
 async def sf_shop_msg(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """Admin edits the message customers see while the shop is closed."""
@@ -3491,8 +3649,10 @@ async def sf_fallback(message: Message, state: FSMContext, bot: Bot) -> None:
     NOTE — stray text is deliberately NOT relayed to the shop owner. It used to be: anything a
     customer typed (a typo, a stray "سلام", a tapped-then-abandoned thought) was forwarded to the
     reseller as a support ticket, which buried them in noise. Reaching support is what the explicit
-    «💬 پشتیبانی» button is for — that flow sets `SF.support` and relays deliberately. A banned
-    customer was already short-circuited by the middleware."""
+    «💬 پشتیبانی» button is for — that flow sets `SF.cust_support`, whose handler relays deliberately
+    (until v1.122.0 this note named the wrong state and NOTHING relayed, so a customer's support
+    message silently went nowhere). A banned customer was already short-circuited by the
+    middleware."""
     if await state.get_state() is not None:
         # Locked flow: don't clear, don't navigate — only «✖️ انصراف» (or /cancel) leaves.
         await message.answer(

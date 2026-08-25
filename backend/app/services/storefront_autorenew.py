@@ -38,6 +38,7 @@ from app.services import (
     broadcast,
     settings_service,
     storefront,
+    storefront_notify,
     storefront_pricing,
     storefront_wallet,
 )
@@ -452,6 +453,12 @@ async def sweep(
                     continue
                 await broadcast.send_with_flood_control(
                     bot, chat_id, _post_fire_msg(label), limiter)
+                # An auto-renew is the one sale nobody in the shop witnesses — no admin pressed
+                # anything and the customer was only told after the fact. Reuses this sweep's
+                # already-open Bot for the shop; `notify_renewal` reads the shop's own switch.
+                await storefront_notify.notify_renewal(
+                    sf_id=bot_id, order_id=order_id, automatic=True, bot=bot,
+                    session_factory=session_factory)
             elif res.reason == "processing":
                 counts["skipped"] += 1   # reconciler owns it; the next sweep confirms
             elif res.reason == "below_cost":

@@ -22,7 +22,7 @@ import type {
   BulkDecisionBody, BulkDecisionResult, TopupDecisionBody, TopupDecisionResult, TopupListFilters,
   TopupListItem, TopupMethod, TopupStatus, Versioned,
 } from "./types";
-import { commandRecoveryMessage, isConflict, isNotFound, useIdempotentMutation } from "./mutation";
+import { isConflict, isNotFound, storefrontErrorMessage, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
 import { NumberField } from "../../components/NumberField";
 
@@ -505,10 +505,9 @@ function decisionMessage(result: TopupDecisionResult): string {
 
 function mutationError(error: unknown, isError: boolean): string | null {
   if (!isError || isConflict(error)) return null;
-  return commandRecoveryMessage(error)
-    || (isNotFound(error)
-      ? "این شارژ دیگر در دسترس نیست؛ فهرست را تازه‌سازی کنید."
-      : "انجام عملیات ناموفق بود. ورودی‌ها و اتصال را بررسی کنید.");
+  // 404 keeps its own wording — "this top-up is gone" is more useful here than the generic one.
+  if (isNotFound(error)) return "این شارژ دیگر در دسترس نیست؛ فهرست را تازه‌سازی کنید.";
+  return storefrontErrorMessage(error, "انجام عملیات ناموفق بود؛ دوباره تلاش کنید.");
 }
 
 function decisionTitle(active: ActiveDecision | null): string {

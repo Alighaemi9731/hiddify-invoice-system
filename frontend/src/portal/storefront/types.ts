@@ -135,6 +135,8 @@ export interface Versioned<T> {
 
 export interface StorefrontPlan {
   id: number;
+  /** Optional name; `""` = unnamed. */
+  title: string;
   gb: number;
   days: number;
   price_toman: number;
@@ -143,6 +145,8 @@ export interface StorefrontPlan {
 }
 
 export interface StorefrontPlanDraft {
+  /** Omit to leave a name unchanged; send `""` to clear it (the server refuses `null`). */
+  title?: string;
   gb: number;
   days: number;
   price_toman: number;
@@ -201,12 +205,19 @@ export interface StorefrontShopStateSettings {
   closed_text: string | null;
 }
 
-export type StorefrontSettingsGroup = "payment" | "trial" | "messages" | "shop-state";
+export interface StorefrontNotificationSettings {
+  /** «اطلاع‌رسانی فروش» — DM the shop's admins on a purchase, a renewal, or a confirmed top-up. */
+  admin_events: boolean;
+}
+
+export type StorefrontSettingsGroup =
+  "payment" | "trial" | "messages" | "shop-state" | "notifications";
 export type StorefrontSettingsByGroup = {
   payment: StorefrontPaymentSettings;
   trial: StorefrontTrialSettings;
   messages: StorefrontMessageSettings;
   "shop-state": StorefrontShopStateSettings;
+  notifications: StorefrontNotificationSettings;
 };
 
 export interface StorefrontChannel {
@@ -222,6 +233,7 @@ export interface StorefrontSettings {
   trial: StorefrontTrialSettingsRead;
   messages: StorefrontMessageSettings;
   shop_state: StorefrontShopStateSettings;
+  notifications: StorefrontNotificationSettings;
   channel: StorefrontChannel;
   config_version: number;
 }
@@ -250,7 +262,7 @@ export interface StorefrontCustomerPreview {
     days: number;
   };
   payment_methods: string[];
-  enabled_plans: Array<Pick<StorefrontPlan, "id" | "gb" | "days" | "price_toman">>;
+  enabled_plans: Array<Pick<StorefrontPlan, "id" | "title" | "gb" | "days" | "price_toman">>;
   channel_required: boolean;
 }
 

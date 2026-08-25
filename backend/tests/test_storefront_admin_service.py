@@ -185,7 +185,7 @@ def test_plan_commands_are_cas_audited_idempotent_and_tenant_safe():
             session, shop.id, _ctx(1), gb=10, days=30, price_toman=100_000)
         assert created.response_status == 201 and created.config_version == 2
         plan_id = created.body["plan"]["id"]
-        assert "title" not in created.body["plan"]
+        assert created.body["plan"]["title"] == ""   # optional; omitted = unnamed
         replay = await storefront_admin.create_plan(
             session, shop.id, _ctx(1), gb=10, days=30, price_toman=100_000)
         assert replay.replayed is True and replay.body == created.body
@@ -674,5 +674,78 @@ def test_money_commands_work_from_the_bot_source_and_are_idempotent():
         await storefront_admin.adjust_wallet(
             session, shop.id, cust.id, ctx("bot-adj"), amount_toman_signed=10_000, reason="via bot")
         assert int((await session.get(StorefrontCustomer, cust.id)).wallet_balance_toman) == 60_000
+
+    _run(body)
+
+
+# ── the optional plan name (v1.122.0) ─────────────────────────────────────────
+
+def test_a_plan_name_is_optional_patchable_alone_and_clearable():
+    """`title` is three-valued at the service boundary: absent leaves it, a string sets it, and
+    `""` CLEARS it. The clear must be a real, hashable instruction — collapsing it into "not
+    provided" would make removing a name impossible."""
+    async def body(session):  # noqa: ANN001
+        _owner, _foreign, shop, _other = await _seed(session)
+        created = await storefront_admin.create_plan(
+            session, shop.id, _ctx(1, "c1"), title="  طلایی  ویژه ", gb=10, days=30,
+            price_toman=100_000)
+        plan_id = created.body["plan"]["id"]
+        assert created.body["plan"]["title"] == "طلایی ویژه"   # whitespace collapsed
+
+        # A title-only patch passes the "empty plan update" guard and leaves the numbers alone.
+        renamed = await storefront_admin.update_plan(
+            session, shop.id, plan_id, _ctx(2, "c2"), title="نقره‌ای")
+        assert renamed.body["plan"]["title"] == "نقره‌ای"
+        assert (renamed.body["plan"]["gb"], renamed.body["plan"]["days"],
+                renamed.body["plan"]["price_toman"]) == (10, 30, 100_000)
+
+        # A number-only patch must not disturb the name.
+        repriced = await storefront_admin.update_plan(
+            session, shop.id, plan_id, _ctx(3, "c3"), price_toman=120_000)
+        assert repriced.body["plan"]["title"] == "نقره‌ای"
+        assert repriced.body["plan"]["price_toman"] == 120_000
+
+        cleared = await storefront_admin.update_plan(
+            session, shop.id, plan_id, _ctx(4, "c4"), title="")
+        assert cleared.body["plan"]["title"] == ""
+        stored = await session.get(StorefrontPlan, plan_id)
+        assert stored.title == ""
+
+        with pytest.raises(storefront_admin.AdminCommandError) as too_long:
+            await storefront_admin.update_plan(
+                session, shop.id, plan_id, _ctx(5, "c5"), title="ن" * 65)
+        assert too_long.value.code == "validation"
+
+    _run(body)
+
+
+def test_a_create_that_never_mentions_a_title_keeps_its_old_intent_hash():
+    """The idempotency intent gains `title` ONLY when one was supplied, so an in-flight command
+    from a caller that predates this field replays instead of colliding with itself."""
+    async def body(session):  # noqa: ANN001
+        _owner, _foreign, shop, _other = await _seed(session)
+        first = await storefront_admin.create_plan(
+            session, shop.id, _ctx(1, "same-key"), gb=10, days=30, price_toman=100_000)
+        replay = await storefront_admin.create_plan(
+            session, shop.id, _ctx(1, "same-key"), gb=10, days=30, price_toman=100_000)
+        assert replay.replayed is True and replay.body == first.body
+        assert await session.scalar(select(func.count(StorefrontPlan.id))) == 1
+
+    _run(body)
+
+
+def test_the_sales_notification_switch_is_a_normal_audited_command():
+    async def body(session):  # noqa: ANN001
+        _owner, _foreign, shop, _other = await _seed(session)
+        assert shop.notify_admin_events is True          # default ON for every shop
+        off = await storefront_admin.update_notifications(
+            session, shop.id, _ctx(1, "n1"), admin_events=False)
+        assert off.body["notifications"] == {"admin_events": False}
+        assert (await session.get(StorefrontBot, shop.id)).notify_admin_events is False
+        assert storefront_admin.settings_snapshot(shop)["notifications"] == {"admin_events": False}
+
+        on = await storefront_admin.update_notifications(
+            session, shop.id, _ctx(2, "n2"), admin_events=True)
+        assert on.body["notifications"] == {"admin_events": True}
 
     _run(body)

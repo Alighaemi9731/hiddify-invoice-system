@@ -48,6 +48,8 @@ from app.schemas.portal_storefront import (
     StorefrontMessageSettingsBody,
     StorefrontMessageSettingsOut,
     StorefrontMutationOut,
+    StorefrontNotificationsBody,
+    StorefrontNotificationsOut,
     StorefrontOrderDeleteBody,
     StorefrontOrderEnabledBody,
     StorefrontPaymentSettingsBody,
@@ -283,6 +285,7 @@ def _settings(raw: dict[str, Any], reset: dict[str, Any]) -> StorefrontSettingsO
         messages=StorefrontMessageSettingsOut(**raw["messages"]),
         shop_state=StorefrontShopStateOut(
             shop_closed=shop_state["closed"], closed_text=shop_state["closed_text"]),
+        notifications=StorefrontNotificationsOut(**raw["notifications"]),
         channel=_channel(raw["channel"]),
         config_version=int(raw["config_version"]),
     )
@@ -663,6 +666,28 @@ async def storefront_shop_state_settings(
     return _mutation_dict(response, result)
 
 
+@router.patch(
+    "/{shop_id}/settings/notifications",
+    response_model=StorefrontMutationOut[dict[str, Any]],
+)
+async def storefront_notification_settings(
+    body: StorefrontNotificationsBody,
+    response: Response,
+    if_match: str = Header(alias="If-Match"),
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    access: StorefrontAccess = Depends(get_storefront_access),
+    ctx: ResellerContext = Depends(get_current_reseller),
+    session: AsyncSession = Depends(get_session),
+) -> StorefrontMutationOut[dict[str, Any]]:
+    command = _command_context(ctx, if_match=if_match, idempotency_key=idempotency_key)
+    try:
+        result = await storefront_admin.update_notifications(
+            session, access.shop.id, command, admin_events=bool(body.admin_events))
+    except storefront_admin.AdminCommandError as exc:
+        _raise_admin_error(exc)
+    return _mutation_dict(response, result)
+
+
 @router.post(
     "/{shop_id}/channel", response_model=StorefrontMutationOut[dict[str, Any]],
 )
@@ -826,7 +851,7 @@ async def storefront_preview(
         ),
         payment_methods=methods,
         enabled_plans=[StorefrontPreviewPlanOut(
-            id=item["id"], gb=item["gb"], days=item["days"],
+            id=item["id"], title=item.get("title", ""), gb=item["gb"], days=item["days"],
             price_toman=item["price_toman"],
         ) for item in raw["plans"]],
         channel_required=bool(raw.get("channel_required", False)),

@@ -34,6 +34,7 @@ ADMIN_MENU: list[tuple[str, str]] = [
     ("🛡 مدیرانِ ربات", "admins"),
     ("🎁 کدهای شارژ", "credits"),
     ("🔴 وضعیت فروشگاه", "shopstate"),
+    ("🔔 اطلاع‌رسانی فروش", "notifycfg"),
     ("👤 نمای مشتری", "preview"),
 ]
 CUSTOMER_MENU: list[tuple[str, str]] = [
@@ -154,14 +155,33 @@ def admins_manage_kb(co_admin_ids: list[int]) -> InlineKeyboardMarkup:
 
 # ── inline keyboards ──────────────────────────────────────────────────────────
 def plan_label(p: StorefrontPlan) -> str:
-    """The one name a plan has, everywhere — volume · duration · price. Plans carry no title
-    (owner, 2026-08-18): the field was portal-only and invisible here, so a bot-made plan was
-    permanently unnamed. Mirrored word-for-word by `planLabel` in the portal
-    (`frontend/src/portal/storefront/planLabel.ts`) plus the price; change one, change the other."""
-    return f"{p.gb} گیگابایت · {p.days} روزه — {p.price_toman:,} تومان"
+    """The one name a plan has, everywhere — an OPTIONAL name, then volume · duration · price.
+
+    The name is a prefix, never a replacement: a customer choosing between «طلایی» and «نقره‌ای»
+    must still see what each one actually buys, on the button itself. An unnamed plan (`title ==
+    ""`, the default) renders exactly the string it always did. Mirrored word-for-word by
+    `planLabel` in the portal (`frontend/src/portal/storefront/planLabel.ts`) plus the price;
+    change one, change the other."""
+    head = f"🏅 {p.title.strip()} · " if (p.title or "").strip() else ""
+    return f"{head}{p.gb} گیگابایت · {p.days} روزه — {p.price_toman:,} تومان"
 
 
-PLAN_FIELDS: dict[str, str] = {"gb": "حجم", "days": "مدت", "price": "قیمت"}
+PLAN_FIELDS: dict[str, str] = {
+    "title": "نام", "gb": "حجم", "days": "مدت", "price": "قیمت"}
+# The three fields that are NUMBERS. `sf_edit_value` branches on this: a name is free text, and
+# widening the digit gate for all four would have let «abc» through as a volume.
+PLAN_NUMERIC_FIELDS = frozenset({"gb", "days", "price"})
+# One-tap skip (when creating) and one-tap clear (when editing). It must NOT join `ALL_LABELS`:
+# `sf_menu` is registered before every FSM handler and matches that set with no state filter, so a
+# label added there is swallowed by the flow-lock instead of reaching the step waiting for it.
+PLAN_NO_TITLE = "⏭ بدون نام"
+
+
+def plan_title_kb() -> ReplyKeyboardMarkup:
+    """Docked while a plan's name is being asked for. `flow_cancel_kb` is a REPLY keyboard, so an
+    inline «skip» button cannot ride the same message — a second reply button is the only genuine
+    one-tap skip, and it doubles as «clear the name» in the edit flow."""
+    return _reply_kb([[KeyboardButton(text=PLAN_NO_TITLE)], [KeyboardButton(text=CANCEL_LABEL)]])
 
 
 def plan_edit_kb(plan_id: int) -> InlineKeyboardMarkup:
@@ -170,6 +190,7 @@ def plan_edit_kb(plan_id: int) -> InlineKeyboardMarkup:
     touch). The portal patches one field at a time; this is the same thing in the bot."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
+            InlineKeyboardButton(text="🏷 نام", callback_data=f"sfplanfield:{plan_id}:title"),
             InlineKeyboardButton(text="📦 حجم", callback_data=f"sfplanfield:{plan_id}:gb"),
             InlineKeyboardButton(text="📅 مدت", callback_data=f"sfplanfield:{plan_id}:days"),
             InlineKeyboardButton(text="💰 قیمت", callback_data=f"sfplanfield:{plan_id}:price"),
@@ -468,6 +489,17 @@ def shop_state_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
             callback_data=f"sfshoptog:{int(not bot.shop_closed)}:{bot.config_version}")],
         [InlineKeyboardButton(text="✏️ متنِ پیامِ بسته‌بودن", callback_data="sfshopmsg")],
     ])
+
+
+def notifications_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
+    """Toggle «اطلاع‌رسانی فروش» — the DM a shop admin gets on a purchase, a renewal, or a confirmed
+    wallet top-up. The desired state rides in the callback data (like `sfshoptog`) so a stale
+    keyboard left in chat history can't flip the switch to whatever it happened to render."""
+    toggle_text = "🔕 خاموش‌کردنِ اطلاع‌رسانی" if bot.notify_admin_events else "🔔 روشن‌کردنِ اطلاع‌رسانی"
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=toggle_text,
+            callback_data=f"sfnotiftog:{int(not bot.notify_admin_events)}:{bot.config_version}")]])
 
 
 def topup_decide_kb(txn_id: int, *, portal_url: str | None = None) -> InlineKeyboardMarkup:

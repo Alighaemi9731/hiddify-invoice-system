@@ -28,7 +28,8 @@ import type {
   Versioned, WalletAdjustmentBody, WalletAdjustmentResult,
 } from "./types";
 import {
-  commandRecoveryMessage, isNotFound, isVersionConflict, rateLimitRetryAfter, useIdempotentMutation,
+  commandRecoveryMessage, isNotFound, isVersionConflict, rateLimitRetryAfter,
+  storefrontErrorMessage, useIdempotentMutation,
 } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
 
@@ -188,10 +189,9 @@ export default function CustomerDetailPage() {
     : null;
 
   const commandError = command.isError && !isVersionConflict(command.error)
-    ? commandRecoveryMessage(command.error)
-      || (isNotFound(command.error)
-        ? "این مورد دیگر در دسترس نیست؛ صفحه را تازه‌سازی کنید."
-        : "انجام عملیات ناموفق بود. ورودی‌ها و اتصال را بررسی کنید.")
+    ? (isNotFound(command.error)
+      ? "این مورد دیگر در دسترس نیست؛ صفحه را تازه‌سازی کنید."
+      : storefrontErrorMessage(command.error, "انجام عملیات ناموفق بود؛ دوباره تلاش کنید."))
     : null;
 
   const openConfirm = (action: Confirm) => {

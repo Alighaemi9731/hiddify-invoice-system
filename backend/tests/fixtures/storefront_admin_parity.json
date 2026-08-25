@@ -133,6 +133,16 @@
       "test_id": "parity_shopstate"
     },
     {
+      "menu_key": "notifycfg",
+      "telegram_label": "🔔 اطلاع‌رسانی فروش",
+      "portal_route": "/portal/storefront/{shop_id}/settings",
+      "api_operation": "PATCH /api/portal/storefronts/{shop_id}/settings/notifications",
+      "shared_symbol": "app.services.storefront_admin.update_notifications",
+      "owner_mode": "browser",
+      "coadmin_fallback": "legacy_bot_keyboard",
+      "test_id": "parity_notifycfg"
+    },
+    {
       "menu_key": "preview",
       "telegram_label": "👤 نمای مشتری",
       "portal_route": "/portal/storefront/{shop_id}/preview",

@@ -1,4 +1,5 @@
 import { QueryClient, keepPreviousData } from "@tanstack/react-query";
+import { isRetriableError } from "./errors";
 
 // Shared QueryClient instance: main.tsx provides it to the tree, and the axios 401
 // interceptor (client.ts) clears it on forced logout so a re-login never serves
@@ -13,7 +14,11 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      // Retry only what a retry could fix. A 404 or a rejected field is already decided, so
+      // re-issuing it just doubled every deterministic failure — and doubled the wait before the
+      // user was told anything.
+      retry: (failureCount: number, error: unknown) =>
+        failureCount < 1 && isRetriableError(error),
       staleTime: 60_000,
       placeholderData: keepPreviousData,
     },

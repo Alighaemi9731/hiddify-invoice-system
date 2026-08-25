@@ -55,6 +55,7 @@ const settings = {
   },
   messages: { welcome_text: "خوش آمدید", support_contact: "@support" },
   shop_state: { shop_closed: false, closed_text: null },
+  notifications: { admin_events: true },
   channel: {
     channel_id: "@sample_channel",
     channel_link: "https://t.me/sample_channel",
@@ -99,7 +100,7 @@ async function openCreateForm(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("storefront Release B administration", () => {
-  it("uses one request for a double-click and never sends a plan title", async () => {
+  it("uses one request for a double-click and sends the (empty) optional plan name", async () => {
     const user = userEvent.setup();
     let requests = 0;
     let body: Record<string, unknown> = {};
@@ -124,7 +125,8 @@ describe("storefront Release B administration", () => {
     await user.dblClick(screen.getByRole("button", { name: "ذخیره" }));
 
     await waitFor(() => expect(requests).toBe(1));
-    expect(body).not.toHaveProperty("title");
+    // A plan may be named, and the name field was left empty — "" is how "unnamed" is spelled.
+    expect(body.title).toBe("");
     expect(await screen.findByText("تغییرات ذخیره شد.")).toBeInTheDocument();
   });
 
@@ -151,7 +153,7 @@ describe("storefront Release B administration", () => {
     renderAdmin("plans", <StorefrontPlansPage />);
     await openCreateForm(user);
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
-    expect(await screen.findByText(/ذخیرهٔ تغییرات انجام نشد/)).toBeInTheDocument();
+    expect(await screen.findByText(/ارتباط با سرور برقرار نشد/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
 
     await waitFor(() => expect(attempts).toBe(2));
@@ -180,7 +182,7 @@ describe("storefront Release B administration", () => {
     renderAdmin("plans", <StorefrontPlansPage />);
     await openCreateForm(user);
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
-    expect(await screen.findByText(/ذخیرهٔ تغییرات انجام نشد/)).toBeInTheDocument();
+    expect(await screen.findByText(/خطای سرور/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "ذخیره" }));
     await waitFor(() => expect(keys).toHaveLength(2));
     expect(keys[1]).toBe(keys[0]);
@@ -551,7 +553,8 @@ describe("storefront Release B administration", () => {
     renderAdmin("settings", <StorefrontSettingsPage />);
     const save = await screen.findByRole("button", { name: "بررسی و ذخیره" });
     await user.click(save);
-    expect(await screen.findByText(/ذخیره انجام نشد/)).toBeInTheDocument();
+    // A dead/unreachable shop bot must say so — it used to read as "check your connection".
+    expect(await screen.findByText(/ربات تلگرامِ فروشگاه در دسترس نیست/)).toBeInTheDocument();
     await user.click(save);
     await waitFor(() => expect(keys).toHaveLength(2));
     expect(keys[1]).not.toBe(keys[0]);
@@ -635,7 +638,9 @@ describe("storefront Release B administration", () => {
   it("renders tenant 404 as a non-leaking data error", async () => {
     server.use(http.get("*/api/portal/storefronts/1/plans", () => HttpResponse.json({ detail: "not found" }, { status: 404 })));
     renderAdmin("plans", <StorefrontPlansPage />);
-    expect(await screen.findByText(/خطا در بارگذاری اطلاعات/)).toBeInTheDocument();
+    // Named for what it is, not blamed on the network — and the server's own English string
+    // (which for a tenant 404 deliberately hides absent-vs-foreign) is never echoed.
+    expect(await screen.findByText(/این مورد پیدا نشد/)).toBeInTheDocument();
     expect(screen.queryByText("not found")).not.toBeInTheDocument();
   });
 
@@ -802,5 +807,101 @@ describe("storefront monthly free-trial reset", () => {
     expect(screen.getByText("حداکثر 1 گیگابایت")).toBeInTheDocument();
     await userEvent.setup().type(gb, "5");
     expect(gb).toHaveAttribute("aria-invalid", "true");
+  });
+  // ── the optional plan name, and the two bugs that made portal actions "not work" ────────────
+
+  it("names a plan, keeps the numbers out of a name-only patch, and can clear it again", async () => {
+    const user = userEvent.setup();
+    const bodies: Array<Record<string, unknown>> = [];
+    let current = { id: 1, title: "", gb: 10, days: 30, price_toman: 100_000, enabled: true, sort_order: 0 };
+    server.use(
+      http.get("*/api/portal/storefronts/1/plans", () => HttpResponse.json(
+        { items: [current], config_version: 1 }, { headers: { ETag: '"sf-config-1"' } },
+      )),
+      http.patch("*/api/portal/storefronts/1/plans/1", async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>;
+        bodies.push(body);
+        current = { ...current, ...body } as typeof current;
+        return HttpResponse.json(
+          { result: current, config_version: 2 }, { headers: { ETag: '"sf-config-2"' } },
+        );
+      }),
+    );
+
+    renderAdmin("plans", <StorefrontPlansPage />);
+    await user.click(await screen.findByRole("button", { name: "ویرایش پلن" }));
+    await user.type(await screen.findByLabelText(/نام پلن/), "طلایی");
+    await user.click(screen.getByRole("button", { name: "ذخیره" }));
+
+    // A name-only edit must not re-send (and so must not silently rewrite) the three numbers.
+    expect(await screen.findByText("تغییرات ذخیره شد.")).toBeInTheDocument();
+    expect(bodies).toEqual([{ title: "طلایی" }]);
+    expect(await screen.findByText(/🏅 طلایی/)).toBeInTheDocument();
+
+    // …and clearing the field is a real change, sent as "" (the server refuses null).
+    await user.click(await screen.findByRole("button", { name: "ویرایش پلن" }));
+    await user.clear(await screen.findByLabelText(/نام پلن/));
+    await user.click(screen.getByRole("button", { name: "ذخیره" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ title: "" });
+  });
+
+  it("never sends the read-only trial reset block, even after another group refetches", async () => {
+    // The trial draft is seeded from the SERVER object, which carries `reset`. Spreading it into
+    // the PATCH body tripped the strict schema's extra="forbid" with a 422 that the page reported
+    // as a connection problem — reachable only once a refetch made the references differ.
+    const user = userEvent.setup();
+    const bodies: Array<Record<string, unknown>> = [];
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        // A FRESH object each time, exactly like a real refetch: `reset` is a new reference.
+        JSON.parse(JSON.stringify(settings)), { headers: { ETag: '"sf-config-1"' } },
+      )),
+      http.patch("*/api/portal/storefronts/1/settings/messages", async () => HttpResponse.json(
+        { result: {}, config_version: 2 }, { headers: { ETag: '"sf-config-2"' } },
+      )),
+      http.patch("*/api/portal/storefronts/1/settings/trial", async ({ request }) => {
+        bodies.push(await request.json() as Record<string, unknown>);
+        return HttpResponse.json({ result: {}, config_version: 3 }, { headers: { ETag: '"sf-config-3"' } });
+      }),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    // Dirty the trial draft, leave it unsaved…
+    const days = await screen.findByLabelText("مدت (روز)");
+    await user.clear(days);
+    await user.type(days, "3");
+    // …save a DIFFERENT group, which refetches and hands the trial draft a stale `reset`…
+    const welcome = screen.getByLabelText("پیام خوش‌آمد");
+    await user.type(welcome, "!");
+    const saves = screen.getAllByRole("button", { name: "ذخیره" });
+    await user.click(saves[2]);
+    // …then save the trial.
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "ذخیره" })[1]).toBeEnabled());
+    await user.click(screen.getAllByRole("button", { name: "ذخیره" })[1]);
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).not.toHaveProperty("reset");
+    expect(bodies[0]).toEqual({ free_trial_days: 3 });
+  });
+
+  it("saves the sales-notification switch as its own settings group", async () => {
+    const user = userEvent.setup();
+    let body: Record<string, unknown> = {};
+    server.use(
+      http.get("*/api/portal/storefronts/1/settings", () => HttpResponse.json(
+        JSON.parse(JSON.stringify(settings)), { headers: { ETag: '"sf-config-1"' } },
+      )),
+      http.patch("*/api/portal/storefronts/1/settings/notifications", async ({ request }) => {
+        body = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ result: {}, config_version: 2 }, { headers: { ETag: '"sf-config-2"' } });
+      }),
+    );
+
+    renderAdmin("settings", <StorefrontSettingsPage />);
+    await user.click(await screen.findByLabelText("اطلاع‌رسانی روشن است"));
+    await user.click(screen.getByLabelText("اطلاع‌رسانی خاموش است").closest("form")!
+      .querySelector("button[type=submit]")!);
+    await waitFor(() => expect(body).toEqual({ admin_events: false }));
   });
 });

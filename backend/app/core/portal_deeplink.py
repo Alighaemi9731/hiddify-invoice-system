@@ -22,7 +22,7 @@ _PERCENT_ENCODED = re.compile(r"%[0-9A-Fa-f]{2}")
 # SPA has no such route, so allowing them would be a dead (and unvalidated) landing.
 _SUFFIX = re.compile(
     r"(?:/|/plans|/customers|/customers/[0-9]+|/topups|/credits|/campaigns"
-    r"|/settings|/managers|/preview|/health)?"
+    r"|/finance|/settings|/managers|/preview|/health)?"
 )
 _SHOP_SEGMENT = re.compile(r"[0-9]+")
 

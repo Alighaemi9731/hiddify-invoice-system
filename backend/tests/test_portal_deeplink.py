@@ -44,6 +44,9 @@ ACCEPT = {
     "/portal/storefront/7/topups": "/portal/storefront/7/topups",
     "/portal/storefront/7/credits": "/portal/storefront/7/credits",
     "/portal/storefront/7/campaigns": "/portal/storefront/7/campaigns",
+    # `/finance` shipped as a real SPA route in v1.111.0 but was never added here, so a link to it
+    # silently landed on the shop picker instead — this list must track PortalApp.tsx.
+    "/portal/storefront/7/finance": "/portal/storefront/7/finance",
     "/portal/storefront/7/settings": "/portal/storefront/7/settings",
     "/portal/storefront/7/managers": "/portal/storefront/7/managers",
     "/portal/storefront/7/preview": "/portal/storefront/7/preview",

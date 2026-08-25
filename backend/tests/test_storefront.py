@@ -408,11 +408,32 @@ def test_reseller_menu_keyboard_storefront_button():
     assert "🏪 راه‌اندازی ربات فروشگاهی" not in _labels(off)
 
 
-def test_plan_label_is_gb_days_price_never_title():
-    p = StorefrontPlan(title="اقتصادی", gb=30, days=30, price_toman=120000)
-    label = sfkb.plan_label(p)
-    assert "اقتصادی" not in label          # owner: «عنوان نمی‌خواهیم»
-    assert "30 گیگ" in label and "30 روزه" in label and "120,000" in label
+def test_plan_label_prefixes_an_optional_name_and_never_replaces_the_facts():
+    """A named plan reads «name · quota · duration — price»; an unnamed one is unchanged.
+
+    The name is a PREFIX by design: a customer choosing between «طلایی» and «نقره‌ای» must still
+    see what each actually buys, on the button itself."""
+    named = sfkb.plan_label(StorefrontPlan(title="اقتصادی", gb=30, days=30, price_toman=120000))
+    assert named.startswith("🏅 اقتصادی · ")
+    assert "30 گیگابایت" in named and "30 روزه" in named and "120,000" in named
+
+    unnamed = sfkb.plan_label(StorefrontPlan(title="", gb=30, days=30, price_toman=120000))
+    assert unnamed == "30 گیگابایت · 30 روزه — 120,000 تومان"
+    # A name that is only whitespace is not a name.
+    assert sfkb.plan_label(
+        StorefrontPlan(title="   ", gb=30, days=30, price_toman=120000)) == unnamed
+
+
+def test_plan_edit_keyboard_offers_the_name_beside_the_three_numbers():
+    data = [b.callback_data for row in sfkb.plan_edit_kb(7).inline_keyboard for b in row]
+    assert "sfplanfield:7:title" in data
+    for field in ("gb", "days", "price"):
+        assert f"sfplanfield:7:{field}" in data
+    # The skip/clear button must stay OUT of ALL_LABELS: `sf_menu` matches that set with no state
+    # filter and is registered first, so a label added there is swallowed by the flow-lock instead
+    # of reaching the step waiting for it.
+    assert sfkb.PLAN_NO_TITLE not in sfkb.ALL_LABELS
+    assert sfkb.PLAN_NUMERIC_FIELDS == {"gb", "days", "price"}
 
 
 # Plan create/update/enable/delete/reorder behavior (incl. foreign-plan rejection and exact
@@ -2061,9 +2082,10 @@ def test_portal_login_url_next_allowlist_and_fresh_token(tmp_path):
 
 
 def test_all_admin_labels_present_and_map_to_actions():
-    # The 14 legacy labels stay routable: every ADMIN_MENU label maps to an action (sf_menu dispatches
-    # `text in ADMIN_LABEL_TO_ACTION`), and ADMIN_MENU is unchanged (14 entries).
-    assert len(sfkb.ADMIN_MENU) == 14
+    # Every ADMIN_MENU label stays routable: sf_menu dispatches `text in ADMIN_LABEL_TO_ACTION`.
+    # 15 entries since «🔔 اطلاع‌رسانی فروش» joined (under «⋯ بیشتر» — the lean top level is
+    # unchanged). Every key also needs a row in the bot↔portal parity fixture.
+    assert len(sfkb.ADMIN_MENU) == 15
     assert set(sfkb.ADMIN_LABEL_TO_ACTION) == {lbl for lbl, _ in sfkb.ADMIN_MENU}
     assert all(action for action in sfkb.ADMIN_LABEL_TO_ACTION.values())
 

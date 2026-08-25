@@ -324,7 +324,7 @@ async def _execute(
 
 def _plan_dict(plan: StorefrontPlan) -> dict:
     return {
-        "id": plan.id, "gb": plan.gb, "days": plan.days,
+        "id": plan.id, "title": plan.title or "", "gb": plan.gb, "days": plan.days,
         "price_toman": plan.price_toman, "enabled": plan.enabled, "sort_order": plan.sort_order,
     }
 
@@ -349,11 +349,27 @@ def _assert_price_covers_cost(
     )
 
 
+PLAN_TITLE_MAX = 64
+
+
+def _normalize_plan_title(raw: str | None) -> str:
+    """A plan's OPTIONAL name. `""` is the canonical "unnamed" value (the column is NOT NULL), and
+    normalizing whitespace matters because this string is rendered inside a Telegram button, where a
+    newline or a run of spaces would break the one-line label.
+
+    Capped at 64 rather than the column's 128: the name is a PREFIX on a label that already carries
+    quota · duration · price, and a longer one makes the buy button unreadable on a phone."""
+    title = " ".join((raw or "").split())
+    if len(title) > PLAN_TITLE_MAX:
+        raise AdminCommandError(
+            "validation", f"title exceeds {PLAN_TITLE_MAX} characters")
+    return title
+
+
 def _validate_plan(*, gb: int, days: int, price_toman: int) -> tuple[int, int, int]:
-    """A plan is exactly quota + duration + price. It has no title: the field existed only in the
-    portal, was invisible in the bot on both the admin and the customer side, and left every
-    bot-made plan permanently unnamed (owner decision, 2026-08-18). The `storefront_plans.title`
-    column survives unused so old audit rows stay readable."""
+    """The three NUMERIC facts of a plan. The optional name goes through `_normalize_plan_title`
+    instead — it has no range, and keeping it out of here is what lets a title-only patch skip the
+    numeric merge entirely."""
     if not 1 <= int(gb) <= 100_000:
         raise AdminCommandError("validation", "gb must be between 1 and 100000")
     if not 1 <= int(days) <= 3650:
@@ -373,11 +389,20 @@ async def list_plans(
 
 async def create_plan(
     session: AsyncSession, shop_id: int, ctx: CommandContext, *,
-    gb: int, days: int, price_toman: int,
+    title: str | None = None, gb: int, days: int, price_toman: int,
 ) -> CommandResult:
+    """Create a plan. `title` is optional — omit it (or send `""`) for an unnamed plan.
+
+    The idempotency `intent` carries `title` ONLY when one was supplied, so a caller that never
+    mentions a name keeps hashing exactly the request it hashed before this field came back — an
+    in-flight command from an older client replays instead of colliding.
+    """
     gb, days, price_toman = _validate_plan(gb=gb, days=days, price_toman=price_toman)
+    name = _normalize_plan_title(title)
     shop, reseller = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
-    request = {"gb": gb, "days": days, "price_toman": price_toman}
+    request: dict[str, Any] = {"gb": gb, "days": days, "price_toman": price_toman}
+    if title is not None:
+        request["title"] = name
     command, replay = await _claim_db_command(
         session, shop, ctx, action="plan.create", intent=request)
     if replay is not None:
@@ -396,7 +421,7 @@ async def create_plan(
 
     async def mutate(_version: int) -> _Mutation:
         plan = StorefrontPlan(
-            storefront_bot_id=shop.id, gb=gb, days=days,
+            storefront_bot_id=shop.id, title=name, gb=gb, days=days,
             price_toman=price_toman, enabled=True, sort_order=plan_count,
         )
         session.add(plan)
@@ -410,11 +435,20 @@ async def create_plan(
 
 async def update_plan(
     session: AsyncSession, shop_id: int, plan_id: int, ctx: CommandContext, *,
+    title: str | None | object = _UNSET,
     gb: int | None = None, days: int | None = None, price_toman: int | None = None,
 ) -> CommandResult:
-    """Patch one or more of a plan's three fields. Every caller (portal form, bot field picker)
-    sends only what changed; the below-cost guard below judges the MERGED values."""
+    """Patch one or more of a plan's four fields. Every caller (portal form, bot field picker)
+    sends only what changed; the below-cost guard below judges the MERGED numeric values.
+
+    `title` is three-valued on purpose, which is why it uses `_UNSET` rather than `None` like the
+    numbers: **absent** leaves the name alone, and **`""` CLEARS it** back to unnamed. A cleared
+    name must be a real, hashable instruction — collapsing it into "not provided" would make
+    removing a name impossible, and would let a clear replay as a no-op under its own key.
+    """
     intent: dict[str, Any] = {"plan_id": plan_id}
+    if title is not _UNSET:
+        intent["title"] = _normalize_plan_title(title if isinstance(title, str) else None)
     for name, value, lo, hi in (
         ("gb", gb, 1, 100_000), ("days", days, 1, 3650),
         ("price_toman", price_toman, 0, 10**12),
@@ -451,6 +485,8 @@ async def update_plan(
 
     async def mutate(_version: int) -> _Mutation:
         plan.gb, plan.days, plan.price_toman = values
+        if "title" in intent:  # absent = leave the name alone; "" = clear it
+            plan.title = intent["title"]
         await session.flush()
         after = _plan_dict(plan)
         return _Mutation({"plan": after}, after, "plan", plan.id)
@@ -616,6 +652,7 @@ def settings_snapshot(shop: StorefrontBot) -> dict:
         },
         "messages": {"welcome_text": shop.welcome_text, "support_contact": shop.support_contact},
         "shop_state": {"closed": shop.shop_closed, "closed_text": shop.closed_text},
+        "notifications": {"admin_events": shop.notify_admin_events},
         "channel": {
             "required": shop.channel_required, "channel_id": shop.channel_id,
             "channel_link": shop.channel_link,
@@ -978,6 +1015,35 @@ async def update_shop_state(
 
     return await _execute(
         session, shop, ctx, action="settings.shop_state", command=command,
+        before=before, mutate=mutate,
+    )
+
+
+async def update_notifications(
+    session: AsyncSession, shop_id: int, ctx: CommandContext, *, admin_events: bool,
+) -> CommandResult:
+    """The shop's «اطلاع‌رسانی فروش» master switch (purchase / renewal / confirmed top-up).
+
+    Deliberately its OWN settings group rather than a field on `shop_state`: closing a shop and
+    muting its notifications are unrelated decisions, and a shared group would make each save
+    re-send the other's value."""
+    desired = bool(admin_events)
+    intent: dict[str, Any] = {"admin_events": desired}
+    shop, _ = await _authorized_shop(session, shop_id, ctx.actor_telegram_id, ctx.source)
+    command, replay = await _claim_db_command(
+        session, shop, ctx, action="settings.notifications", intent=intent)
+    if replay is not None:
+        return replay
+    before = settings_snapshot(shop)["notifications"]
+    state = {"admin_events": desired}
+
+    async def mutate(_version: int) -> _Mutation:
+        shop.notify_admin_events = desired
+        await session.flush()
+        return _Mutation({"notifications": state}, state, "settings", "notifications")
+
+    return await _execute(
+        session, shop, ctx, action="settings.notifications", command=command,
         before=before, mutate=mutate,
     )
 
@@ -1688,6 +1754,13 @@ async def renew_order(
             correlation_id=ctx.correlation_id or ctx.idempotency_key,
             after={"gb": result.gb, "days": result.days})
         await session.commit()
+        # AFTER the commit, never inside it: a Telegram outage must not roll back a renewal, and a
+        # committed renewal must not be lost because the notification failed. The acting admin is
+        # excluded — they are reading the result in the portal right now.
+        from app.services import storefront_notify
+        await storefront_notify.notify_renewal(
+            sf_id=shop.id, order_id=order_id, automatic=False,
+            exclude_chat_id=ctx.actor_telegram_id)
         return CommandResult(200, body, current)
     reason = result.reason or "error"
     # `below_cost` is a deterministic pre-flight refusal (no durable state, no panel call), so it
@@ -1849,8 +1922,22 @@ async def set_topup_decision(
                     idempotency_key=f"topup-notify:{ctx.idempotency_key}", customers=[cust])
         return _Mutation(body, body, "wallet_txn", txn_id)
 
-    return await _execute_entity(
+    result = await _execute_entity(
         session, shop, ctx, action="topup.decide", command=command, before=before, mutate=mutate)
+    # Outside `mutate`, so a rolled-back decision can never notify and a committed one can never be
+    # lost by a Telegram failure. `changed` is False on a replay, which is what keeps a retried
+    # request from announcing the same top-up twice. The BOT path passes its own live Bot and its
+    # own actor; here the shop's transient bot is built on demand.
+    body = result.body if isinstance(result.body, dict) else {}
+    if decision == "confirm" and body.get("changed") and ctx.source != "bot":
+        from app.services import storefront_notify
+        txn_row = await session.get(StorefrontWalletTxn, txn_id)
+        await storefront_notify.notify_topup(
+            sf_id=shop.id, customer_id=txn_row.customer_id if txn_row else None,
+            amount_toman=body.get("credited"),
+            bonus_toman=body.get("credit_bonus_toman") or 0,
+            exclude_chat_id=ctx.actor_telegram_id)
+    return result
 
 
 async def bulk_topup_decisions(

@@ -17,7 +17,7 @@ import {
 } from "./api";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { CreditCode, CreditCreateBody, CreditKind, CreditUpdateBody, Versioned } from "./types";
-import { isNotFound, useIdempotentMutation } from "./mutation";
+import { isNotFound, storefrontErrorMessage, useIdempotentMutation } from "./mutation";
 import { useXsFullScreen } from "../../responsive";
 import { NumberField } from "../../components/NumberField";
 
@@ -86,8 +86,12 @@ export default function StorefrontCreditsPage() {
   );
 
   const busy = enableMut.isPending || archiveMut.isPending;
-  const actionError = (enableMut.isError || archiveMut.isError)
-    ? "انجام عملیات ناموفق بود. دوباره تلاش کنید." : null;
+  // Say which failure it was. "try again" is useless advice for a 404 or a dead shop bot.
+  const actionError = enableMut.isError
+    ? storefrontErrorMessage(enableMut.error, "انجام عملیات ناموفق بود؛ دوباره تلاش کنید.")
+    : archiveMut.isError
+      ? storefrontErrorMessage(archiveMut.error, "انجام عملیات ناموفق بود؛ دوباره تلاش کنید.")
+      : null;
 
   return (
     <Box>
@@ -259,7 +263,9 @@ function CreditFormDialog({
             </Alert>
           )}
           {err != null && !locked && (
-            <Alert severity="error">ثبت ناموفق بود (ممکن است این کد از قبل وجود داشته باشد یا ورودی نامعتبر باشد).</Alert>
+            <Alert severity="error" sx={{ whiteSpace: "pre-line" }}>
+              {storefrontErrorMessage(err, "ثبت ناموفق بود (ممکن است این کد از قبل وجود داشته باشد یا ورودی نامعتبر باشد).")}
+            </Alert>
           )}
           {!editing && (
             <TextField label="کد" value={form.code} onChange={(e) => set("code", e.target.value)}

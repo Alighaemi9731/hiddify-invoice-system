@@ -119,6 +119,13 @@ class StorefrontBot(Base, TimestampMixin):
     shop_closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     closed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # «اطلاع‌رسانی فروش»: DM the shop's admins when a customer buys, renews, or has a wallet top-up
+    # confirmed. Default ON — a shop owner who never opens the portal should still learn about a
+    # sale. It is read in exactly ONE place (`storefront_notify.notify_shop_admins`), so no event
+    # site can forget it and leave the switch half-honoured.
+    notify_admin_events: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true())
+
     plans: Mapped[list[StorefrontPlan]] = relationship(
         back_populates="bot", cascade="all, delete-orphan"
     )

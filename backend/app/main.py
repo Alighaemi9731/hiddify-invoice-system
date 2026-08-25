@@ -127,7 +127,12 @@ app.add_middleware(
     allow_headers=["*"],
     # Pagination totals ride a response header; without exposing it the DEV cross-origin
     # SPA (vite on :5173) can't read it. Same-origin production is unaffected.
-    expose_headers=["X-Total-Count", "X-Total-Amount-Toman", "X-Paid-Amount-Toman"],
+    # `ETag` and `Retry-After` are here for the same reason: the storefront portal has body-level
+    # fallbacks for both (`config_version`, a 5s default), and leaving those load-bearing in dev
+    # means a concurrency or rate-limit bug only ever reproduces in production.
+    expose_headers=[
+        "X-Total-Count", "X-Total-Amount-Toman", "X-Paid-Amount-Toman", "ETag", "Retry-After",
+    ],
 )
 
 # Illegal invoice state transitions (B03) surface as a clean 400 with a Persian message.

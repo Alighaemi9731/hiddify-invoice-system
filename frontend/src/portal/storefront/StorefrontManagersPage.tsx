@@ -10,7 +10,7 @@ import { addStorefrontManager, listStorefrontManagers, removeStorefrontManager, 
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
 import type { StorefrontOutletContext } from "./StorefrontShell";
 import type { StorefrontManagers, Versioned } from "./types";
-import { commandRecoveryMessage, isVersionConflict, useIdempotentMutation } from "./mutation";
+import { isVersionConflict, storefrontErrorMessage, useIdempotentMutation } from "./mutation";
 
 type ManagerCommand =
   | { type: "add"; telegramId: string; etag?: string }
@@ -60,10 +60,10 @@ export default function StorefrontManagersPage() {
       </Stack>
       {mutation.isError && !isVersionConflict(mutation.error) && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          {commandRecoveryMessage(mutation.error) || "تغییر مدیر انجام نشد."}
+          {storefrontErrorMessage(mutation.error, "تغییر مدیر انجام نشد؛ دوباره تلاش کنید.")}
         </Alert>
       )}
-      <DataState isLoading={query.isLoading} isError={query.isError} rows={4} onRetry={() => query.refetch()}>
+      <DataState isLoading={query.isLoading} isError={query.isError} error={query.error} rows={4} onRetry={() => query.refetch()}>
         {query.data && (
           <Stack spacing={2}>
             <Card>

@@ -529,6 +529,10 @@ async def reap_pending_orders(
             await session.commit()
             counts["completed"] += 1
             await _notify_completed(sf, customer, order)
+            # The sale is only NOW visible to anyone; the buy handler never got to announce it
+            # (its process died mid-provision), so the shop's admins learn of it here or not at all.
+            from app.services import storefront_notify
+            await storefront_notify.notify_purchase(sf_id=sf.id, order_id=order.id)
         else:  # nothing on the panel → refund (once) and fail
             if order.price_toman and not await storefront_wallet.order_has_refund(session, order.id):
                 await storefront_wallet.refund(session, order.customer_id, int(order.price_toman),

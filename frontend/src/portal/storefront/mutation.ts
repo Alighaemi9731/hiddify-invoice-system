@@ -1,49 +1,77 @@
 import { useRef } from "react";
 import { useMutation, type UseMutationOptions } from "@tanstack/react-query";
 import axios from "axios";
+import { ConcurrentCommandError, apiErrorMessage } from "../../api/errors";
 
 const newIdempotencyKey = () => {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+interface CommandSlot<TData> {
+  inFlight: Promise<TData> | null;
+  key: string | null;
+  fingerprint: string | null;
+}
+
+/**
+ * `commandKey` groups variables into INDEPENDENT command lanes.
+ *
+ * One hook instance multiplexes every command a page can issue (create / update / enable / delete /
+ * reorder …). With a single shared slot, moving a plan up while a toggle was still in flight was
+ * rejected outright — the action silently did not happen, and the plain `Error` it threw matched
+ * none of the error helpers, so the page blamed the network. Lanes keep the useful half of the
+ * guard (the SAME command double-tapped still de-duplicates onto one request) without blocking a
+ * different one.
+ *
+ * Deliberately not a queue: a queued second command would carry the `If-Match` ETag that the first
+ * one is about to bump, so it would replay into a 409 while looking like it had succeeded.
+ */
 export function useIdempotentMutation<TData, TVariables>(
   mutationFn: (variables: TVariables, idempotencyKey: string) => Promise<TData>,
-  options?: Omit<UseMutationOptions<TData, Error, TVariables>, "mutationFn">,
+  options?: Omit<UseMutationOptions<TData, Error, TVariables>, "mutationFn"> & {
+    commandKey?: (variables: TVariables) => string;
+  },
 ) {
-  const inFlight = useRef<Promise<TData> | null>(null);
-  const key = useRef<string | null>(null);
-  const fingerprint = useRef<string | null>(null);
+  const slots = useRef<Map<string, CommandSlot<TData>>>(new Map());
+  const { commandKey, ...mutationOptions } = options || {};
   return useMutation({
-    ...options,
+    ...mutationOptions,
     mutationFn: (variables) => {
+      const lane = commandKey ? commandKey(variables) : "default";
+      let slot = slots.current.get(lane);
+      if (!slot) {
+        slot = { inFlight: null, key: null, fingerprint: null };
+        slots.current.set(lane, slot);
+      }
       const nextFingerprint = JSON.stringify(variables);
-      if (inFlight.current) {
-        if (fingerprint.current === nextFingerprint) return inFlight.current;
-        return Promise.reject(new Error("another storefront command is already in progress"));
+      if (slot.inFlight) {
+        if (slot.fingerprint === nextFingerprint) return slot.inFlight;
+        return Promise.reject(new ConcurrentCommandError());
       }
-      if (!key.current || fingerprint.current !== nextFingerprint) {
-        key.current = newIdempotencyKey();
-        fingerprint.current = nextFingerprint;
+      if (!slot.key || slot.fingerprint !== nextFingerprint) {
+        slot.key = newIdempotencyKey();
+        slot.fingerprint = nextFingerprint;
       }
-      const requestKey = key.current;
+      const current = slot;
+      const requestKey = current.key;
       const request = mutationFn(variables, requestKey).then((result) => {
-        key.current = null;
-        fingerprint.current = null;
+        current.key = null;
+        current.fingerprint = null;
         return result;
       }).catch((error: unknown) => {
         // A response means the server reached a definite HTTP outcome (including cached 4xx/5xx),
         // so a deliberate retry must be a new command. Only transport failures with no response
         // retain the key because the server may have committed before the connection failed.
-        if (axios.isAxiosError(error) && isDefinitiveResponse(error.response)) {
-          key.current = null;
-          fingerprint.current = null;
+        if (axios.isAxiosError(error) && error.response && isDefinitiveResponse(error.response)) {
+          current.key = null;
+          current.fingerprint = null;
         }
         throw error;
       }).finally(() => {
-        inFlight.current = null;
+        current.inFlight = null;
       });
-      inFlight.current = request;
+      current.inFlight = request;
       return request;
     },
   });
@@ -84,6 +112,15 @@ export function commandRecoveryMessage(error: unknown) {
   if (code === "unknown") return "نتیجهٔ عملیات قبلی نامشخص است؛ پیش از تلاش دوباره، وضعیت فعلی را بررسی و با پشتیبانی هماهنگ کنید.";
   return null;
 }
+
+/**
+ * What to show a reseller when a storefront command fails. `belowCostMessage` stays first because
+ * the server authors that one word for word (including the «۵۰ هزار تومان → 50000» hint);
+ * everything else falls through to the shared map, which finally reads the Persian `message` the
+ * backend already ships instead of blaming the user's internet connection.
+ */
+export const storefrontErrorMessage = (error: unknown, fallback?: string) =>
+  belowCostMessage(error) ?? apiErrorMessage(error, fallback);
 
 // A plan priced under the reseller's own cost. The server authors the (Persian) explanation —
 // including the "you probably meant 50000, not 50" hint — so render it verbatim rather than

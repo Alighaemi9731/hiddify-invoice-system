@@ -27,7 +27,7 @@ export default function StorefrontPlanHistoryDialog({
     <Dialog open={!!plan} onClose={onClose} maxWidth="sm" fullWidth fullScreen={xsFull}>
       <DialogTitle>تاریخچهٔ پلن {plan ? planLabel(plan) : ""}</DialogTitle>
       <DialogContent>
-        <DataState isLoading={query.isLoading} isError={query.isError} rows={4} onRetry={() => query.refetch()}>
+        <DataState isLoading={query.isLoading} isError={query.isError} error={query.error} rows={4} onRetry={() => query.refetch()}>
           {!query.data?.length ? (
             <Typography color="text.secondary" variant="body2" sx={{ py: 3, textAlign: "center" }}>
               تغییری برای این پلن ثبت نشده است.
@@ -37,10 +37,17 @@ export default function StorefrontPlanHistoryDialog({
               {query.data.map((event) => (
                 <ListItem key={event.id} divider alignItems="flex-start">
                   <ListItemText
-                    primary={event.action}
+                    primary={ACTION_FA[event.action] || event.action}
                     secondary={
                       <Stack component="span" spacing={0.4} sx={{ mt: 0.5 }}>
-                        <span>{event.source} · {event.actor_role} · {fmtDateTime(event.created_at)}</span>
+                        <span>
+                          {SOURCE_FA[event.source] || event.source}
+                          {" · "}{ROLE_FA[event.actor_role] || event.actor_role}
+                          {" · "}{fmtDateTime(event.created_at)}
+                          {event.outcome && event.outcome !== "succeeded"
+                            ? ` · ${OUTCOME_FA[event.outcome] || event.outcome}`
+                            : ""}
+                        </span>
                         {event.before && <span>قبل: {planSnapshot(event.before)}</span>}
                         {event.after && <span>بعد: {planSnapshot(event.after)}</span>}
                       </Stack>
@@ -57,10 +64,22 @@ export default function StorefrontPlanHistoryDialog({
   );
 }
 
-// Audit rows written before plans lost their title still carry one; it is deliberately not
-// rendered, so history reads in today's vocabulary rather than resurrecting a dead field.
+// The audit log stores machine tokens (`plan.create`, `portal`, `owner`). Rendering them raw put
+// LTR identifiers in the middle of a Persian RTL list and told a shop owner nothing.
+const ACTION_FA: Record<string, string> = {
+  "plan.create": "ساخت پلن",
+  "plan.update": "ویرایش پلن",
+  "plan.enabled": "فعال/غیرفعال کردن",
+  "plan.delete": "حذف پلن",
+  "plan.reorder": "تغییر ترتیب",
+};
+const SOURCE_FA: Record<string, string> = { portal: "پنل", bot: "ربات", system: "سامانه" };
+const ROLE_FA: Record<string, string> = { owner: "مالک", manager: "مدیر", admin: "مدیر" };
+const OUTCOME_FA: Record<string, string> = { failed: "ناموفق", replayed: "تکراری" };
+
 function planSnapshot(value: Partial<StorefrontPlan>) {
   const parts = [];
+  if (value.title !== undefined) parts.push(value.title || "بدون نام");
   if (value.gb !== undefined) parts.push(`${fmtNum(value.gb)} گیگابایت`);
   if (value.days !== undefined) parts.push(`${fmtNum(value.days)} روز`);
   if (value.price_toman !== undefined) parts.push(fmtToman(value.price_toman));
