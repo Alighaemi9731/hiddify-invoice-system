@@ -77,7 +77,12 @@ def test_register_defaults_when_no_config():
     assert "day='1-3'" in t["storefront_trial_reset"]
     assert "hour='8'" in t["storefront_trial_reset"]
     assert "minute='25'" in t["storefront_trial_reset"]
-    assert len(t) == 15
+    # Daily traffic audit: the configured hour plus two as a RETRY hour, not two scans — a
+    # reseller already stored for the day is skipped before any panel call. Minute :45 is unused
+    # by every other cron job at any owner-settable hour.
+    assert "hour='5,7'" in t["traffic_audit"]
+    assert "minute='45'" in t["traffic_audit"]
+    assert len(t) == 16
 
 
 def test_non_divisor_interval_keeps_true_spacing_across_boundaries():
@@ -136,5 +141,13 @@ def test_daily_maintenance_schedules_storefront_command_retention(monkeypatch):
     monkeypatch.setattr(jobs.maintenance, "prune_owner_data", lambda _s: mark("owner"))
     monkeypatch.setattr(jobs.storefront_audit, "prune_commands", lambda _s: mark("commands"))
 
+    from app.services import traffic_audit
+
+    async def traffic_prune(_s):  # noqa: ANN001
+        calls.append("traffic")
+        return 0
+
+    monkeypatch.setattr(traffic_audit, "prune", traffic_prune)
+
     asyncio.run(jobs.daily_maintenance_job())
-    assert calls == ["logs", "snapshots", "storefront", "owner", "commands", "commit"]
+    assert calls == ["logs", "snapshots", "storefront", "owner", "traffic", "commands", "commit"]

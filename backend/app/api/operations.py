@@ -25,6 +25,7 @@ from app.models import (
     Panel,
     Payment,
     Reseller,
+    ResellerTrafficDaily,
     SyncRun,
     UsageMeter,
     UsageMeterEvent,
@@ -40,6 +41,7 @@ from app.services import (
     dunning,
     enforcement,
     invoicing,
+    traffic_audit,
 )
 from app.services import (
     broadcast as broadcast_service,
@@ -175,6 +177,85 @@ async def reset_trial_quota(session: AsyncSession = Depends(get_session)) -> dic
     return await storefront_subscription.reset_over_renewed_trials(session)
 
 
+# ── Traffic audit («بررسی مصرف غیرعادی») ──────────────────────────────────────
+#
+# REPORT-ONLY, deliberately. `high-volume-users` has a `/warn` sibling and the below-cost sweep
+# disables plans; this one has neither, by the owner's decision. Do not "complete the pattern".
+#
+# The status dict below is process-local. That is safe for the manual scan because the API runs a
+# SINGLE uvicorn worker, but the daily job runs in the SCHEDULER container — so its outcome is
+# never in this dict and must be read from `/traffic-audit/latest`, which reads the DB.
+_traffic_status: dict = {"running": False}
+
+
+async def _traffic_audit_bg(panel_id: int | None) -> None:
+    """Background task: scan the fleet in its own sessions (the request's is already closed).
+
+    Two sessions, with the 2–3 minute network phase deliberately BETWEEN them: holding a pooled
+    connection idle for the whole fan-out would starve the API that launched the scan.
+    """
+    global _traffic_status
+    try:
+        async with SessionLocal() as session:
+            jobs, skipped, thresholds = await traffic_audit.collect(session, panel_id=panel_id)
+        total = sum(len(j.roots) for j in jobs)
+        _traffic_status.update({
+            "running": True, "scanned": 0, "total": total,
+            "panels_total": len(jobs), "panel": None,
+        })
+
+        def progress(panel_key: str) -> None:
+            _traffic_status["scanned"] = int(_traffic_status.get("scanned", 0)) + 1
+            _traffic_status["panel"] = panel_key
+
+        result = await traffic_audit.measure(
+            jobs, thresholds, skipped=skipped, on_progress=progress
+        )
+        async with SessionLocal() as session:
+            await traffic_audit.store(session, result)
+        _traffic_status.update({"running": False, "result": result.as_dict(), "error": None})
+    except Exception as exc:  # noqa: BLE001 — a failed scan must not wedge the flag forever
+        log.exception("traffic audit failed")
+        _traffic_status.update({"running": False, "error": str(exc)[:300]})
+
+
+@router.post("/traffic-audit/run")
+async def traffic_audit_run(
+    background: BackgroundTasks, panel_id: int | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Start a live traffic scan and return immediately.
+
+    Takes 2–3 minutes (one ~1.8 s panel call per reseller, panels concurrent), so it is backgrounded
+    and polled through `/traffic-audit/status`. A second start while one is running is refused
+    rather than queued — two concurrent scans would just make each other slower.
+    """
+    if _traffic_status.get("running"):
+        return {"status": "already_running", **_traffic_status}
+    # Cheap pre-count so the UI can show honest progress from the very first poll.
+    jobs, _skipped, _t = await traffic_audit.collect(session, panel_id=panel_id)
+    total = sum(len(j.roots) for j in jobs)
+    _traffic_status.update({
+        "running": True, "scanned": 0, "total": total, "panels_total": len(jobs),
+        "panel": None, "result": None, "error": None,
+    })
+    background.add_task(_traffic_audit_bg, panel_id)
+    return {"status": "started", "total": total, "panels": len(jobs)}
+
+
+@router.get("/traffic-audit/status")
+async def traffic_audit_status() -> dict:
+    """Live progress of the MANUAL scan running in this process (no DB)."""
+    return _traffic_status
+
+
+@router.get("/traffic-audit/latest")
+async def traffic_audit_latest(session: AsyncSession = Depends(get_session)) -> dict:
+    """The last STORED scan — instant, no panel calls. This is what the page shows on open, and
+    the only way to see the scheduled run's result (it happens in the scheduler container)."""
+    return await traffic_audit.latest(session)
+
+
 @router.post("/refresh-rate")
 async def refresh_rate(session: AsyncSession = Depends(get_session)) -> dict:
     """Fetch the live USDT→Toman rate now (Tetherland/Wallex) and cache it for billing/display.
@@ -281,7 +362,11 @@ async def wipe_data(body: WipeBody, session: AsyncSession = Depends(get_session)
     # invoice would reuse an old id and silently overwrite a historic financial_records row.
     for model in (
         InvoiceLine, Payment, DeliveryLog, EnforcementAction, Invoice,
-        UsageMeter, UsageMeterEvent, EndUserSnapshot, SyncRun, BotUser, Reseller, Panel,
+        # ResellerTrafficDaily is denormalized with no FKs (so a deleted reseller keeps its
+        # history), which means a wipe must delete it explicitly or trend lines would survive for
+        # accounts that no longer exist. Unlike FinancialRecord it is telemetry, not a money fact.
+        UsageMeter, UsageMeterEvent, EndUserSnapshot, SyncRun, BotUser, ResellerTrafficDaily,
+        Reseller, Panel,
     ):
         await session.execute(delete(model))
     await session.commit()

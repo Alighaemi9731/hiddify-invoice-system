@@ -585,6 +585,37 @@ export type HighVolumeDeleteResult = {
 export const highVolumeDelete = (body: { snapshot_ids: number[]; threshold?: number }) =>
   api.post("/api/reports/high-volume-users/delete", body, { timeout: LONG_OP_MS })
     .then((r) => r.data as HighVolumeDeleteResult);
+// ── Traffic audit («بررسی مصرف غیرعادی») ────────────────────────────────────────
+export type TrafficAuditRow = {
+  panel_key: string; panel_id: number | null; reseller_name: string; admin_uuid: string;
+  sub_count: number; reachable: boolean;
+  yesterday_gb: number; yesterday_online: number; last_30d_gb: number; total_users: number;
+  quota_gb: number; counter_gb: number; counter_ratio: number | null;
+  ratio: number | null; flagged: boolean;
+  gb_per_user_day: number | null; panel_share_pct: number | null;
+};
+export type TrafficAuditReport = {
+  day?: string | null; scanned_at?: string | null;
+  resellers_scanned: number; flagged: number; unreachable?: number;
+  panels_skipped?: number; total_traffic_yesterday_gb?: number;
+  skipped_panels_detail?: { panel_key: string; reason: string }[];
+  rows: TrafficAuditRow[];
+};
+export type TrafficAuditStatus = {
+  running: boolean; scanned?: number; total?: number; panels_total?: number;
+  panel?: string | null; result?: TrafficAuditReport | null; error?: string | null;
+};
+/** Starts the scan and returns immediately — the work is backgrounded and polled via
+ *  `trafficAuditStatus`, so this deliberately does NOT need LONG_OP_MS. */
+export const trafficAuditRun = (params?: { panel_id?: number }) =>
+  api.post("/api/ops/traffic-audit/run", null, { params }).then((r) => r.data);
+export const trafficAuditStatus = () =>
+  api.get("/api/ops/traffic-audit/status").then((r) => r.data as TrafficAuditStatus);
+/** The last STORED scan — instant. Also the only way to see the daily job's result, since that
+ *  runs in the scheduler container and never reaches the API's in-memory status. */
+export const trafficAuditLatest = () =>
+  api.get("/api/ops/traffic-audit/latest").then((r) => r.data as TrafficAuditReport);
+
 export const runChannelGuard = () => api.post("/api/ops/channel-guard").then((r) => r.data);
 export const setDomain = (domain: string, acme_email?: string) =>
   api.post("/api/ops/set-domain", { domain, acme_email }).then((r) => r.data);

@@ -54,6 +54,7 @@ class ScheduleConfig:
     storefront_autorenew_minutes: int = 15  # deferred auto-renew fire-sweep cadence (1–1440)
     trial_reset_day: int = 1   # fleet-wide free-trial re-arm: day of month (1–28)
     trial_reset_hour: int = 8  # fleet-wide free-trial re-arm: hour (0–23)
+    traffic_audit_hour: int = 5  # daily reseller-traffic audit: hour (0–23)
 
 
 def _anchor(tz, minute_offset: int) -> datetime:  # noqa: ANN001
@@ -87,6 +88,7 @@ SCHEDULE_SETTING_KEYS: tuple[str, ...] = (
     "storefront_pending_order_reaper_minutes", "storefront_delivery_worker_interval_minutes",
     "storefront_autorenew_interval_minutes",
     "storefront_trial_reset_day", "storefront_trial_reset_hour",
+    "traffic_audit_hour",
 )
 
 
@@ -113,6 +115,7 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
         # a month and the whole feature would be «چرا این ماه ریست نشد؟».
         trial_reset_day=_clamp(s.get("storefront_trial_reset_day"), 1, 28, 1),
         trial_reset_hour=_clamp(s.get("storefront_trial_reset_hour"), 0, 23, 8),
+        traffic_audit_hour=_clamp(s.get("traffic_audit_hour"), 0, 23, 5),
     )
 
 
@@ -316,6 +319,12 @@ async def daily_maintenance_job() -> None:
         async with SessionLocal() as session:
             await maintenance.prune_owner_data(session)
         async with SessionLocal() as session:
+            from app.services import traffic_audit
+
+            dropped = await traffic_audit.prune(session)
+            if dropped:
+                log.info("traffic audit retention: pruned %s history rows", dropped)
+        async with SessionLocal() as session:
             await storefront_audit.prune_commands(session)
             await session.commit()
         async with SessionLocal() as session:
@@ -433,6 +442,37 @@ async def rate_refresh_job() -> None:
         log.exception("rate_refresh_job failed")
 
 
+async def traffic_audit_job() -> None:
+    """Daily reseller-traffic audit: record what each top-level reseller ACTUALLY moved.
+
+    Runs in the scheduler container, so its result never reaches the API's in-memory status dict —
+    the panel reads it back from the stored history (`/api/ops/traffic-audit/latest`).
+
+    Report-only by design: this writes a history row and logs. It never bills, warns or enforces.
+    """
+    try:
+        from app.services import traffic_audit
+
+        async with SessionLocal() as session:
+            summary = await traffic_audit.run_daily(session)
+        if summary.get("flagged"):
+            log.warning("traffic audit: %s reseller(s) flagged", summary["flagged"])
+    except Exception:  # noqa: BLE001 — never crash the scheduler loop
+        log.exception("traffic_audit_job failed")
+
+
+def _traffic_audit_hours(hour: int) -> str:
+    """The cron `hour` field for the traffic audit: the configured hour plus two.
+
+    Same reasoning as `_trial_reset_days`, one cadence down. A daily fire's next chance is 24 hours
+    away, and `server_status` offers no way to re-read a missed "yesterday" — so a scheduler that
+    was mid-deploy at that minute would lose the day permanently. The retry hours are nearly free:
+    a reseller already stored for that day is skipped before any panel call is made.
+    """
+    hour = max(0, min(23, int(hour or 0)))
+    return f"{hour},{(hour + 2) % 24}"
+
+
 def _trial_reset_days(day: int) -> str:
     """The cron `day` field for the fleet-wide trial re-arm: the configured day plus two.
 
@@ -544,6 +584,14 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         ("storefront_trial_reset", storefront_trial_reset_job,
          CronTrigger(day=_trial_reset_days(cfg.trial_reset_day), hour=cfg.trial_reset_hour,
                      minute=25, timezone=tz), 12 * 3600),
+        # Daily reseller-traffic audit. Cron, not interval: it records "yesterday", a calendar
+        # event. Minute :45 is free at EVERY owner-settable hour (:00 invoicing/dunning, :15
+        # expiry, :25 trial reset, :30 maintenance/digest) — the cron analogue of the interval
+        # jobs' distinct anchor offsets. Runs at the configured hour AND two hours later; the
+        # second fire makes no panel calls once the day is stored.
+        ("traffic_audit", traffic_audit_job,
+         CronTrigger(hour=_traffic_audit_hours(cfg.traffic_audit_hour), minute=45, timezone=tz),
+         6 * 3600),
     ]
     for job_id, func, trigger, grace in specs:
         sched.add_job(func, trigger, id=job_id, replace_existing=True,

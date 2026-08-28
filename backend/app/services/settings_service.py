@@ -390,6 +390,19 @@ DEFS: list[SettingDef] = [
     SettingDef("crm_declining_pct", 50, False, "crm"),
     SettingDef("crm_growing_pct", 125, False, "crm"),
     SettingDef("crm_snooze_default_days", 15, False, "crm"),
+    # Traffic audit («بررسی مصرف غیرعادی») — the panel-abuse report. Reads Hiddify's own
+    # `daily_usage` accounting and compares it with the quota the reseller actually sold. Panel-only:
+    # nothing here bills, warns or enforces; the thresholds only decide which rows get a red flag.
+    SettingDef("traffic_audit_enabled", True, False, "reports"),
+    # A user who bought 30 GB cannot legitimately consume more, so sold quota is a hard ceiling on
+    # honest traffic. Measured across the whole fleet (366 active resellers, 2026-08): ZERO sit above
+    # 2.0, exactly one above 1.5, and the reseller that motivated this feature was at 8.8.
+    SettingDef("traffic_audit_ratio_threshold", 2.0, False, "reports"),
+    # Volume floor: a tiny denominator makes the ratio meaningless (the single 1.5 outlier fleet-wide
+    # was 45 GB across 3 users). Below this, a reseller is never flagged however extreme the ratio.
+    SettingDef("traffic_audit_min_gb_30d", 50, False, "reports"),
+    SettingDef("traffic_audit_retention_days", 180, False, "reports"),
+    SettingDef("traffic_audit_hour", 5, False, "schedule"),
     # Message templates
     SettingDef("tpl_welcome", _TPL_WELCOME, False, "templates"),
     SettingDef("tpl_membership", _TPL_MEMBERSHIP, False, "templates"),
@@ -487,6 +500,13 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "crm_declining_pct": (1, 100),
     "crm_growing_pct": (100, 1000),
     "crm_snooze_default_days": (1, 365),
+    # Traffic audit. Lower bound 1 on the ratio for the same reason as the CRM keys: the
+    # `.get(key, (0, None))` fallback admits 0, and a threshold of 0 would flag every reseller on
+    # the fleet at once. To switch the report off, use `traffic_audit_enabled`.
+    "traffic_audit_ratio_threshold": (1, 1000),
+    "traffic_audit_min_gb_30d": (0, 1_000_000),
+    "traffic_audit_retention_days": (7, 3650),
+    "traffic_audit_hour": (0, 23),
     "kick_grace_minutes": (0, 24 * 60),
     "min_confirmations": (0, 10_000),
     "ton_amount_tolerance_pct": (0, 100),

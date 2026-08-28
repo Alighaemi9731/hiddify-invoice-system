@@ -559,6 +559,39 @@ class AdminApiClient(PanelClient):
                 return None
             return resp.json()
 
+    async def get_server_status(  # noqa: ANN001
+        self, panel, *, api_key: str | None = None
+    ) -> dict | None:
+        """Hiddify's own traffic accounting for the admin we authenticate AS — the `usage_history`
+        half of `GET /server_status/`. Returns the raw dict, or None if the admin can't be read.
+
+        This is the ONLY way to reach the panel's `daily_usage` table: it is absent from the backup
+        JSON (`dump_db_to_dict` never passes `dump_id=True`) and from the admin-user API
+        (`AdminSchema` has no `id` field). Pass `api_key = <that reseller's admin_uuid>` and the
+        panel answers for THAT admin — the endpoint accepts `Role.agent`, and it aggregates over
+        `recursive_sub_admins_ids()`, so sub-resellers are already rolled up into their parent.
+        (The `?admin_id=` query param would need a numeric id we neither store nor can obtain.)
+
+        Returns None rather than raising for a 4xx: on `/api/` paths Hiddify aborts a rejected key
+        with **403** and an absent admin with 404, and a scan across hundreds of resellers must
+        treat "this one can't be read" as a row-level fact, not an aborted run. Transport errors
+        still raise, so the caller can tell a dead panel from a dead admin.
+        """
+        url = f"{panel.admin_api_base}/server_status/"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url, headers=self._headers(panel, api_key))
+        # A page-style login bounce means the key was refused; never scrape it for numbers.
+        if 300 <= resp.status_code < 400 or resp.status_code >= 400:
+            return None
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001 — a non-JSON body is a refusal, not usage data
+            return None
+        if not isinstance(data, dict):
+            return None
+        history = data.get("usage_history")
+        return history if isinstance(history, dict) else None
+
     async def get_admin_limits(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None
     ) -> tuple[int | None, int | None]:

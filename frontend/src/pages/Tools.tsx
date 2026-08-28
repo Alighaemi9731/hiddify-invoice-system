@@ -17,6 +17,7 @@ import {
   previewAdminDelete, deleteAdminCascade,
   listPanels, recoveryCandidates, recoveryRestore, RecoveryPanel, RecoveryResult,
 } from "../api/client";
+import TrafficAuditTool from "./tools/TrafficAuditTool";
 import { errMsg, useToast } from "../components/Toast";
 import { DataState } from "../components/DataState";
 import { fmtGb, fmtNum, fmtDate, fmtDateTime } from "../format";
@@ -614,6 +615,8 @@ export default function Tools() {
         عملیاتِ نادر و ویژه (با احتیاط استفاده شود)
       </Typography>
       <Stack spacing={2} sx={{ maxWidth: 1000 }}>
+        {/* First on the page: the only read-only, diagnostic tool here. */}
+        <TrafficAuditTool />
         <RecoverUsersTool />
         <RemoveUserTool />
         <UnbindTelegramTool />
