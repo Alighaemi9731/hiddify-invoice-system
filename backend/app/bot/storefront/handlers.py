@@ -158,6 +158,16 @@ def _usage_line(used_gb: float, limit_gb: float, plan_gb: int) -> str:
     return f"{base} (شاملِ تمدید)" if limit_gb > float(plan_gb) + 0.5 else base
 
 
+# A plain dashed rule — cheap, RTL-neutral (no letters/digits for `rtl()` to touch), and it splits a
+# welcome message's sections (the reseller's own free-text header vs. our system-generated blocks)
+# so the whole thing doesn't read as one undifferentiated wall of text.
+_SECTION_RULE = "┄" * 18
+# Keycap digits instead of "1." / "۱.": plain digits are bidi-weak and can visually drift in an
+# RTL paragraph, while a keycap glyph is a single opaque symbol with no direction to reorder. Caps
+# out at 10, which already matches the `plans[:10]` display limit below.
+_PLAN_BULLETS = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟")
+
+
 async def _resolve(session, bot: Bot, user) -> tuple[StorefrontBot | None, Reseller | None, bool]:  # noqa: ANN001
     """Resolve the tenant for the physical bot, plus whether `user` is the reseller-admin."""
     sf = await storefront.get_bot_by_telegram_id(session, bot.id)
@@ -259,12 +269,13 @@ async def _send_customer_menu(  # noqa: ANN001
 ) -> None:
     bal = _toman(storefront_wallet.balance(customer))
     text = sf.welcome_text or "🛍 به فروشگاهِ ما خوش آمدید!"
-    lines = [text, "", f"👛 موجودیِ کیفِ پولِ شما: {bal} تومان"]
+    info = [f"👛 موجودیِ کیفِ پولِ شما: {bal} تومان"]
     if _trial_claimable(sf, customer):
-        lines.append(f"🎁 تستِ رایگان ({sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز) فعال است.")
+        info.append(f"🎁 تستِ رایگان ({sf.free_trial_gb} گیگابایت · {sf.free_trial_days} روز) فعال است.")
     elif _trial_visible(sf) and await _monthly_trial_reset(session):
         # The button stays on the keyboard either way; this line is what stops it reading as broken.
-        lines.append("🎁 تستِ رایگانِ این ماه را دریافت کرده‌اید؛ ماهِ آینده دوباره فعال می‌شود.")
+        info.append("🎁 تستِ رایگانِ این ماه را دریافت کرده‌اید؛ ماهِ آینده دوباره فعال می‌شود.")
+    lines = [text, "", _SECTION_RULE, *info]
     await answer(
         rtl("\n".join(lines)),
         reply_markup=kb.customer_reply_kb(
@@ -284,29 +295,36 @@ def _preview_plan(raw: dict) -> StorefrontPlan:
 
 async def _send_customer_preview(answer, preview: dict) -> None:  # noqa: ANN001
     """Render the admin preview from a pure DTO; never creates/updates a customer row."""
-    lines = [preview["welcome_text"], "", "👛 موجودیِ کیفِ پولِ شما: ۰ تومان"]
+    info = ["👛 موجودیِ کیفِ پولِ شما: ۰ تومان"]
     if preview["shop_closed"]:
-        lines.extend(["", preview["closed_text"] or _SHOP_CLOSED_DEFAULT])
+        info.extend(["", preview["closed_text"] or _SHOP_CLOSED_DEFAULT])
     trial = preview["trial"]
     if trial["enabled"]:
-        lines.append(f"🎁 تستِ رایگان ({trial['gb']} گیگابایت · {trial['days']} روز) فعال است.")
+        info.append(f"🎁 تستِ رایگان ({trial['gb']} گیگابایت · {trial['days']} روز) فعال است.")
     if preview["channel_required"]:
-        lines.append("🔒 عضویت در کانال پیش از استفاده الزامی است.")
+        info.append("🔒 عضویت در کانال پیش از استفاده الزامی است.")
+    lines = [preview["welcome_text"], "", _SECTION_RULE, *info]
     plans = preview["plans"]
     if plans:
-        lines.extend(["", "📦 پلن‌های فعال:"])
+        lines.extend(["", _SECTION_RULE, "📦 پلن‌های فعال:", ""])
         # Rendered by the SAME helper the customer's buy button uses, so a named plan cannot show
         # its name on one screen and not the other. `plan_label` reads attributes, and this DTO is
         # a dict — hence the tiny adapter rather than a fourth copy of the format string.
-        lines.extend(f"• {kb.plan_label(_preview_plan(plan))}" for plan in plans[:10])
+        lines.extend(
+            f"{_PLAN_BULLETS[i]} {kb.plan_label(_preview_plan(plan))}"
+            for i, plan in enumerate(plans[:10])
+        )
+    footer: list[str] = []
     methods = [
         label for name, label in (("card", "کارت"), ("usdt", "USDT"), ("ton", "TON"))
         if preview["payment_methods"].get(name)
     ]
     if methods:
-        lines.extend(["", f"💳 روش‌های پرداخت: {'، '.join(methods)}"])
+        footer.append(f"💳 روش‌های پرداخت: {'، '.join(methods)}")
     if preview["support_contact"]:
-        lines.append(f"☎️ پشتیبانی: {preview['support_contact']}")
+        footer.append(f"☎️ پشتیبانی: {preview['support_contact']}")
+    if footer:
+        lines.extend(["", _SECTION_RULE, *footer])
     await answer(
         rtl("\n".join(lines)),
         reply_markup=kb.customer_reply_kb(
