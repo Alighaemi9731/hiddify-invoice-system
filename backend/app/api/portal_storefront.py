@@ -87,6 +87,13 @@ from app.services import (
 
 router = APIRouter(prefix="/api/portal/storefronts", tags=["portal-storefront"])
 _ETAG = re.compile(r'^"sf-config-([1-9][0-9]*)"$')
+# Caddy's `encode` (or any future compressing proxy) rewrites a compressed response's ETag by
+# appending "-gzip"/"-zstd"/... (RFC-correct: each content-coding is a distinct representation).
+# `encode` is scoped away from /api/* precisely so this never happens (see deploy/Caddyfile), but
+# this token is an app-level version counter, not a real cache validator, so tolerating the four
+# encodings Caddy's own `encode` module can produce costs nothing and survives that proxy layer
+# being reconfigured by someone who does not know the invariant.
+_ETAG_ENCODED = re.compile(r'^"sf-config-([1-9][0-9]*)-(?:gzip|zstd|br|deflate)"$')
 
 
 def _etag(version: int) -> str:
@@ -99,11 +106,15 @@ def _set_etag(response: Response, version: int) -> None:
 
 
 def _expected_version(if_match: str) -> int:
-    match = _ETAG.fullmatch(if_match.strip())
+    trimmed = if_match.strip()
+    match = _ETAG.fullmatch(trimmed) or _ETAG_ENCODED.fullmatch(trimmed)
     if match is None:
         raise HTTPException(
             status_code=422,
-            detail={"code": "invalid_if_match", "message": "If-Match must be a storefront ETag"},
+            detail={
+                "code": "invalid_if_match",
+                "message": "شناسهٔ نسخهٔ ارسالی (If-Match) نامعتبر است؛ صفحه را تازه‌سازی کنید و دوباره تلاش کنید.",
+            },
         )
     return int(match.group(1))
 

@@ -78,11 +78,12 @@ export default function StorefrontCreditsPage() {
 
   const enableMut = useIdempotentMutation<Versioned<{ credit: CreditCode }>, { id: number; enabled: boolean }>(
     (v, key) => setCreditCodeEnabled(shop.id, v.id, v.enabled, key),
-    { onSuccess: async () => { await invalidate(); } },
+    // One lane per code: toggling code A must not block a toggle on code B that's still in flight.
+    { commandKey: (v) => String(v.id), onSuccess: async () => { await invalidate(); } },
   );
   const archiveMut = useIdempotentMutation<Versioned<{ credit: CreditCode }>, { id: number }>(
     (v, key) => archiveCreditCode(shop.id, v.id, key),
-    { onSuccess: async () => { await invalidate(); setMessage("کد بایگانی شد."); } },
+    { commandKey: (v) => String(v.id), onSuccess: async () => { await invalidate(); setMessage("کد بایگانی شد."); } },
   );
 
   const busy = enableMut.isPending || archiveMut.isPending;

@@ -143,6 +143,52 @@ def test_customer_list_filters_keyset_isolation_and_cursor_guard():
     _run(body)
 
 
+def test_customer_list_cursor_is_scoped_to_its_own_shop():
+    """The customer-list cursor tag must fold in shop_id like every sibling keyset list
+    (orders/ledger by customer_id, topups by shop_id) — otherwise a cursor minted while paging one
+    shop's customers still decodes successfully against a DIFFERENT shop's list. Not reachable as a
+    cross-tenant leak (the WHERE clause always re-filters by the target shop_id), but one Telegram
+    id can legitimately own several `Reseller` rows (one per panel — `StorefrontBot` is one-per-
+    -reseller, per `uq_storefront_bot_reseller`), each with its own shop, all in the SAME portal
+    session. A stray cursor pasted into the wrong one of ITS OWN shops must be refused, not silently
+    mispositioned."""
+    async def body(session, factory):  # noqa: ANN001
+        owner, shop, _other, _a, _b, _c = await _seed(session)
+        # A second reseller row for the SAME Telegram id (a different panel), with its own shop —
+        # one portal session legitimately covering two shops.
+        owner2 = Reseller(panel_id=shop.panel_id, admin_uuid="owner2", name="Owner2",
+                          bot_chat_id=111, storefront_enabled=True)
+        session.add(owner2)
+        await session.flush()
+        shop2 = StorefrontBot(reseller_id=owner2.id, panel_id=shop.panel_id, bot_token_enc="t3",
+                              config_version=1)
+        session.add(shop2)
+        await session.flush()
+        session.add(StorefrontCustomer(
+            storefront_bot_id=shop2.id, telegram_id=901, name="Dave",
+            created_at=dt.datetime(2026, 7, 4, tzinfo=UTC)))
+        await session.commit()
+
+        async def session_override():
+            yield session
+
+        async def context_override():
+            return ResellerContext(chat_id=111, resellers=[owner, owner2])
+
+        app.dependency_overrides[get_session] = session_override
+        app.dependency_overrides[get_current_reseller] = context_override
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            p1 = (await client.get(
+                f"/api/portal/storefronts/{shop.id}/customers", params={"limit": 1})).json()
+            assert p1["next_cursor"]
+            cross_shop = await client.get(
+                f"/api/portal/storefronts/{shop2.id}/customers",
+                params={"cursor": p1["next_cursor"]})
+            assert cross_shop.status_code == 422
+
+    _run(body)
+
+
 def test_customer_detail_ltv_ledger_redaction_and_no_sub_link():
     async def body(session, factory):  # noqa: ANN001
         owner, shop, other, a, b, c = await _seed(session)

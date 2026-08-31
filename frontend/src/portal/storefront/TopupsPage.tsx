@@ -148,6 +148,9 @@ export default function TopupsPage() {
   const decision = useIdempotentMutation<Versioned<TopupDecisionResult>, { txnId: number; body: TopupDecisionBody }>(
     (input, key) => decideTopup(shop.id, input.txnId, input.body, key),
     {
+      // One lane per top-up: deciding txn A must not reject a decision on txn B as "concurrent"
+      // just because A is still in flight — clearing a queue one-by-one is the normal workflow.
+      commandKey: (input) => String(input.txnId),
       onSuccess: async (result, variables) => {
         await invalidateAfter(variables.txnId);
         setActive(null);

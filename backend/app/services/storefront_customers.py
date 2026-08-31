@@ -175,7 +175,7 @@ async def list_customers_keyset(
         where.append(~_has_service_exists())
 
     if cursor:
-        c_at, c_id = storefront_cursor.decode_cursor("customers", cursor)
+        c_at, c_id = storefront_cursor.decode_cursor(f"customers:{shop_id}", cursor)
         where.append(or_(
             StorefrontCustomer.created_at < c_at,
             and_(StorefrontCustomer.created_at == c_at, StorefrontCustomer.id < c_id),
@@ -192,7 +192,7 @@ async def list_customers_keyset(
     page = rows[:limit]
     next_cursor = (
         storefront_cursor.encode_cursor(
-            endpoint="customers", created_at=page[-1].created_at, row_id=page[-1].id)
+            endpoint=f"customers:{shop_id}", created_at=page[-1].created_at, row_id=page[-1].id)
         if len(rows) > limit and page else None
     )
     # has_service per row (one grouped query over the page's customers).

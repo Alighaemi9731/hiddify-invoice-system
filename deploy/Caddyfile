@@ -22,13 +22,18 @@
 }
 
 {$SERVER_DOMAIN::80} {
-	encode zstd gzip
-
+	# Scoped to the SPA only, never /api/*: Caddy's encode rewrites a compressed response's ETag by
+	# appending "-gzip"/"-zstd" (RFC-correct — each encoding is a distinct representation), but the
+	# storefront portal's If-Match concurrency token is a bare "sf-config-N" string compared for exact
+	# equality server-side. A compressed settings/plans/managers response handed the mangled ETag
+	# straight back as the next request's If-Match, which the backend then rejected as malformed —
+	# breaking nearly every save in the storefront admin portal (2026-08-31).
 	@api path /api/* /health /docs /openapi.json
 	handle @api {
 		reverse_proxy backend:8000
 	}
 	handle {
+		encode zstd gzip
 		reverse_proxy frontend:80
 	}
 }

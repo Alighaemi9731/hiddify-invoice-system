@@ -256,6 +256,57 @@ def test_settings_validation_and_stale_etag():
     _run(body)
 
 
+def test_if_match_tolerates_a_compressing_proxys_etag_suffix_but_rejects_garbage():
+    """Caddy's `encode` (or any future compressing layer) may legally rewrite a compressed
+    response's ETag by appending "-gzip"/"-zstd" (RFC 7232: each content-coding is a distinct
+    representation). `encode` is scoped away from /api/* in deploy/Caddyfile precisely so this
+    never happens in production, but this token is an app-level version counter compared for exact
+    equality, not a real cache validator — so the parser tolerates the four encodings Caddy's own
+    `encode` module can produce as a second line of defense, while still rejecting a value that
+    isn't a storefront ETag at all."""
+    async def body(session):  # noqa: ANN001
+        owner, shop = await _seed(session)
+
+        async def session_override():
+            yield session
+
+        async def context_override():
+            return ResellerContext(chat_id=111, resellers=[owner])
+
+        app.dependency_overrides[get_session] = session_override
+        app.dependency_overrides[get_current_reseller] = context_override
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test",
+        ) as client:
+            version = 1
+            for suffix in ("-gzip", "-zstd", "-br", "-deflate"):
+                resp = await client.patch(
+                    f"/api/portal/storefronts/{shop.id}/settings/messages",
+                    json={"support_contact": f"c{suffix}"},
+                    headers={
+                        "If-Match": f'"sf-config-{version}{suffix}"',
+                        "Idempotency-Key": f"k{suffix}",
+                    },
+                )
+                assert resp.status_code == 200, (suffix, resp.text)
+                version += 1
+                assert resp.headers["etag"] == f'"sf-config-{version}"'
+
+            garbage = await client.patch(
+                f"/api/portal/storefronts/{shop.id}/settings/messages",
+                json={"support_contact": "x"},
+                headers={"If-Match": f'"sf-config-{version}-bogus"', "Idempotency-Key": "garbage"},
+            )
+            assert garbage.status_code == 422
+            detail = garbage.json()["detail"]
+            assert detail["code"] == "invalid_if_match"
+            # The message must be Persian — an English backend-internal string leaking to the
+            # reseller UI is exactly the second bug that shipped alongside the ETag one.
+            assert any("؀" <= ch <= "ۿ" for ch in detail["message"])
+
+    _run(body)
+
+
 def test_partial_trial_patch_replays_cleanly_after_concurrent_change(monkeypatch):  # noqa: ANN001
     """A partial settings PATCH must fold ONLY the sent field into the idempotency hash. After
     the exclude_unset fix, a network retry of `{free_trial_enabled}` replays cleanly even though a

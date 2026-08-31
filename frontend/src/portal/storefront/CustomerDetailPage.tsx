@@ -15,6 +15,7 @@ import RefreshIcon from "@mui/icons-material/esm/Refresh";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { DataState } from "../../components/DataState";
+import { NumberField } from "../../components/NumberField";
 import { fmtDateTime, fmtGb, fmtNum, fmtToman } from "../../format";
 import { SectionCard } from "../ui";
 import {
@@ -127,6 +128,10 @@ export default function CustomerDetailPage() {
       return deleteOrder(shop.id, input.orderId, input.reason, key);
     },
     {
+      // One lane per order (plus a separate one for the customer-level ban): renewing order A must
+      // not block deleting order B just because A's command — a real panel round-trip, not a fast
+      // DB write — is still in flight.
+      commandKey: (input) => (input.type === "ban" ? "ban" : `${input.type}:${input.orderId}`),
       onSuccess: async (result, variables) => {
         await invalidateAfterCommand("orderId" in variables ? variables.orderId : undefined);
         setMessage(successMessage(variables, result));
@@ -140,9 +145,14 @@ export default function CustomerDetailPage() {
     },
   );
 
+  const orderBusy = (orderId: number) =>
+    command.isPending && command.variables !== undefined
+    && "orderId" in command.variables && command.variables.orderId === orderId;
+
   const refresh = useIdempotentMutation<OrderRefreshResult, { orderId: number }>(
     (input, key) => refreshOrder(shop.id, input.orderId, key),
     {
+      commandKey: (input) => String(input.orderId),
       onSuccess: (result, variables) =>
         setLive((prev) => ({ ...prev, [variables.orderId]: { result } })),
       onError: (error, variables) => {
@@ -326,12 +336,12 @@ export default function CustomerDetailPage() {
 
                 <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>تنظیم دستی موجودی</Typography>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "flex-start" }}>
-                  <TextField
+                  <NumberField
                     size="small" label="مبلغ (تومان)" value={adjAmount}
-                    onChange={(event) => setAdjAmount(event.target.value)}
+                    onChange={setAdjAmount}
+                    allowNegative
                     error={adjAmount.trim() !== "" && !adjAmountValid}
                     helperText="مثبت برای افزایش، منفی برای کاهش"
-                    inputProps={{ dir: "ltr", inputMode: "numeric" }}
                     disabled={walletMutation.isPending}
                     sx={{ minWidth: { xs: "100%", sm: 180 } }}
                   />
@@ -396,9 +406,9 @@ export default function CustomerDetailPage() {
                         key={order.id}
                         order={order}
                         live={live[order.id]}
-                        busy={command.isPending}
+                        busy={orderBusy(order.id)}
                         refreshing={refresh.isPending && refresh.variables?.orderId === order.id}
-                        refreshDisabled={refresh.isPending}
+                        refreshDisabled={refresh.isPending && refresh.variables?.orderId === order.id}
                         onRefresh={() => refresh.mutate({ orderId: order.id })}
                         onRenew={() => openConfirm({ kind: "renew", orderId: order.id })}
                         onToggle={(enabled) => openConfirm({ kind: "enabled", orderId: order.id, enabled })}

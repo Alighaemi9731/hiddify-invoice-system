@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Alert, Box, Button, Card, CardContent, IconButton, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, CardContent, IconButton, Stack, Typography } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/esm/DeleteOutline";
 import PersonAddIcon from "@mui/icons-material/esm/PersonAdd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
 import { DataState } from "../../components/DataState";
+import { NumberField } from "../../components/NumberField";
 import { fmtNum } from "../../format";
 import { addStorefrontManager, listStorefrontManagers, removeStorefrontManager, storefrontQueryKeys } from "./api";
 import StorefrontConflictDialog from "./StorefrontConflictDialog";
@@ -33,10 +34,20 @@ export default function StorefrontManagersPage() {
         : removeStorefrontManager(shop.id, input.telegramId, etag, key);
     },
     {
+      // One lane per manager being removed (plus a separate one for add): removing two different
+      // managers back-to-back is a normal thing to do, and a single shared lane rejected the second
+      // tap outright while the first was still in flight.
+      commandKey: (input) => (input.type === "remove" ? `remove:${input.telegramId}` : "add"),
       onSuccess: async (result) => {
+        // `result.data` is the raw command body (e.g. `{managers: {co_admin_ids: [...]}}`), NOT a
+        // `StorefrontManagers` shape — it has no `.items`/`.max_count`. Writing it straight into the
+        // list query's cache used to crash the page (`items.filter` on `undefined`) the instant this
+        // update landed, before the refetch below could restore the real shape. Only the etag is
+        // ever safe to trust here; the list itself comes from the refetch, exactly like the Plans
+        // and Settings pages already do.
         if (result.etag) {
           queryClient.setQueryData<Versioned<StorefrontManagers>>(queryKey, (current) =>
-            current ? { data: result.data, etag: result.etag } : current);
+            current ? { ...current, etag: result.etag } : current);
         }
         setTelegramId("");
         await query.refetch();
@@ -69,15 +80,14 @@ export default function StorefrontManagersPage() {
             <Card>
               <CardContent>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
-                  <TextField
+                  <NumberField
                     fullWidth
                     label="شناسهٔ تلگرامِ مدیر جدید"
                     value={telegramId}
                     error={!!telegramId && !valid}
                     helperText={atLimit ? `حداکثر ${fmtNum(query.data.data.max_count)} مدیر ثبت شده است.` : "شناسهٔ عددی مثبت"}
-                    inputProps={{ inputMode: "numeric", dir: "ltr" }}
                     disabled={mutation.isPending}
-                    onChange={(event) => setTelegramId(event.target.value.replace(/\D/g, ""))}
+                    onChange={setTelegramId}
                   />
                   <Button
                     variant="contained"

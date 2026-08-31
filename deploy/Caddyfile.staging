@@ -1,11 +1,12 @@
 :80 {
-	encode zstd gzip
-
+	# See deploy/Caddyfile: encode is scoped away from /api/* so it can never mangle the
+	# storefront portal's ETag-based If-Match concurrency token.
 	@api path /api/* /health /docs /openapi.json
 	handle @api {
 		reverse_proxy backend:8000
 	}
 	handle {
+		encode zstd gzip
 		reverse_proxy frontend:80
 	}
 }

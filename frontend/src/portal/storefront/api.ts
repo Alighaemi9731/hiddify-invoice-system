@@ -89,8 +89,15 @@ export const storefrontQueryKeys = {
     ["portal-storefronts", shopId, "broadcast", jobId] as const,
 };
 
+// The body-declared `config_version` (always present, `ge=1`) is the canonical source: it is
+// exactly what this same response's handler used to build the ETag header, with no intermediary
+// in between. The raw header is only a fallback for a hypothetical caller that lacks it — an
+// intervening proxy (Caddy's `encode`, or any future compressing layer) can legally rewrite a
+// compressed response's ETag by appending "-gzip"/"-zstd" per RFC 7232, and this token is compared
+// for exact equality server-side, not used for real HTTP caching (every route sets `no-store`).
+// Trusting the header first turned that legal rewrite into a 422 on nearly every storefront save.
 const etagOf = (headers: Record<string, unknown>, configVersion?: number) =>
-  String(headers.etag || (configVersion ? `"sf-config-${configVersion}"` : ""));
+  configVersion ? `"sf-config-${configVersion}"` : String(headers.etag || "");
 const commandHeaders = (etag: string, idempotencyKey: string) => ({
   "If-Match": etag,
   "Idempotency-Key": idempotencyKey,

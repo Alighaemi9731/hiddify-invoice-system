@@ -69,13 +69,20 @@ export default function StorefrontPlanHistoryDialog({
 const ACTION_FA: Record<string, string> = {
   "plan.create": "ساخت پلن",
   "plan.update": "ویرایش پلن",
-  "plan.enabled": "فعال/غیرفعال کردن",
+  "plan.set_enabled": "فعال/غیرفعال کردن",
   "plan.delete": "حذف پلن",
   "plan.reorder": "تغییر ترتیب",
 };
 const SOURCE_FA: Record<string, string> = { portal: "پنل", bot: "ربات", system: "سامانه" };
 const ROLE_FA: Record<string, string> = { owner: "مالک", manager: "مدیر", admin: "مدیر" };
-const OUTCOME_FA: Record<string, string> = { failed: "ناموفق", replayed: "تکراری" };
+// Every outcome `_execute`/`_claim_db_command` (backend/app/services/storefront_admin.py) can
+// actually write, besides "succeeded" (never shown — see the filter above this table).
+const OUTCOME_FA: Record<string, string> = {
+  failed: "ناموفق",
+  conflict: "درگیری هم‌زمان",
+  started: "شروع‌شده",
+  unknown: "نامشخص",
+};
 
 function planSnapshot(value: Partial<StorefrontPlan>) {
   const parts = [];

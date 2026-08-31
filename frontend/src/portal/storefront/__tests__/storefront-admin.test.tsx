@@ -354,6 +354,19 @@ describe("storefront Release B administration", () => {
         after: { price_toman: 100_000 },
         outcome: "succeeded",
         created_at: "2026-07-16T12:00:00Z",
+      }, {
+        // The real action for a toggle is "plan.set_enabled" (see `set_plan_enabled` in
+        // storefront_admin.py) and a real, non-"succeeded" outcome can be "conflict" — both must
+        // resolve to Persian text, not leak the raw machine token into the reseller's history list.
+        id: 11,
+        action: "plan.set_enabled",
+        actor_telegram_id: "100",
+        actor_role: "owner",
+        source: "portal",
+        before: null,
+        after: null,
+        outcome: "conflict",
+        created_at: "2026-07-16T12:05:00Z",
       }] })),
     );
 
@@ -361,6 +374,10 @@ describe("storefront Release B administration", () => {
     await user.click(await screen.findByRole("button", { name: "تاریخچه پلن" }));
     expect(await screen.findByText(/قبل: ۹۰٬۰۰۰ تومان/)).toBeInTheDocument();
     expect(screen.getByText(/بعد: ۱۰۰٬۰۰۰ تومان/)).toBeInTheDocument();
+    expect(screen.getByText("فعال/غیرفعال کردن")).toBeInTheDocument();
+    expect(screen.getByText(/درگیری هم‌زمان/)).toBeInTheDocument();
+    expect(screen.queryByText(/plan\.set_enabled|plan\.enabled/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^conflict$/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "بستن" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /تاریخچهٔ پلن/ })).not.toBeInTheDocument());
   });
@@ -573,14 +590,17 @@ describe("storefront Release B administration", () => {
         max_count: 10,
         config_version: 1,
       }, { headers: { ETag: '"sf-config-1"' } })),
+      // The real backend's command endpoints return the raw command body (e.g.
+      // `{managers: {co_admin_ids: [...]}}`), NOT a `StorefrontManagers` shape — unlike this
+      // mock's old (wrong) `{owner_id, items, max_count, config_version}` response, which hid a
+      // production crash: the page trusted this body as the new list and called `.items.filter`
+      // on it, throwing because a raw command body has no `.items` at all.
       http.post("*/api/portal/storefronts/1/managers", async ({ request }) => {
         added = String(((await request.json()) as { telegram_id: string }).telegram_id);
-        return HttpResponse.json({ result: {
-          owner_id: 100,
-          items: [{ telegram_id: 100, role: "owner", removable: false }],
-          max_count: 10,
+        return HttpResponse.json({
+          result: { managers: { co_admin_ids: [200, 300] } },
           config_version: 2,
-        }, config_version: 2 }, { headers: { ETag: '"sf-config-2"' } });
+        }, { headers: { ETag: '"sf-config-2"' } });
       }),
     );
 
@@ -590,6 +610,10 @@ describe("storefront Release B administration", () => {
     await user.type(screen.getByLabelText("شناسهٔ تلگرامِ مدیر جدید"), "300");
     await user.click(screen.getByRole("button", { name: "افزودن مدیر" }));
     await waitFor(() => expect(added).toBe("300"));
+    // The command body's odd shape must never leak into the list cache: the page re-fetches the
+    // real list and keeps rendering it, rather than crashing on `undefined.filter`.
+    expect(await screen.findByText("مالک اصلی")).toBeInTheDocument();
+    expect(screen.getByLabelText("شناسهٔ تلگرامِ مدیر جدید")).toHaveValue("");
   });
 
   it("round-trips and removes maximum int64 manager ids without JS rounding", async () => {
@@ -601,11 +625,13 @@ describe("storefront Release B administration", () => {
       http.get("*/api/portal/storefronts/1/managers", () => new HttpResponse(rawManagers, {
         headers: { "Content-Type": "application/json", ETag: '"sf-config-1"' },
       })),
+      // Real shape (see the sibling add test above): a raw command body, not a re-served list.
       http.delete("*/api/portal/storefronts/1/managers/:telegramId", ({ params }) => {
         removed = String(params.telegramId);
-        return new HttpResponse(`{"result":${rawManagers},"config_version":2}`, {
-          headers: { "Content-Type": "application/json", ETag: '"sf-config-2"' },
-        });
+        return HttpResponse.json({
+          result: { managers: { co_admin_ids: [] } },
+          config_version: 2,
+        }, { headers: { ETag: '"sf-config-2"' } });
       }),
     );
 
@@ -613,6 +639,9 @@ describe("storefront Release B administration", () => {
     expect(await screen.findByText("9223372036854775807")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "حذف مدیر 9223372036854775807" }));
     await waitFor(() => expect(removed).toBe("9223372036854775807"));
+    // Must still be a working page after the delete resolves, not a crash from the command
+    // body's shape leaking into the list cache.
+    expect(await screen.findByText("مالک اصلی")).toBeInTheDocument();
     confirm.mockRestore();
   });
 
