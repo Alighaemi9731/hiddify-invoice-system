@@ -44,11 +44,16 @@ _RESET_FLOOR_GB = 5.0
 # Individual resets look identical per user, so the signal has to be PANEL-WIDE: many users' counters
 # dropping in the SAME sync is a restore, not a coincidence of resellers.
 # A restore hits EVERY reseller's users at once, whereas even scripted abuse belongs to one admin —
-# so requiring the drop to span several admins is the discriminator that lets the volume thresholds
+# so requiring the drop to span several admins is the discriminator that lets the volume threshold
 # stay low enough to actually catch a restore (only the users who consumed between backup and restore
 # move backwards, which can be a modest slice of a big panel).
+# There is deliberately NO ratio-of-the-panel condition. One existed (5% of metered users) and it is
+# what silenced the 2026-08-14 restore: on a 6,755-user panel it demanded 338 simultaneous drops,
+# while a ~6-hour backup gap only rewinds the users who consumed IN that gap (~42 surfaced, across
+# 27 admins — both real conditions passed) — so ~617 GB across ~93 resellers was billed as fake
+# «مصرف مازاد». At fleet scale any percentage is a number a short gap can never reach; the absolute
+# floor plus the admin spread are the whole defense.
 _ROLLBACK_MIN_USERS = 10          # never call a small panel's handful of real resets a rollback
-_ROLLBACK_RATIO = 0.05            # …at least this share of the panel's already-metered users…
 _ROLLBACK_MIN_ADMINS = 3          # …and spread across at least this many different resellers
 
 
@@ -66,14 +71,12 @@ def detect_panel_rollback(users, existing: dict) -> int:  # noqa: ANN001
     The drop must also span several DIFFERENT resellers: one reseller mass-resetting their own
     customers is the abuse this meter exists to bill, not a restore, however many users it touches.
     """
-    known = 0
     dropped = 0
     admins: set[str] = set()
     for u in users:
         s = existing.get(u.uuid)
         if s is None or not bool(getattr(s, "meter_init", False)):
             continue
-        known += 1
         prev_used = float(s.current_usage_gb or 0)
         new_used = float(u.current_usage_gb or 0)
         if new_used + _EPS >= prev_used:
@@ -85,11 +88,7 @@ def detect_panel_rollback(users, existing: dict) -> int:  # noqa: ANN001
         owner = getattr(u, "added_by_uuid", None) or getattr(s, "added_by_uuid", None)
         if owner:
             admins.add(str(owner))
-    if (
-        dropped >= _ROLLBACK_MIN_USERS
-        and dropped >= _ROLLBACK_RATIO * max(known, 1)
-        and len(admins) >= _ROLLBACK_MIN_ADMINS
-    ):
+    if dropped >= _ROLLBACK_MIN_USERS and len(admins) >= _ROLLBACK_MIN_ADMINS:
         return dropped
     return 0
 

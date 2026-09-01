@@ -43,6 +43,18 @@ def test_rollback_detected_only_when_the_drop_is_panel_wide():
     assert metering.detect_panel_rollback(users, existing) == 12
 
 
+def test_a_real_restore_on_a_big_panel_is_detected():
+    """Pinned to the 2026-08-14 production incident (Hetzner ban → 6h-old backup restored): on a
+    panel of 6,755 metered users, 42 counters rewound across 27 resellers. The old 5%-of-the-panel
+    condition demanded 338 simultaneous drops — a number a short backup gap can never produce on a
+    fleet-scale panel — so detection stayed silent and ~617 GB fleet-wide was billed as fake
+    overage. The absolute floor + the admin spread must be sufficient on their own."""
+    existing = {f"u{i}": _snap(used=8.0, owner=f"admin-{i % 27}") for i in range(6755)}
+    users = [_user(f"u{i}", 4.0 if i < 42 else 8.0, owner=f"admin-{i % 27}")
+             for i in range(6755)]
+    assert metering.detect_panel_rollback(users, existing) == 42
+
+
 def test_a_few_genuine_resets_are_not_a_rollback():
     """Three resellers zeroing a customer each must stay billable abuse, not be excused."""
     existing = {f"u{i}": _snap(used=8.0, owner=f"admin-{i % 4}") for i in range(40)}
