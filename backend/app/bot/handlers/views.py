@@ -32,8 +32,16 @@ from app.models.enums import EnforcementState, PaymentStatus
 from app.services import settings_service
 from app.services.periods import today as tehran_today
 
-
 # --------------------------- create user (top-level resellers) ---------------------------
+# Same wording as the storefront's admin-side closure (`storefront/handlers._SUSPENDED_ADMIN`): the
+# reseller has already read that sentence about their shop, so the bot's own «ساخت کاربر» closing
+# for the same reason must not sound like a different problem.
+CREATE_USER_SUSPENDED = (
+    "⛔️ پنلِ شما در سامانه مسدود شده و تا زمانِ رفعِ مسدودی امکانِ ساختِ سرویسِ جدید وجود ندارد.\n"
+    "برای بازگشتِ سرویس، فاکتورِ باز خود را پرداخت کنید یا با پشتیبانی تماس بگیرید."
+)
+
+
 async def _begin_create_user(answer, chat_id: int, session, state: FSMContext) -> None:
     """Entry point for «ساخت کاربر»: validate eligibility, then ask for the panel (if >1) or the mode."""
     from app.services import usercreate
@@ -50,6 +58,15 @@ async def _begin_create_user(answer, chat_id: int, session, state: FSMContext) -
     if not roots:
         await answer("فقط نماینده‌های اصلی می‌توانند سرویس بسازند.")
         return
+    # A suspended (or frozen) account is refused HERE, before the wizard, with the reason — not
+    # after four taps. Per account: a person who is top-level on several panels keeps creating on
+    # the panels that are not cut off. `create_for_reseller` re-checks at the end regardless, so a
+    # suspension landing mid-wizard is still caught.
+    allowed = [r for r in roots if await usercreate.creation_blocked(session, r) is None]
+    if not allowed:
+        await answer(rtl(CREATE_USER_SUSPENDED))
+        return
+    roots = allowed
     if len(roots) == 1:
         await state.update_data(cu_reseller_id=roots[0].id)
         await answer(

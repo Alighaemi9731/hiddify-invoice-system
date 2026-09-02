@@ -124,7 +124,7 @@ class ProvisionResult:
     ok: bool
     sub_link: str | None = None
     uuid: str | None = None
-    reason: str | None = None      # "capacity" | "limit" | "error"
+    reason: str | None = None      # "capacity" | "limit" | "error" | "suspended"
     message: str | None = None
 
 
@@ -178,6 +178,10 @@ async def provision(
         return ProvisionResult(False, reason="error", message=str(exc)[:300])
     if getattr(result, "error", None):
         return ProvisionResult(False, reason="error", message=str(result.error)[:300])
+    if getattr(result, "suspended", False):
+        # Unreachable when the purchase gate above did its job (it refuses before any wallet
+        # charge); kept so the service-level guard can never be mistaken for a panel failure.
+        return ProvisionResult(False, reason="suspended", message="reseller suspended")
     if getattr(result, "capacity_blocked", False):
         return ProvisionResult(False, reason="capacity", message="capacity reached")
     if getattr(result, "limit_hit", False) or not result.created:

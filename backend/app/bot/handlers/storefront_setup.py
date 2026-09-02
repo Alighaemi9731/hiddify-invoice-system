@@ -298,6 +298,16 @@ async def _finish_create_user(message: Message, chat_id: int, data: dict, *, use
         panel = await s.get(Panel, reseller.panel_id)
         pname = panel.key if panel else "?"
 
+    if result.suspended:
+        # Suspended between the wizard's first tap and its confirm (or a stale confirm button from
+        # an older message): the service refused before touching the panel — say why.
+        from app.bot.handlers.views import CREATE_USER_SUSPENDED
+
+        await message.answer(rtl(CREATE_USER_SUSPENDED))
+        async with common.SessionLocal() as s:
+            await _reshow_menu(message, s, menu_user)
+        return
+
     if result.capacity_blocked:
         remaining = result.remaining if result.remaining is not None else 0
         await message.answer(

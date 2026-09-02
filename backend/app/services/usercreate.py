@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndUserSnapshot, Panel, Reseller
+from app.models.enums import EnforcementState
 from app.services import settings_service
 from app.services.panel_client.admin_api import AdminApiClient, UserLimitError
 from app.services.presence import snapshot_present_filter
@@ -86,11 +87,35 @@ class CreatedUser:
 @dataclass
 class CreateResult:
     created: list[CreatedUser] = field(default_factory=list)
+    suspended: bool = False          # the reseller (or its branch) is cut off — nothing was asked of the panel
+    blocked_reason: str | None = None  # "suspended" | "frozen" when `suspended` is set
     capacity_blocked: bool = False   # pre-check: creating `count` would exceed max_users
     limit_hit: bool = False          # the panel itself rejected mid-run (server max_users)
     error: str | None = None
     max_users: int | None = None
     remaining: int | None = None     # capacity left at pre-check (when max_users is set)
+
+
+async def creation_blocked(session: AsyncSession, reseller: Reseller) -> str | None:
+    """Why this reseller may not create users right now — `"suspended"` when it (or an ancestor) is
+    under a live suspension, `"frozen"` when its own limits were zeroed by a freeze — else None.
+
+    THE gate for every create path (bot «ساخت کاربر», storefront provisioning). It exists because
+    nothing downstream refuses: the create authenticates with the reseller's API key, which Hiddify
+    keeps honouring after the enforcement password lock (that lock only closes the UUID-link web
+    login), and Hiddify's REST create never consults `max_users` — `can_have_more_users()` is
+    called from the Flask-Admin UI only. So a suspended debtor whose users were all disabled and
+    whose limits read 0/0 could still mint a fresh user a day through the bot (11 resellers / 46
+    users found in production on 2026-09-02); the daily re-assert killed each one, but never the
+    door. Imported lazily: `enforcement` pulls in the panel client and would close an import cycle
+    through this module."""
+    from app.services import enforcement
+
+    if reseller.enforcement_state == EnforcementState.frozen:
+        return "frozen"
+    if await enforcement.suspended_branch_root(session, reseller) is not None:
+        return "suspended"
+    return None
 
 
 async def create_for_reseller(
@@ -110,12 +135,21 @@ async def create_for_reseller(
     if panel is None:
         res.error = "panel not found"
         return res
+    # Refuse BEFORE any network I/O: a cut-off reseller gets no proxy-path fetch and no create.
+    why = await creation_blocked(session, reseller)
+    if why is not None:
+        res.suspended = True
+        res.blocked_reason = why
+        return res
     # The customer sub-link needs the CLIENT proxy path (v12 separates it from the admin path). It's
     # captured during sync; if a panel hasn't been re-synced since the feature shipped, fetch it once
     # now so the very first create still produces the correct link.
     if not panel.client_proxy_path:
         await ensure_client_proxy_path(session, panel)
-    if reseller.panel_max_users:
+    # `is not None`, not truthiness: a synced limit of 0 is a REAL cap (a suspension or freeze
+    # zeroes it, and Hiddify's own UI treats 0 as "no more users"). The old truthy test skipped the
+    # guard exactly when the limit had been zeroed, reading "blocked" as "unlimited".
+    if reseller.panel_max_users is not None:
         current = await current_user_count(session, reseller)
         res.remaining = max(0, reseller.panel_max_users - current)
         if current + count > reseller.panel_max_users:

@@ -289,3 +289,168 @@ def test_capacity_count_is_case_insensitive_on_added_by():
         await s.commit()
         assert await usercreate.current_user_count(s, r) == 1
     _run(body)
+
+
+# ---------------- suspension / freeze gate ----------------
+# Why these exist: a fully suspended reseller (users disabled, limits 0/0, panel password locked)
+# kept minting users through the bot's «ساخت کاربر». Nothing downstream refuses — the create
+# authenticates with the reseller's API KEY (Hiddify's password lock only closes the UUID-link web
+# login) and Hiddify's REST create never consults `max_users` (`can_have_more_users()` is a
+# Flask-Admin UI check). 11 suspended resellers / 46 users were found in production on 2026-09-02;
+# the daily re-assert killed each user within a day, but never the door.
+from app.models.enums import EnforcementState  # noqa: E402
+
+
+def _must_not_create(monkeypatch):
+    async def _boom(self, panel, *, name, gb, days, api_key=None, user_uuid=None):
+        raise AssertionError("panel create must not be attempted for a cut-off reseller")
+    monkeypatch.setattr(admin_api.AdminApiClient, "create_user", _boom)
+
+
+def test_suspended_reseller_cannot_create(monkeypatch):
+    _must_not_create(monkeypatch)
+
+    async def body(s):
+        r = await _seed(s, max_users=100, existing=0)   # plenty of capacity — the gate, not the cap
+        r.enforcement_state = EnforcementState.enforced
+        await s.commit()
+        res = await usercreate.create_for_reseller(s, r, count=1, gb=20, days=30, base_name="x")
+        assert res.suspended and res.blocked_reason == "suspended"
+        assert not res.created and not res.capacity_blocked and res.error is None
+    _run(body)
+
+
+def test_frozen_reseller_cannot_create(monkeypatch):
+    """Freeze = «توقف ساخت کاربر» by definition; the bot must honour it before the next sync
+    mirrors the zeroed limit."""
+    _must_not_create(monkeypatch)
+
+    async def body(s):
+        r = await _seed(s, max_users=100, existing=0)
+        r.enforcement_state = EnforcementState.frozen
+        await s.commit()
+        res = await usercreate.create_for_reseller(s, r, count=1, gb=20, days=30, base_name="x")
+        assert res.suspended and res.blocked_reason == "frozen"
+    _run(body)
+
+
+def test_suspended_ancestor_blocks_the_sub(monkeypatch):
+    """Ancestor-aware like the storefront gate: a sub inside a suspended branch is cut off too."""
+    _must_not_create(monkeypatch)
+
+    async def body(s):
+        p = Panel(key="p1", host="p1.invalid", proxy_path_enc="x", owner_uuid="o")
+        p.client_proxy_path = "clientpath"
+        s.add(p)
+        await s.flush()
+        s.add_all([
+            Reseller(panel_id=p.id, admin_uuid="OWNER", name="Owner", is_owner=True),
+            Reseller(panel_id=p.id, admin_uuid="TL", parent_admin_uuid="OWNER", name="TL",
+                     enforcement_state=EnforcementState.enforced, panel_max_users=100),
+            Reseller(panel_id=p.id, admin_uuid="SUB", parent_admin_uuid="TL", name="SUB",
+                     enforcement_state=EnforcementState.active, panel_max_users=100),
+        ])
+        await s.commit()
+        from sqlalchemy import select as _s
+        sub = (await s.execute(_s(Reseller).where(Reseller.admin_uuid == "SUB"))).scalar_one()
+        res = await usercreate.create_for_reseller(s, sub, count=1, gb=20, days=30, base_name="x")
+        assert res.suspended and res.blocked_reason == "suspended"
+    _run(body)
+
+
+def test_zero_max_users_is_a_cap_not_unlimited(monkeypatch):
+    """`if reseller.panel_max_users:` skipped the guard exactly when a suspension/freeze had
+    zeroed the limit — 0 read as "unlimited". 0 is the strictest cap there is."""
+    _must_not_create(monkeypatch)
+
+    async def body(s):
+        r = await _seed(s, max_users=0, existing=0)
+        res = await usercreate.create_for_reseller(s, r, count=1, gb=20, days=30, base_name="x")
+        assert res.capacity_blocked and res.remaining == 0 and res.max_users == 0
+        assert not res.created
+    _run(body)
+
+
+def test_active_reseller_still_creates(monkeypatch):
+    """The gate must not over-reach: an active top-level reseller with room creates as before."""
+    async def _fake_create(self, panel, *, name, gb, days, api_key=None, user_uuid=None):
+        return f"uuid-{name}"
+    monkeypatch.setattr(admin_api.AdminApiClient, "create_user", _fake_create)
+
+    async def body(s):
+        r = await _seed(s, max_users=5, existing=0)
+        assert await usercreate.creation_blocked(s, r) is None
+        res = await usercreate.create_for_reseller(s, r, count=1, gb=20, days=30, base_name="ok")
+        assert not res.suspended and [u.name for u in res.created] == ["ok"]
+    _run(body)
+
+
+# ---------------- bot entry («➕ ساخت کاربر») refuses before the wizard ----------------
+class _FakeState:
+    def __init__(self) -> None:
+        self.data: dict = {}
+        self.cleared = 0
+
+    async def clear(self) -> None:
+        self.cleared += 1
+
+    async def update_data(self, **kw) -> None:
+        self.data.update(kw)
+
+
+def _enable_feature(monkeypatch):
+    async def _opts(session):
+        return usercreate.CreateOptions(enabled=True, gb=[20, 30], days=[30], counts=[5])
+    monkeypatch.setattr(usercreate, "load_options", _opts)
+
+
+async def _seed_top_level(s, *, panel_key, chat_id, state):
+    p = Panel(key=panel_key, host=f"{panel_key}.invalid", proxy_path_enc="x", owner_uuid="o")
+    p.client_proxy_path = "clientpath"
+    s.add(p)
+    await s.flush()
+    owner = Reseller(panel_id=p.id, admin_uuid=f"OWNER-{panel_key}", name="Owner", is_owner=True)
+    tl = Reseller(panel_id=p.id, admin_uuid=f"TL-{panel_key}", parent_admin_uuid=owner.admin_uuid,
+                  name=f"TL {panel_key}", bot_chat_id=chat_id, enforcement_state=state,
+                  panel_max_users=100)
+    s.add_all([owner, tl])
+    await s.commit()
+    return tl
+
+
+def test_begin_create_user_refuses_suspended_reseller(monkeypatch):
+    from app.bot.handlers import views
+
+    _enable_feature(monkeypatch)
+    sent: list[str] = []
+
+    async def answer(text, **kw):
+        sent.append(text)
+
+    async def body(s):
+        await _seed_top_level(s, panel_key="p1", chat_id=111, state=EnforcementState.enforced)
+        st = _FakeState()
+        await views._begin_create_user(answer, 111, s, st)
+        assert len(sent) == 1 and "مسدود شده" in sent[0], sent
+        assert "cu_reseller_id" not in st.data        # the wizard never started
+    _run(body)
+
+
+def test_begin_create_user_skips_only_the_suspended_panel(monkeypatch):
+    """Top-level on two panels, one suspended: the flow continues on the healthy one alone."""
+    from app.bot.handlers import views
+
+    _enable_feature(monkeypatch)
+    sent: list[str] = []
+
+    async def answer(text, **kw):
+        sent.append(text)
+
+    async def body(s):
+        await _seed_top_level(s, panel_key="p1", chat_id=111, state=EnforcementState.enforced)
+        good = await _seed_top_level(s, panel_key="p2", chat_id=111, state=EnforcementState.active)
+        st = _FakeState()
+        await views._begin_create_user(answer, 111, s, st)
+        assert len(sent) == 1 and "مسدود شده" not in sent[0], sent
+        assert st.data.get("cu_reseller_id") == good.id   # single-root path, the healthy account
+    _run(body)
