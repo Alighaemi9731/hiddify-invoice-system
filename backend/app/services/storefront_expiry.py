@@ -99,25 +99,38 @@ def _needs_alert(order: StorefrontOrder) -> bool:
     return lr is not None and ea is not None and lr > ea
 
 
-def _message_fa(label: str | None, days_left: int) -> str:
+# The CTA for a service whose plan the shop DELETED: `renew`/`arm` refuse it as `plan_gone`, so
+# telling the customer to turn on auto-renew would send them into a refusal.
+PLAN_GONE_CTA_FA = (
+    "پلنِ این سرویس دیگر در فروشگاه ارائه نمی‌شود و قابلِ تمدید نیست؛ برای ادامه، از دکمهٔ زیر "
+    "یکی از پلن‌های فعلیِ فروشگاه را تهیه کنید."
+)
+
+
+def _plan_gone(order: StorefrontOrder) -> bool:
+    """The order's plan was deleted (`plan_id` is `SET NULL` on delete), so it cannot be renewed."""
+    return order.plan_id is None
+
+
+def _message_fa(label: str | None, days_left: int, *, plan_gone: bool = False) -> str:
     name = f"«{label}» " if label else ""
     when = "امروز" if days_left <= 0 else (
         "فردا" if days_left == 1 else f"تا {days_left} روز دیگر")
-    return (
-        f"⏳ سرویس {name}شما {when} منقضی می‌شود.\n"
+    cta = PLAN_GONE_CTA_FA if plan_gone else (
         "برای جلوگیری از قطعِ سرویس، «تمدید خودکار» را روشن کنید تا درست پیش از پایان، یک‌بار به‌صورت "
         "خودکار تمدید شود (مبلغِ یک تمدید از کیفِ پولِ شما رزرو می‌شود)."
     )
+    return f"⏳ سرویس {name}شما {when} منقضی می‌شود.\n{cta}"
 
 
-def _expired_msg(label: str | None, days_ago: int) -> str:
+def _expired_msg(label: str | None, days_ago: int, *, plan_gone: bool = False) -> str:
     name = f"«{label}» " if label else ""
     when = "امروز" if days_ago <= 0 else ("دیروز" if days_ago == 1 else f"{days_ago} روز پیش")
-    return (
-        f"⛔️ سرویس {name}شما {when} منقضی شد و اتصالِ شما قطع شده است.\n"
+    cta = PLAN_GONE_CTA_FA if plan_gone else (
         "برای بازگشت به سرویس، «تمدید خودکار» را روشن کنید تا بلافاصله تمدید شود و دفعهٔ بعد نیز "
         "پیش از قطعی، به‌صورت خودکار تمدید شود."
     )
+    return f"⛔️ سرویس {name}شما {when} منقضی شد و اتصالِ شما قطع شده است.\n{cta}"
 
 
 def _needs_expired_alert(order: StorefrontOrder) -> bool:
@@ -304,7 +317,9 @@ async def notify_expiring(
         return days_left
 
     def render(order: StorefrontOrder, days_left: Any) -> tuple[str, InlineKeyboardMarkup]:
-        return _message_fa(order.label, int(days_left)), _renew_keyboard(order.id)
+        gone = _plan_gone(order)
+        return (_message_fa(order.label, int(days_left), plan_gone=gone),
+                _buy_keyboard() if gone else _renew_keyboard(order.id))
 
     return await _run_sweep(
         session, rows, snaps, due=due, render=render, stamp_attr="expiry_alerted_at",
@@ -439,7 +454,9 @@ async def notify_expired(
         return days_ago
 
     def render(order: StorefrontOrder, days_ago: Any) -> tuple[str, InlineKeyboardMarkup]:
-        return _expired_msg(order.label, int(days_ago)), _renew_keyboard(order.id)
+        gone = _plan_gone(order)
+        return (_expired_msg(order.label, int(days_ago), plan_gone=gone),
+                _buy_keyboard() if gone else _renew_keyboard(order.id))
 
     return await _run_sweep(
         session, rows, snaps, due=due, render=render, stamp_attr="expired_alerted_at",
@@ -456,14 +473,16 @@ def _usage_needs_alert(order: StorefrontOrder) -> bool:
     return lr is not None and ua is not None and lr > ua
 
 
-def _usage_high_msg(label: str | None, used_gb: float, limit_gb: float) -> str:
+def _usage_high_msg(
+    label: str | None, used_gb: float, limit_gb: float, *, plan_gone: bool = False
+) -> str:
     name = f"«{label}» " if label else ""
     pct = int(round(used_gb / limit_gb * 100)) if limit_gb else 0
-    return (
-        f"⚠️ حجمِ سرویسِ {name}شما رو به پایان است (حدود {pct}٪ مصرف شده است).\n"
+    cta = PLAN_GONE_CTA_FA if plan_gone else (
         "برای جلوگیری از قطعِ سرویس، «تمدید خودکار» را روشن کنید تا درست پیش از پایانِ حجم، یک‌بار به‌صورت "
         "خودکار تمدید شود."
     )
+    return f"⚠️ حجمِ سرویسِ {name}شما رو به پایان است (حدود {pct}٪ مصرف شده است).\n{cta}"
 
 
 async def notify_usage_high(
@@ -525,7 +544,9 @@ async def notify_usage_high(
 
     def render(order: StorefrontOrder, payload: Any) -> tuple[str, InlineKeyboardMarkup]:
         used_gb, limit_gb = payload
-        return _usage_high_msg(order.label, used_gb, limit_gb), _renew_keyboard(order.id)
+        gone = _plan_gone(order)
+        return (_usage_high_msg(order.label, used_gb, limit_gb, plan_gone=gone),
+                _buy_keyboard() if gone else _renew_keyboard(order.id))
 
     return await _run_sweep(
         session, rows, snaps, due=due, render=render, stamp_attr="usage_alerted_at",

@@ -26,6 +26,7 @@ from app.models import (  # noqa: E402
     StorefrontBot,
     StorefrontCustomer,
     StorefrontOrder,
+    StorefrontPlan,
     StorefrontWalletTxn,
 )
 from app.services import (  # noqa: E402
@@ -182,10 +183,15 @@ def test_f5_concurrent_refunds_yield_exactly_one():
 # ───────────────────────── F11: ambiguous renewal is durably reconciled ─────────────────────────
 def test_f11_renew_panel_failure_compensates_charge(tmp_path, monkeypatch):
     async def body(s, S):
-        _bot, cust = await _shop(s, "a", balance=100_000)
+        bot, cust = await _shop(s, "a", balance=100_000)
+        # A live plan: a customer renewal of a DELETED (plan-less) order is refused as `plan_gone`.
+        plan = StorefrontPlan(storefront_bot_id=bot.id, gb=5, days=30, price_toman=50_000,
+                              enabled=True)
+        s.add(plan)
+        await s.flush()
         order = StorefrontOrder(
-            customer_id=cust.id, panel_id=1, panel_user_uuid="uuid-1", status="provisioned",
-            is_trial=False, gb=5, days=30, price_toman=50_000, label="svc")
+            customer_id=cust.id, plan_id=plan.id, panel_id=1, panel_user_uuid="uuid-1",
+            status="provisioned", is_trial=False, gb=5, days=30, price_toman=50_000, label="svc")
         s.add(order)
         await s.commit()
         oid, cid = order.id, cust.id

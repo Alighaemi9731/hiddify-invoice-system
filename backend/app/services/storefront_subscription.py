@@ -122,6 +122,13 @@ async def renew(
         if await enforcement.suspended_branch_root(s, reseller) is not None:
             return SubResult(False, "suspended")
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
+        # A deleted plan is not renewable by the CUSTOMER. Deleting it `SET NULL`s the order's
+        # `plan_id`, and the old fallback below then billed the purchase-time `order.price_toman`
+        # forever — a shop that replaced a 200k plan with a 250k one kept renewing its old
+        # customers at 200k with no way to reprice them (shop 25, 2026-10). The customer buys a
+        # current plan instead. An admin renew is a free grant, so it keeps the order's own gb/days.
+        if plan is None and not by_admin:
+            return SubResult(False, "plan_gone")
         gb = int(plan.gb) if plan else int(order.gb)
         days = int(plan.days) if plan else int(order.days)
         # gb/days have always come from the LIVE plan whenever the row still exists, `enabled` or

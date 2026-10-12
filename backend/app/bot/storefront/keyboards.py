@@ -249,7 +249,8 @@ def orders_kb(orders: list[StorefrontOrder]) -> InlineKeyboardMarkup:
 
 
 def order_actions_kb(
-    order_id: int, renew_price: int, *, paused: bool, is_trial: bool = False, armed: bool = False
+    order_id: int, renew_price: int, *, paused: bool, is_trial: bool = False, armed: bool = False,
+    renewable: bool = True,
 ) -> InlineKeyboardMarkup:
     """Customer controls for one provisioned service: the ONE-SHOT auto-renew toggle (arm reserves the
     plan price; it fires once near exhaustion), resume, delete. There is no immediate "renew now"
@@ -262,9 +263,14 @@ def order_actions_kb(
     them plenty: the button sat one mis-tap away from «🗑 حذف» with no confirmation, every expiry /
     usage / trial sweep filters on `provisioned` so a paused customer goes silent, and an armed
     auto-renew on a paused order could never fire. Pausing stays available to the SHOP ADMIN
-    (`sfatgl:`), who has a real use for it."""
+    (`sfatgl:`), who has a real use for it.
+
+    `renewable=False` (the shop DELETED this service's plan) swaps the toggle for a «buy a current
+    plan» button: arming would only be refused as `plan_gone`. A still-armed order keeps its «لغو»."""
     rows = []
-    if not is_trial:
+    if not is_trial and not renewable and not armed:
+        rows.append([InlineKeyboardButton(text="🛒 خرید سرویسِ جدید", callback_data="sfbuylist")])
+    elif not is_trial:
         if armed:
             label = "🔁 تمدید خودکار: روشن ✅ — لغو"
         else:
@@ -458,6 +464,12 @@ def trial_settings_kb(bot: StorefrontBot) -> InlineKeyboardMarkup:
             callback_data=f"sftrialtog:{int(not bot.free_trial_enabled)}:{bot.config_version}")],
         [InlineKeyboardButton(text="✏️ تغییرِ حجم/مدت", callback_data="sftrialset")],
     ])
+
+
+def view_plans_kb() -> InlineKeyboardMarkup:
+    """One button to the shop's CURRENT plans — under «this service's plan is no longer sold»."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🛒 دیدنِ پلن‌ها", callback_data="sfbuylist")]])
 
 
 def trial_used_kb() -> InlineKeyboardMarkup:

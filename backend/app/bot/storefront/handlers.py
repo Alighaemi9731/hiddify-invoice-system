@@ -1397,6 +1397,7 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
             order.label or "سرویس", order.gb, order.days, order.sub_link, order.status == "disabled")
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        renewable = plan is not None
         armed = storefront_autorenew.is_armed(order)
         status = await storefront_provision.live_status(s, sf, order)
     lines = [f"📦 {name}", f"پلن: {gb} گیگابایت · {days} روز"]
@@ -1410,11 +1411,13 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
         lines.append("اطلاعاتِ مصرف فعلاً در دسترس نیست.")
     if not order.is_trial:
         lines.append("🔁 تمدید خودکار: فعال (یک‌بار) ✅" if armed else "🔁 تمدید خودکار: خاموش")
+        if not renewable:
+            lines.append("⛔️ پلنِ این سرویس دیگر در فروشگاه ارائه نمی‌شود و قابلِ تمدید نیست.")
     if sub_link:
         lines += ["", "🔗 لینکِ اشتراک:", f"<code>{sub_link}</code>"]
     caption = rtl("\n".join(lines))
     markup = kb.order_actions_kb(order_id, renew_price, paused=paused, is_trial=order.is_trial,
-                                 armed=armed)
+                                 armed=armed, renewable=renewable)
     # ONE message: the QR photo carries the status + link + action buttons (no separate "آماده شد" send).
     sent = False
     if sub_link:
@@ -1429,6 +1432,15 @@ async def sf_order_detail(cb: CallbackQuery, bot: Bot) -> None:
         await cb.message.answer(caption, parse_mode="HTML", reply_markup=markup,
                                 disable_web_page_preview=True)
     await cb.answer()
+
+
+# Answer to a customer who tries to renew a service whose plan the shop DELETED (`plan_gone`).
+# Points at the one real next step: the shop's CURRENT plans (the button under it opens them).
+PLAN_GONE_RENEW_FA = (
+    "⛔️ پلنِ این سرویس دیگر در فروشگاه ارائه نمی‌شود، به همین دلیل امکانِ تمدیدِ آن وجود ندارد.\n"
+    "سرویسِ فعلیِ شما تا پایانِ حجم و زمانِ باقی‌مانده‌اش بدونِ تغییر فعال می‌ماند. برای ادامه، "
+    "از دکمهٔ زیر (یا «🛒 خرید سرویس» در منو) پلن‌های فعلیِ فروشگاه را ببینید و سرویسِ جدیدی تهیه کنید."
+)
 
 
 async def _report_arm(cb: CallbackQuery, res: storefront_autorenew.ArmResult, price_hint: int) -> None:
@@ -1449,6 +1461,8 @@ async def _report_arm(cb: CallbackQuery, res: storefront_autorenew.ArmResult, pr
         await cb.message.answer(rtl(
             "این سرویس هم‌اکنون متوقف است و تا وقتی متوقف بماند تمدید نمی‌شود.\n"
             "ابتدا با «▶️ فعال‌سازی» آن را فعال کنید، سپس «تمدید خودکار» را روشن کنید."))
+    elif res.reason == "plan_gone":
+        await cb.message.answer(rtl(PLAN_GONE_RENEW_FA), reply_markup=kb.view_plans_kb())
     elif res.reason == "below_cost":
         # The shop's pricing is broken (this plan sells under the reseller's own cost), so we
         # refuse to lock in another loss-making renewal. NEVER surface the reseller's cost to a
@@ -1486,6 +1500,7 @@ async def sf_autorenew_toggle(cb: CallbackQuery, bot: Bot) -> None:
         paused = order.status == "disabled"
         plan = await s.get(StorefrontPlan, order.plan_id) if order.plan_id else None
         renew_price = int(plan.price_toman) if (plan and plan.enabled) else int(order.price_toman)
+        renewable = plan is not None
         was_armed = storefront_autorenew.is_armed(order)
     await cb.answer()
     if was_armed:
@@ -1503,7 +1518,8 @@ async def sf_autorenew_toggle(cb: CallbackQuery, bot: Bot) -> None:
     try:
         await cb.message.edit_reply_markup(
             reply_markup=kb.order_actions_kb(order_id, renew_price, paused=paused,
-                                             is_trial=False, armed=new_armed))
+                                             is_trial=False, armed=new_armed,
+                                             renewable=renewable))
     except Exception:  # noqa: BLE001
         pass
 
@@ -1539,6 +1555,9 @@ async def sf_renew_legacy(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
     if already:
         await cb.message.answer(rtl("🔁 «تمدید خودکار» از قبل برای این سرویس روشن است."))
+        return
+    if plan is None:
+        await cb.message.answer(rtl(PLAN_GONE_RENEW_FA), reply_markup=kb.view_plans_kb())
         return
     await cb.message.answer(rtl(
         "ℹ️ تمدید اکنون «خودکار» است: به‌جای تمدیدِ زودهنگام (که حجمِ باقی‌ماندهٔ شما را از بین می‌برد)، "
