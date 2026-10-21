@@ -59,9 +59,8 @@ async def prepare_domain(
 ) -> dict:
     """Bootstrap TLS before collecting an owner password. No owner/JWT is created here.
 
-    This narrowly scoped first-run operation accepts the installer's token over the
-    initial HTTP connection; account credentials remain HTTPS-only. The token is still
-    required on the HTTPS setup page and is consumed atomically with owner creation.
+    This accepts only the installer's purpose-separated TLS token over the initial
+    HTTP connection. The account-creation token and owner credentials stay HTTPS-only.
     """
     from app.services import domain_setup
 
@@ -72,7 +71,7 @@ async def prepare_domain(
         await session.execute(select(Setting).where(Setting.key == "setup_done").with_for_update())
         if await _is_done(session):
             raise HTTPException(409, "راه‌اندازی قبلاً انجام شده است.")
-        token_hash = str(await settings_service.get(session, _TOKEN_HASH_KEY, "") or "")
+        token_hash = str(await settings_service.get(session, "setup_tls_token_hash", "") or "")
         if not token_hash or not await verify_password_async(body.token, token_hash):
             raise HTTPException(403, "توکنِ راه‌اندازی نادرست است.")
         result = await domain_setup.set_domain(session, body.domain, body.acme_email)
@@ -153,6 +152,7 @@ async def do_setup(
         await settings_service.set_value(session, "setup_done", True, commit=False)
         if token_hash:
             await settings_service.set_value(session, _TOKEN_HASH_KEY, "", commit=False)  # one-time: consume it
+        await settings_service.set_value(session, "setup_tls_token_hash", "", commit=False)
         await session.commit()
 
     result: dict = {"setup_done": True, "domain_applied": False}

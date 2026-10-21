@@ -74,7 +74,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               <>
                 <Alert severity="success" sx={{ my: 2, textAlign: "right" }}>
                   {result.tls_prepared
-                    ? "دامنه ثبت شد و گواهی SSL در حال صدور است. برای ساخت حساب مدیر، آدرس زیر را باز کنید و توکن نصب را دوباره وارد کنید:"
+                    ? "دامنه ثبت شد و گواهی SSL در حال صدور است. برای ساخت حساب مدیر، آدرس زیر را باز کنید و توکن ساخت حساب را از کنسول نصب وارد کنید:"
                     : "دامنه ثبت شد و گواهی SSL در حال صدور است. از طریق آدرس زیر وارد شوید:"}
                 </Alert>
                 <Link href={url} variant="h6" dir="ltr" sx={{ display: "block", mb: 2 }}>{url}</Link>
@@ -118,7 +118,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
           {needsHttps && <Alert severity="info" sx={{ mb: 2 }}>
             ابتدا دامنه و HTTPS را فعال کنید؛ حساب مدیر و رمز عبور در مرحلهٔ بعد، روی اتصال امن ساخته می‌شوند.
-            رکورد A دامنه باید به IP این سرور اشاره کند. توکن نصب را از کنسول سرور بردارید.
+            رکورد A دامنه باید به IP این سرور اشاره کند. توکن فعال‌سازی HTTPS را از کنسول سرور بردارید.
           </Alert>}
 
           <Stack spacing={2}>
@@ -132,8 +132,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             </>}
 
             {(tokenRequired || needsHttps) && (
-              <TextField label="توکن راه‌اندازی" inputProps={{ dir: "ltr" }} value={token} onChange={(e) => setToken(e.target.value)} fullWidth
-                helperText="این توکن هنگام نصب در کنسول سرور نمایش داده شده است (SETUP_BOOTSTRAP_TOKEN)." />
+              <TextField label={needsHttps ? "توکن فعال‌سازی HTTPS" : "توکن راه‌اندازی"} inputProps={{ dir: "ltr" }} value={token} onChange={(e) => setToken(e.target.value)} fullWidth
+                helperText={needsHttps ? "در کنسول نصب با عنوان HTTPS activation token چاپ شده است؛ توکن ساخت حساب را اینجا وارد نکنید." : "در کنسول نصب با عنوان Account setup token چاپ شده است."} />
             )}
 
             <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 1 }}>{needsHttps ? "دامنه و اتصال امن" : "۲) دامنه (اختیاری)"}</Typography>

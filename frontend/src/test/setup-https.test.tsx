@@ -16,11 +16,11 @@ describe("HTTPS first-run bootstrap", () => {
     vi.mocked(prepareSetupDomain).mockResolvedValue({ ok: true, url: "https://panel.example.com" });
     const user = userEvent.setup();
     render(<Setup onDone={vi.fn()} />);
-    await screen.findByLabelText("توکن راه‌اندازی");
+    await screen.findByLabelText("توکن فعال‌سازی HTTPS");
     expect(screen.queryByLabelText("نام کاربری")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("رمز عبور")).not.toBeInTheDocument();
     await user.type(screen.getByLabelText("دامنه"), "panel.example.com");
-    await user.type(screen.getByLabelText("توکن راه‌اندازی"), "install-token");
+    await user.type(screen.getByLabelText("توکن فعال‌سازی HTTPS"), "install-token");
     await user.click(screen.getByRole("button", { name: "فعال‌سازی HTTPS و ادامه" }));
     await waitFor(() => expect(prepareSetupDomain).toHaveBeenCalledWith({ domain: "panel.example.com", token: "install-token", acme_email: undefined }));
     expect(await screen.findByText("اتصال امن آماده می‌شود")).toBeInTheDocument();

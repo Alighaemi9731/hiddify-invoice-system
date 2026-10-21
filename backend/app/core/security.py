@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import logging
 
 import bcrypt
@@ -23,6 +24,11 @@ MIN_PASSWORD_CHARS = 8
 MAX_PASSWORD_BYTES = 72
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 log = logging.getLogger("security")
+
+
+def setup_tls_token(account_token: str) -> str:
+    """Purpose-separated TLS bootstrap credential; revealing it cannot claim the owner."""
+    return hashlib.sha256(("invoice-setup-tls:" + account_token).encode()).hexdigest()
 
 
 # ----------------------------- passwords -----------------------------

@@ -127,8 +127,8 @@ sudo bash release-installer.sh
 The installer asks nothing: it installs Docker, resolves one release tag, downloads its
 immutable archive, **verifies the published SHA-256 before any code runs as root**, and
 brings up the whole stack. Open the printed `http://<server-ip>` — the one-time setup
-wizard first takes your domain and installer token to enable HTTPS. Open the resulting
-`https://<domain>` and enter the same token to create the owner account there. Owner passwords
+wizard first takes your domain and HTTPS activation token. Open the resulting
+`https://<domain>` and enter the separate account setup token to create the owner account. Owner passwords
 and authenticated API requests always require HTTPS (or a direct local connection).
 
 - **Update** — from the panel («به‌روزرسانی سامانه», via a host-side systemd watcher) or

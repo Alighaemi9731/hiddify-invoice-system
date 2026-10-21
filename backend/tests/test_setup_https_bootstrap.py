@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import setup
 from app.core.db import Base
-from app.core.security import hash_password
+from app.core.security import hash_password, setup_tls_token
 from app.models import AppUser
 from app.services import domain_setup, settings_service
 
@@ -34,22 +34,29 @@ def test_http_to_https_setup_preserves_token_and_owner_gate(tmp_path, monkeypatc
             async with factory() as s:
                 await settings_service.set_value(s, 'setup_done', False)
                 await settings_service.set_value(s, 'setup_bootstrap_token_hash', hash_password('install-token'))
-                for token in ('', 'wrong'):
+                await settings_service.set_value(s, 'setup_tls_token_hash', hash_password(setup_tls_token('install-token')))
+                for token in ('', 'wrong', 'install-token'):
                     with pytest.raises(HTTPException) as exc:
                         await setup.prepare_domain(setup.SetupDomainRequest(domain='panel.example.com', token=token), http, s)
                     assert exc.value.status_code == 403
                 assert not calls
                 result = await setup.prepare_domain(
-                    setup.SetupDomainRequest(domain='panel.example.com', token='install-token'), http, s)
+                    setup.SetupDomainRequest(domain='panel.example.com', token=setup_tls_token('install-token')), http, s)
                 assert result['url'] == 'https://panel.example.com'
                 assert (await s.execute(select(func.count(AppUser.id)))).scalar() == 0
                 assert await settings_service.get(s, 'setup_bootstrap_token_hash')
                 body = setup.SetupRequest(username='owner', password='password123', token='install-token')
+                with pytest.raises(HTTPException) as wrong_purpose:
+                    await setup.do_setup(setup.SetupRequest(
+                        username='owner', password='password123', token=setup_tls_token('install-token')
+                    ), https, s)
+                assert wrong_purpose.value.status_code == 403
                 with pytest.raises(HTTPException) as exc:
                     await setup.do_setup(body, http, s)
                 assert exc.value.status_code == 426
                 assert (await setup.do_setup(body, https, s))['setup_done']
                 assert not await settings_service.get(s, 'setup_bootstrap_token_hash')
+                assert not await settings_service.get(s, 'setup_tls_token_hash')
                 with pytest.raises(HTTPException) as exc:
                     await setup.prepare_domain(setup.SetupDomainRequest(domain='other.example.com', token='install-token'), http, s)
                 assert exc.value.status_code == 409
@@ -74,8 +81,9 @@ def test_http_domain_bootstrap_failure_is_retryable(tmp_path, monkeypatch):
         try:
             async with factory() as s:
                 await settings_service.set_value(s, 'setup_bootstrap_token_hash', hash_password('install-token'))
+                await settings_service.set_value(s, 'setup_tls_token_hash', hash_password(setup_tls_token('install-token')))
                 with pytest.raises(HTTPException) as exc:
-                    await setup.prepare_domain(setup.SetupDomainRequest(domain='bad', token='install-token'), request, s)
+                    await setup.prepare_domain(setup.SetupDomainRequest(domain='bad', token=setup_tls_token('install-token')), request, s)
                 assert exc.value.status_code == 400
                 assert not await setup._is_done(s)
                 assert await settings_service.get(s, 'setup_bootstrap_token_hash')

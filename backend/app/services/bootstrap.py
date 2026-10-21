@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from app.core.config import settings as boot
 from app.core.db import SessionLocal, init_models
-from app.core.security import hash_password
+from app.core.security import hash_password, setup_tls_token
 from app.models.app_user import AppUser
 from app.services import settings_service
 
@@ -48,6 +48,9 @@ async def run_bootstrap() -> None:
                     hash_password(boot.setup_bootstrap_token),
                 )
                 await session.commit()
+                await settings_service.set_value(
+                    session, "setup_tls_token_hash", hash_password(setup_tls_token(boot.setup_bootstrap_token))
+                )
                 log.info("First-run setup requires the bootstrap token from the installer console.")
             log.info("No owner yet — first visit will show the setup wizard.")
         log.info("Settings defaults ensured.")

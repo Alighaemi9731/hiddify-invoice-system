@@ -316,7 +316,9 @@ else
   [[ -n "$SETUP_TOKEN_ENV" ]] && TOKEN_LINE="  Setup token (enter it on the first-run page): $SETUP_TOKEN_ENV"
 fi
 if [[ -z "$ADMIN_PASSWORD" && -n "$SETUP_TOKEN_ENV" ]]; then
-  TOKEN_LINE="  First-run setup token (also required after switching to HTTPS): $SETUP_TOKEN_ENV"
+  TLS_SETUP_TOKEN="$(printf 'invoice-setup-tls:%s' "$SETUP_TOKEN_ENV" | sha256sum | cut -d' ' -f1)"
+  TOKEN_LINE="  HTTPS activation token (HTTP/IP page): $TLS_SETUP_TOKEN
+  Account setup token (enter ONLY on the HTTPS page): $SETUP_TOKEN_ENV"
 fi
 
 c "Running post-deploy smoke checks…"
