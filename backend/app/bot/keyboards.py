@@ -257,17 +257,16 @@ def cap_bump_keyboard(reseller_id: int) -> InlineKeyboardMarkup:
 
 
 def broadcast_audience_keyboard() -> InlineKeyboardMarkup:
-    """The bot's compact audience picker (the panel's Broadcast page carries the FULL filter set)."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👥 همه نمایندگان", callback_data="bcaud:all")],
-            [InlineKeyboardButton(text="💰 بدهکاران", callback_data="bcaud:debtors")],
-            [InlineKeyboardButton(text="⏰ سررسیدگذشته‌ها", callback_data="bcaud:overdue")],
-            [InlineKeyboardButton(text="📅 مهلت‌دارها (به مهلت نرسیده)", callback_data="bcaud:deferred")],
-            [InlineKeyboardButton(text="🟡 فروش صفر این ماه", callback_data="bcaud:zero_sale")],
-            [InlineKeyboardButton(text="🖥 نمایندگان یک پنل", callback_data="bcaud:panel")],
-        ]
-    )
+    labels = [("all", "👥 همه نمایندگان"), ("debtors", "💰 بدهکاران"),
+              ("overdue", "⏰ سررسیدگذشته‌ها"), ("deferred", "📅 مهلت‌دارها"),
+              ("enforced", "🔴 مسدودشده‌ها"), ("frozen", "🧊 فریزشده‌ها"),
+              ("pending_payment", "🧾 پرداخت در انتظار تأیید"), ("paid_up", "✅ بدون بدهی"),
+              ("zero_sale", "🟡 فروش صفر این ماه"), ("few_active", "👤 کاربران فعال کم"),
+              ("invoice_below", "📉 فروش این ماه زیر مبلغ"), ("invoice_above", "📈 فروش این ماه بالای مبلغ"),
+              ("new_resellers", "🆕 نمایندگان جدید")]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=f"bcaud:{key}")] for key, label in labels
+    ] + [cancel_row()])
 
 
 def broadcast_panel_keyboard(panels: list[tuple[int, str]]) -> InlineKeyboardMarkup:

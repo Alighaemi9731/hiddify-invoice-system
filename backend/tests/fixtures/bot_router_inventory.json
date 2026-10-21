@@ -21,6 +21,7 @@
       "on_owner_reply",
       "cmd_broadcast",
       "on_broadcast_text",
+      "on_broadcast_filter_value",
       "on_sub_cap_text",
       "on_owner_cap_bump_text",
       "cmd_newuser",
@@ -49,6 +50,10 @@
   "callback_query": {
     "handlers": [
       "cb_broadcast_audience",
+      "cb_broadcast_filters",
+      "cb_broadcast_recipient_list",
+      "cb_broadcast_edit",
+      "cb_broadcast_confirm",
       "cb_cancel",
       "cb_support_reply",
       "cb_check_membership",

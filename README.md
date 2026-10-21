@@ -202,3 +202,6 @@ cd frontend && npx tsc --noEmit && npm test -- --run && npm run build
 ---
 
 *Private, single-operator production system. Not accepting external contributions.*
+
+Targeted owner broadcasts support invoice-month ranges, multiple panels, debt/age/access filters,
+recipient previews and CSV in both the panel and Telegram bot. See [broadcast guide](docs/BROADCAST.md).

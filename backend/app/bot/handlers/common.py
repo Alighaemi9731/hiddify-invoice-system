@@ -27,7 +27,10 @@ from app.services import settings_service
 
 
 class BroadcastState(StatesGroup):
+    configuring = State()
+    filter_value = State()
     waiting = State()
+    confirming = State()
 
 
 class SupportState(StatesGroup):

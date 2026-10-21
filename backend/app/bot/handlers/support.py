@@ -11,7 +11,10 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot import keyboards
 from app.bot.handlers import common
-from app.bot.handlers.broadcast import _do_broadcast
+from app.bot.handlers.broadcast import (
+    on_broadcast_filter_value as apply_broadcast_filter_value,
+)
+from app.bot.handlers.broadcast import prepare_confirmation
 from app.bot.handlers.common import (
     BroadcastState,
     OwnerReplyState,
@@ -118,8 +121,10 @@ async def cmd_broadcast(message: Message, state: FSMContext, command: CommandObj
     async with common.SessionLocal() as s:
         if not await common._is_owner_user(s, message.from_user):
             return
+        await state.clear()
         if command.args:
-            await _do_broadcast(message, s, command.args, "all")
+            await state.update_data(audience="all", filters={})
+            await prepare_confirmation(message, state, s, command.args)
         else:
             await message.answer("📢 گیرندگان پیام همگانی را انتخاب کنید:",
                                  reply_markup=keyboards.broadcast_audience_keyboard())
@@ -127,14 +132,19 @@ async def cmd_broadcast(message: Message, state: FSMContext, command: CommandObj
 
 @router.message(BroadcastState.waiting)
 async def on_broadcast_text(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    audience = data.get("audience", "all")
-    panel_id = data.get("panel_id")
-    await state.clear()
     async with common.SessionLocal() as s:
         if not await common._is_owner_user(s, message.from_user):
             return
         if not (message.text or "").strip():
-            await message.answer("متن پیام خالی بود؛ لغو شد.")
+            await message.answer("متن پیام خالی است؛ دوباره بنویسید.")
             return
-        await _do_broadcast(message, s, message.text, audience, panel_id)
+        if len(message.text) > 4096:
+            await message.answer("حداکثر طول پیام ۴۰۹۶ کاراکتر است.")
+            return
+        await prepare_confirmation(message, state, s, message.text)
+
+
+@router.message(BroadcastState.filter_value)
+async def on_broadcast_filter_value(message: Message, state: FSMContext) -> None:
+    """Register AFTER global cancel/menu handlers so the filter prompt always has an exit."""
+    await apply_broadcast_filter_value(message, state)

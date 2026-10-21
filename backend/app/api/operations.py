@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hmac
 import logging
+import math
 import os
 import signal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +33,7 @@ from app.models import (
     UsageMeterEvent,
 )
 from app.models.enums import PanelStatus
+from app.schemas.broadcast import BroadcastFilters
 from app.services import (
     backup as backup_service,
 )
@@ -81,12 +84,15 @@ class DomainBody(BaseModel):
 
 
 class BroadcastBody(BaseModel):
-    text: str = ""
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(default="", max_length=4096)
+    filters: BroadcastFilters = Field(default_factory=BroadcastFilters)
+    preview_token: str | None = Field(default=None, max_length=64)
     audience: str = "all"          # one of broadcast_service.AUDIENCES (validated in the endpoints)
     panel_id: int | None = None    # optional single-panel restriction (combinable)
     # few_active: max active users • invoice_below/above: Toman • new_resellers: days (default 30).
     # REQUIRED (positive) for few_active/invoice_below/invoice_above — else the request is 400.
-    threshold: float | None = None
+    threshold: float | None = Field(default=None, allow_inf_nan=False)
 
 
 # Audiences that are meaningless without a positive threshold. invoice_above with a
@@ -97,6 +103,10 @@ _THRESHOLD_REQUIRED = ("few_active", "invoice_below", "invoice_above")
 def _validate_audience(audience: str, threshold: float | None = None) -> None:
     """An unknown audience must NEVER silently fall back to «all» (a typo would message
     everyone), and a threshold audience without a positive threshold is rejected."""
+    if threshold is not None and (not math.isfinite(threshold) or threshold < 0 or threshold > 1e15):
+        raise HTTPException(400, "آستانه نامعتبر است.")
+    if audience == "new_resellers" and threshold is not None and threshold > 36500:
+        raise HTTPException(400, "بازه ثبت‌نام بیش از حد بزرگ است.")
     if audience not in broadcast_service.AUDIENCES:
         raise HTTPException(400, "فیلترِ گیرندگان نامعتبر است.")
     if audience in _THRESHOLD_REQUIRED and (threshold is None or threshold <= 0):
@@ -401,11 +411,20 @@ async def broadcast(
     result summary is delivered to the owner's Telegram when it finishes (and is also visible via
     the live status endpoint). Avoids the request timeout on large audiences."""
     _validate_audience(body.audience, body.threshold)
-    reachable, unregistered = await broadcast_service.resolve_recipients(
-        session, body.audience, body.panel_id, body.threshold)
-    if body.text.strip() and reachable:
-        background.add_task(_broadcast_bg, body.text, reachable, len(unregistered))
-    return {"status": "started", "total": len(reachable), "unregistered": len(unregistered)}
+    if not body.text.strip():
+        raise HTTPException(400, "متن پیام خالی است.")
+    result = await broadcast_service.preview(
+        session, audience=body.audience, panel_id=body.panel_id, threshold=body.threshold, filters=body.filters)
+    if body.preview_token is not None and not hmac.compare_digest(body.preview_token, result["preview_token"]):
+        raise HTTPException(409, "گیرندگان یا وضعیت بدهی تغییر کرده‌اند؛ دوباره پیش‌نمایش بگیرید.")
+    if result["recipients"]:
+        background.add_task(_broadcast_bg, body.text, result["recipients"], result["unregistered"])
+    return {"status": "started", "total": result["total"], "unregistered": result["unregistered"]}
+
+
+@router.get("/broadcast/options")
+async def broadcast_options(session: AsyncSession = Depends(get_session)) -> dict:
+    return await broadcast_service.filter_options(session)
 
 
 @router.get("/broadcast/status")
@@ -422,7 +441,7 @@ async def broadcast_preview(
     filter and see the exact recipient list before sending."""
     _validate_audience(body.audience, body.threshold)
     return await broadcast_service.preview(
-        session, audience=body.audience, panel_id=body.panel_id, threshold=body.threshold
+        session, audience=body.audience, panel_id=body.panel_id, threshold=body.threshold, filters=body.filters
     )
 
 

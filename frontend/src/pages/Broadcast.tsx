@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   Box, Card, CardContent, Typography, TextField, Button, Stack, Alert, MenuItem, Select,
   Chip, Divider, Table, TableBody, TableCell, TableHead, TableRow, Collapse,
@@ -13,13 +13,15 @@ import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
 import NotificationsActiveIcon from "@mui/icons-material/esm/NotificationsActive";
 import DeleteForeverIcon from "@mui/icons-material/esm/DeleteForever";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { broadcastMessage, broadcastPreview, broadcastStatus, panelMigration, panelMigrationPreview, runChannelGuard, listPanels, highVolumeUsers, highVolumeWarn, highVolumeDelete } from "../api/client";
-import type { HighVolumeDeleteResult, HighVolumeDeleteRow } from "../api/client";
+import { broadcastMessage, broadcastPreview, broadcastStatus, broadcastOptions, panelMigration, panelMigrationPreview, runChannelGuard, listPanels, highVolumeUsers, highVolumeWarn, highVolumeDelete } from "../api/client";
+import type { BroadcastFilters, HighVolumeDeleteResult, HighVolumeDeleteRow } from "../api/client";
 import { useToast, errMsg } from "../components/Toast";
 import { DataState } from "../components/DataState";
 import { telegramHref } from "../components/TelegramLink";
 import { fmtNum, fmtToman } from "../format";
 import { NumberField } from "../components/NumberField";
+import SegmentFilters from "./Broadcast/SegmentFilters";
+import { recipientCsv } from "./Broadcast/export";
 
 // Audience filters — each is applied ON TOP of the base set (resellers in the main «نمایندگان»
 // list that are not exempt from billing and are on an active panel). The panel filter is combinable.
@@ -79,7 +81,10 @@ export default function Broadcast() {
   const { node, show } = useToast();
   const [text, setText] = useState("");
   const [audience, setAudience] = useState("all");
-  const [panelId, setPanelId] = useState<string>("");
+  const [filters, setFilters] = useState<BroadcastFilters>({});
+  const [confirmSend, setConfirmSend] = useState(false);
+  const filterVersion = useRef(0);
+  const { data: options } = useQuery({ queryKey: ["broadcast-options"], queryFn: broadcastOptions });
   const [threshold, setThreshold] = useState<string>("");
   const [report, setReport] = useState<any>(null);   // last preview result (recipient list)
   const [showList, setShowList] = useState(true);
@@ -103,27 +108,32 @@ export default function Broadcast() {
 
   const body = useMemo(() => ({
     text, audience,
-    panel_id: panelId ? Number(panelId) : undefined,
+    filters,
     threshold: needsThreshold ? Number(threshold || audDef!.threshold!.def) : undefined,
-  }), [text, audience, panelId, threshold, needsThreshold, audDef]);
+  }), [text, audience, filters, threshold, needsThreshold, audDef]);
 
   const preview = useMutation({
-    mutationFn: () => broadcastPreview(body),
-    onSuccess: (r: any) => { setReport({ ...r, _sent: false }); setShowList(true); },
+    mutationFn: async () => {
+      const version = filterVersion.current;
+      return { result: await broadcastPreview(body), version };
+    },
+    onSuccess: ({ result, version }) => {
+      if (version === filterVersion.current) { setReport(result); setShowList(true); }
+    },
     onError: (e) => show(errMsg(e), "error"),
   });
   const send = useMutation({
-    mutationFn: () => broadcastMessage(body),
+    mutationFn: () => broadcastMessage({ ...body, preview_token: report?.preview_token }),
     onSuccess: (r: any) => {
       show(
         `ارسال در پس‌زمینه شروع شد — به ${fmtNum(r.total)} نماینده`
         + (r.unregistered ? ` (${fmtNum(r.unregistered)} بدون ربات، پیام دریافت نمی‌کنند)` : "")
         + "؛ خلاصهٔ نتیجه به تلگرامِ شما می‌رسد.",
         "success");
-      setText("");
+      setText(""); setReport(null); setConfirmSend(false);
       if (r.total > 0) setPolling(true);   // show live progress while the send runs
     },
-    onError: (e) => show(errMsg(e), "error"),
+    onError: (e) => { show(errMsg(e), "error"); setConfirmSend(false); setReport(null); },
   });
 
   const guard = useMutation({
@@ -222,8 +232,14 @@ export default function Broadcast() {
   });
 
   // Reset the stale report whenever the filter changes (so it never mismatches the controls).
-  const onFilterChange = (fn: () => void) => { fn(); setReport(null); };
-  const rows = report ? [...(report.recipients || []), ...(report.skipped || [])] : [];
+  const onFilterChange = (fn: () => void) => { filterVersion.current++; fn(); setReport(null); setConfirmSend(false); };
+  const rows = report ? [...(report.recipients || []), ...(report.skipped || [])].flatMap((r: any) =>
+    (r.accounts || [r]).map((a: any) => ({ ...a, status: r.status }))) : [];
+  const exportRecipients = () => {
+    const url = URL.createObjectURL(new Blob([recipientCsv(rows)], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a"); a.href = url; a.download = "broadcast-recipients.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <Box sx={{ maxWidth: 860 }}>
@@ -251,13 +267,6 @@ export default function Broadcast() {
                 )),
               ])}
             </Select>
-            <Select size="small" value={panelId} displayEmpty
-              onChange={(e) => onFilterChange(() => setPanelId(e.target.value))}
-              renderValue={(v) => v ? (panels.find((p: any) => String(p.id) === String(v))?.key ?? v) : "همهٔ پنل‌ها"}
-              sx={{ minWidth: 160, "& .MuiSelect-select": { py: "7px !important" } }}>
-              <MenuItem value="">همهٔ پنل‌ها</MenuItem>
-              {panels.map((p: any) => <MenuItem key={p.id} value={p.id}>{p.key}</MenuItem>)}
-            </Select>
             {needsThreshold && (
               <NumberField size="small" sx={{ minWidth: 220 }}
                 label={audDef!.threshold!.label}
@@ -268,6 +277,16 @@ export default function Broadcast() {
               onClick={() => preview.mutate()}>پیش‌نمایشِ گیرندگان</Button>
           </Stack>
 
+          <SegmentFilters filters={filters} periods={options?.periods || []} panels={panels}
+            onChange={value => onFilterChange(() => setFilters(value))} />
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+            {[ ["debtors", "بدهکاران ماه قبل"], ["enforced", "مسدودهای ماه قبل"], ["overdue", "معوق‌های ماه قبل"] ].map(([value, label]) =>
+              <Button key={value} size="small" variant="outlined" onClick={() => onFilterChange(() => {
+                const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - 1);
+                const period = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+                setAudience(value); setThreshold(""); setFilters({ period_from: period, period_to: period });
+              })}>{label}</Button>)}
+          </Stack>
           {audDef?.hint && (
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: -1, mb: 2 }}>
               ℹ️ {audDef.hint}
@@ -279,7 +298,11 @@ export default function Broadcast() {
               action={rows.length
                 ? <Button color="inherit" size="small" onClick={() => setShowList((s) => !s)}>{showList ? "بستن فهرست" : "نمایش فهرست"}</Button>
                 : undefined}>
-              این فیلتر <b>{fmtNum(report.matched)}</b> نماینده را شامل می‌شود: {fmtNum(report.total)} قابل‌ارسال{report.unregistered ? ` • ${fmtNum(report.unregistered)} بدون ربات (قابل‌دسترس نیستند)` : ""}.
+              این فیلتر <b>{fmtNum(report.matched_accounts ?? report.matched)}</b> حساب را شامل می‌شود: {fmtNum(report.total)} قابل‌ارسال{report.unregistered ? ` • ${fmtNum(report.unregistered)} بدون ربات (قابل‌دسترس نیستند)` : ""}.
+              <Typography variant="caption" display="block">
+                بدهی دوره: {fmtToman(report.debt_toman || 0)} • {fmtNum(report.duplicate_chats || 0)} حساب با مقصد تکراری؛ هر فرد یک پیام دریافت می‌کند.
+              </Typography>
+              <Button size="small" onClick={exportRecipients}>خروجی CSV گیرندگان</Button>
             </Alert>
           )}
 
@@ -297,18 +320,22 @@ export default function Broadcast() {
               <Box sx={{ mb: 2, maxHeight: 320, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 2 }}>
                 <Table size="small" stickyHeader className="resp-table">
                   <TableHead>
-                    <TableRow><TableCell>نماینده</TableCell><TableCell>پنل</TableCell><TableCell>وضعیت</TableCell></TableRow>
+                    <TableRow><TableCell>نماینده</TableCell><TableCell>پنل / دوره</TableCell><TableCell>بدهی / سن</TableCell><TableCell>وضعیت</TableCell><TableCell>انتخاب</TableCell></TableRow>
                   </TableHead>
                   <TableBody>
                     {rows.map((r: any) => (
                       <TableRow key={r.reseller_id} hover>
                         <TableCell>{r.name}</TableCell>
-                        <TableCell>{r.panel}</TableCell>
+                        <TableCell>{r.panel}<Typography variant="caption" display="block">{r.periods?.join("، ") || "—"}</Typography></TableCell>
+                        <TableCell>{fmtToman(r.debt_toman || 0)}<Typography variant="caption" display="block">{r.oldest_debt_days == null ? "تاریخ نامشخص" : `${fmtNum(r.oldest_debt_days)} روز`}</Typography></TableCell>
                         <TableCell><Chip size="small" color={STATUS_COLOR[r.status]} label={STATUS_FA[r.status] || r.status} /></TableCell>
+                        <TableCell><Button size="small" onClick={() => onFilterChange(() => setFilters(f => ({ ...f,
+                          excluded_reseller_ids: [...(f.excluded_reseller_ids || []), r.reseller_id],
+                        })))}>کنار گذاشتن</Button></TableCell>
                       </TableRow>
                     ))}
                     {rows.length === 0 && (
-                      <TableRow><TableCell colSpan={3} align="center" sx={{ py: 3, color: "text.secondary" }}>هیچ نماینده‌ای با این فیلتر پیدا نشد</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={5} align="center" sx={{ py: 3, color: "text.secondary" }}>هیچ نماینده‌ای با این فیلتر پیدا نشد</TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>
@@ -318,16 +345,24 @@ export default function Broadcast() {
 
           <Divider sx={{ mb: 2 }} />
           <TextField label="متن پیام" value={text} onChange={(e) => setText(e.target.value)}
-            multiline minRows={5} fullWidth sx={{ mb: 2 }} />
+            multiline minRows={5} fullWidth sx={{ mb: 2 }} inputProps={{ maxLength: 4096 }}
+            helperText={`${fmtNum(text.length)} / ۴۰۹۶ کاراکتر — ارسال به صورت متن ساده`} />
           <Button variant="contained" startIcon={<CampaignIcon />}
-            disabled={!text.trim() || send.isPending}
-            onClick={() => {
-              const n = report && !report._sent ? report.total : null;
-              if (window.confirm(n != null
-                ? `پیام به ${n} نماینده ارسال شود؟`
-                : "پیام همگانی ارسال شود؟ (برای دیدنِ گیرندگان ابتدا «پیش‌نمایش» را بزنید)"))
-                send.mutate();
-            }}>ارسال</Button>
+            disabled={!text.trim() || !report?.total || send.isPending || preview.isPending}
+            onClick={() => setConfirmSend(true)}>بررسی نهایی و ارسال</Button>
+          {!report && <Typography variant="caption" display="block" sx={{ mt: 1 }}>برای ارسال، ابتدا پیش‌نمایشِ تازه بگیرید.</Typography>}
+          <Dialog open={confirmSend} onClose={() => !send.isPending && setConfirmSend(false)} fullWidth maxWidth="sm">
+            <DialogTitle>تأیید پیام همگانی</DialogTitle>
+            <DialogContent>
+              <Typography sx={{ mb: 2 }}>ارسال به {fmtNum(report?.total || 0)} گیرنده یکتا — {audDef?.label}</Typography>
+              <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>{text}</Typography>
+              <Alert severity="info" sx={{ mt: 2 }}>در صورت تغییر گیرندگان یا بدهی از زمان پیش‌نمایش، پیش‌نمایش تازه لازم است.</Alert>
+            </DialogContent>
+            <DialogActions>
+              <Button disabled={send.isPending} onClick={() => setConfirmSend(false)}>بازگشت</Button>
+              <Button variant="contained" disabled={send.isPending} onClick={() => send.mutate()}>تأیید و ارسال</Button>
+            </DialogActions>
+          </Dialog>
         </CardContent>
       </Card>
 

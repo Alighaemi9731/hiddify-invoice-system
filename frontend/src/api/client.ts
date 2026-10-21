@@ -556,9 +556,18 @@ export const getFinancialHistory = (params: any = {}) =>
   api.get("/api/reports/financial-history", { params }).then((r) => r.data);
 
 // ---- operations ----
+export interface BroadcastFilters {
+  panel_ids?: number[]; period_from?: string; period_to?: string;
+  access_state?: "active" | "frozen" | "enforced";
+  min_debt?: number; max_debt?: number; min_age_days?: number; max_age_days?: number;
+  exclude_pending?: boolean; search?: string; excluded_reseller_ids?: number[];
+}
 export interface BroadcastBody {
   text?: string; audience?: string; panel_id?: number; threshold?: number;
+  filters?: BroadcastFilters; preview_token?: string;
 }
+export const broadcastOptions = () =>
+  api.get("/api/ops/broadcast/options").then((r) => r.data as { periods: string[] });
 export const broadcastMessage = (body: BroadcastBody) =>
   api.post("/api/ops/broadcast", body).then((r) => r.data);
 export const broadcastPreview = (body: BroadcastBody) =>

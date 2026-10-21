@@ -15,19 +15,25 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
+import hmac
 import html as _html
+import json
 import logging
+import math
 from collections.abc import Callable
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.telegram import build_bot
+from app.core.config import settings
 from app.models import EndUserSnapshot, Invoice, Panel, Payment, Reseller
 from app.models.enums import EnforcementState, InvoiceStatus, PaymentStatus
-from app.services import owner_notify, reseller_stats
+from app.schemas.broadcast import BroadcastFilters
+from app.services import broadcast_segments, owner_notify, reseller_stats
 from app.services.periods import today as tehran_today
 
 log = logging.getLogger("broadcast")
@@ -141,9 +147,19 @@ class Recipient(TypedDict):
     panel: str
     chat_id: int | None
     status: str  # pending | sent | blocked | failed | unregistered
+    accounts: NotRequired[list[dict[str, Any]]]  # all matched accounts sharing this chat
+    debt_toman: NotRequired[float]
+    oldest_debt_days: NotRequired[int | None]
+    periods: NotRequired[list[str]]
+    access_state: NotRequired[str]
 
 
 class BroadcastResult(TypedDict):
+    preview_token: NotRequired[str]
+    matched_accounts: NotRequired[int]
+    duplicate_chats: NotRequired[int]
+    debt_toman: NotRequired[float]
+    filters: NotRequired[dict[str, Any]]
     audience: str
     panel_id: int | None
     threshold: float | None
@@ -199,6 +215,10 @@ async def _matching_roots(
     session: AsyncSession, audience: str, panel_id: int | None, threshold: float | None
 ) -> list[Reseller]:
     """The base set narrowed by the chosen filter (and the optional single-panel restriction)."""
+    if threshold is not None and (not math.isfinite(threshold) or threshold < 0 or threshold > 1e15):
+        return []
+    if audience == "new_resellers" and threshold is not None and threshold > 36500:
+        return []
     roots = await reseller_stats.load_billable_roots(session, panel_id)
     today = tehran_today()
     if audience == "debtors":
@@ -274,21 +294,35 @@ async def _matching_roots(
 
 
 async def resolve_recipients(
-    session: AsyncSession, audience: str, panel_id: int | None, threshold: float | None
+    session: AsyncSession, audience: str, panel_id: int | None, threshold: float | None,
+    *, filters: BroadcastFilters | None = None,
 ) -> tuple[list[Recipient], list[Recipient]]:
     """(reachable, unregistered): the matched roots split by whether they can be messaged.
     Reachable recipients are de-duplicated by chat_id (one person on two panels → one message)."""
-    roots = await _matching_roots(session, audience, panel_id, threshold)
-    panel_keys = {p.id: p.key for p in (await session.execute(select(Panel))).scalars().all()}
+    filters = filters or BroadcastFilters()
+    base_audience = "all" if audience in ("debtors", "overdue", "deferred", "paid_up", "pending_payment") else audience
+    roots = await _matching_roots(session, base_audience, panel_id, threshold)
+    roots, metadata = await broadcast_segments.narrow(session, roots, audience, filters)
+    panel_keys = {p.id: p.key for p in (await session.execute(select(Panel).where(Panel.enabled.is_(True)))).scalars().all()}
+    roots = [r for r in roots if r.panel_id in panel_keys]
     reachable: dict[int, Recipient] = {}
     unregistered: list[Recipient] = []
-    for r in roots:
+    for r in sorted(roots, key=lambda r: (r.panel_id, r.name or "", r.id)):
         rec = Recipient(
             reseller_id=r.id, name=r.name or "—",
             panel=panel_keys.get(r.panel_id, "?"), chat_id=r.bot_chat_id, status="pending",
         )
+        account = {"reseller_id": r.id, "name": rec["name"], "panel": rec["panel"], **metadata[r.id]}
+        rec["debt_toman"] = metadata[r.id]["debt_toman"]
+        rec["oldest_debt_days"] = metadata[r.id]["oldest_debt_days"]
+        rec["periods"] = metadata[r.id]["periods"]
+        rec["access_state"] = metadata[r.id]["access_state"]
+        rec["accounts"] = [account]
         if r.bot_chat_id:
-            reachable.setdefault(r.bot_chat_id, rec)
+            if r.bot_chat_id in reachable:
+                reachable[r.bot_chat_id]["accounts"].append(account)
+            else:
+                reachable[r.bot_chat_id] = rec
         else:
             rec["status"] = "unregistered"
             unregistered.append(rec)
@@ -306,16 +340,37 @@ def _empty(audience: str, panel_id: int | None, threshold: float | None) -> Broa
 async def preview(
     session: AsyncSession, *, audience: str = "all",
     panel_id: int | None = None, threshold: float | None = None,
+    filters: BroadcastFilters | None = None,
 ) -> BroadcastResult:
     """Resolve the recipient list WITHOUT sending, so the owner can verify the filter first."""
-    reachable, unregistered = await resolve_recipients(session, audience, panel_id, threshold)
+    filters = filters or BroadcastFilters()
+    reachable, unregistered = await resolve_recipients(session, audience, panel_id, threshold, filters=filters)
     res = _empty(audience, panel_id, threshold)
     res["recipients"] = reachable
     res["skipped"] = unregistered
     res["total"] = len(reachable)
     res["unregistered"] = len(unregistered)
     res["matched"] = len(reachable) + len(unregistered)
+    accounts = [a for r in reachable + unregistered for a in r.get("accounts", [])]
+    res["matched_accounts"] = len(accounts)
+    res["duplicate_chats"] = len(accounts) - res["matched"]
+    res["debt_toman"] = sum(a["debt_toman"] for a in accounts)
+    res["filters"] = filters.model_dump()
+    res["preview_token"] = preview_token(res)
     return res
+
+
+def preview_token(result: BroadcastResult) -> str:
+    """Bind confirmation to filters AND recipients/financial state; never send a stale list."""
+    snapshot: dict[str, Any] = dict(result)
+    payload = {k: snapshot[k] for k in ("audience", "panel_id", "threshold", "filters", "recipients", "skipped")}
+    data = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
+    return hmac.new(settings.secret_key.encode(), data, hashlib.sha256).hexdigest()
+
+
+async def filter_options(session: AsyncSession) -> dict[str, Any]:
+    starts = (await session.execute(select(Invoice.period_start).distinct().order_by(Invoice.period_start.desc()))).scalars()
+    return {"periods": sorted({d.strftime("%Y-%m") for d in starts}, reverse=True)}
 
 
 def migration_text(panel: Panel, previous_host: str, admin_uuid: str, tag: str | None) -> str:
