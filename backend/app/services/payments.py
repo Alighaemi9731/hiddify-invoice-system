@@ -1260,7 +1260,7 @@ def _periods_label(periods: list[str]) -> str:
     """A readable label for the period(s) a payment settled: a single «2026-02», or
     «2026-01، 2026-02» for several — used in the customer's confirm/reject acknowledgements."""
     clean = [p.strip() for p in periods if p and p.strip()]
-    return "، ".join(clean)
+    return "، ".join(sorted(clean))
 
 
 async def _payment_received_text(session: AsyncSession, period: str, code: int | None = None) -> str:

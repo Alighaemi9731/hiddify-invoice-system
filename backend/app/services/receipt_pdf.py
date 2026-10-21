@@ -51,15 +51,15 @@ async def render_payment_receipt_pdf(
     total = 0.0
     if ids:
         rows = (
-            await session.execute(select(Invoice).where(Invoice.id.in_(ids)))
+            await session.execute(
+                select(Invoice).where(Invoice.id.in_(ids))
+                .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+            )
         ).scalars().all()
-        by_id = {i.id: i for i in rows}
-        for iid in ids:  # keep the stored order (primary first)
-            inv = by_id.get(iid)
-            if inv is not None:
-                amt = float(inv.amount_toman or 0)
-                invoices.append({"period": inv.period_label, "amount_toman": amt})
-                total += amt
+        for inv in rows:
+            amt = float(inv.amount_toman or 0)
+            invoices.append({"period": inv.period_label, "amount_toman": amt})
+            total += amt
 
     amount = float(payment.amount_toman or 0) or total
     issued = to_local_date(payment.verified_at) if payment.verified_at else tehran_today()

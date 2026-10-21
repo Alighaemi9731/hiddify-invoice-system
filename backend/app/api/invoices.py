@@ -161,8 +161,8 @@ async def list_invoices(
     reseller_id: int | None = None,
     status: InvoiceStatus | None = None,
     q: str | None = Query(None, description="search: invoice number or reseller name"),
-    sort: str = Query("amount"),
-    order: str = Query("desc"),
+    sort: str = Query("date"),
+    order: str = Query("asc"),
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -208,10 +208,13 @@ async def list_invoices(
         .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
         .where(*filters)
     )
-    col = _SORT_COLUMNS.get(sort, Invoice.amount_toman)
+    col = _SORT_COLUMNS.get(sort, Invoice.period_start)
     # Deterministic tiebreaker: equal sort values must not shuffle rows across pages.
     query = (
-        query.order_by(col.asc() if order == "asc" else col.desc(), Invoice.id.desc())
+        query.order_by(
+            col.asc() if order == "asc" else col.desc(),
+            Invoice.id.asc() if order == "asc" else Invoice.id.desc(),
+        )
         .limit(limit)
         .offset(offset)
     )

@@ -469,8 +469,7 @@ async def cb_owner_reseller_invoices(cb: CallbackQuery) -> None:
             await s.execute(
                 select(Invoice.period_label, Invoice.amount_toman, Invoice.status)
                 .where(Invoice.reseller_id == rid)
-                .order_by(Invoice.period_start.desc())
-                .limit(12)
+                .order_by(Invoice.period_start.asc(), Invoice.id.asc())
             )
         ).all()
         if not rows:
@@ -479,12 +478,13 @@ async def cb_owner_reseller_invoices(cb: CallbackQuery) -> None:
             return
         status_fa = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
                      "overdue": "سررسید گذشته", "enforced": "مسدود", "canceled": "لغو"}
-        lines = ["🧾 فاکتورهای اخیر:"]
-        for period, toman, status in rows:
-            lines.append(
-                f"‏• {period}: {float(toman or 0):,.0f} ت — {status_fa.get(status.value, status.value)}"
-            )
-        await cb.message.answer("\n".join(lines))
+        for start in range(0, len(rows), 12):
+            lines = ["🧾 فاکتورها (از قدیمی به جدید):"]
+            for period, toman, status in rows[start:start + 12]:
+                lines.append(
+                    f"‏• {period}: {float(toman or 0):,.0f} ت — {status_fa.get(status.value, status.value)}"
+                )
+            await cb.message.answer("\n".join(lines))
     await cb.answer()
 
 

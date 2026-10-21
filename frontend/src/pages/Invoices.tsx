@@ -84,7 +84,7 @@ export default function Invoices() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [sortState, setSortState] = useState<{ key: string; dir: "asc" | "desc" }>(
-    { key: "amount_toman", dir: "desc" },
+    { key: "period_label", dir: "asc" },
   );
   const { key, dir } = sortState;
   const toggle = (k: string) =>
@@ -206,14 +206,14 @@ export default function Invoices() {
   });
 
   // CSV export: re-fetch the FULL filtered dataset (server-filtered with the same
-  // period/status/search the list uses; backend cap 2000) and build the file in the browser.
+  // scope and ordering the list uses; backend cap 2000) and build the file in the browser.
   const exportCsv = useToastMutation({
     show,
     mutationFn: () =>
-      listInvoices({ period, status: status || undefined, q: q || undefined, limit: 2000 }),
+      listInvoices({ ...listParams(0), limit: 2000 }),
     success: (rows: any[]) => `${fmtNum(rows.length)} فاکتور در فایل CSV ذخیره شد`,
     onSuccess: (rows: any[]) => downloadCsv(
-      `invoices-${period}.csv`,
+      `invoices-${inResellerMode ? `r${resellerFilter!.id}` : period}.csv`,
       ["شماره", "نماینده", "پنل", "دوره", "مصرف (گیگابایت)", "مبلغ (تومان)", "وضعیت", "تاریخ ارسال", "تاریخ پرداخت"],
       rows.map((i: any) => [
         i.number, i.reseller_name, i.panel_key, i.period_label, i.usage_gb, i.amount_toman,

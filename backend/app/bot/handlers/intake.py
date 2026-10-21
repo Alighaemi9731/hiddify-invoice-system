@@ -196,6 +196,7 @@ async def _payment_review_html(session, pay, *, reseller=None, inv=None, invs=No
                 (await session.execute(select(Invoice).where(Invoice.id.in_(set_ids))))
                 .scalars().all()
             )
+    invoices.sort(key=lambda invoice: (invoice.period_start, invoice.id))
     chain = pay.chain or ("ton" if pay.method == PaymentMethod.ton_txid else "bsc")
     name_link = (
         owner_notify.user_link(reseller, username=await _reseller_username(session, reseller))

@@ -373,7 +373,7 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
         await session.execute(
             select(Invoice)
             .where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.desc()).limit(12)
+            .order_by(Invoice.period_start.asc(), Invoice.id.asc())
         )
     ).scalars().all()
     if not invoices:
@@ -391,11 +391,13 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
     note = ""
     if pending:
         note = "\n⏳ فاکتورهای «در انتظار تأیید» را فرستاده‌اید؛ تا بررسیِ پشتیبانی منتظر بمانید."
-    await answer(
-        "🧾 فاکتورهای پرداخت‌نشدهٔ شما — برای دیدن کاملِ هر فاکتور (متن + PDF) روی آن بزنید.\n"
-        "برای پرداخت، از «💳 پرداخت فاکتور» استفاده کنید." + note,
-        reply_markup=keyboards.my_invoices_keyboard(items),
-    )
+    # Keep every month reachable; bounded keyboards avoid silently dropping older/newer debts.
+    for start in range(0, len(items), 12):
+        await answer(
+            "🧾 فاکتورهای پرداخت‌نشدهٔ شما — برای دیدن کاملِ هر فاکتور (متن + PDF) روی آن بزنید.\n"
+            "برای پرداخت، از «💳 پرداخت فاکتور» استفاده کنید." + note,
+            reply_markup=keyboards.my_invoices_keyboard(items[start:start + 12]),
+        )
 
 
 async def _send_self_interim(answer, chat_id: int, session, *, bot=None) -> None:
@@ -514,7 +516,7 @@ async def _send_pay(answer, chat_id: int, session) -> None:
     owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.desc())
+            .order_by(Invoice.period_start.asc(), Invoice.id.asc())
         )
     ).scalars().all()
     today = tehran_today()

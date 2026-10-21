@@ -21,8 +21,7 @@ from app.models.mixins import TimestampMixin
 class FinancialRecord(Base, TimestampMixin):
     __tablename__ = "financial_records"
     __table_args__ = (
-        # The financial-history view sorts (period_label DESC, amount_toman DESC) over a
-        # ledger that grows forever by design.
+        # Retained for period/amount queries; history displays months oldest first.
         Index("ix_finrec_period_amount", "period_label", "amount_toman"),
         CheckConstraint("usage_gb >= 0", name="ck_financial_records_usage_nonnegative"),
         CheckConstraint("price_per_gb >= 0", name="ck_financial_records_price_nonnegative"),

@@ -47,12 +47,13 @@ def _equiv_str(
 def _briefs_for(
     p: Payment, inv_map: dict[int, Invoice], ton_rate: int, avax_rate: int
 ) -> list[InvoiceBrief]:
-    """The covered invoices of a payment, in stored order (the first is the primary)."""
+    """The covered invoices of a payment in billing-month order, oldest first."""
     briefs: list[InvoiceBrief] = []
-    for iid in payments_service._settled_ids(p):
-        inv = inv_map.get(iid)
-        if inv is None:
-            continue
+    covered = sorted(
+        (inv_map[iid] for iid in payments_service._settled_ids(p) if iid in inv_map),
+        key=lambda inv: (inv.period_start, inv.id),
+    )
+    for inv in covered:
         briefs.append(InvoiceBrief(
             id=inv.id, period=inv.period_label,
             amount_toman=float(inv.amount_toman or 0),
@@ -67,7 +68,7 @@ def _to_out(
     *, briefs: list[InvoiceBrief],
     reseller_chat_id: int | None = None, reseller_username: str | None = None,
 ) -> PaymentOut:
-    primary = briefs[0] if briefs else None
+    primary = next((b for b in briefs if b.id == p.invoice_id), briefs[0] if briefs else None)
     return PaymentOut(
         id=p.id, number=payment_code(p.id),
         reseller_id=p.reseller_id, reseller_name=reseller_name, invoice_id=p.invoice_id,
