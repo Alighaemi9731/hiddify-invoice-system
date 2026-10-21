@@ -365,13 +365,13 @@ async def invoices(
     ctx: ResellerContext = Depends(get_current_reseller),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    """The caller's issued invoices in billing-month order, oldest first."""
+    """The caller's issued invoices in billing-month order, newest first."""
     panels = await _panel_keys(session, {r.panel_id for r in ctx.resellers})
     rows = (await session.execute(
         select(Invoice)
         .where(Invoice.reseller_id.in_(ctx.ids),
                Invoice.status != InvoiceStatus.draft)
-        .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+        .order_by(Invoice.period_start.desc(), Invoice.id.desc())
     )).scalars().all()
     return [
         {
@@ -428,7 +428,7 @@ async def list_payments(
     for pmt in pmts:
         covered = sorted(
             (inv_map[i] for i in payments._settled_ids(pmt) if i in inv_map),
-            key=lambda inv: (inv.period_start, inv.id),
+            key=lambda inv: (inv.period_start, inv.id), reverse=True,
         )
         periods = [inv.period_label for inv in covered if inv.period_label]
         out.append({
@@ -624,7 +624,7 @@ async def pay_options_all(
     owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ctx.ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+            .order_by(Invoice.period_start.desc(), Invoice.id.desc())
         )
     ).scalars().all()
     held = await payments._pending_invoice_ids_in_sets(

@@ -373,7 +373,7 @@ async def _send_invoices(answer, chat_id: int, session) -> None:
         await session.execute(
             select(Invoice)
             .where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+            .order_by(Invoice.period_start.desc(), Invoice.id.desc())
         )
     ).scalars().all()
     if not invoices:
@@ -516,7 +516,7 @@ async def _send_pay(answer, chat_id: int, session) -> None:
     owed = (
         await session.execute(
             select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-            .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+            .order_by(Invoice.period_start.desc(), Invoice.id.desc())
         )
     ).scalars().all()
     today = tehran_today()

@@ -84,7 +84,7 @@ export default function Invoices() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [sortState, setSortState] = useState<{ key: string; dir: "asc" | "desc" }>(
-    { key: "period_label", dir: "asc" },
+    { key: "period_label", dir: "desc" },
   );
   const { key, dir } = sortState;
   const toggle = (k: string) =>

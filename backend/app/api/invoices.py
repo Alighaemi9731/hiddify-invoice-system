@@ -162,7 +162,7 @@ async def list_invoices(
     status: InvoiceStatus | None = None,
     q: str | None = Query(None, description="search: invoice number or reseller name"),
     sort: str = Query("date"),
-    order: str = Query("asc"),
+    order: str = Query("desc"),
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),

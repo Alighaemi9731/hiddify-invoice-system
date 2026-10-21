@@ -74,7 +74,7 @@ hierarchy, capacity meters) · Invoices · Payments · Debts · Sales · Financi
 Logs · Broadcast · Tools (user recovery, ops) · Backup/restore · Settings (every runtime
 knob — schedules, pricing, texts, payment methods — editable live, secrets encrypted).
 
-Invoice lists default to billing month, oldest first, in the owner panel, reseller portal,
+Invoice lists default to billing month, newest first, in the owner panel, reseller portal,
 Telegram history and payment pickers, financial history, payment details, receipts and CSV.
 Same-month invoices use a stable ID order; owner table headers still allow custom sorting.
 

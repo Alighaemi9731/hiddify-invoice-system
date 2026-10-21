@@ -53,7 +53,7 @@ async def render_payment_receipt_pdf(
         rows = (
             await session.execute(
                 select(Invoice).where(Invoice.id.in_(ids))
-                .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+                .order_by(Invoice.period_start.desc(), Invoice.id.desc())
             )
         ).scalars().all()
         for inv in rows:

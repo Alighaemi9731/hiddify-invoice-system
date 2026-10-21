@@ -254,7 +254,7 @@ async def financial_history(
     """Durable ledger: panel, reseller, month, amount, paid/unpaid — kept permanently
     even after a data wipe or panel/reseller removal. Server-paged: the ledger grows
     forever by design, so the SPA must never download it whole; the filtered total is
-    returned in `X-Total-Count`. Billing months ascend with a stable id tiebreaker."""
+    returned in `X-Total-Count`. Billing months descend with a stable id tiebreaker."""
     filters = []
     if period:
         filters.append(FinancialRecord.period_label == period)
@@ -288,8 +288,8 @@ async def financial_history(
         select(FinancialRecord)
         .where(*filters)
         .order_by(
-            FinancialRecord.period_label.asc(),
-            FinancialRecord.id.asc(),
+            FinancialRecord.period_label.desc(),
+            FinancialRecord.id.desc(),
         )
     )
     rows = (await session.execute(query.limit(limit).offset(offset))).scalars().all()

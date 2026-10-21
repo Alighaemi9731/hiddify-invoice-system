@@ -436,7 +436,7 @@ async def _load_pay_invoices(session, data: dict) -> list[Invoice]:
         inv = await session.get(Invoice, int(iid))
         if inv is not None:
             invs.append(inv)
-    return sorted(invs, key=lambda inv: (inv.period_start, inv.id))
+    return sorted(invs, key=lambda inv: (inv.period_start, inv.id), reverse=True)
 
 
 async def _start_pay_flow(cb: CallbackQuery, state: FSMContext, invoices: list[Invoice]) -> None:
@@ -551,7 +551,7 @@ async def cb_pay_all(cb: CallbackQuery, state: FSMContext) -> None:
         owed = (
             await s.execute(
                 select(Invoice).where(Invoice.reseller_id.in_(ids), Invoice.status.in_(_OWED))
-                .order_by(Invoice.period_start.asc(), Invoice.id.asc())
+                .order_by(Invoice.period_start.desc(), Invoice.id.desc())
             )
         ).scalars().all()
         pending = await _pending_invoice_ids(s, ids)

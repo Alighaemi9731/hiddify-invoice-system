@@ -47,11 +47,11 @@ def _equiv_str(
 def _briefs_for(
     p: Payment, inv_map: dict[int, Invoice], ton_rate: int, avax_rate: int
 ) -> list[InvoiceBrief]:
-    """The covered invoices of a payment in billing-month order, oldest first."""
+    """The covered invoices of a payment in billing-month order, newest first."""
     briefs: list[InvoiceBrief] = []
     covered = sorted(
         (inv_map[iid] for iid in payments_service._settled_ids(p) if iid in inv_map),
-        key=lambda inv: (inv.period_start, inv.id),
+        key=lambda inv: (inv.period_start, inv.id), reverse=True,
     )
     for inv in covered:
         briefs.append(InvoiceBrief(
