@@ -311,9 +311,12 @@ if [[ -n "$ADMIN_PASSWORD" ]]; then
 elif [[ -n "$EXISTING_DOMAIN" ]]; then
   LOGIN_NOTE="Already set up — log in with your existing username/password (your data was kept)."
 else
-  LOGIN_NOTE="First run: the page asks for a username, password and domain, then gets SSL automatically."
+  LOGIN_NOTE="First run: activate your domain/HTTPS with the setup token, then create the owner on HTTPS."
   # F1: the wizard requires this one-time token so nobody can claim ownership before you.
   [[ -n "$SETUP_TOKEN_ENV" ]] && TOKEN_LINE="  Setup token (enter it on the first-run page): $SETUP_TOKEN_ENV"
+fi
+if [[ -z "$ADMIN_PASSWORD" && -n "$SETUP_TOKEN_ENV" ]]; then
+  TOKEN_LINE="  First-run setup token (also required after switching to HTTPS): $SETUP_TOKEN_ENV"
 fi
 
 c "Running post-deploy smoke checks…"

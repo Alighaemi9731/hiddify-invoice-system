@@ -15,6 +15,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/enfrace.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
+import pytest  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
@@ -32,6 +33,17 @@ from app.models.enums import (  # noqa: E402
     InvoiceStatus,
 )
 from tests.panel_fakes import as_identity  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _stub_panel_password_writes(monkeypatch):
+    # These simulations cover limits/users/races; all panel I/O must be stubbed.
+    from app.services import enforcement
+
+    async def set_password(self, panel, admin_uuid, password, *, api_key=None):
+        return None
+
+    monkeypatch.setattr(enforcement.AdminApiClient, "set_admin_password", set_password)
 
 
 def _run(coro_fn, tmp_path, name):

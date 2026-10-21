@@ -62,10 +62,43 @@ required (there is no bare-IP access) — either passed now or already in `.env`
 relay first** so Caddy's first ACME attempt can reach it.
 
 ## After install
+- On a public HTTP/IP address, first enter the installer token and a domain whose A record points
+  here. Caddy enables HTTPS before the wizard asks for an owner username/password. Keep the token:
+  enter it again on the HTTPS page to finish setup. Account creation consumes it once.
+- A failed domain/certificate attempt does not create an owner or consume the token. Correct DNS
+  before continuing. If a certificate is still issuing, wait before opening the HTTPS link.
 - **Settings tab** → set the Telegram **bot token**, **USDT wallet** (BEP-20),
   **BscScan API key**, exchange rate, and (optionally) the **master xpub**.
 - **Panels tab** → add your real Hiddify panels (paste each admin link) and sync.
 - Certificate **renewal is automatic** (Caddy).
+
+## Hiddify passwordless restoration
+
+The default restore password is empty: an unsuspended admin opens its existing UUID link without
+a password prompt. Hiddify v12's stock edit form ignores an empty `new_password`, so each Hiddify
+host needs the provided owner-only extension. It changes only explicit clear requests for
+non-super-admin accounts; the normal edit form and UUIDs/limits/users retain their behavior.
+
+Copy `deploy/hiddify-password-clear.py` onto each Hiddify host, then run as root:
+
+```bash
+install -m 755 hiddify-password-clear.py /usr/local/sbin/invoice-hiddify-password-clear
+/usr/local/sbin/invoice-hiddify-password-clear --check
+/usr/local/sbin/invoice-hiddify-password-clear
+mkdir -p /etc/systemd/system/hiddify-panel.service.d
+cat > /etc/systemd/system/hiddify-panel.service.d/invoice-password-clear.conf <<'EOF'
+[Service]
+ExecStartPre=-+/usr/local/sbin/invoice-hiddify-password-clear
+EOF
+systemctl daemon-reload
+systemctl restart hiddify-panel
+```
+
+The original module is retained as `AdminstratorAdmin.py.invoice-original`. The hook reapplies the
+extension on compatible package updates; unknown layouts are left untouched and do not prevent
+the panel starting. The invoice worker verifies passwordless login, records failures, and retries
+only failed admins up to five times. A missing extension cannot be recorded as a successful clear.
+Rolling the invoice app back to a previous release does not require removing the extension.
 
 ## Operations
 ```bash

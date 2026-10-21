@@ -127,8 +127,9 @@ sudo bash release-installer.sh
 The installer asks nothing: it installs Docker, resolves one release tag, downloads its
 immutable archive, **verifies the published SHA-256 before any code runs as root**, and
 brings up the whole stack. Open the printed `http://<server-ip>` — the one-time setup
-wizard takes a username, password, and (optionally) a domain; with a domain, Caddy
-fetches a certificate and the panel moves to `https://<domain>` automatically.
+wizard first takes your domain and installer token to enable HTTPS. Open the resulting
+`https://<domain>` and enter the same token to create the owner account there. Owner passwords
+and authenticated API requests always require HTTPS (or a direct local connection).
 
 - **Update** — from the panel («به‌روزرسانی سامانه», via a host-side systemd watcher) or
   `sudo bash deploy/release-installer.sh` on the server. Same verified-archive path.
@@ -137,6 +138,9 @@ fetches a certificate and the panel moves to `https://<domain>` automatically.
 - The database is **never** wiped by install, update, or rollback. Schema evolves through
   versioned Alembic migrations on boot, serialized by a Postgres advisory lock.
 - Details: [`deploy/README.md`](deploy/README.md).
+
+Passwordless reseller restoration requires the small owner-only Hiddify form extension
+documented in [`deploy/README.md`](deploy/README.md#hiddify-passwordless-restoration).
 
 ### First steps after install
 

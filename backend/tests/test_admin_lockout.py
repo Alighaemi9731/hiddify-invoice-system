@@ -13,9 +13,10 @@ from app.services.panel_client import admin_api
 
 
 class _Response:
-    def __init__(self, status_code: int, *, text: str = "") -> None:
+    def __init__(self, status_code: int, *, text: str = "", headers=None) -> None:
         self.status_code = status_code
         self.text = text
+        self.headers = headers or {}
 
 
 def _panel():
@@ -249,3 +250,73 @@ def test_apply_admin_passwords_skips_owner_and_survives_failures(monkeypatch):
     assert res["ok"] == 2 and res["failed"] == 1  # sub1, sub2 ok; boom failed
     # The failing admin is NAMED so the owner alert can say who kept their panel login.
     assert res["failed_names"] == ["Boom"]
+
+
+def test_clear_password_requires_a_verified_uuid_login(monkeypatch):
+    """An unpatched panel silently ignores blank new_password; never report that as success."""
+    from unittest.mock import AsyncMock
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, params=None):
+            return _Response(200, text=_LIST_PAGE if url.endswith('/adminuser/') else _EDIT_FORM)
+
+        async def post(self, url, params=None, data=None):
+            captured.update(data)
+            return _Response(302)
+
+    monkeypatch.setattr(admin_api.httpx, 'AsyncClient', FakeClient)
+    probe = AsyncMock(side_effect=[False, True, False, False])
+    monkeypatch.setattr(admin_api.AdminApiClient, 'admin_link_login_works', probe)
+    client = admin_api.AdminApiClient()
+    asyncio.run(client.set_admin_password(_panel(), '5836db89-8bcd-4c9c-8e2b-cbc484696382', ''))
+    assert captured['new_password'] == ''
+    assert captured['invoice_clear_password'] == '1'
+    import pytest
+    with pytest.raises(RuntimeError, match='not cleared'):
+        asyncio.run(client.set_admin_password(_panel(), '5836db89-8bcd-4c9c-8e2b-cbc484696382', ''))
+
+
+def test_hiddify_extension_clears_only_with_explicit_owner_request():
+    import runpy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    extension = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'deploy/hiddify-password-clear.py'))
+    source = '''class Form:
+    def on_model_change(self, form, model, is_created):
+        if model.new_password:
+            model.password=model.new_password
+'''
+    patched = extension['patched_source'](source)
+    assert extension['patched_source'](patched) == patched
+    modes = SimpleNamespace(super_admin='super_admin', agent='agent')
+    env = {'request': SimpleNamespace(form={'invoice_clear_password': '1'}),
+           'g': SimpleNamespace(account=SimpleNamespace(mode='super_admin')),
+           'AdminMode': modes, 'ValidationError': ValueError}
+    exec(patched, env)
+    model = SimpleNamespace(password='locked', new_password='', mode='agent')
+    env['Form']().on_model_change(None, model, False)
+    assert model.password == ''
+    import pytest
+    model.mode = 'super_admin'
+    with pytest.raises(ValueError):
+        env['Form']().on_model_change(None, model, False)
+    model.mode = 'agent'
+    env['g'].account.mode = 'agent'
+    with pytest.raises(ValueError):
+        env['Form']().on_model_change(None, model, False)
+    env['request'].form = {}
+    model.new_password = 'custom'
+    env['Form']().on_model_change(None, model, False)
+    assert model.password == 'custom'

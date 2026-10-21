@@ -654,8 +654,11 @@ class AdminApiClient(PanelClient):
         The form is submitted by MIRRORING it: we GET the edit page and resend every field the panel
         rendered verbatim, injecting only `new_password`. This never invents a value, so it cannot
         clobber the admin's name / limits / uuid / mode even if Hiddify reshuffles the form. Auth uses
-        the panel's super-admin key (default header) so it can edit any sub-admin. Best-effort — the
-        caller wraps this; a failure is logged, never fatal to the suspend/restore."""
+        the panel's super-admin key (default header) so it can edit any sub-admin. Empty passwords
+        require the explicit form extension and verified unauthenticated UUID-link login."""
+        clearing = password == ""
+        if clearing and await self.admin_link_login_works(panel, admin_uuid):
+            return
         headers = self._headers(panel, api_key)
         headers["User-Agent"] = "invoice-system-admin-lockout/1"
         list_url = f"{panel.proxy_base}{ADMIN_LIST_PATH}"
@@ -703,16 +706,38 @@ class AdminApiClient(PanelClient):
             if form_uuid and form_uuid != admin_uuid.strip().lower():
                 raise RuntimeError(f"admin edit form is for another admin (row {row_id})")
             fields["new_password"] = password
+            if clearing:
+                # Stock Hiddify ignores empty new_password; use the owner-only extension.
+                fields["invoice_clear_password"] = "1"
 
             resp = await client.post(edit_url, params={"id": row_id}, data=fields)
             # Flask-Admin redirects (3xx) to the list on success; a validation error re-renders the
             # form (200) with an error alert. Treat a 200 carrying an error marker as a failure.
             if resp.status_code >= 400:
                 raise RuntimeError(f"admin edit POST {resp.status_code}: {resp.text[:200]}")
+            if _is_login_redirect(resp):
+                raise PanelAuthError("admin password update redirected to login")
             if resp.status_code < 300 and re.search(
                 r'alert-danger|is-invalid|has-error', resp.text, re.I
             ):
                 raise RuntimeError("admin edit POST rejected (form validation error)")
+        if clearing and not await self.admin_link_login_works(panel, admin_uuid):
+            raise RuntimeError(
+                "Admin password was not cleared; install deploy/hiddify-password-clear.py on this panel"
+            )
+
+    async def admin_link_login_works(self, panel, admin_uuid: str) -> bool:  # noqa: ANN001
+        """Check UUID login in a fresh session without API credentials or prior cookies."""
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            response = await client.get(
+                panel.admin_link(admin_uuid), headers={"User-Agent": "Mozilla/5.0 invoice-system"}
+            )
+        return (
+            response.status_code == 200
+            and "force=1" not in str(response.url)
+            and not re.search(r'name=["\'](?:secret_textbox|password_textbox|username|password)["\']', response.text)
+            and "/admin/" in response.url.path
+        )
 
     async def delete_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None

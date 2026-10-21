@@ -54,6 +54,48 @@ def _run(coro_fn, tmp_path, name):
     asyncio.run(go())
 
 
+def test_failed_password_clear_retries_only_failed_admins(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.services import settings_service
+
+    async def body(s, _Session):
+        await settings_service.set_value(s, 'enforcement_admin_lockout_enabled', True)
+        await settings_service.set_value(s, 'enforcement_restore_password', '')
+        s.add(Panel(id=1, key='p', host='h', proxy_path_enc='x', owner_uuid='owner'))
+        root = Reseller(panel_id=1, admin_uuid='root', enforcement_state=EnforcementState.enforced)
+        child = Reseller(panel_id=1, admin_uuid='child', parent_admin_uuid='root')
+        s.add_all([root, child])
+        await s.flush()
+        action = EnforcementAction(reseller_id=root.id, action=EnforcementActionType.restore,
+                                   dry_run=False, status=EnforcementActionStatus.planned,
+                                   snapshot={'users': {}, 'admins': [], 'progress': {'phase': 'users'}})
+        s.add(action)
+        await s.commit()
+        monkeypatch.setattr(enforcement, '_abort_if_admin_gone', AsyncMock(return_value={}))
+        monkeypatch.setattr(enforcement, '_run_user_chunks', AsyncMock(return_value=(0, False)))
+        monkeypatch.setattr(enforcement, '_notify_lockout_failures', AsyncMock())
+        calls = []
+
+        async def passwords(session, panel, admins, password):
+            calls.append(({a.admin_uuid for a in admins}, password))
+            if len(calls) == 1:
+                return {'ok': 1, 'failed': 1, 'ok_uuids': ['child'], 'failed_uuids': ['root']}
+            return {'ok': 1, 'failed': 0, 'ok_uuids': ['root'], 'failed_uuids': []}
+
+        monkeypatch.setattr(enforcement, '_apply_admin_passwords', passwords)
+        first = await enforcement._process_restore_action(s, action, user_chunk_size=500, admin_parallelism=2)
+        assert first['partial'] == 1
+        assert action.status == EnforcementActionStatus.partial
+        assert not action.snapshot['progress']['password_restored']
+        assert root.enforcement_state == EnforcementState.active
+        second = await enforcement._process_restore_action(s, action, user_chunk_size=500, admin_parallelism=2)
+        assert second['done'] == 1
+        assert action.snapshot['progress']['password_restored']
+        assert calls == [({'root', 'child'}, ''), ({'root'}, '')]
+    _run(body, tmp_path, 'password-retry.db')
+
+
 def _owed_invoice(reseller_id: int) -> Invoice:
     return Invoice(
         reseller_id=reseller_id, panel_id=1, period_start=dt.date(2026, 3, 1),

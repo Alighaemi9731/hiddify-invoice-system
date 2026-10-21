@@ -180,15 +180,15 @@ async def _apply_admin_passwords(
     """Best-effort: set the Flask-Admin login password of each admin in `admins` (via the panel's
     own edit form — Hiddify's REST API has no password field). NEVER touches the panel owner /
     super-admin (that would lock the operator + our API out). Never raises: a per-admin failure is
-    logged and counted, so a flaky password write never fails the surrounding suspend/restore.
+    logged and counted; restore saves individual failures for bounded retries.
 
     Setting a non-empty password revokes the admin's UUID-link login (Hiddify refuses UUID auth once
-    `password != ""`), which is what stops a suspended debtor re-enabling their own users; restoring
-    a known password (default "123") gives it back."""
+    `password != ""`), which stops a suspended debtor re-enabling their own users.
+    Clearing it restores direct UUID-link login."""
     client = AdminApiClient()
     owner_uuid = (getattr(panel, "owner_uuid", "") or "").lower()
     api_owner = (getattr(panel, "admin_api_key", "") or "").lower()
-    out: dict = {"ok": 0, "failed": 0, "failed_names": []}
+    out: dict = {"ok": 0, "failed": 0, "failed_names": [], "ok_uuids": [], "failed_uuids": []}
     seen: set[str] = set()
     for admin in admins:
         uuid_l = (admin.admin_uuid or "").lower()
@@ -200,10 +200,12 @@ async def _apply_admin_passwords(
         try:
             await client.set_admin_password(panel, admin.admin_uuid, password)
             out["ok"] += 1
+            out["ok_uuids"].append(admin.admin_uuid)
         except Exception:  # noqa: BLE001 — best-effort; the panel form may be unreachable/changed
             log.warning("set_admin_password failed for admin %s", admin.admin_uuid, exc_info=True)
             out["failed"] += 1
             out["failed_names"].append(admin.name or admin.admin_uuid)
+            out["failed_uuids"].append(admin.admin_uuid)
     return out
 
 
@@ -268,7 +270,7 @@ async def _lockout_config(session: AsyncSession) -> tuple[bool, str, str]:
     """(enabled, lock_password, restore_password) for the admin-login lockout feature."""
     enabled = bool(await settings_service.get(session, "enforcement_admin_lockout_enabled", True))
     lock_pw = str(await settings_service.get(session, "enforcement_lock_password", "blocked-node"))
-    restore_pw = str(await settings_service.get(session, "enforcement_restore_password", "123"))
+    restore_pw = str(await settings_service.get(session, "enforcement_restore_password", "") or "")
     return enabled, lock_pw, restore_pw
 
 
@@ -1397,6 +1399,7 @@ async def queue_restore(
             prog["admins_failed"] = {}
             prog["admin_attempts"] = {}
             snap["require_no_due"] = require_no_due
+            prog["password_attempts"] = 0
             snap["reason"] = reason
             existing.snapshot = snap
             existing.status = EnforcementActionStatus.planned
@@ -1993,14 +1996,25 @@ async def _process_restore_action(
         return result
 
     # ── Restore admin logins ─────────────────────────────────────────────────
-    # Give each restored admin its normal panel password back (default "123"). Skip descendants that
-    # are INDEPENDENTLY enforced/frozen — they must stay locked. Best-effort, gated by the setting.
+    # Empty default restores direct UUID login. Keep failed password writes resumable,
+    # without delaying the users/limits already restored. Skip independently restricted branches.
+    password_failed = False
+    password_exhausted = False
     if not progress.get("password_restored"):
         enabled, _lock_pw, restore_pw = await _lockout_config(session)
-        if enabled and restore_pw:
-            targets = [d for d in descendants if d.admin_uuid not in independently_enforced]
+        if enabled:
+            pw_done = set(progress.get("password_admins_done") or [])
+            targets = [d for d in descendants
+                       if d.admin_uuid not in independently_enforced and d.admin_uuid not in pw_done]
             res = await _apply_admin_passwords(session, panel, targets, restore_pw)
-            progress["password_restored"] = True
+            pw_done.update(res.get("ok_uuids") or [])
+            progress["password_admins_done"] = sorted(pw_done)
+            progress["password_admins_failed"] = res.get("failed_uuids") or []
+            password_failed = bool(res["failed"])
+            progress["password_restored"] = not password_failed
+            if password_failed:
+                progress["password_attempts"] = int(progress.get("password_attempts") or 0) + 1
+                password_exhausted = progress["password_attempts"] >= _MAX_RETRIES
             log.info(
                 "Admin login restore for reseller %s: %d reset, %d failed",
                 reseller.name, res["ok"], res["failed"],
@@ -2042,9 +2056,12 @@ async def _process_restore_action(
         if absorbed is not None and absorbed.status != EnforcementActionStatus.reverted:
             absorbed.status = EnforcementActionStatus.reverted
 
-    action.status = EnforcementActionStatus.done
-    action.error = None
-    progress["phase"] = "done"
+    action.status = (
+        EnforcementActionStatus.failed if password_exhausted else
+        EnforcementActionStatus.partial if password_failed else EnforcementActionStatus.done
+    )
+    action.error = "admin password restore failed" if password_failed else None
+    progress["phase"] = "passwords" if password_failed else "done"
     action.affected_count = len(done_users - missing_users)
     snapshot.pop("panel_user_ids", None)
     action.snapshot = snapshot
@@ -2056,7 +2073,7 @@ async def _process_restore_action(
         patched_u,
         result["restored_admins"],
     )
-    result["done"] = 1
+    result["failed" if password_exhausted else "partial" if password_failed else "done"] = 1
     return result
 
 

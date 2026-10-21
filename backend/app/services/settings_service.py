@@ -337,7 +337,7 @@ DEFS: list[SettingDef] = [
     # login-lockout isn't wanted there).
     SettingDef("enforcement_admin_lockout_enabled", True, False, "dunning"),
     SettingDef("enforcement_lock_password", "blocked-node", False, "dunning"),
-    SettingDef("enforcement_restore_password", "123", False, "dunning"),
+    SettingDef("enforcement_restore_password", "", False, "dunning"),
     # A pending (under-review) payment pauses dunning on ITS invoice for at most this many days,
     # so a stale, never-reviewed proof can't shield a debt forever. Default 7.
     SettingDef("pending_payment_hold_days", 7, False, "dunning"),
@@ -618,6 +618,11 @@ async def seed_defaults(session: AsyncSession) -> None:
             value = crypto.encrypt(str(value))
         session.add(Setting(key=d.key, value=value, is_secret=d.is_secret))
     await session.commit()
+
+    # Upgrade the previous default to passwordless UUID-link login; preserve custom passwords.
+    restore_password = await session.get(Setting, "enforcement_restore_password")
+    if restore_password is not None and restore_password.value == "123":
+        await set_value(session, "enforcement_restore_password", "")
 
     # One-time upgrade of the invoice template to the current default, which shows a CTA to the
     # «💳 پرداخت فاکتور» button instead of embedding the wallet/card/amount (so the invoice never

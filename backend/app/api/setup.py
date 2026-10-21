@@ -47,6 +47,40 @@ class SetupRequest(BaseModel):
     acme_email: str | None = None
 
 
+class SetupDomainRequest(BaseModel):
+    domain: str
+    token: str
+    acme_email: str | None = None
+
+
+@router.post("/domain")
+async def prepare_domain(
+    body: SetupDomainRequest, request: Request, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Bootstrap TLS before collecting an owner password. No owner/JWT is created here.
+
+    This narrowly scoped first-run operation accepts the installer's token over the
+    initial HTTP connection; account credentials remain HTTPS-only. The token is still
+    required on the HTTPS setup page and is consumed atomically with owner creation.
+    """
+    from app.services import domain_setup
+
+    ip = request.client.host if request.client else "?"
+    if not loginsec.captcha_allowed("setup-domain:" + ip):
+        raise HTTPException(429, "درخواست‌های راه‌اندازی بیش از حد است؛ کمی بعد دوباره تلاش کنید.")
+    async with _setup_lock:
+        await session.execute(select(Setting).where(Setting.key == "setup_done").with_for_update())
+        if await _is_done(session):
+            raise HTTPException(409, "راه‌اندازی قبلاً انجام شده است.")
+        token_hash = str(await settings_service.get(session, _TOKEN_HASH_KEY, "") or "")
+        if not token_hash or not await verify_password_async(body.token, token_hash):
+            raise HTTPException(403, "توکنِ راه‌اندازی نادرست است.")
+        result = await domain_setup.set_domain(session, body.domain, body.acme_email)
+        if not result.get("ok"):
+            raise HTTPException(400, result.get("error") or result.get("message"))
+        return result
+
+
 async def _is_done(session: AsyncSession) -> bool:
     if await settings_service.get(session, "setup_done", False):
         return True
