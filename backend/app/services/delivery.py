@@ -25,6 +25,9 @@ from app.services import invoice_pdf, notifier
 
 log = logging.getLogger("delivery")
 
+# Separate from the scheduler/generation advisory-lock namespaces.
+_DELIVERY_LOCK_BASE = 8_100_000_000
+
 
 # Call to action at the bottom of the sent invoice. The invoice text itself is kept lean — the
 # wallet/card/USDT/TON details are NOT embedded (they'd duplicate the pay view AND a TON amount
@@ -156,6 +159,30 @@ async def send_invoice_content(
 async def send_invoice(
     session: AsyncSession, invoice_id: int, *, bot: Bot | None = None
 ) -> DeliveryLog:
+    """Explicit delivery/resend, serialized with automatic draft deliveries."""
+    from app.services.job_lock import session_lock
+
+    async with session_lock(session, _DELIVERY_LOCK_BASE + invoice_id, wait=True):
+        await session.get(Invoice, invoice_id, populate_existing=True)
+        return await _send_invoice(session, invoice_id, bot=bot)
+
+
+async def send_draft_invoice(
+    session: AsyncSession, invoice_id: int, *, bot: Bot | None = None
+) -> DeliveryLog | None:
+    """Re-check draft status AFTER acquiring the shared lock; never resend an issued invoice."""
+    from app.services.job_lock import session_lock
+
+    async with session_lock(session, _DELIVERY_LOCK_BASE + invoice_id, wait=True):
+        inv = await session.get(Invoice, invoice_id, populate_existing=True)
+        if inv is None or inv.status != InvoiceStatus.draft:
+            return None
+        return await _send_invoice(session, invoice_id, bot=bot)
+
+
+async def _send_invoice(
+    session: AsyncSession, invoice_id: int, *, bot: Bot | None = None
+) -> DeliveryLog:
     """Deliver the invoice like the «فاکتور علی‌الحساب»: a text message (payable amount +
     payment instructions + a per-node usage breakdown), then a SEPARATE volume-only PDF for
     the reseller's own users and one per sub-reseller. Falls back to text-only on failure."""
@@ -279,11 +306,14 @@ async def send_period(session: AsyncSession, period_label: str) -> dict:
         return {"period": period_label, "sent": 0, "failed": 0, "unmatched": 0, "total": 0}
 
     bot = await build_bot(session)
-    counts = {"sent": 0, "failed": 0, "unmatched": 0, "blocked": 0}
+    counts = {"sent": 0, "failed": 0, "unmatched": 0, "blocked": 0, "skipped": 0}
     try:
         for inv in invoices:
-            dl = await send_invoice(session, inv.id, bot=bot)
-            counts[dl.status.value] = counts.get(dl.status.value, 0) + 1
+            dl = await send_draft_invoice(session, inv.id, bot=bot)
+            if dl is None:
+                counts["skipped"] += 1
+            else:
+                counts[dl.status.value] = counts.get(dl.status.value, 0) + 1
     finally:
         if bot is not None:
             await bot.session.close()

@@ -204,3 +204,27 @@ four times a day. See `CLAUDE.md` → Scheduler.
 The active enums intentionally contain only values produced by implemented workflows.
 Migration `3f2a7c91b8e4` normalizes obsolete labels from older installations before the
 application reads them.
+
+
+### Scheduler configuration and monthly recovery
+
+The scheduler container owns all triggers. A fixed 15-second reconciliation job reads committed
+schedule settings from the shared database, reschedules only changed triggers, and publishes its
+applied configuration and actual next execution times. API saves do not depend on an in-process
+scheduler or a container restart. The authenticated `GET /api/settings/schedule` reports applied,
+pending, or unavailable (worker snapshot older than 60 seconds); Settings shows this separately
+from the saved values. Unchanged polls never move a pending execution or re-anchor interval jobs.
+
+A fixed once-per-minute recovery job checks only the previous Gregorian billing month, after the
+configured day/hour in the scheduler timezone (Asia/Tehran by default). `monthly_billing_runs`
+persists attempts, completion and retry deadlines. A dedicated PostgreSQL session advisory lock
+serializes cron/recovery workers across the sync/generation/delivery commits. Failed/partial runs
+retry at five-minute intervals, up to three attempts, then remain visible for operator review.
+Unregistered and bot-blocking recipients are reported without keeping the whole cycle retrying.
+Successful cycles do not replay after restarts or a day/hour edit, and older months are not swept.
+
+Automatic delivery re-checks draft status under an invoice-specific PostgreSQL advisory lock
+shared with explicit sends. Already-issued/paid/canceled invoices are skipped; generation leaves
+issued accounting unchanged. As with any Telegram send, an abrupt crash after Telegram accepts a
+message but before the database records it leaves an unavoidable delivery ambiguity; Telegram
+provides no transactional idempotency key. An explicit manual resend remains intentional.

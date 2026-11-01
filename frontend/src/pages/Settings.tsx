@@ -8,6 +8,7 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { TIER1_BLUR, TIER2_BG, TIER2_BLUR } from "../themeTokens";
 import { fmtDateTime } from "../format";
 import { NumberField, numberValue } from "../components/NumberField";
+import ScheduleStatus from "../components/ScheduleStatus";
 import SmartToyIcon from "@mui/icons-material/esm/SmartToy";
 import PaymentsIcon from "@mui/icons-material/esm/Payments";
 import SellIcon from "@mui/icons-material/esm/Sell";
@@ -581,7 +582,7 @@ export default function Settings() {
       });
       return updateSettings(items);
     },
-    onSuccess: () => { show("تنظیمات ذخیره شد"); setEdits({}); qc.invalidateQueries({ queryKey: ["settings"] }); },
+    onSuccess: () => { show("تنظیمات ذخیره شد"); setEdits({}); qc.invalidateQueries({ queryKey: ["settings"] }); qc.invalidateQueries({ queryKey: ["schedule-status"] }); },
     onError: (e) => show(errMsg(e), "error"),
   });
 
@@ -686,6 +687,7 @@ export default function Settings() {
         )}
 
         {/* Owner-connection status — read-only, not an editable field. */}
+        {sec.id === "schedule" && <ScheduleStatus />}
         {sec.id === "general" && (
           <Box sx={{ mb: 2 }}>
             {byKey["owner_chat_id"]?.value

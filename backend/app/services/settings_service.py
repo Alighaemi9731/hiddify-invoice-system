@@ -702,20 +702,21 @@ async def get(session: AsyncSession, key: str, default: Any = None) -> Any:
     return value
 
 
-async def get_many(session: AsyncSession, keys: list[str]) -> dict[str, Any]:
+async def get_many(session: AsyncSession, keys: list[str], *, fresh: bool = False) -> dict[str, Any]:
     """Batch read: one SELECT for every cache-miss key (was one round-trip PER key)."""
     ns = proccache.engine_ns(session)
     out: dict[str, Any] = {}
     missing: list[str] = []
     for k in keys:
-        hit = _settings_cache.get((ns, k))
+        hit = proccache.MISS if fresh else _settings_cache.get((ns, k))
         if hit is proccache.MISS:
             missing.append(k)
         else:
             out[k] = _resolve_absent(k, None) if hit is _ROW_ABSENT else hit
     if missing:
         rows = (
-            await session.execute(select(Setting).where(Setting.key.in_(missing)))
+            await session.execute(select(Setting).where(Setting.key.in_(missing))
+                                  .execution_options(populate_existing=fresh))
         ).scalars().all()
         found = {r.key: r for r in rows}
         for k in missing:
@@ -761,6 +762,8 @@ async def all_for_api(session: AsyncSession) -> list[dict]:
     rows = (await session.execute(select(Setting))).scalars().all()
     out: list[dict] = []
     for row in rows:
+        if row.key == "scheduler_runtime_state":
+            continue  # Worker-owned diagnostics are exposed read-only via /settings/schedule.
         d = _DEF_BY_KEY.get(row.key)
         if row.is_secret and isinstance(row.value, str):
             display: Any = crypto.mask(row.value)

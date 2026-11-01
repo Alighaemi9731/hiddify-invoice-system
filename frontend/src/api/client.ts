@@ -667,5 +667,18 @@ export const restoreBackup = (file: File, passphrase?: string) => {
 
 // ---- settings ----
 export const listSettings = () => api.get("/api/settings").then((r) => r.data);
+export type ScheduleStatusData = {
+  status: "applied" | "pending" | "unavailable";
+  desired: { invoice_day: number; invoice_hour: number };
+  active: { invoice_day: number; invoice_hour: number } | null;
+  checked_at: string | null;
+  applied_at: string | null;
+  timezone: string;
+  next_invoice_at: string | null;
+  next_recovery_check_at: string | null;
+  monthly_run: { period: string; status: string; attempts: number; next_attempt_at: string | null } | null;
+};
+export const getScheduleStatus = (): Promise<ScheduleStatusData> =>
+  api.get("/api/settings/schedule").then((r) => r.data);
 export const updateSettings = (items: { key: string; value: any }[]) =>
   api.patch("/api/settings", { items }).then((r) => r.data);

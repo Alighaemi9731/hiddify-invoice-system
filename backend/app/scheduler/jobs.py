@@ -19,10 +19,8 @@ from app.core.db import SessionLocal
 from app.services import (
     backup_delivery,
     channel_guard,
-    delivery,
     dunning,
     enforcement,
-    invoicing,
     maintenance,
     owner_notify,
     rates,
@@ -32,7 +30,6 @@ from app.services import (
 from app.services import (
     sync as sync_service,
 )
-from app.services.periods import previous_month
 
 log = logging.getLogger("scheduler.jobs")
 
@@ -94,7 +91,8 @@ SCHEDULE_SETTING_KEYS: tuple[str, ...] = (
 
 async def load_config(session: AsyncSession) -> ScheduleConfig:
     """Read the owner-configured scheduler timings (clamped to safe ranges)."""
-    s = await settings_service.get_many(session, list(SCHEDULE_SETTING_KEYS))
+    # Scheduling decisions must see committed edits from OTHER processes, even at a deadline.
+    s = await settings_service.get_many(session, list(SCHEDULE_SETTING_KEYS), fresh=True)
     return ScheduleConfig(
         invoice_day=_clamp(s.get("invoice_day_of_month"), 1, 28, 1),
         invoice_hour=_clamp(s.get("invoice_hour"), 0, 23, 9),
@@ -120,37 +118,11 @@ async def load_config(session: AsyncSession) -> ScheduleConfig:
 
 
 async def monthly_invoicing_job() -> None:
+    from app.services import monthly_billing
+
     try:
         async with SessionLocal() as session:
-            await sync_service.sync_all(session)
-            period = previous_month()
-            summary = await invoicing.generate_invoices(session, period)
-            d = await delivery.send_period(session, period.label)
-            log.info("Monthly invoicing job completed for %s", period.label)
-            msg = (
-                f"🧾 صدور و ارسال خودکار فاکتورهای دورهٔ {period.label} انجام شد.\n"
-                f"• ساخته‌شده: {summary.created}\n"
-                f"• مبلغ کل: {summary.total_amount_toman:,.0f} تومان\n"
-                f"• ارسال موفق: {d.get('sent', 0)} | بدون ربات: {d.get('unmatched', 0)} | "
-                f"ناموفق: {d.get('failed', 0)}"
-            )
-            # Surface any panel skipped because its sync failed — those resellers were NOT billed
-            # this run and need attention (otherwise the shortfall is silent).
-            if summary.skipped_panels:
-                msg += (
-                    "\n\n⚠️ پنل‌های زیر به‌دلیل ناموفق‌بودنِ همگام‌سازی فاکتور نشدند "
-                    "(لطفاً بررسی کرده و سپس «صدور فاکتورهای دوره» را برای آن‌ها اجرا کنید):\n"
-                    + "\n".join(f"• {p}" for p in summary.skipped_panels)
-                )
-            # Surface resellers that fell through the hierarchy entirely (parent deleted / a
-            # parent cycle) — they were NOT billed and the shortfall is otherwise silent.
-            if summary.unbilled_subtrees:
-                msg += (
-                    "\n\n⚠️ نماینده‌های زیر در هیچ فاکتوری لحاظ نشدند (نمایندهٔ بالادستیِ آن‌ها حذف شده "
-                    "یا حلقهٔ والد دارند)؛ لطفاً سلسله‌مراتب را در پنل اصلاح کنید:\n"
-                    + "\n".join(f"• {p}" for p in summary.unbilled_subtrees)
-                )
-            await owner_notify.notify_owner(session, msg)
+            await monthly_billing.run_due(session)
     except Exception:  # noqa: BLE001
         log.exception("monthly_invoicing_job failed")
 
@@ -485,7 +457,9 @@ def _trial_reset_days(day: int) -> str:
     return f"{day}-{min(day + 2, 28)}" if day < 28 else "28"
 
 
-def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None:
+def register(
+    sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None, *, update_existing: bool = False
+) -> list[str]:
     """(Re)register all jobs with the owner-configured timings. Safe to call on a running
     scheduler — `replace_existing=True` updates each trigger in place, so this doubles as the
     live "apply settings" path. Falls back to defaults if no config is given.
@@ -593,9 +567,22 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
          CronTrigger(hour=_traffic_audit_hours(cfg.traffic_audit_hour), minute=45, timezone=tz),
          6 * 3600),
     ]
+    changed: list[str] = []
     for job_id, func, trigger, grace in specs:
-        sched.add_job(func, trigger, id=job_id, replace_existing=True,
-                      coalesce=True, misfire_grace_time=grace)
+        current = sched.get_job(job_id) if update_existing else None
+        if update_existing and current is not None:
+            if str(current.trigger) == str(trigger):
+                continue
+            old_trigger = str(current.trigger)
+            sched.reschedule_job(job_id, trigger=trigger)
+            log.info("Rescheduled %s: %s -> %s; next=%s", job_id, old_trigger,
+                     trigger, sched.get_job(job_id).next_run_time)
+        else:
+            sched.add_job(func, trigger, id=job_id, replace_existing=True,
+                          coalesce=True, misfire_grace_time=grace)
+        changed.append(job_id)
+    if update_existing:
+        return changed
     log.info(
         "Registered %d jobs (tz=%s): invoice day=%d@%02d:00, dunning %02d:00, "
         "maintenance 04:30, sync every %dh, guard every %dm, enforcement every %dm, "
@@ -603,3 +590,5 @@ def register(sched: AsyncIOScheduler, cfg: ScheduleConfig | None = None) -> None
         len(specs), sched.timezone, cfg.invoice_day, cfg.invoice_hour, cfg.dunning_hour,
         cfg.sync_hours, cfg.guard_minutes, cfg.enforcement_minutes, cfg.backup_hours, cfg.rate_hours,
     )
+
+    return changed

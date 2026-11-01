@@ -70,3 +70,14 @@ So the fleet stamps its own liveness, mirroring the scheduler pattern:
 ```bash
 sudo bash /opt/hiddify-invoice-system/deploy/healthwatch.sh; echo "exit=$?"
 ```
+
+
+## Saved versus applied schedules
+
+Use authenticated `GET /api/settings/schedule` or Settings → زمان‌بندی کارهای خودکار.
+`applied` means the worker's configuration equals the saved configuration and its snapshot is
+at most 60 seconds old. `pending` should resolve within one 15-second poll. `unavailable` means
+no fresh worker snapshot; inspect scheduler logs for `Scheduler settings reconciliation failed`.
+The response includes actual next cron/recovery checks and the previous month's durable run.
+A `retry` run waits five minutes; a `failed` run needs review after three automatic attempts.
+Do not assume restarting the API applies a schedule: the dedicated scheduler owns the triggers.

@@ -66,6 +66,7 @@ _POST_BASELINE_TABLES = {
     "usage_meter_events",
     "reseller_crm_state", "reseller_followups",
     "reseller_traffic_daily",
+    "monthly_billing_runs",
 }
 
 

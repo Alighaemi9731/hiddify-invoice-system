@@ -18,6 +18,7 @@ from app.models.enums import (
 from app.models.financial_record import FinancialRecord
 from app.models.invoice import Invoice, InvoiceLine
 from app.models.logs import DeliveryLog, EnforcementAction, SyncRun
+from app.models.monthly_billing_run import MonthlyBillingRun
 from app.models.panel import Panel
 from app.models.payment import Payment, PaymentSettlement
 from app.models.portal_login_nonce import PortalLoginNonce
@@ -60,6 +61,7 @@ __all__ = [
     "PortalLoginNonce",
     "PortalSessionEpoch",
     "Setting",
+    "MonthlyBillingRun",
     "StorefrontBot",
     "StorefrontApiCommand",
     "StorefrontAuditEvent",

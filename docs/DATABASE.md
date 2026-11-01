@@ -385,3 +385,12 @@ and masked on read.
 *All tables also carry `created_at` / `updated_at` (via `TimestampMixin`) except the
 three log tables, which keep only their own event timestamp (`created_at` /
 `started_at`).*
+
+
+## Monthly billing runs
+
+`monthly_billing_runs` has one row per billing `period_start` (primary key), with status
+(`running`, `retry`, `completed`, `failed`), attempts, start/finish/retry timestamps, result JSON,
+and error category. It survives worker restarts and is not log-retention data. Revision
+`d8a1f3b6c902` adds the table on top of `c9e4f7a2b810`; downgrade drops only this execution history.
+The existing invoice and delivery records remain the authority for what was actually delivered.

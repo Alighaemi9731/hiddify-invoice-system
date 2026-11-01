@@ -1,6 +1,9 @@
 """Runtime settings: read (masked) + update. Owner-only."""
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,6 +85,40 @@ async def _resync_owner_if_needed(session: AsyncSession, changed_keys: set[str])
 @router.get("", response_model=list[SettingOut])
 async def list_settings(session: AsyncSession = Depends(get_session)) -> list[SettingOut]:
     return [SettingOut(**row) for row in await settings_service.all_for_api(session)]
+
+
+@router.get("/schedule")
+async def schedule_status(session: AsyncSession = Depends(get_session)) -> dict:
+    """Read worker-reported state; importing a scheduler here cannot inspect another process."""
+    from app.models import MonthlyBillingRun, Setting
+    from app.scheduler.jobs import load_config
+    from app.services import periods
+
+    cfg = asdict(await load_config(session))
+    row = await session.get(Setting, "scheduler_runtime_state", populate_existing=True)
+    state = row.value if row is not None and isinstance(row.value, dict) else {}
+    checked = state.get("checked_at")
+    fresh = False
+    if isinstance(checked, str):
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(checked)).total_seconds()
+            fresh = 0 <= age <= 60
+        except (ValueError, TypeError):
+            pass
+    run = await session.get(MonthlyBillingRun, periods.previous_month().start)
+    return {
+        "status": "unavailable" if not fresh else "applied" if state.get("config") == cfg else "pending",
+        "desired": cfg, "active": state.get("config"),
+        "checked_at": checked, "applied_at": state.get("applied_at"),
+        "timezone": state.get("timezone", "Asia/Tehran"),
+        "next_invoice_at": state.get("jobs", {}).get("monthly_invoicing") if fresh else None,
+        "next_recovery_check_at": state.get("jobs", {}).get("monthly_recovery") if fresh else None,
+        "monthly_run": None if run is None else {
+            "period": run.period_start.strftime("%Y-%m"), "status": run.status,
+            "attempts": run.attempts, "started_at": run.started_at,
+            "finished_at": run.finished_at, "next_attempt_at": run.next_attempt_at,
+        },
+    }
 
 
 @router.put("", response_model=dict)
