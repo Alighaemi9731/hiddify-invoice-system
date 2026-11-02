@@ -267,3 +267,24 @@ def test_configuration_read_bypasses_cross_process_ttl_and_identity_map(tmp_path
         finally:
             await engine.dispose()
     asyncio.run(run())
+
+
+def test_explicit_retry_after_repair_preserves_attempt_history(tmp_path, monkeypatch):
+    _, generate, send, _ = services(monkeypatch)
+    async def run():
+        engine, factory, _ = await database(tmp_path)
+        try:
+            async with factory() as session:
+                session.add(MonthlyBillingRun(period_start=dt.date(2026, 10, 1), status="failed", attempts=3))
+                await session.commit()
+                assert (await monthly_billing.run_due(session, now=NOW))["status"] == "failed"
+                assert generate.await_count == 0
+                result = await monthly_billing.run_due(session, now=NOW, retry_failed=True)
+                assert result["status"] == "completed" and result["attempts"] == 4
+                row = await session.get(MonthlyBillingRun, dt.date(2026, 10, 1))
+                assert row.result["manual_retry"] is True
+                await monthly_billing.run_due(session, now=NOW, retry_failed=True)
+                assert send.await_count == 1  # Completed cycles cannot be replayed, even explicitly.
+        finally:
+            await engine.dispose()
+    asyncio.run(run())

@@ -23,7 +23,10 @@ def aware(value: dt.datetime) -> dt.datetime:
     return value.replace(tzinfo=dt.timezone.utc) if value.tzinfo is None else value
 
 
-async def run_due(session: AsyncSession, *, now: dt.datetime | None = None) -> dict:
+async def run_due(
+    session: AsyncSession, *, now: dt.datetime | None = None, retry_failed: bool = False
+) -> dict:
+    """Run a due cycle. Maintenance may explicitly retry a failed cycle once after repair."""
     from app.scheduler.jobs import load_config
     from app.scheduler.scheduler import SCHEDULER_TIMEZONE
 
@@ -39,11 +42,12 @@ async def run_due(session: AsyncSession, *, now: dt.datetime | None = None) -> d
             return {"status": "already_running"}
         run = await session.get(MonthlyBillingRun, period.start, populate_existing=True)
         if run is not None:
-            if run.status in ("completed", "failed"):
+            manual_retry = retry_failed and run.status == "failed"
+            if run.status == "completed" or (run.status == "failed" and not manual_retry):
                 return {"status": run.status, "period": period.label}
             if run.next_attempt_at and now < aware(run.next_attempt_at):
                 return {"status": "retry_wait", "period": period.label}
-            if run.attempts >= MAX_ATTEMPTS:
+            if run.attempts >= MAX_ATTEMPTS and not manual_retry:
                 run.status = "failed"
                 run.error = "Automatic retry limit reached after an interrupted run"
                 await session.commit()
@@ -67,6 +71,7 @@ async def run_due(session: AsyncSession, *, now: dt.datetime | None = None) -> d
                 "updated": summary.updated, "amount_toman": float(summary.total_amount_toman),
                 "delivery": sent, "skipped_panels": summary.skipped_panels,
                 "unbilled_subtrees": summary.unbilled_subtrees,
+                "manual_retry": retry_failed,
             }
             problem = bool(sent.get("failed") or summary.skipped_panels or summary.unbilled_subtrees)
             run.result = result

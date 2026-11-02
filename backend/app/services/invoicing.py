@@ -21,7 +21,12 @@ from app.models import (
 )
 from app.models.enums import InvoiceStatus, PanelStatus
 from app.services import financial_archive, metering, pricing, storefront
-from app.services.invoice_engine import BundleResult, compute_invoices
+from app.services.invoice_engine import (
+    BundleResult,
+    build_children_map,
+    collect_descendants,
+    compute_invoices,
+)
 from app.services.periods import Period
 
 log = logging.getLogger("invoicing")
@@ -245,6 +250,12 @@ async def generate_invoices(
         # in a parent cycle) is silently never invoiced. Surface it so the owner can fix the
         # hierarchy instead of losing that revenue quietly.
         covered = {u for b in bundles for u in b.admin_uuids}
+        # An intentionally exempt branch is not an orphan. Descendants need not carry
+        # their parent's exemption flag; leave all billing calculations unchanged.
+        children = build_children_map(resellers)
+        for exempt in resellers:
+            if exempt.exclude_from_billing and not exempt.is_owner:
+                covered.update(r.admin_uuid for r in collect_descendants(exempt, children))
         for rr in resellers:
             if rr.is_owner or rr.exclude_from_billing:
                 continue

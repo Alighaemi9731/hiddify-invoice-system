@@ -228,3 +228,9 @@ shared with explicit sends. Already-issued/paid/canceled invoices are skipped; g
 issued accounting unchanged. As with any Telegram send, an abrupt crash after Telegram accepts a
 message but before the database records it leaves an unavoidable delivery ambiguity; Telegram
 provides no transactional idempotency key. An explicit manual resend remains intentional.
+
+
+Exempt resellers' descendants are intentionally unbilled and do not count as orphaned
+subtrees. After repairing a failed cycle, an operator may invoke `monthly_billing.run_due`
+with `retry_failed=True` for one explicit retry. This preserves the cumulative attempt count,
+records `manual_retry` in the result, and never replays a completed cycle.

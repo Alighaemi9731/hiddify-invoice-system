@@ -70,6 +70,31 @@ def test_orphan_subtree_reported_not_silently_unbilled(tmp_path):
     _run(body, tmp_path, "o1.db")
 
 
+def test_exempt_branch_descendants_are_not_reported_as_orphans(tmp_path):
+    async def body(s):
+        now = dt.datetime.now(dt.timezone.utc)
+        s.add(Panel(id=1, key="exempt", host="h", proxy_path_enc=crypto.encrypt("x"),
+                    owner_uuid="owner", last_synced_at=now))
+        await s.flush()
+        s.add_all([
+            Reseller(panel_id=1, admin_uuid="owner", is_owner=True, last_seen_at=now),
+            Reseller(panel_id=1, admin_uuid="exempt", parent_admin_uuid="owner",
+                     exclude_from_billing=True, last_seen_at=now),
+            Reseller(panel_id=1, admin_uuid="child", parent_admin_uuid="exempt", last_seen_at=now),
+            Reseller(panel_id=1, admin_uuid="grandchild", parent_admin_uuid="child", last_seen_at=now),
+            Reseller(panel_id=1, admin_uuid="real-orphan", parent_admin_uuid="missing", last_seen_at=now),
+        ])
+        s.add(EndUserSnapshot(panel_id=1, user_uuid="u", added_by_uuid="grandchild",
+                              usage_limit_gb=20, start_date=dt.date(2026, 6, 5), enable=True,
+                              last_synced_at=now))
+        await s.commit()
+        summary = await invoicing.generate_invoices(s, PERIOD, panel_id=1)
+        assert len(summary.unbilled_subtrees) == 1
+        assert "real-orphan" in summary.unbilled_subtrees[0]
+        assert summary.created == 0  # Intentional billing exemption is preserved.
+    _run(body, tmp_path, "exempt-descendants.db")
+
+
 def test_ton_rate_falls_back_to_manual_when_stale(tmp_path):
     async def body(s):
         await settings_service.set_value(s, "ton_rate_mode", "auto")
