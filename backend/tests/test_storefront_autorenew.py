@@ -112,6 +112,39 @@ def test_prepare_renew_user_is_a_clean_reset(monkeypatch):
     asyncio.run(go())
 
 
+def test_time_only_autorenew_uses_live_package_dates_without_remaining_day(tmp_path, monkeypatch):
+    """Both Hiddify generations omit remaining_day from the single-user API."""
+    import datetime as dt
+
+    from app.services import storefront_provision
+    from app.services.periods import today
+
+    async def get_user(self, panel, uuid, *, api_key=None):
+        return {"usage_limit_GB": 10, "current_usage_GB": 1, "package_days": 30,
+                "start_date": (today() - dt.timedelta(days=29)).isoformat()}
+    monkeypatch.setattr(admin_api.AdminApiClient, "get_user", get_user)
+
+    async def go():
+        engine, Session = _engine_session(tmp_path, "live-expiry.db")
+        await _create_all(engine)
+        try:
+            async with Session() as s:
+                _r, bot, customer, plan = await _seed(s)
+                order = await _mk_order(s, customer, plan, bot)
+                assert (await storefront_autorenew.arm(s, order.id)).ok
+                oid, cid = order.id, customer.id
+                live = await storefront_provision.live_status(s, bot, order)
+                assert live.ok and live.remaining_days == 1
+            assert await storefront_autorenew._live_confirm(Session, oid, 0.5, 2)
+            refreshed, freshness = await storefront_provision.refresh_order_live(
+                order_id=oid, session_factory=Session, window_seconds=30)
+            assert freshness == "live" and refreshed["remaining_days"] == 1
+            assert await _wallet(Session, cid) == 70_000  # Readback never settles a hold.
+        finally:
+            await engine.dispose()
+    asyncio.run(go())
+
+
 async def _wallet(Session, cid):  # noqa: ANN001
     async with Session() as s:
         return int((await s.get(StorefrontCustomer, cid)).wallet_balance_toman)

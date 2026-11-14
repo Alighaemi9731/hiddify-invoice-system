@@ -67,6 +67,13 @@ wrappers are retained for existing callers; the bulk queue resolves each UUID af
 | `admin_link_login_works` | Fresh, unauthenticated UUID-login verification |
 | `delete_admin` | Verified descendant cascade after deleting its users |
 
+The single-user API in both generations may omit `remaining_day`. Storefront live
+status and refresh normalize expiry from `start_date` and `package_days` using the
+application's Tehran calendar, matching the panel's package semantics. An unstarted
+package keeps its full duration; expired packages retain negative days. This also
+lets time-only automatic renewal pass its final live confirmation when volume remains.
+An explicit remaining-day value, when supplied by the panel, remains authoritative.
+
 ## Financial state
 
 `end_user_snapshots.panel_deleted` records explicit tombstones. Presence requires both

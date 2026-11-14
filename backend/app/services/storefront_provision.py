@@ -36,6 +36,7 @@ from app.services.panel_maintenance import (
     panel_operation,
     storefront_write,
 )
+from app.services.periods import today as tehran_today
 
 log = logging.getLogger("bot.storefront")
 
@@ -204,6 +205,39 @@ def _to_float(value) -> float:  # noqa: ANN001
         return 0.0
 
 
+def _remaining_days(data: dict) -> int | None:
+    """Normalize live expiry: Hiddify's single-user schema omits remaining_day.
+
+    Match the panel's package calendar, including an unstarted package's full
+    duration and negative expired days. Never substitute the purchase date: the
+    clock begins on first connection and may be edited directly on the panel.
+    """
+    for key in ("remaining_day", "remaining_days"):
+        value = data.get(key)
+        if value is not None and not isinstance(value, bool):
+            try:
+                return int(value)
+            except (TypeError, ValueError, OverflowError):
+                pass
+    if "package_days" not in data:
+        return None
+    value = data["package_days"]
+    if value is None:
+        return -1  # Hiddify treats a package without a duration as expired.
+    if isinstance(value, bool):
+        return None
+    try:
+        days = int(value)
+        if float(value) != days:
+            return None
+        if data.get("start_date"):
+            start = dt.date.fromisoformat(str(data["start_date"])[:10])
+            days -= (tehran_today() - start).days
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return min(days, 10000)  # Same ceiling as Hiddify User.remaining_days.
+
+
 async def live_status(
     session: AsyncSession, bot: StorefrontBot, order: StorefrontOrder
 ) -> LiveStatus:
@@ -230,16 +264,11 @@ async def live_status(
         return LiveStatus(False)
     if not data:
         return LiveStatus(False)
-    remaining = data.get("remaining_day")
-    try:
-        remaining_days = int(remaining) if remaining is not None else None
-    except (TypeError, ValueError):
-        remaining_days = None
     return LiveStatus(
         True,
         used_gb=_to_float(data.get("current_usage_GB")),
         limit_gb=_to_float(data.get("usage_limit_GB")) or float(order.gb or 0),
-        remaining_days=remaining_days,
+        remaining_days=_remaining_days(data),
     )
 
 
@@ -774,14 +803,9 @@ async def refresh_order_live(
         return {"ok": False}, "stale"
     if not data:
         return {"ok": False}, "stale"
-    remaining = data.get("remaining_day")
-    try:
-        remaining_days = int(remaining) if remaining is not None else None
-    except (TypeError, ValueError):
-        remaining_days = None
     return {
         "ok": True,
         "used_gb": _to_float(data.get("current_usage_GB")),
         "limit_gb": _to_float(data.get("usage_limit_GB")) or float(order_gb or 0),
-        "remaining_days": remaining_days,
+        "remaining_days": _remaining_days(data),
     }, "live"
