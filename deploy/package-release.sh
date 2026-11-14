@@ -36,13 +36,18 @@ gzip -n -9 < "$tmp/release.tar" > "$OUT_DIR/$asset"
 
 git -C "$REPO_DIR" show "$REF:deploy/release-installer.sh" > "$OUT_DIR/release-installer.sh"
 chmod 755 "$OUT_DIR/release-installer.sh"
+git -C "$REPO_DIR" show "$REF:deploy/panel-addon-installer.sh" > "$OUT_DIR/panel-addon-installer.sh"
+chmod 755 "$OUT_DIR/panel-addon-installer.sh"
 (
   cd "$OUT_DIR"
   sha256sum release-installer.sh > release-installer.sh.sha256
+  sha256sum panel-addon-installer.sh > panel-addon-installer.sh.sha256
 )
 
 printf '%s\n' \
   "$OUT_DIR/$asset" \
   "$OUT_DIR/$asset.sha256" \
   "$OUT_DIR/release-installer.sh" \
-  "$OUT_DIR/release-installer.sh.sha256"
+  "$OUT_DIR/release-installer.sh.sha256" \
+  "$OUT_DIR/panel-addon-installer.sh" \
+  "$OUT_DIR/panel-addon-installer.sh.sha256"

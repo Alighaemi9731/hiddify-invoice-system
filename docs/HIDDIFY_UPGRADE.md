@@ -20,36 +20,32 @@ not permission to upgrade all servers automatically. Target exactly 12.0.0 → 1
 Record exact source/image digests, schema versions, checksums, test results and unresolved
 failures in private operator artifacts. Do not label a missing live test PASS.
 
-## Owner-only password extension on v14
+## Owner-only password extension on both generations
 
-Use `deploy/hiddify-invoice-compat.py` from the verified invoice release. It accepts
-only the source of Panel 14.2.0 pinned by Manager 14.2.0; an unknown layout/hash fails
-closed. The reference checkout is not an installation target.
+Use the separate [panel add-on installer](PANEL_ADDON.md) on each Hiddify host.
+The same command supports exactly 12.0.0 and 14.2.0 and selects the active environment.
+It verifies the release, backs up SQL/config/source/service files, replaces recognized
+legacy hooks with one version-aware hook, restarts only `hiddify-panel`, and proves
+that the extension was loaded. Keep the full upgrade rollback backup below as well;
+the add-on backup is not a full host snapshot or database-migration rollback.
 
-On the dedicated test host, then on each v14 production host during its maintenance:
+If the common add-on was installed on v12 before upgrading, its local boot hook will
+select the v14 helper after the upgrade. Otherwise run the add-on installer on the
+healthy upgraded panel. After either path:
 
 ```bash
-install -m 755 hiddify-invoice-compat.py /usr/local/sbin/invoice-hiddify-compat-v14
-/usr/local/sbin/invoice-hiddify-compat-v14 --check
-/usr/local/sbin/invoice-hiddify-compat-v14
+sudo invoice-panel-addon --check
 ```
 
-The script does not restart services. After a coordinated restart of `hiddify-panel`,
-the application's read-only preflight must report the loaded password extension.
-An installed file without a loaded capability is not ready. A restart can apply panel
-database migrations, so take the full rollback backup first.
+Also run the invoice application's read-only preflight. An installed file without a
+loaded capability is not ready. Unknown versions/source fail closed at service start;
+validate later Hiddify releases before unattended upgrades. Recognized legacy hooks
+are migrated automatically; ambiguous/custom overrides are rejected for review.
 
-For persistence across package replacement of the same supported release, a root-run
-`ExecStartPre=+/usr/local/sbin/invoice-hiddify-compat-v14` may be placed in a dedicated
-`hiddify-panel.service.d` drop-in **on a v14 host** after installation is tested. An
-unrecognized future source intentionally prevents that hook from starting the service;
-validate future versions before unattended panel updates. Preserve the legacy v12 hook
-on v12 hosts. Restore the appropriate old service/drop-ins with the complete rollback
-snapshot; do not leave a v14-only startup hook enabled on a v12 rollback host.
-
-`--check` is read-only. `--uninstall` removes only the exact recognized extension/hook;
-it also needs a coordinated panel restart to unload the routes. If the module or
-registration file was independently modified, the installer refuses to overwrite it.
+The same hook supports a restored v12 host, but restore the complete matching panel
+state/database/configuration first. Removal uses `sudo invoice-panel-addon --uninstall`
+on a supported healthy panel and includes a panel restart; see the add-on guide for
+backup locations and recovery when source is unknown.
 
 The extension exposes only owner-authenticated capability and set/clear routes. It
 forbids editing the owner, rejects extra fields, preserves name/role/alias/limits and
@@ -67,7 +63,8 @@ revoke a reseller's UUID API key; enforcement users/limits/reassert remain neces
 4. Upgrade by the exact official 14.2.0 procedure validated in rehearsal. Do not run a
    mutable `dev`/`latest` installer. Account for the new layout, Python 3.13, database
    migration, proxy engines, node relationships and customization changes.
-5. Install/load the v14 password extension; read-only invoice preflight must pass.
+5. Verify the common panel add-on is loaded (`sudo invoice-panel-addon --check`);
+   install it if missing. Read-only invoice preflight must pass.
 6. Validate the converted data and invoice dry-run against the baseline. Check a
    designated disposable account's create/renew, scoped suspend/restore, UUID login,
    client subscription and actual VPN protocols used by customers. Never use an

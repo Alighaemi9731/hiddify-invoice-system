@@ -4,6 +4,10 @@ Production stack: **Caddy** (automatic HTTPS) in front of the **React SPA** and 
 **FastAPI backend**, with **PostgreSQL** and the **Telegram bot** — all in Docker.
 One domain serves everything (`/api/*` → backend, the rest → SPA).
 
+The invoice application runs on the central server. The **panel add-on** has its own
+installer for each existing Hiddify host; see [PANEL_ADDON.md](../docs/PANEL_ADDON.md).
+The two installers are independent.
+
 ## Requirements
 - A server running **Ubuntu 24.04 or 26.04** with a public IP.
 - A **domain** (or subdomain) whose **A record points to the server's IP**.
@@ -80,28 +84,25 @@ a password prompt. Hiddify v12's stock edit form ignores an empty `new_password`
 host needs the provided owner-only extension. It changes only explicit clear requests for
 non-super-admin accounts; the normal edit form and UUIDs/limits/users retain their behavior.
 
-Copy `deploy/hiddify-password-clear.py` onto each Hiddify host, then run as root:
+Use the separate, version-aware [one-line panel add-on installer](../docs/PANEL_ADDON.md).
+It supports exactly 12.0.0 and 14.2.0, selects the active environment, backs up SQL and
+changed files, migrates recognized old startup hooks, restarts only `hiddify-panel`,
+and checks the loaded extension. Repeating an already-ready install does not restart.
+The common boot hook also selects the right helper after a 12.0.0 → 14.2.0 upgrade.
+Unknown versions/source stop the hook; validate future panel releases before upgrading.
 
 ```bash
-install -m 755 hiddify-password-clear.py /usr/local/sbin/invoice-hiddify-password-clear
-/usr/local/sbin/invoice-hiddify-password-clear --check
-/usr/local/sbin/invoice-hiddify-password-clear
-mkdir -p /etc/systemd/system/hiddify-panel.service.d
-cat > /etc/systemd/system/hiddify-panel.service.d/invoice-password-clear.conf <<'EOF'
-[Service]
-ExecStartPre=-+/usr/local/sbin/invoice-hiddify-password-clear
-EOF
-systemctl daemon-reload
-systemctl restart hiddify-panel
+sudo invoice-panel-addon --check      # read-only readiness after install/upgrade
+sudo invoice-panel-addon --uninstall  # backup, remove, restart panel and verify
 ```
 
-The original module is retained as `AdminstratorAdmin.py.invoice-original`. The hook reapplies the
-extension on compatible package updates; unknown layouts are left untouched and do not prevent
-the panel starting. The invoice worker verifies passwordless login, records failures, and retries
-only failed admins up to five times. A missing extension cannot be recorded as a successful clear.
-Rolling the invoice app back to a previous release does not require removing the extension.
-Before rolling back to an older app that cannot clear passwords, set
-`enforcement_restore_password` to `123` in Settings so that older worker can restore logins.
+The underlying `hiddify-password-clear.py` and `hiddify-invoice-compat.py` files are
+internal generation-specific helpers; copying them manually is no longer the normal
+installation path. The invoice worker verifies passwordless login and records/retries
+failed restores. A missing extension cannot be recorded as a successful clear.
+Rolling the invoice app back does not require removing this extension. Before using
+an older app that cannot clear passwords, set `enforcement_restore_password` to `123`
+in Settings so that older worker can restore logins.
 
 ## Operations
 ```bash

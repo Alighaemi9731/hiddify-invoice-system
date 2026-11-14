@@ -118,14 +118,21 @@ docs/      architecture, database, release process, versioning
 
 ---
 
-## Install (fresh Ubuntu server)
+## Installation
+
+دو دستور مستقل داریم؛ دستور مناسب را روی سرور مربوط اجرا کنید:
+
+| نصب | محل اجرا | اسکریپت |
+|---|---|---|
+| **سامانه فاکتور** | سرور مرکزی سامانه | `release-installer.sh` |
+| **افزونه پنل** | هر سرور هیدیفای نسخه ۱۲.۰.۰ یا ۱۴.۲.۰ | `panel-addon-installer.sh` |
+
+### نصب سامانه فاکتور — سرور مرکزی
+
+Fresh Ubuntu server:
 
 ```bash
-tmp="$(mktemp -d)" && cd "$tmp"
-curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download/release-installer.sh
-curl -fLO https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download/release-installer.sh.sha256
-sha256sum -c release-installer.sh.sha256
-sudo bash release-installer.sh
+(set -e; d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT; cd "$d"; u="https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download"; curl -fsSLO "$u/release-installer.sh"; curl -fsSLO "$u/release-installer.sh.sha256"; sha256sum -c release-installer.sh.sha256; sudo bash release-installer.sh)
 ```
 
 The installer asks nothing: it installs Docker, resolves one release tag, downloads its
@@ -146,7 +153,28 @@ and authenticated API requests always require HTTPS (or a direct local connectio
 Hiddify 12.0.0 and 14.2.0 use different backup, bulk-action and password-restoration
 contracts. See [panel compatibility](docs/HIDDIFY_COMPATIBILITY.md) and the
 [upgrade runbook](docs/HIDDIFY_UPGRADE.md) before upgrading a panel. Passwordless
-restoration requires the matching generation’s host extension.
+restoration requires the host add-on below.
+
+### نصب افزونه پنل — روی هر سرور هیدیفای
+
+همین دستور را روی هر پنل نصب‌شده و سالم اجرا کنید؛ نسخه مناسب خودکار انتخاب می‌شود:
+
+```bash
+(set -e; d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT; cd "$d"; u="https://github.com/Alighaemi9731/hiddify-invoice-system/releases/latest/download"; curl -fsSLO "$u/panel-addon-installer.sh"; curl -fsSLO "$u/panel-addon-installer.sh.sha256"; sha256sum -c panel-addon-installer.sh.sha256; sudo bash panel-addon-installer.sh)
+```
+
+نصب‌کننده بکاپ می‌گیرد، افزونه قفل/بازگردانی رمز را نصب و بارگذاری آن را بررسی
+می‌کند. فقط سرویس پنل مدیریت برای بارگذاری افزونه ری‌استارت می‌شود. نصب مجدد
+همان نسخه روی پنل آماده، ری‌استارت اضافی ندارد. هوک مشترک، پس از ارتقای ۱۲.۰.۰
+به ۱۴.۲.۰ هم افزونه مناسب را خودکار انتخاب می‌کند.
+
+بررسی بعد از نصب یا ارتقای هیدیفای:
+
+```bash
+sudo invoice-panel-addon --check
+```
+
+[راهنمای کامل افزونه، پیش‌نیازها، بکاپ و حذف](docs/PANEL_ADDON.md).
 
 ### First steps after install
 
@@ -199,6 +227,7 @@ cd frontend && npx tsc --noEmit && npm test -- --run && npm run build
 
 | Document | Contents |
 |---|---|
+| [Panel add-on](docs/PANEL_ADDON.md) | دستور مستقل افزونه هیدیفای ۱۲/۱۴، بررسی سلامت، بکاپ و حذف |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Full system design, data model, flows, diagrams |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Schema evolution, migrations, backup/restore semantics |
 | [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) | Release gate, packaging, deploy, smoke, rollback |

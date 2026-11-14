@@ -68,9 +68,21 @@ gh release upload v1.37.36 \
   dist-release/invoice-system-v1.37.36.tar.gz \
   dist-release/invoice-system-v1.37.36.tar.gz.sha256 \
   dist-release/release-installer.sh \
-  dist-release/release-installer.sh.sha256
+  dist-release/release-installer.sh.sha256 \
+  dist-release/panel-addon-installer.sh \
+  dist-release/panel-addon-installer.sh.sha256
 gh release edit v1.37.36 --draft=false
 ```
+
+Every release publishes **six assets**: the archive, invoice bootstrap, panel add-on
+bootstrap, and one SHA-256 file for each. Verify all three checksums against the tagged
+local package before publishing. The add-on bootstrap extracts only its own files and
+never invokes the central application installer.
+
+For a deploy-tool/documentation-only release, GitHub publication and add-on canary
+acceptance can be completed independently of a central app deployment. Record the
+actually deployed app version separately; do not label publication as production deploy.
+See [PANEL_ADDON.md](PANEL_ADDON.md) for the independent host installation.
 
 `gh auth status` must succeed first. If GitHub CLI authentication is unavailable,
 stop after the Git push and repair authentication before creating or deploying a

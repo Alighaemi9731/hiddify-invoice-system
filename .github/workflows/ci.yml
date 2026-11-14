@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: backend/requirements-dev.lock
       - run: pip install --require-hashes -r requirements-dev.lock
       - run: pip check
-      - run: ruff check app tests alembic
+      - run: ruff check --config pyproject.toml app tests alembic ../deploy/panel_addon.py
       - run: mypy app
       - run: pytest -q
       - name: Check Alembic migrations and model drift
@@ -119,14 +119,19 @@ jobs:
       - run: |
           bash -n deploy/install.sh deploy/bootstrap.sh deploy/updater.sh get.sh \
             deploy/package-release.sh deploy/release-installer.sh deploy/rollback.sh \
-            deploy/smoke.sh deploy/test-release-tools.sh deploy/healthwatch.sh
+            deploy/smoke.sh deploy/test-release-tools.sh deploy/healthwatch.sh \
+            deploy/panel-addon-installer.sh deploy/test-panel-addon.sh
       - run: bash deploy/test-release-tools.sh
+      - run: bash deploy/test-panel-addon.sh
       - name: Build and verify release assets
         run: |
           RELEASE_REF=HEAD bash deploy/package-release.sh "v$(cat VERSION)" /tmp/release
           cd /tmp/release
           sha256sum -c "invoice-system-v$(cat "$GITHUB_WORKSPACE/VERSION").tar.gz.sha256"
           sha256sum -c release-installer.sh.sha256
+          sha256sum -c panel-addon-installer.sh.sha256
+          ALLOW_NON_ROOT=1 RELEASE_TAG="v$(cat "$GITHUB_WORKSPACE/VERSION")" \
+            RELEASE_ASSET_DIR=/tmp/release bash panel-addon-installer.sh --help
       - name: Validate production Compose
         run: |
           printf 'POSTGRES_PASSWORD=ci-only-not-a-secret\n' > .env

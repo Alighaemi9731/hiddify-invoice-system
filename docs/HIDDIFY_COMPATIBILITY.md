@@ -4,6 +4,9 @@ The compatibility adapter targets **Manager/Panel 12.0.0 and 14.2.0**, including
 running both at once. A newer 14.x release needs its own source and runtime validation.
 Passing a read-only preflight is not an acceptance test of billing, restoration or VPN clients.
 
+The host password extension is installed separately with the same command on both
+generations: [panel add-on installation and checks](PANEL_ADDON.md).
+
 ## Contracts
 
 | Operation | 12.0.0 | 14.2.0 |
