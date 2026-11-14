@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -67,6 +68,10 @@ class EndUserSnapshot(Base, TimestampMixin):
     current_usage_gb: Mapped[float] = mapped_column(Numeric(14, 3), default=0)
     start_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)
     package_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    panel_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
     enable: Mapped[bool] = mapped_column(default=True)
     is_active: Mapped[bool] = mapped_column(default=True)

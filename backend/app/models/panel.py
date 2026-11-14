@@ -6,7 +6,7 @@ import re
 import unicodedata
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core import crypto
@@ -50,6 +50,8 @@ class Panel(Base, TimestampMixin):
     # stale pasted link in the bot after a domain move — never touches billing, backup, or the
     # Admin API (those always derive from `host`).
     host_aliases: Mapped[str] = mapped_column(Text, nullable=True, default="", server_default="")
+
+    maintenance: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     enabled: Mapped[bool] = mapped_column(default=True)
     status: Mapped[PanelStatus] = mapped_column(

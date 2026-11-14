@@ -102,6 +102,7 @@ class PanelUser:
     mode: str | None
     last_online: dt.datetime | None
     comment: str | None
+    deleted: bool = False
 
 
 @dataclass
@@ -140,7 +141,7 @@ def parse_backup(payload: dict) -> PanelData:
 
     admins: list[PanelAdmin] = []
     for a in (payload.get("admin_users") or []):
-        if not isinstance(a, dict) or not a.get("uuid"):
+        if not isinstance(a, dict) or not a.get("uuid") or a.get("deleted") is True:
             continue
         try:
             admins.append(PanelAdmin(
@@ -175,6 +176,7 @@ def parse_backup(payload: dict) -> PanelData:
                 mode=u.get("mode"),
                 last_online=_to_datetime(u.get("last_online")),
                 comment=u.get("comment"),
+                deleted=u.get("deleted") is True,
             ))
         except Exception:  # noqa: BLE001 — skip a bad user row, keep the rest
             log.warning("parse_backup: skipping malformed user entry", exc_info=True)

@@ -225,7 +225,7 @@ async def fire(
     res = await renew(
         session_factory, order_id=order_id, op_id=op_id,
         prepaid_hold_txn_id=hold_id, locked_price_toman=price)
-    if res.ok or res.reason == "processing":
+    if res.ok or res.reason in ("processing", "maintenance"):
         return res
     # Definitive failure (not_found / trial / error / cancelled / hold-missing): tear the arm down so
     # the reservation returns and the order isn't left falsely armed. release_hold is idempotent — if
@@ -499,7 +499,7 @@ async def sweep(
                 await storefront_notify.notify_renewal(
                     sf_id=bot_id, order_id=order_id, automatic=True, bot=bot,
                     session_factory=session_factory)
-            elif res.reason == "processing":
+            elif res.reason in ("processing", "maintenance"):
                 counts["skipped"] += 1   # reconciler owns it; the next sweep confirms
             elif res.reason == "below_cost":
                 # Phase 1 screens on the order's own gb; `renew` is authoritative and reads the

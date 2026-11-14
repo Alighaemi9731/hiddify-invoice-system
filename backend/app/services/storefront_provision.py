@@ -30,6 +30,12 @@ from app.models import (
 )
 from app.services import storefront, storefront_ops, storefront_wallet, usercreate
 from app.services.panel_client.admin_api import AdminApiClient, RenewUserTarget
+from app.services.panel_maintenance import (
+    PanelMaintenanceError,
+    panel_for_order,
+    panel_operation,
+    storefront_write,
+)
 
 log = logging.getLogger("bot.storefront")
 
@@ -239,6 +245,7 @@ async def live_status(
 
 # ── atomic, crash-safe purchase + free trial ─────────────────────────────────
 
+@storefront_write(PurchaseResult)
 async def purchase(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,
@@ -398,6 +405,7 @@ async def purchase(
                                   message=res.message, gb=gb, days=days, label=label)
 
 
+@storefront_write(PurchaseResult)
 async def claim_trial(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,
@@ -504,53 +512,59 @@ async def reap_pending_orders(
     ).scalars().all()
     client = AdminApiClient()
     for oid in ids:
-        order = await _lock_order_skip(session, oid)
-        if order is None or order.status != "pending":
-            await session.rollback()
-            continue  # gone, locked by a live provision (skip this tick), or already decided
-        if _lease_active(order.lease_expires_at, now):
-            await session.rollback()  # release the row lock immediately; live finalization must not wait
-            continue  # F5: a live provision is holding this order across the panel call — leave it
-        counts["checked"] += 1
-        customer = await session.get(StorefrontCustomer, order.customer_id)
-        sf = await session.get(StorefrontBot, customer.storefront_bot_id) if customer else None
-        reseller = await session.get(Reseller, sf.reseller_id) if sf else None
-        panel = await session.get(Panel, reseller.panel_id) if reseller else None
-        if not (customer and sf and reseller and panel and order.panel_user_uuid):
-            await session.rollback()
-            continue
         try:
-            data = await client.get_user(panel, order.panel_user_uuid, api_key=reseller.admin_uuid)
-        except Exception:  # noqa: BLE001 — leave it pending; try again next tick
-            log.warning("reaper get_user failed for order %s", order.id, exc_info=True)
+            maintenance_panel = await panel_for_order(session, oid)
+            async with panel_operation(maintenance_panel, session):
+                order = await _lock_order_skip(session, oid)
+                if order is None or order.status != "pending":
+                    await session.rollback()
+                    continue  # gone, locked by a live provision (skip this tick), or already decided
+                if _lease_active(order.lease_expires_at, now):
+                    await session.rollback()  # release the row lock immediately; live finalization must not wait
+                    continue  # F5: a live provision is holding this order across the panel call — leave it
+                counts["checked"] += 1
+                customer = await session.get(StorefrontCustomer, order.customer_id)
+                sf = await session.get(StorefrontBot, customer.storefront_bot_id) if customer else None
+                reseller = await session.get(Reseller, sf.reseller_id) if sf else None
+                panel = await session.get(Panel, reseller.panel_id) if reseller else None
+                if not (customer and sf and reseller and panel and order.panel_user_uuid):
+                    await session.rollback()
+                    continue
+                try:
+                    data = await client.get_user(panel, order.panel_user_uuid, api_key=reseller.admin_uuid)
+                except Exception:  # noqa: BLE001 — leave it pending; try again next tick
+                    log.warning("reaper get_user failed for order %s", order.id, exc_info=True)
+                    await session.rollback()
+                    continue
+                if data:  # the config WAS created before the crash → complete it
+                    order.status = "provisioned"
+                    order.sub_link = panel.user_sub_link(order.panel_user_uuid, name=order.label or None)
+                    order.lease_expires_at = None
+                    await _finalize_purchase_op(session, order.id, order.sub_link)
+                    await session.commit()
+                    counts["completed"] += 1
+                    await _notify_completed(sf, customer, order)
+                    # The sale is only NOW visible to anyone; the buy handler never got to announce it
+                    # (its process died mid-provision), so the shop's admins learn of it here or not at all.
+                    from app.services import storefront_notify
+                    await storefront_notify.notify_purchase(sf_id=sf.id, order_id=order.id)
+                else:  # nothing on the panel → refund (once) and fail
+                    if order.price_toman and not await storefront_wallet.order_has_refund(session, order.id):
+                        await storefront_wallet.refund(session, order.customer_id, int(order.price_toman),
+                                                       order_id=order.id, note="reaper: provision lost")
+                    # A reaped-failed FREE TRIAL must free the one-time flag so the customer can retry —
+                    # a trial has no refund path (price 0), so without this they'd be stuck unable to
+                    # re-claim (same recovery claim_trial does on its own provisioning failure).
+                    if order.is_trial and customer.free_trial_used:
+                        customer.free_trial_used = False
+                    order.status = "failed"
+                    order.lease_expires_at = None
+                    await _finalize_purchase_op(session, order.id, None)
+                    await session.commit()
+                    counts["refunded"] += 1
+        except PanelMaintenanceError:
             await session.rollback()
             continue
-        if data:  # the config WAS created before the crash → complete it
-            order.status = "provisioned"
-            order.sub_link = panel.user_sub_link(order.panel_user_uuid, name=order.label or None)
-            order.lease_expires_at = None
-            await _finalize_purchase_op(session, order.id, order.sub_link)
-            await session.commit()
-            counts["completed"] += 1
-            await _notify_completed(sf, customer, order)
-            # The sale is only NOW visible to anyone; the buy handler never got to announce it
-            # (its process died mid-provision), so the shop's admins learn of it here or not at all.
-            from app.services import storefront_notify
-            await storefront_notify.notify_purchase(sf_id=sf.id, order_id=order.id)
-        else:  # nothing on the panel → refund (once) and fail
-            if order.price_toman and not await storefront_wallet.order_has_refund(session, order.id):
-                await storefront_wallet.refund(session, order.customer_id, int(order.price_toman),
-                                               order_id=order.id, note="reaper: provision lost")
-            # A reaped-failed FREE TRIAL must free the one-time flag so the customer can retry —
-            # a trial has no refund path (price 0), so without this they'd be stuck unable to
-            # re-claim (same recovery claim_trial does on its own provisioning failure).
-            if order.is_trial and customer.free_trial_used:
-                customer.free_trial_used = False
-            order.status = "failed"
-            order.lease_expires_at = None
-            await _finalize_purchase_op(session, order.id, None)
-            await session.commit()
-            counts["refunded"] += 1
 
     # Recover RENEWALS stuck in "renewing" whose lease expired. New operations carry an absolute panel
     # target: verify/reapply it and finalize forward, so a successful remote write is never blindly
@@ -564,86 +578,93 @@ async def reap_pending_orders(
         )
     ).scalars().all()
     for oid in renewing_ids:
-        o = await _lock_order_skip(session, oid)
-        if o is None or o.status != "renewing":
+        try:
+            maintenance_panel = await panel_for_order(session, oid)
+            async with panel_operation(maintenance_panel, session):
+                o = await _lock_order_skip(session, oid)
+                if o is None or o.status != "renewing":
+                    await session.rollback()
+                    continue
+                if _lease_active(o.lease_expires_at, now):
+                    await session.rollback()  # release the row lock immediately; live finalization must not wait
+                    continue   # a live renewal still holds this order — leave it
+                op = (
+                    await session.execute(
+                        select(StorefrontOperation).where(
+                            StorefrontOperation.order_id == oid,
+                            StorefrontOperation.op_type == "renewal",
+                            StorefrontOperation.status == "in_progress",
+                        ).order_by(StorefrontOperation.id.desc()).limit(1)
+                    )
+                ).scalar_one_or_none()
+                if op is not None:
+                    charged = await storefront_wallet.operation_has_charge(session, op.id)
+                    # A paid/customer renewal with a persisted target is recoverable in the FORWARD direction:
+                    # verify the panel mutation and, when necessary, idempotently reapply the same absolute target.
+                    # This removes the "panel succeeded, DB finalize crashed, blind refund grants free service" gap.
+                    if op.target_usage_limit_gb is not None and (charged or op.by_admin):
+                        customer = await session.get(StorefrontCustomer, op.customer_id) if op.customer_id else None
+                        sf = await session.get(StorefrontBot, op.storefront_bot_id) if op.storefront_bot_id else None
+                        reseller = await session.get(Reseller, sf.reseller_id) if sf else None
+                        panel = await session.get(Panel, reseller.panel_id) if reseller else None
+                        if not (customer and sf and reseller and panel and o.panel_user_uuid):
+                            await session.rollback()
+                            continue  # context may be transiently unavailable; keep the durable operation pending
+                        target = RenewUserTarget(
+                            usage_limit_gb=float(op.target_usage_limit_gb),
+                            package_days=int(op.days),
+                            prior_start_date=op.prior_panel_start_date,
+                        )
+                        try:
+                            data = await client.get_user(
+                                panel, o.panel_user_uuid, api_key=reseller.admin_uuid)
+                            if data is None:
+                                # The service definitively does not exist: make a charged customer whole.
+                                if charged and op.customer_id is not None:
+                                    await storefront_wallet.reverse_charge(
+                                        session, op.customer_id, int(op.price_toman), order_id=oid,
+                                        operation_id=op.id, note="reconciler: renewal user missing")
+                                    op.status = "reversed"
+                                    counts["reversed"] += 1
+                                else:
+                                    op.status = "failed"
+                                o.status = op.prior_status if op.prior_status in _ACTIVE else "provisioned"
+                            else:
+                                if not _renewal_target_applied(data, target, op.prior_panel_start_date):
+                                    await client.apply_renew_user_target(
+                                        panel, o.panel_user_uuid, target, api_key=reseller.admin_uuid)
+                                op.status = "done"
+                                op.result_order_id = oid
+                                o.status = "provisioned"
+                                o.gb, o.days = int(op.gb), int(op.days)
+                                o.last_renewed_at = storefront_ops.now()
+                                counts["renewing_completed"] += 1
+                            o.lease_expires_at = None
+                            await session.commit()
+                            counts["renewing_recovered"] += 1
+                        except Exception:  # noqa: BLE001 — ambiguity stays pending; next tick retries safely
+                            log.warning("renewal recovery failed for order %s", oid, exc_info=True)
+                            await session.rollback()
+                        continue
+
+                    if op.customer_id is not None and charged:
+                        await storefront_wallet.reverse_charge(
+                            session, op.customer_id, int(op.price_toman), order_id=oid, operation_id=op.id,
+                            note="reconciler: crashed renewal")
+                        op.status = "reversed"
+                        counts["reversed"] += 1
+                    else:
+                        op.status = "failed"
+                    o.status = op.prior_status if op.prior_status in _ACTIVE else "provisioned"
+                else:
+                    o.status = "provisioned"   # legacy in-flight renewal (pre-deploy, no operation record)
+                o.lease_expires_at = None
+                await session.commit()
+                counts["renewing_recovered"] += 1
+        except PanelMaintenanceError:
             await session.rollback()
             continue
-        if _lease_active(o.lease_expires_at, now):
-            await session.rollback()  # release the row lock immediately; live finalization must not wait
-            continue   # a live renewal still holds this order — leave it
-        op = (
-            await session.execute(
-                select(StorefrontOperation).where(
-                    StorefrontOperation.order_id == oid,
-                    StorefrontOperation.op_type == "renewal",
-                    StorefrontOperation.status == "in_progress",
-                ).order_by(StorefrontOperation.id.desc()).limit(1)
-            )
-        ).scalar_one_or_none()
-        if op is not None:
-            charged = await storefront_wallet.operation_has_charge(session, op.id)
-            # A paid/customer renewal with a persisted target is recoverable in the FORWARD direction:
-            # verify the panel mutation and, when necessary, idempotently reapply the same absolute target.
-            # This removes the "panel succeeded, DB finalize crashed, blind refund grants free service" gap.
-            if op.target_usage_limit_gb is not None and (charged or op.by_admin):
-                customer = await session.get(StorefrontCustomer, op.customer_id) if op.customer_id else None
-                sf = await session.get(StorefrontBot, op.storefront_bot_id) if op.storefront_bot_id else None
-                reseller = await session.get(Reseller, sf.reseller_id) if sf else None
-                panel = await session.get(Panel, reseller.panel_id) if reseller else None
-                if not (customer and sf and reseller and panel and o.panel_user_uuid):
-                    await session.rollback()
-                    continue  # context may be transiently unavailable; keep the durable operation pending
-                target = RenewUserTarget(
-                    usage_limit_gb=float(op.target_usage_limit_gb),
-                    package_days=int(op.days),
-                    prior_start_date=op.prior_panel_start_date,
-                )
-                try:
-                    data = await client.get_user(
-                        panel, o.panel_user_uuid, api_key=reseller.admin_uuid)
-                    if data is None:
-                        # The service definitively does not exist: make a charged customer whole.
-                        if charged and op.customer_id is not None:
-                            await storefront_wallet.reverse_charge(
-                                session, op.customer_id, int(op.price_toman), order_id=oid,
-                                operation_id=op.id, note="reconciler: renewal user missing")
-                            op.status = "reversed"
-                            counts["reversed"] += 1
-                        else:
-                            op.status = "failed"
-                        o.status = op.prior_status if op.prior_status in _ACTIVE else "provisioned"
-                    else:
-                        if not _renewal_target_applied(data, target, op.prior_panel_start_date):
-                            await client.apply_renew_user_target(
-                                panel, o.panel_user_uuid, target, api_key=reseller.admin_uuid)
-                        op.status = "done"
-                        op.result_order_id = oid
-                        o.status = "provisioned"
-                        o.gb, o.days = int(op.gb), int(op.days)
-                        o.last_renewed_at = storefront_ops.now()
-                        counts["renewing_completed"] += 1
-                    o.lease_expires_at = None
-                    await session.commit()
-                    counts["renewing_recovered"] += 1
-                except Exception:  # noqa: BLE001 — ambiguity stays pending; next tick retries safely
-                    log.warning("renewal recovery failed for order %s", oid, exc_info=True)
-                    await session.rollback()
-                continue
 
-            if op.customer_id is not None and charged:
-                await storefront_wallet.reverse_charge(
-                    session, op.customer_id, int(op.price_toman), order_id=oid, operation_id=op.id,
-                    note="reconciler: crashed renewal")
-                op.status = "reversed"
-                counts["reversed"] += 1
-            else:
-                op.status = "failed"
-            o.status = op.prior_status if op.prior_status in _ACTIVE else "provisioned"
-        else:
-            o.status = "provisioned"   # legacy in-flight renewal (pre-deploy, no operation record)
-        o.lease_expires_at = None
-        await session.commit()
-        counts["renewing_recovered"] += 1
     return counts
 
 

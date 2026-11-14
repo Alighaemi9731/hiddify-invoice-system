@@ -66,7 +66,7 @@ async def search_end_users(
     for r in rows:
         panel = panels.get(r.panel_id)
         present = bool(
-            r.last_synced_at and panel and panel.last_synced_at
+            not r.panel_deleted and r.last_synced_at and panel and panel.last_synced_at
             and r.last_synced_at >= panel.last_synced_at
         )
         out.append({

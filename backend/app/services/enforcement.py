@@ -2508,6 +2508,19 @@ _PENDING_ACTION_FILTER = (
 async def _process_panel_queue(
     session: AsyncSession, panel_id: int, *, limit: int, chunk: int, para: int
 ) -> dict:
+    from app.services.panel_maintenance import PanelMaintenanceError, panel_operation
+
+    panel = await session.get(Panel, panel_id, populate_existing=True)
+    try:
+        async with panel_operation(panel, session):
+            return await _process_panel_queue_ready(session, panel_id, limit=limit, chunk=chunk, para=para)
+    except PanelMaintenanceError:
+        return _empty_queue_result()  # No action/retry budget was consumed.
+
+
+async def _process_panel_queue_ready(
+    session: AsyncSession, panel_id: int, *, limit: int, chunk: int, para: int
+) -> dict:
     """Process up to `limit` pending actions for ONE panel, sequentially (restores first), on a
     dedicated session. One lane per panel; lanes run concurrently (see process_enforcement_queue).
     Each panel is processed serially so we never hammer a single panel's API in parallel."""

@@ -198,7 +198,8 @@ async def prune_stale_snapshots(session: AsyncSession) -> dict[str, int]:
             Panel.status == PanelStatus.ok,
             Panel.last_synced_at.is_not(None),
             EndUserSnapshot.last_synced_at.is_not(None),
-            EndUserSnapshot.last_synced_at < Panel.last_synced_at,  # not seen in the latest sync
+            or_(EndUserSnapshot.panel_deleted.is_(True),
+                EndUserSnapshot.last_synced_at < Panel.last_synced_at),
             or_(
                 EndUserSnapshot.start_date.is_(None),               # never billable (no create date)
                 EndUserSnapshot.start_date < keep_from,             # older than the previous month

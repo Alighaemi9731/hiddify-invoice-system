@@ -71,3 +71,6 @@ CLAUDE.md
 .claude/
 .mcp.json
 plans/
+
+# Internal implementation handoff plans (local-only).
+advisor-plans/

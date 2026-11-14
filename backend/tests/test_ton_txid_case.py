@@ -1,3 +1,5 @@
+from tests.legacy_schema import insert_legacy
+
 """H06 — TON hex txid canonicalization.
 
 - submit lowercases a hex-form TON hash so `ABC…` then `abc…` is caught as a duplicate
@@ -95,7 +97,7 @@ def _seed_collision_db(db: Path) -> None:
         engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
         Session = async_sessionmaker(engine, expire_on_commit=False)
         async with Session() as s:
-            s.add(Panel(id=1, key="p", name="p", host="h", proxy_path_enc="x", owner_uuid="o"))
+            await insert_legacy(s, Panel(id=1, key="p", name="p", host="h", proxy_path_enc="x", owner_uuid="o"))
             s.add(Reseller(id=1, panel_id=1, admin_uuid="a", name="R"))
             await s.flush()
             # Same transfer, two casings: a rejected UPPER and a confirmed lower.

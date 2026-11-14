@@ -29,6 +29,7 @@ from app.services import (
     storefront_wallet,
 )
 from app.services.panel_client.admin_api import AdminApiClient
+from app.services.panel_maintenance import storefront_write
 from app.services.storefront_provision import _customer_lock, _lease_active
 
 log = logging.getLogger("bot.storefront")
@@ -74,6 +75,7 @@ def _cached_renew_result(op: StorefrontOperation) -> SubResult:
     return SubResult(False, "error")   # failed / reversed → the renewal did not ultimately succeed
 
 
+@storefront_write(SubResult)
 async def renew(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,
@@ -300,6 +302,7 @@ async def renew(
         return SubResult(True, price=(0 if by_admin else price), gb=gb, days=days)
 
 
+@storefront_write(SubResult)
 async def delete_subscription(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,
@@ -391,6 +394,7 @@ async def _delete_panel_user_and_mark(
     return SubResult(True)
 
 
+@storefront_write(SubResult)
 async def set_enabled(
     session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
     *,

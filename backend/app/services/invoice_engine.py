@@ -182,6 +182,7 @@ def billable_gb_for_user(
         deleted = user_synced_at < panel_synced_at
     else:
         deleted = False
+    deleted = deleted or bool(getattr(u, "panel_deleted", False))
     if deleted:
         gb = round(float(getattr(u, "current_usage_gb", 0) or 0), 3)
         # A removed config whose CONSUMPTION is below the free threshold is negligible (e.g. a

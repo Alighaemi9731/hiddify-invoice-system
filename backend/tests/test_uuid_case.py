@@ -1,3 +1,5 @@
+from tests.legacy_schema import insert_legacy
+
 """H05 — uuid case normalization.
 
 - parse_backup lowercases admin/user uuids at ingest, so a case-mismatched
@@ -89,7 +91,7 @@ def _seed_mixed_case_db(db: Path) -> None:
         engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
         Session = async_sessionmaker(engine, expire_on_commit=False)
         async with Session() as s:
-            s.add(Panel(id=1, key="p", name="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
+            await insert_legacy(s, Panel(id=1, key="p", name="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
             await s.flush()
             # Case-duplicate pair: 'ABC' (0 invoices) + 'abc' (has bot_chat_id → keeper).
             s.add(Reseller(id=1, panel_id=1, admin_uuid="ABC", name="Big",
@@ -98,11 +100,11 @@ def _seed_mixed_case_db(db: Path) -> None:
                            parent_admin_uuid="owner", bot_chat_id=555, price_per_gb=2000))
             s.add(Reseller(id=3, panel_id=1, admin_uuid="sub1", name="Sub",
                            parent_admin_uuid="Abc"))
-            s.add(EndUserSnapshot(
+            await insert_legacy(s, EndUserSnapshot(
                 panel_id=1, user_uuid="U9", name="u9", added_by_uuid="ABC",
                 usage_limit_gb=5, current_usage_gb=0,
                 last_synced_at=dt.datetime(2026, 2, 1)))
-            s.add(EndUserSnapshot(
+            await insert_legacy(s, EndUserSnapshot(
                 panel_id=1, user_uuid="u9", name="u9", added_by_uuid="abc",
                 usage_limit_gb=7, current_usage_gb=0,
                 last_synced_at=dt.datetime(2026, 3, 1)))

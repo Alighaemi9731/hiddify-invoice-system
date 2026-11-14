@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from app.models import EndUserSnapshot, Panel
 
@@ -40,17 +40,20 @@ def snapshot_present_filter():
     `NOT (snap < panel)` yields NULL — not TRUE — when either side is NULL, which would silently
     DROP never-synced rows instead of keeping them.
     """
-    return or_(
+    return and_(EndUserSnapshot.panel_deleted.is_(False), or_(
         Panel.last_synced_at.is_(None),
         EndUserSnapshot.last_synced_at.is_(None),
         EndUserSnapshot.last_synced_at >= Panel.last_synced_at,
-    )
+    ))
 
 
 def snapshot_present(
-    user_synced: dt.datetime | None, panel_synced: dt.datetime | None
+    user_synced: dt.datetime | None, panel_synced: dt.datetime | None,
+    *, panel_deleted: bool = False,
 ) -> bool:
     """In-Python twin of `snapshot_present_filter` (naive datetimes are read as UTC)."""
+    if panel_deleted:
+        return False
     if not user_synced or not panel_synced:
         return True
     if user_synced.tzinfo is None:

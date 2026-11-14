@@ -31,16 +31,20 @@ class BackupJsonClient(PanelClient):
             (in_path, None),                 # uuid in path, no auth
             (in_path, (uuid, "")),           # uuid in path + basic-auth
             (panel.backup_url, None),        # proxy/admin/backup, no auth
+            (f"{getattr(panel, 'admin_api_base', '')}/backup/download/", None),  # v14 JSON download
         ]
         last = "no response"
         async with httpx.AsyncClient(
-            timeout=self.timeout, follow_redirects=True, verify=True
+            timeout=self.timeout, follow_redirects=False, verify=True
         ) as client:
             for url, auth in candidates:
                 try:
-                    resp = await client.get(url, auth=auth)
+                    if url.endswith("/api/v2/admin/backup/download/"):
+                        resp = await client.get(url, headers={"Hiddify-API-Key": uuid})
+                    else:
+                        resp = await client.get(url, auth=auth)
                 except Exception as exc:  # noqa: BLE001
-                    last = f"{type(exc).__name__}: {exc}"
+                    last = type(exc).__name__
                     continue
                 if resp.status_code != 200:
                     last = f"HTTP {resp.status_code}"
@@ -61,8 +65,10 @@ class BackupJsonClient(PanelClient):
                 if isinstance(payload, dict) and isinstance(payload.get("admin_users"), list) \
                         and isinstance(payload.get("users"), list):
                     data = await asyncio.to_thread(parse_backup, payload)
-                    if not data.admins:
-                        last = "backup has no admins (truncated/partial?)"
+                    if not data.admins or not any(
+                        a.uuid == uuid.strip().lower() or a.is_owner for a in data.admins
+                    ):
+                        last = "backup has no owner admin (truncated/partial?)"
                         continue
                     log.info(
                         "Fetched backup for panel '%s': %d admins, %d users",

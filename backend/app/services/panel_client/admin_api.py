@@ -18,7 +18,9 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.services.panel_client.base import PanelClient, PanelData, parse_backup
+from app.services.panel_client.backup_json import BackupJsonClient
+from app.services.panel_client.base import PanelClient, PanelData
+from app.services.panel_maintenance import writable_panel
 
 log = logging.getLogger("panel.admin_api")
 
@@ -163,6 +165,9 @@ class AdminApiClient(PanelClient):
         # Hiddify reapplies the whole proxy config on each user PATCH, which can take a
         # while on a busy panel — keep a generous timeout so disabling users doesn't fail.
         self.timeout = timeout
+        # Numeric ids are volatile. This map lives only for this client/pass and is
+        # populated by fresh per-target reads, never persisted across queue retries.
+        self._user_targets: dict[tuple[str, int], str] = {}
 
     def _headers(self, panel, api_key: str | None = None) -> dict:  # noqa: ANN001
         # In Hiddify v2 the API key IS an admin's uuid. `api_key` lets a caller act AS a
@@ -174,13 +179,10 @@ class AdminApiClient(PanelClient):
         return {"Hiddify-API-Key": key, "Accept": "application/json"}
 
     async def fetch_backup(self, panel) -> PanelData:  # noqa: ANN001
-        """Optional read path via the API (backup JSON remains the default)."""
-        url = f"{panel.admin_api_base}/backup/"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.get(url, headers=self._headers(panel))
-            resp.raise_for_status()
-            return parse_backup(resp.json())
+        """Use the same validated, dual-generation backup contract as scheduled sync."""
+        return await BackupJsonClient(timeout=self.timeout).fetch_backup(panel)
 
+    @writable_panel
     async def set_user_enabled(  # noqa: ANN001
         self, panel, user_uuid: str, enabled: bool, *, api_key: str | None = None
     ) -> None:
@@ -194,6 +196,7 @@ class AdminApiClient(PanelClient):
             if resp.status_code >= 400:
                 raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
 
+    @writable_panel
     async def create_user(  # noqa: ANN001
         self, panel, *, name: str, gb: float, days: int, api_key: str | None = None,
         user_uuid: str | None = None,
@@ -257,6 +260,8 @@ class AdminApiClient(PanelClient):
         if not isinstance(data, dict):
             return UserIdentity(None, None)
         uid = data.get("id")
+        if isinstance(uid, int):
+            self._user_targets[(panel.admin_api_base, uid)] = user_uuid
         owner = data.get("added_by_uuid")
         return UserIdentity(
             panel_user_id=int(uid) if isinstance(uid, int) else None,
@@ -309,6 +314,7 @@ class AdminApiClient(PanelClient):
         data = resp.json()
         return data if isinstance(data, dict) else None
 
+    @writable_panel
     async def patch_user(  # noqa: ANN001
         self, panel, user_uuid: str, body: dict, *, api_key: str | None = None
     ) -> None:
@@ -316,6 +322,15 @@ class AdminApiClient(PanelClient):
         `PATCH /user/{uuid}/`. Tolerates the Hiddify v12 quirk where the PATCH applies but returns a
         non-2xx: re-GET and accept if every field we sent actually took effect."""
         url = f"{panel.admin_api_base}/user/{user_uuid}/"
+        body = dict(body)
+        if "start_date" in body and "package_days" not in body:
+            current = await self.get_user(panel, user_uuid, api_key=api_key)
+            if current is None:
+                raise RuntimeError("Panel user not found")
+            if "deleted" not in current:  # v12 only applies start_date inside its package_days branch.
+                if current.get("package_days") is None:
+                    raise RuntimeError("Panel has no package duration for date update")
+                body["package_days"] = current["package_days"]
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.patch(url, headers=self._headers(panel, api_key), json=body)
             if resp.status_code < 400:
@@ -330,6 +345,7 @@ class AdminApiClient(PanelClient):
                 pass
             raise RuntimeError(f"PATCH user {resp.status_code}: {resp.text[:300]}")
 
+    @writable_panel
     async def delete_user(  # noqa: ANN001
         self, panel, user_uuid: str, *, api_key: str | None = None
     ) -> None:
@@ -367,12 +383,14 @@ class AdminApiClient(PanelClient):
             prior_start_date=(str(raw_start)[:32] if raw_start not in (None, "") else None),
         )
 
+    @writable_panel
     async def apply_renew_user_target(  # noqa: ANN001
         self, panel, user_uuid: str, target: RenewUserTarget, *, api_key: str | None = None
     ) -> None:
         """Apply a previously persisted absolute target; safe to retry during crash recovery."""
         await self.patch_user(panel, user_uuid, target.body, api_key=api_key)
 
+    @writable_panel
     async def renew_user(  # noqa: ANN001
         self, panel, user_uuid: str, *, gb: int, days: int, api_key: str | None = None
     ) -> None:
@@ -403,6 +421,7 @@ class AdminApiClient(PanelClient):
             user_id = row.get("id")
             if uuid and isinstance(user_id, int):
                 result[str(uuid)] = user_id
+                self._user_targets[(panel.admin_api_base, user_id)] = str(uuid)
         return result
 
     async def _user_bulk_action(  # noqa: ANN001
@@ -435,6 +454,9 @@ class AdminApiClient(PanelClient):
             headers=headers,
         ) as client:
             page = await client.get(list_url)
+            if page.status_code == 404:
+                await self._json_user_bulk_action(panel, user_ids, action, api_key=api_key)
+                return
             if page.status_code >= 400:
                 raise RuntimeError(
                     f"Hiddify bulk user page {page.status_code}: {page.text[:300]}"
@@ -480,6 +502,43 @@ class AdminApiClient(PanelClient):
                     f"({response.status_code} → {_redirect_target(response)})"
                 )
 
+    async def _json_user_bulk_action(
+        self, panel, user_ids: list[int], action: str, *, api_key: str | None,
+    ) -> None:
+        """v14 UUID bulk API. Only freshly resolved targets, scoped to their actual owner."""
+        targets = []
+        for numeric_id in user_ids:
+            uid = self._user_targets.get((panel.admin_api_base, numeric_id))
+            if not uid:
+                raise RuntimeError("Bulk target was not resolved in this pass")
+            current = await self.get_user_identity(panel, uid, api_key=api_key)
+            if current is None or current.panel_user_id != numeric_id:
+                raise RuntimeError("Bulk target identity changed; retry with fresh targets")
+            if not api_key or not current.added_by_uuid or current.added_by_uuid.lower() != api_key.lower():
+                raise RuntimeError("Bulk target owner mismatch; refusing unscoped write")
+            targets.append(uid)
+        async with httpx.AsyncClient(timeout=max(self.timeout, 300), follow_redirects=False) as client:
+            # A read-only capability probe before the first mutation. 401/403 is never a downgrade.
+            probe = await client.get(f"{panel.admin_api_base}/users/{targets[0]}/",
+                                     headers=self._headers(panel, api_key))
+            if probe.status_code != 200 or probe.json().get("user", {}).get("uuid") != targets[0]:
+                raise RuntimeError("Panel has no authenticated JSON bulk capability")
+            response = await client.post(
+                f"{panel.admin_api_base}/users/bulk/", headers=self._headers(panel, api_key),
+                json={"action": action, "uuids": targets},
+            )
+            if response.status_code != 200 or response.json().get("count") != len(targets):
+                raise RuntimeError(f"JSON bulk action unconfirmed (HTTP {response.status_code})")
+        for uid in targets:
+            # Owner credentials prove scope above; the owner key verifies existence after delete.
+            row = await self.get_user(panel, uid, api_key=panel.owner_uuid)
+            if action == "delete":
+                if row is not None:
+                    raise RuntimeError("Bulk delete readback still contains a target")
+            elif row is None or row.get("enable") is not (action == "enable"):
+                raise RuntimeError("Bulk enable/disable readback did not match")
+
+    @writable_panel
     async def bulk_set_users_enabled(  # noqa: ANN001
         self, panel, user_ids: list[int], enabled: bool, *, api_key: str | None = None
     ) -> None:
@@ -488,6 +547,7 @@ class AdminApiClient(PanelClient):
         await self._user_bulk_action(
             panel, user_ids, "enable" if enabled else "disable", api_key=api_key)
 
+    @writable_panel
     async def bulk_delete_users(  # noqa: ANN001
         self, panel, user_ids: list[int], *, api_key: str | None = None
     ) -> None:
@@ -497,6 +557,7 @@ class AdminApiClient(PanelClient):
         here."""
         await self._user_bulk_action(panel, user_ids, "delete", api_key=api_key)
 
+    @writable_panel
     async def create_admin(  # noqa: ANN001
         self, panel, *, name: str, api_key: str, parent_admin_uuid: str,
         admin_uuid: str | None = None, max_users: int = 100, max_active_users: int = 100,
@@ -622,12 +683,14 @@ class AdminApiClient(PanelClient):
                 pass
             raise RuntimeError(f"PATCH admin_user {resp.status_code}: {resp.text[:300]}")
 
+    @writable_panel
     async def set_can_add_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, can_add_admin: bool, *, api_key: str | None = None
     ) -> None:
         """Turn an admin's ability to create sub-admins on/off (Hiddify `can_add_admin`)."""
         await self._patch_admin(panel, admin_uuid, {"can_add_admin": can_add_admin}, api_key=api_key)
 
+    @writable_panel
     async def set_admin_limits(  # noqa: ANN001
         self, panel, admin_uuid: str, max_users: int, max_active_users: int,
         *, api_key: str | None = None,
@@ -640,6 +703,7 @@ class AdminApiClient(PanelClient):
             api_key=api_key,
         )
 
+    @writable_panel
     async def set_admin_password(  # noqa: ANN001
         self, panel, admin_uuid: str, password: str, *, api_key: str | None = None
     ) -> None:
@@ -656,6 +720,8 @@ class AdminApiClient(PanelClient):
         clobber the admin's name / limits / uuid / mode even if Hiddify reshuffles the form. Auth uses
         the panel's super-admin key (default header) so it can edit any sub-admin. Empty passwords
         require the explicit form extension and verified unauthenticated UUID-link login."""
+        if admin_uuid.lower() == panel.owner_uuid.lower():
+            raise RuntimeError("Refusing to change the panel owner password")
         clearing = password == ""
         if clearing and await self.admin_link_login_works(panel, admin_uuid):
             return
@@ -668,6 +734,9 @@ class AdminApiClient(PanelClient):
             # 1) Resolve the Flask-Admin numeric row id by searching the admin list by uuid (the
             #    list is `column_searchable_list = ["name", "uuid"]`, so uuid search is exact).
             search = await client.get(list_url, params={"search": admin_uuid})
+            if search.status_code == 404:
+                await self._json_admin_password(panel, admin_uuid, password)
+                return
             if search.status_code >= 400:
                 raise RuntimeError(f"admin list {search.status_code}: {search.text[:200]}")
             if 300 <= search.status_code < 400:
@@ -726,6 +795,25 @@ class AdminApiClient(PanelClient):
                 "Admin password was not cleared; install deploy/hiddify-password-clear.py on this panel"
             )
 
+    async def _json_admin_password(self, panel, admin_uuid: str, password: str) -> None:
+        if admin_uuid.lower() == panel.owner_uuid.lower():
+            raise RuntimeError("Refusing to change the panel owner password")
+        url = f"{panel.admin_api_base}/invoice/admin-password/{admin_uuid}/"
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False) as client:
+            headers = self._headers(panel, panel.owner_uuid)
+            probe = await client.get(url, headers=headers)
+            if probe.status_code != 200 or probe.json().get("extension_version") != 1:
+                raise RuntimeError("Install the v14 invoice password extension before lockout/restore")
+            response = await client.patch(url, headers=headers, json={"password": password})
+            if response.status_code != 200:
+                raise RuntimeError(f"Invoice password extension HTTP {response.status_code}")
+            check = await client.get(url, headers=headers)
+            if check.status_code != 200 or check.json().get("has_password") is not bool(password):
+                raise RuntimeError("Invoice password extension readback failed")
+        login_works = await self.admin_link_login_works(panel, admin_uuid)
+        if login_works != (password == ""):
+            raise RuntimeError("Admin UUID login verification failed after password change")
+
     async def admin_link_login_works(self, panel, admin_uuid: str) -> bool:  # noqa: ANN001
         """Check UUID login in a fresh session without API credentials or prior cookies."""
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
@@ -739,6 +827,7 @@ class AdminApiClient(PanelClient):
             and "/admin/" in response.url.path
         )
 
+    @writable_panel
     async def delete_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None
     ) -> None:

@@ -149,6 +149,8 @@ async def detect(
     # panel_id -> cluster_key(minute) -> {"last_seen_at", "users"}
     per_panel: dict[int, dict[str, dict]] = {}
     for s in rows:
+        if s.panel_deleted:
+            continue  # An explicit deletion is not a user lost by a panel rollback.
         p = panels.get(s.panel_id)
         if p is None or p.last_synced_at is None or s.last_synced_at is None:
             continue
@@ -230,6 +232,9 @@ async def restore(
             admin_name = reseller.name if reseller else None
         label = {"panel_id": panel_id, "user_uuid": user_uuid, "name": name or "",
                  "admin_name": admin_name}
+        if snap is not None and snap.panel_deleted:
+            skipped.append({**label, "reason": "explicitly deleted on panel"})
+            continue
         if snap is None or panel is None:
             errors.append({**label, "reason": "not found in the invoice database"})
             continue

@@ -6,9 +6,10 @@ import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MonthlyBillingRun
+from app.models import MonthlyBillingRun, Panel
 from app.services import delivery, invoicing, owner_notify, periods
 from app.services import sync as sync_service
 from app.services.job_lock import session_lock
@@ -75,8 +76,19 @@ async def run_due(
             }
             problem = bool(sent.get("failed") or summary.skipped_panels or summary.unbilled_subtrees)
             run.result = result
-            run.status = ("failed" if run.attempts >= MAX_ATTEMPTS else "retry") if problem else "completed"
-            run.error = "Some panels, invoices or deliveries require retry/review" if problem else None
+            maintenance_keys = set((await session.scalars(select(Panel.key).where(
+                Panel.maintenance.is_(True), Panel.enabled.is_(True)))).all())
+            only_maintenance = bool(summary.skipped_panels) and not (
+                sent.get("failed") or summary.unbilled_subtrees
+            ) and all(any(entry.startswith(f"{key}:") for key in maintenance_keys)
+                      for entry in summary.skipped_panels)
+            if only_maintenance:
+                run.attempts -= 1  # An intentional pause is not a failed attempt.
+                run.status = "retry"
+                run.error = "Waiting for panel maintenance"
+            else:
+                run.status = ("failed" if run.attempts >= MAX_ATTEMPTS else "retry") if problem else "completed"
+                run.error = "Some panels, invoices or deliveries require retry/review" if problem else None
         except Exception as exc:
             await session.rollback()
             run = await session.get(MonthlyBillingRun, period.start, populate_existing=True)

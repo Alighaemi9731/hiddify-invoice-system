@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 
 from sqlalchemy import delete, select, text
@@ -26,6 +27,11 @@ from app.services.invoice_engine import (
     build_children_map,
     collect_descendants,
     compute_invoices,
+)
+from app.services.panel_maintenance import (
+    MESSAGE,
+    PanelMaintenanceError,
+    panel_operation,
 )
 from app.services.periods import Period
 
@@ -85,6 +91,8 @@ def _panel_billable(
     snapshots would invoice last month's reality. With `max_age_hours`>0, also skip a panel whose
     last successful sync is older than that (F9 — a scheduler outage or a re-enabled panel must not
     silently bill months-old state). Returns (ok, reason)."""
+    if getattr(panel, "maintenance", False):
+        return False, "پنل در حال به‌روزرسانی است"
     if panel.last_synced_at is None:
         return False, "هرگز همگام‌سازی نشده"
     if panel.status == PanelStatus.error:
@@ -147,6 +155,33 @@ async def generate_invoices(
     panel_id: int | None = None,
     force: bool = False,
 ) -> GenerationSummary:
+    query = select(Panel).where(Panel.enabled.is_(True))
+    if panel_id is not None:
+        query = query.where(Panel.id == panel_id)
+    panels = (await session.scalars(query)).all()
+    ready: list[Panel] = []
+    skipped: list[str] = []
+    # Keep the leases through the final commit/reconciliation. Checking a flag at
+    # the start of each loop alone allows maintenance to begin halfway through billing.
+    async with AsyncExitStack() as stack:
+        for panel in panels:
+            try:
+                await stack.enter_async_context(panel_operation(panel, session))
+                ready.append(panel)
+            except PanelMaintenanceError:
+                skipped.append(f"{panel.key}: {MESSAGE}")
+        summary = await _generate_invoices(session, period, panels=ready, force=force)
+        summary.skipped_panels.extend(skipped)
+        return summary
+
+
+async def _generate_invoices(
+    session: AsyncSession,
+    period: Period,
+    *,
+    panels: list[Panel],
+    force: bool = False,
+) -> GenerationSummary:
     """Generate draft invoices for `period`. Existing non-draft invoices are kept
     unless `force=True`. Draft invoices for the period are recomputed in place."""
     from app.services import rates, settings_service
@@ -186,13 +221,6 @@ async def generate_invoices(
     rate = await pricing.get_rate(session)
     max_age = await pricing.get_max_snapshot_age_hours(session)
     now_utc = dt.datetime.now(dt.timezone.utc)
-
-    # An explicit panel_id must NOT bypass the enabled filter — a disabled panel is
-    # disabled for billing too.
-    panel_q = select(Panel).where(Panel.enabled.is_(True))
-    if panel_id is not None:
-        panel_q = panel_q.where(Panel.id == panel_id)
-    panels = (await session.execute(panel_q)).scalars().all()
 
     summary = GenerationSummary(period=period.label)
     processed_panel_ids: list[int] = []
@@ -348,6 +376,17 @@ async def preview_bundles(
 
 
 async def recompute_invoice(
+    session: AsyncSession, invoice: Invoice, *, sync_first: bool = True
+) -> dict:
+    panel = await session.get(Panel, invoice.panel_id)
+    try:
+        async with panel_operation(panel, session):
+            return await _recompute_invoice(session, invoice, sync_first=sync_first)
+    except PanelMaintenanceError as exc:
+        raise ValueError(MESSAGE) from exc
+
+
+async def _recompute_invoice(
     session: AsyncSession, invoice: Invoice, *, sync_first: bool = True
 ) -> dict:
     """Refresh ONE invoice's figures from the panel's CURRENT data, keeping its status

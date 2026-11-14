@@ -29,6 +29,7 @@ _MIGRATION_LOCK = 734_137_043
 # baseline is stamped — so the adoption validator must not treat them as "missing". Append the
 # fully-qualified "table.column" for every post-baseline column-add migration.
 _POST_BASELINE_COLUMNS = {
+    "end_user_snapshots.panel_deleted", "panels.maintenance",
     "usage_meters.renew_used_gb", "panels.host_aliases", "panels.client_proxy_path_enc",
     "end_user_snapshots.panel_user_id",
     "resellers.storefront_enabled", "resellers.storefront_monthly_fee_toman",

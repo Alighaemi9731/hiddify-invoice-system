@@ -16,6 +16,7 @@ from app.models import EndUserSnapshot, Invoice, Panel, Reseller, SyncRun
 from app.models.enums import InvoiceStatus, PanelStatus
 from app.schemas.panel import (
     PanelCreate,
+    PanelMaintenanceUpdate,
     PanelOut,
     PanelUpdate,
     SyncRunOut,
@@ -85,6 +86,7 @@ async def _to_out(
         host_aliases=panel.host_alias_list,
         owner_uuid=panel.owner_uuid,
         enabled=panel.enabled,
+        maintenance=bool(panel.maintenance),
         status=panel.status.value,
         source=panel.source.value,
         proxy_path_masked=crypto.mask(panel.proxy_path_enc),
@@ -261,11 +263,11 @@ async def update_panel(
         panel.set_host_aliases(body.host_aliases)
     if body.enabled is not None:
         panel.enabled = body.enabled
-    if conn_changed and panel.enabled:
+    if conn_changed and panel.enabled and not panel.maintenance:
         panel.status = PanelStatus.unknown  # show "syncing…" until the re-sync finishes
     await session.commit()
     await session.refresh(panel)
-    if conn_changed and panel.enabled:
+    if conn_changed and panel.enabled and not panel.maintenance:
         background.add_task(_sync_one_bg, panel.id)
     return await _to_out(session, panel)
 
@@ -378,6 +380,8 @@ async def sync_panel(
     """Kick off a sync in the background and return immediately. The panel's
     `status` / `last_synced_at` update when it finishes (poll the panels list)."""
     panel = await _get_or_404(session, panel_id)
+    if panel.maintenance:
+        raise HTTPException(409, "پنل در حال به‌روزرسانی است؛ از بررسی پایان نگه‌داری استفاده کنید")
     panel.status = PanelStatus.unknown  # mark "syncing…" until it finishes
     await session.commit()
     background.add_task(_sync_one_bg, panel_id)
@@ -420,3 +424,27 @@ async def test_connection(
         )
     except Exception as exc:  # noqa: BLE001
         return SyncTestResult(ok=False, error=str(exc)[:500])
+
+
+@router.get("/{panel_id}/preflight")
+async def panel_preflight(panel_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    from app.services.panel_preflight import inspect_panel
+
+    panel = await _get_or_404(session, panel_id)
+    try:
+        return await inspect_panel(panel)
+    except Exception as exc:
+        raise HTTPException(502, "بررسی سازگاری پنل ناموفق بود") from exc
+
+
+@router.post("/{panel_id}/maintenance")
+async def panel_maintenance(
+    panel_id: int, body: PanelMaintenanceUpdate, session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.services.panel_preflight import change_maintenance
+
+    panel = await _get_or_404(session, panel_id)
+    try:
+        return await change_maintenance(session, panel, body.enabled)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc

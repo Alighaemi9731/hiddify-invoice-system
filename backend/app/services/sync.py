@@ -19,6 +19,8 @@ from app.core.db import SessionLocal
 from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
 from app.models.enums import EnforcementState, PanelStatus, SyncSource, SyncStatus
 from app.services.panel_client import BackupJsonClient, PanelClient, PanelData
+from app.services.panel_maintenance import panel_operation
+from app.services.periods import previous_month
 
 log = logging.getLogger("sync")
 
@@ -77,6 +79,23 @@ def _newer_success_since(last_synced_at: dt.datetime | None, attempt_started: dt
 
 
 async def sync_panel(
+    session: AsyncSession,
+    panel: Panel,
+    *,
+    data: PanelData | None = None,
+    client: PanelClient | None = None,
+    source: SyncSource = SyncSource.backup_json,
+    allow_maintenance: bool = False,
+) -> SyncRun:
+    # Drain an ordinary read/upsert too: a backup fetched before the upgrade must
+    # not finish writing stale snapshots after maintenance has been acknowledged.
+    if allow_maintenance:
+        return await _sync_panel(session, panel, data=data, client=client, source=source)
+    async with panel_operation(panel, session):
+        return await _sync_panel(session, panel, data=data, client=client, source=source)
+
+
+async def _sync_panel(
     session: AsyncSession,
     panel: Panel,
     *,
@@ -288,7 +307,9 @@ async def _upsert_users(
     # A restored Hiddify backup (the owner's mid-month server migrations) rewinds every user's usage
     # counter at once. Detect that BEFORE metering anything, so the rewound GB are handed back
     # instead of being re-billed as "overage" while the panel climbs back to where it already was.
-    rolled_back = metering.detect_panel_rollback(data.users, existing) if metering_on else 0
+    rolled_back = metering.detect_panel_rollback(
+        [u for u in data.users if not u.deleted], existing
+    ) if metering_on else 0
     if rolled_back:
         log.warning(
             "panel %s: usage counters rewound for %d users — treating this sync as a restored "
@@ -297,8 +318,12 @@ async def _upsert_users(
         )
         await _notify_panel_rollback(session, panel, rolled_back)
 
+    keep_from = previous_month(now.date()).start
     for u in data.users:
         s = existing.get(u.uuid)
+        if s is None and u.deleted and (u.start_date is None or u.start_date < keep_from):
+            # Do not resurrect tombstones already eligible for retention cleanup on every sync.
+            continue
         if s is None:
             s = EndUserSnapshot(panel_id=panel.id, user_uuid=u.uuid)
             session.add(s)
@@ -347,6 +372,9 @@ async def _upsert_users(
             # retry misclassify/miss the renewal, so it is part of the same atomic baseline.
             s.start_date = u.start_date
         s.package_days = u.package_days
+        if bool(s.panel_deleted) != u.deleted:
+            s.panel_user_id = None
+        s.panel_deleted = u.deleted
         s.enable = u.enable
         s.is_active = u.is_active
         s.mode = u.mode
@@ -369,7 +397,7 @@ async def sync_all(session: AsyncSession) -> list[SyncRun]:
     short-lived session so a failure/rollback in one can never poison another's
     transaction (the old serial loop shared one session across all panels)."""
     panel_ids = (
-        await session.execute(select(Panel.id).where(Panel.enabled.is_(True)))
+        await session.execute(select(Panel.id).where(Panel.enabled.is_(True), Panel.maintenance.is_(False)))
     ).scalars().all()
     sem = asyncio.Semaphore(_SYNC_ALL_CONCURRENCY)
 

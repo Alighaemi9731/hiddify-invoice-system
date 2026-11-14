@@ -1,0 +1,14 @@
+# Local environments and runtime state are not release inputs.
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env*
+data/
+invoices/
+downloads/
+*.db
+*.sqlite3

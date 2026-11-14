@@ -38,7 +38,12 @@ class PanelUpdate(BaseModel):
     host_aliases: list[str] | None = None  # old hosts (matcher-only); does NOT trigger a re-sync
 
 
+class PanelMaintenanceUpdate(BaseModel):
+    enabled: bool
+
+
 class PanelOut(BaseModel):
+    maintenance: bool = False
     id: int
     key: str
     name: str

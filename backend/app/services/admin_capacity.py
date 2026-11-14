@@ -17,6 +17,17 @@ from app.services.panel_client.admin_api import AdminApiClient
 log = logging.getLogger("admin_capacity")
 
 
+async def _authorized_key(session: AsyncSession, panel: Panel | None, reseller: Reseller) -> str:
+    if panel is None or reseller.panel_id != panel.id or reseller.admin_uuid.lower() == panel.owner_uuid.lower():
+        raise RuntimeError("Invalid admin capacity target")
+    # Local caller authorization happens in owner/portal handlers. Verify the live parent
+    # before owner-key fallback so a moved sub-admin cannot be edited through a stale portal link.
+    current = await AdminApiClient().get_admin(panel, reseller.admin_uuid, api_key=panel.owner_uuid)
+    if current is None or (current.get("parent_admin_uuid") or "").lower() != (reseller.parent_admin_uuid or "").lower():
+        raise RuntimeError("Admin parent changed; sync before changing capacity")
+    return panel.owner_uuid
+
+
 async def bump_limits(
     session: AsyncSession, reseller: Reseller, amount: int
 ) -> tuple[int, int]:
@@ -30,7 +41,7 @@ async def bump_limits(
     client = AdminApiClient()
     # Authenticate as the admin's parent (Hiddify permits editing an admin_user when the
     # acting key is its parent), falling back to the panel/owner key inside the client.
-    parent = reseller.parent_admin_uuid
+    parent = await _authorized_key(session, panel, reseller)
     cur_mu, cur_mau = await client.get_admin_limits(panel, reseller.admin_uuid, api_key=parent)
     if cur_mu is None:
         cur_mu = reseller.panel_max_users or 0
@@ -53,7 +64,7 @@ async def set_can_add_admin(
     panel = await session.get(Panel, reseller.panel_id)
     client = AdminApiClient()
     await client.set_can_add_admin(
-        panel, reseller.admin_uuid, enabled, api_key=reseller.parent_admin_uuid
+        panel, reseller.admin_uuid, enabled, api_key=await _authorized_key(session, panel, reseller)
     )
     reseller.can_add_admin = enabled
     await session.commit()

@@ -111,6 +111,9 @@ async def creation_blocked(session: AsyncSession, reseller: Reseller) -> str | N
     through this module."""
     from app.services import enforcement
 
+    panel = await session.get(Panel, reseller.panel_id)
+    if panel is not None and panel.maintenance:
+        return "maintenance"
     if reseller.enforcement_state == EnforcementState.frozen:
         return "frozen"
     if await enforcement.suspended_branch_root(session, reseller) is not None:
@@ -137,6 +140,10 @@ async def create_for_reseller(
         return res
     # Refuse BEFORE any network I/O: a cut-off reseller gets no proxy-path fetch and no create.
     why = await creation_blocked(session, reseller)
+    if why == "maintenance":
+        from app.services.panel_maintenance import MESSAGE
+        res.error = MESSAGE
+        return res
     if why is not None:
         res.suspended = True
         res.blocked_reason = why

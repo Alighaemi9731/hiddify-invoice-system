@@ -181,3 +181,10 @@ sudo REPO=git@github.com:Alighaemi9731/hiddify-invoice-system.git \
 ```
 This clones to `/opt/hiddify-invoice-system`, then runs `deploy/install.sh`
 (Docker + secure `.env` + Caddy auto-HTTPS). Updating later: re-run `bootstrap.sh`.
+
+## Hiddify 12/14 compatibility
+
+The v12 form hook above remains required for v12. Hiddify 14.2.0 uses the separate,
+source-pinned `hiddify-invoice-compat.py` extension. See
+[panel compatibility](../docs/HIDDIFY_COMPATIBILITY.md) and the
+[staged panel upgrade runbook](../docs/HIDDIFY_UPGRADE.md) before installing or upgrading.

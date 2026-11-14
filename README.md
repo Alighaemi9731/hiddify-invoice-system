@@ -143,8 +143,10 @@ and authenticated API requests always require HTTPS (or a direct local connectio
   versioned Alembic migrations on boot, serialized by a Postgres advisory lock.
 - Details: [`deploy/README.md`](deploy/README.md).
 
-Passwordless reseller restoration requires the small owner-only Hiddify form extension
-documented in [`deploy/README.md`](deploy/README.md#hiddify-passwordless-restoration).
+Hiddify 12.0.0 and 14.2.0 use different backup, bulk-action and password-restoration
+contracts. See [panel compatibility](docs/HIDDIFY_COMPATIBILITY.md) and the
+[upgrade runbook](docs/HIDDIFY_UPGRADE.md) before upgrading a panel. Passwordless
+restoration requires the matching generation’s host extension.
 
 ### First steps after install
 
