@@ -51,6 +51,8 @@ all money is Toman with live crypto conversion.
   reconciles the fleet from the database.
 - Both bots use docked reply-keyboard menus with FSM-locked flows: a flow always shows a
   cancel exit and the correct menu always returns when the flow ends.
+- The main bot drains its previous polling task before rebuilding a failed Telegram
+  session, keeping reconnects from leaving competing update receivers running.
 
 ### Reseller web portal
 - One-tap login from the bot via strictly single-use tokens (no passwords), RTL Persian

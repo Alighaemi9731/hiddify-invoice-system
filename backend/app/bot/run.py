@@ -40,6 +40,35 @@ async def _current_token() -> str | None:
         return await get_token(session)
 
 
+async def _poll_with_watchdog(dp: Dispatcher, bot: Bot) -> None:
+    """Drain aiogram's child poller before rebuilding the Telegram session.
+
+    Cancelling start_polling directly skips its pending-task drain while it waits
+    for a stop signal. Its child can reopen the closed session and keep polling,
+    competing with the replacement bot for getUpdates.
+    """
+    poll = asyncio.create_task(dp.start_polling(bot), name="polling")
+    watch = asyncio.create_task(_watch_session(bot), name="session-watchdog")
+    try:
+        done, _ = await asyncio.wait({poll, watch}, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
+    finally:
+        watch.cancel()
+        if not poll.done():
+            try:
+                await dp.stop_polling()
+            except RuntimeError:
+                # Cancellation before start_polling acquired its lock: no child
+                # exists yet, so cancelling the not-started runner is safe.
+                poll.cancel()
+        await asyncio.gather(poll, watch, return_exceptions=True)
+    # The child may fail while a completed watchdog is requesting its stop.
+    # Preserve that failure so the outer reconnect loop applies its backoff.
+    if not poll.cancelled():
+        poll.result()
+
+
 async def _main_bot_loop() -> None:
     # Build the Dispatcher ONCE — a router can only be attached to one dispatcher,
     # so we reuse it across reconnects (only the Bot/session is recreated).
@@ -88,17 +117,7 @@ async def _main_bot_loop() -> None:
             # on a session that no longer reaches Telegram (no exception, no updates, container stays
             # «healthy») — that silent wedge is what left the fleet mute on 2026-07-31. Whichever task
             # finishes first ends this round; the `while` then rebuilds the Bot with a new session.
-            poll = asyncio.create_task(dp.start_polling(bot), name="polling")
-            watch = asyncio.create_task(_watch_session(bot), name="session-watchdog")
-            done, pending = await asyncio.wait(
-                {poll, watch}, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await task
-            for task in done:
-                task.result()  # re-raise a real failure into the handler below
+            await _poll_with_watchdog(dp, bot)
         except Exception:  # noqa: BLE001
             log.exception("Polling stopped unexpectedly; restarting in 15s.")
             await asyncio.sleep(15)
