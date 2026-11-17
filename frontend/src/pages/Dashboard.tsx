@@ -429,7 +429,7 @@ export default function Dashboard() {
                       </Box>
                     </Stack>
                   ) : (
-                    <EmptyState>هنوز فاکتور ارسال‌شده‌ای در این دوره نیست.</EmptyState>
+                    <EmptyState>هنوز فاکتور قطعی‌ای در این دوره نیست.</EmptyState>
                   )}
                 </SectionCard>
               </Grid>

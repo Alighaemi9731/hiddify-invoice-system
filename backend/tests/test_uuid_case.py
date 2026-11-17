@@ -75,8 +75,8 @@ def test_normalized_data_bundles_mixed_case_subtree():
 
 
 def _seed_mixed_case_db(db: Path) -> None:
-    """Upgrade to the pre-H05 head, then seed mixed-case rows via the ORM (H05 adds no
-    columns, so the current models match that schema)."""
+    """Upgrade to the pre-H05 head, then seed against the reflected historical
+    schema; current models also contain newer issuance/registration columns."""
     import asyncio
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -94,11 +94,11 @@ def _seed_mixed_case_db(db: Path) -> None:
             await insert_legacy(s, Panel(id=1, key="p", name="p", host="h", proxy_path_enc="x", owner_uuid="owner"))
             await s.flush()
             # Case-duplicate pair: 'ABC' (0 invoices) + 'abc' (has bot_chat_id → keeper).
-            s.add(Reseller(id=1, panel_id=1, admin_uuid="ABC", name="Big",
+            await insert_legacy(s, Reseller(id=1, panel_id=1, admin_uuid="ABC", name="Big",
                            parent_admin_uuid="OWNER"))
-            s.add(Reseller(id=2, panel_id=1, admin_uuid="abc", name="small",
+            await insert_legacy(s, Reseller(id=2, panel_id=1, admin_uuid="abc", name="small",
                            parent_admin_uuid="owner", bot_chat_id=555, price_per_gb=2000))
-            s.add(Reseller(id=3, panel_id=1, admin_uuid="sub1", name="Sub",
+            await insert_legacy(s, Reseller(id=3, panel_id=1, admin_uuid="sub1", name="Sub",
                            parent_admin_uuid="Abc"))
             await insert_legacy(s, EndUserSnapshot(
                 panel_id=1, user_uuid="U9", name="u9", added_by_uuid="ABC",

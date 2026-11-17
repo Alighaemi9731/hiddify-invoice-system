@@ -53,4 +53,8 @@ async def run_bootstrap() -> None:
                 )
                 log.info("First-run setup requires the bootstrap token from the installer console.")
             log.info("No owner yet — first visit will show the setup wizard.")
+        from app.services import billing_recovery
+        report = await billing_recovery.recover(session)
+        log.info("Billing recovery: %d issued, %d require review",
+                 len(report.get("recovered_ids", [])), len(report.get("review", [])))
         log.info("Settings defaults ensured.")

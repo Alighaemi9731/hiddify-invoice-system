@@ -126,7 +126,7 @@ export default function AbsentResellers({ panelId }: { panelId: string }) {
             </Typography>
             {confirmRow.has_nondraft_invoices && (
               <Typography variant="body2" color="error" sx={{ fontWeight: 700, mb: 1 }}>
-                ⚠️ این نماینده فاکتور ارسال‌شده یا پرداخت‌شده دارد؛ آن فاکتورها نیز حذف خواهند شد.
+                ⚠️ این نماینده فاکتور قطعی یا پرداخت‌شده دارد؛ آن فاکتورها نیز حذف خواهند شد.
               </Typography>
             )}
             {confirmRow.has_payments && (

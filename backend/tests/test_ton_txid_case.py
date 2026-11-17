@@ -98,7 +98,7 @@ def _seed_collision_db(db: Path) -> None:
         Session = async_sessionmaker(engine, expire_on_commit=False)
         async with Session() as s:
             await insert_legacy(s, Panel(id=1, key="p", name="p", host="h", proxy_path_enc="x", owner_uuid="o"))
-            s.add(Reseller(id=1, panel_id=1, admin_uuid="a", name="R"))
+            await insert_legacy(s, Reseller(id=1, panel_id=1, admin_uuid="a", name="R"))
             await s.flush()
             # Same transfer, two casings: a rejected UPPER and a confirmed lower.
             s.add(Payment(id=1, reseller_id=1, method=PaymentMethod.ton_txid, chain="ton",

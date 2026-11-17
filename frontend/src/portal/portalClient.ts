@@ -121,6 +121,9 @@ export const portalSalesByMonth = (months = 6) =>
 
 // ---- invoices ----
 export interface PortalInvoice {
+  issued_at?: string | null;
+  due_on?: string | null;
+  enforcement_on?: string | null;
   id: number;
   number: string;
   period_label: string;

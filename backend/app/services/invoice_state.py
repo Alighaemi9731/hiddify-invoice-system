@@ -7,14 +7,14 @@ keeps the state machine consistent: a paid invoice can't be silently canceled/de
 edited, a draft can't be marked paid, a canceled invoice can't be deferred, etc.
 
 Status meanings (see `app.models.enums.InvoiceStatus`):
-  draft     — generated, not delivered (not in the financial ledger)
-  sent      — delivered, owed
-  overdue   — delivered, owed, past due
-  enforced  — delivered, owed, panel access suspended
+  draft     — calculated, not issued (not in the financial ledger)
+  sent      — issued, owed
+  overdue   — issued, owed, past due
+  enforced  — issued, owed, panel access suspended
   paid      — settled
   canceled  — voided
 
-`OWED` = the delivered-but-unpaid states money is collected against.
+`OWED` = the issued-but-unpaid states money is collected against.
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def ensure_can_mark_paid(status: S) -> None:
         if status == S.paid:
             raise InvoiceStateError("این فاکتور قبلاً پرداخت‌شده است.")
         if status == S.draft:
-            raise InvoiceStateError("فاکتور پیش‌نویس را نمی‌توان به‌عنوان پرداخت‌شده ثبت کرد؛ لطفاً ابتدا آن را صادر/ارسال کنید.")
+            raise InvoiceStateError("فاکتور پیش‌نویس را نمی‌توان به‌عنوان پرداخت‌شده ثبت کرد؛ لطفاً ابتدا آن را صادر کنید.")
         raise InvoiceStateError("فاکتور لغوشده را نمی‌توان به‌عنوان پرداخت‌شده ثبت کرد.")
 
 

@@ -35,6 +35,16 @@ class InvoiceOut(BaseModel):
     floor_applied: bool = False
     status: str
     sent_at: dt.datetime | None
+    issued_at: dt.datetime | None = None
+    collection_started_at: dt.datetime | None = None
+    due_on: dt.date | None = None
+    enforcement_on: dt.date | None = None
+    telegram_delivery_status: str | None = None
+    delivery_attempted_at: dt.datetime | None = None
+    legacy_recovered_at: dt.datetime | None = None
+    reseller_access_state: str | None = None
+    registration_deadline_at: dt.datetime | None = None
+    registration_blocked: bool = False
     paid_at: dt.datetime | None
     deferred_until: dt.date | None = None
     defer_note: str | None = None

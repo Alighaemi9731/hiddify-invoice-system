@@ -312,6 +312,8 @@ DEFS: list[SettingDef] = [
     # Dunning / enforcement
     # Days after the invoice was sent (or after a granted payment deadline). The production
     # cadence: reminders on D+3 / D+5, hard warning («سررسید گذشته») on D+10, suspension D+30.
+    SettingDef("registration_enforcement_enabled", True, False, "dunning"),
+    SettingDef("registration_grace_hours", 72, False, "dunning"),
     SettingDef("reminder1_day", 3, False, "dunning"),
     SettingDef("reminder2_day", 5, False, "dunning"),
     SettingDef("warning_day", 10, False, "dunning"),
@@ -478,6 +480,7 @@ _INT_RANGES: dict[str, tuple[int, int | None]] = {
     "test_config_gb": (1, 1000),
     "test_config_days": (1, 365),
     "daily_digest_hour": (0, 23),
+    "registration_grace_hours": (1, 8760),
     "reminder1_day": (0, 365),
     "reminder2_day": (0, 365),
     "warning_day": (0, 365),
@@ -762,7 +765,7 @@ async def all_for_api(session: AsyncSession) -> list[dict]:
     rows = (await session.execute(select(Setting))).scalars().all()
     out: list[dict] = []
     for row in rows:
-        if row.key == "scheduler_runtime_state":
+        if row.key in ("scheduler_runtime_state", "billing_issuance_recovery_v1"):
             continue  # Worker-owned diagnostics are exposed read-only via /settings/schedule.
         d = _DEF_BY_KEY.get(row.key)
         if row.is_secret and isinstance(row.value, str):

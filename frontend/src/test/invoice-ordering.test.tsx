@@ -18,6 +18,7 @@ describe("invoice month ordering", () => {
       period_label: "2026-01", amount_toman: 1000, usage_gb: 1, status: "paid" };
     const older = { ...invoice, id: 2, number: "10000002", period_label: "2025-12", amount_toman: 9000 };
     server.use(
+      http.get("*/api/invoices/recovery-report", () => HttpResponse.json({})),
       http.get("*/api/invoices", ({ request }) => {
         requests.push(new URL(request.url).searchParams);
         return HttpResponse.json([invoice, older], { headers: { "X-Total-Count": "2", "X-Total-Amount-Toman": "10000" } });

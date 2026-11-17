@@ -304,8 +304,8 @@ def _proof_wanted_fa(opts) -> str:
     return " یا ".join(wants) if wants else "رسید پرداخت"
 _UNPAID = (InvoiceStatus.draft, InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 _OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
-_STATUS_FA = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
-              "overdue": "سررسید گذشته", "enforced": "مسدود", "canceled": "لغو"}
+_STATUS_FA = {"draft": "پیش‌نویس", "sent": "صادرشده؛ پرداخت‌نشده", "paid": "پرداخت‌شده",
+              "overdue": "سررسید گذشته", "enforced": "بدهی معوق؛ تعلیق مالی", "canceled": "لغوشده"}
 
 
 # --------------------------- helpers ---------------------------

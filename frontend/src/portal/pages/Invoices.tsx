@@ -8,6 +8,7 @@ import { DataState } from "../../components/DataState";
 import { fmtToman, fmtGb, fmtDate, INVOICE_STATUS_FA } from "../../format";
 import { EmptyState } from "../ui";
 import PayDialog from "../PayDialog";
+import { InvoiceDeadlines } from "../../components/InvoiceLifecycle";
 
 const STATUS_COLOR: Record<string, "default" | "info" | "success" | "warning" | "error"> = {
   draft: "default",
@@ -60,7 +61,7 @@ export default function PortalInvoices() {
                   <TableCell align="left">حجم</TableCell>
                   <TableCell align="left">مبلغ</TableCell>
                   <TableCell>وضعیت</TableCell>
-                  <TableCell>تاریخ</TableCell>
+                  <TableCell>مهلت‌های مالی</TableCell><TableCell>صدور قطعی</TableCell>
                   <TableCell align="center">عملیات</TableCell>
                 </TableRow>
               </TableHead>
@@ -89,7 +90,8 @@ export default function PortalInvoices() {
                         )}
                       </Stack>
                     </TableCell>
-                    <TableCell dir="ltr">{fmtDate(inv.created_at)}</TableCell>
+                    <TableCell><InvoiceDeadlines invoice={inv} /></TableCell>
+                    <TableCell dir="ltr">{fmtDate(inv.issued_at)}</TableCell>
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                         {inv.owed && (

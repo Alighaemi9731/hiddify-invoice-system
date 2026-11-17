@@ -118,3 +118,52 @@ def test_two_draft_senders_only_deliver_once(monkeypatch):
                 await session.commit()
             await engine.dispose()
     asyncio.run(run())
+
+
+@pytest.mark.pg_contract
+@requires_pg
+def test_financial_issuance_serializes_without_telegram_delivery():
+    from sqlalchemy import select
+
+    from app.models import FinancialRecord
+    from app.services import issuance
+
+    async def run():
+        engine, factory = make_engine()
+        suffix = uuid.uuid4().hex[:12]
+        panel_id = invoice_id = None
+        try:
+            async with factory() as session:
+                panel = Panel(key=f"issue-{suffix}", host=f"{suffix}.invalid", proxy_path_enc="x", owner_uuid=suffix)
+                session.add(panel)
+                await session.flush()
+                panel_id = panel.id
+                r = Reseller(panel_id=panel_id, admin_uuid=suffix)
+                session.add(r)
+                await session.flush()
+                inv = Invoice(reseller_id=r.id, panel_id=panel_id, amount_toman=1000,
+                              period_start=dt.date(2091, 1, 1), period_end=dt.date(2091, 1, 31))
+                session.add(inv)
+                await session.commit()
+                invoice_id = inv.id
+            async def worker():
+                async with factory() as session:
+                    return await issuance.issue_invoice(session, invoice_id)
+            results = await asyncio.gather(worker(), worker())
+            assert sorted(results) == [False, True]
+            async with factory() as session:
+                inv = await session.get(Invoice, invoice_id)
+                assert inv.issued_at == inv.collection_started_at
+                assert inv.sent_at is None and inv.status == InvoiceStatus.sent
+                assert len(list((await session.scalars(select(FinancialRecord).where(
+                    FinancialRecord.invoice_id == invoice_id))).all())) == 1
+        finally:
+            async with factory() as session:
+                if invoice_id is not None:
+                    await session.execute(delete(FinancialRecord).where(FinancialRecord.invoice_id == invoice_id))
+                    await session.execute(delete(Invoice).where(Invoice.id == invoice_id))
+                if panel_id is not None:
+                    await session.execute(delete(Panel).where(Panel.id == panel_id))
+                await session.commit()
+            await engine.dispose()
+    asyncio.run(run())

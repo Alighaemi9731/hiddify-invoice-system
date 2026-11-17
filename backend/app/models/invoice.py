@@ -72,6 +72,13 @@ class Invoice(Base, TimestampMixin):
         Enum(InvoiceStatus, native_enum=False, length=16), default=InvoiceStatus.draft
     )
     sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Financial issuance and collection never depend on Telegram delivery. `sent` remains
+    # the stored status value for API/backup compatibility; it means issued and unpaid.
+    issued_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    collection_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    telegram_delivery_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    delivery_attempted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    legacy_recovered_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     paid_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Payment grace: while set and in the future, dunning/enforcement is paused for
     # this invoice (it stays owed). Lets the owner give a reseller more time without

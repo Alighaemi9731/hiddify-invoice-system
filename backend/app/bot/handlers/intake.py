@@ -66,6 +66,13 @@ async def _handle_link(message: Message, session, parsed) -> None:
         await owner_notify.notify_owner(
             session, f"🔗 نمایندهٔ جدید در ربات ثبت شد: «{reseller.name}»"
             + (f" (پنل {panel.key})" if panel else ""))
+    from app.services import registration_policy
+    await registration_policy.completed(session, reseller)
+    from app.services import delivery
+    try:
+        await delivery.retry_pending(session, reseller_id=reseller.id)
+    except Exception:
+        log.warning("registration invoice catch-up failed", exc_info=True)
     # Now a registered reseller → keep the menu at hand.
     await _reshow_menu(message, session, message.from_user)
 

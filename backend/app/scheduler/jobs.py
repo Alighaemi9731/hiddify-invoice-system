@@ -178,7 +178,11 @@ async def daily_dunning_job() -> None:
 async def enforcement_queue_job() -> None:
     try:
         async with SessionLocal() as session:
+            from app.services import billing_recovery, delivery, registration_policy
+            await billing_recovery.recover(session)
+            await registration_policy.run(session)
             res = await enforcement.process_enforcement_queue(session)
+            await delivery.retry_pending(session)
             if res.get("picked"):
                 log.info("Enforcement queue worker: %s", res)
     except Exception:  # noqa: BLE001

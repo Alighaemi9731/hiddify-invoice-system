@@ -71,13 +71,13 @@ function ResellerTableRow({
       <TableCell>{canAddSwitch(reseller)}</TableCell>
       <TableCell>
         <Stack direction="row" spacing={0.5} alignItems="center">
-          <ConnectionStatus connected={reseller.registered} />
+          <ConnectionStatus connected={reseller.registered} deadline={reseller.registration_deadline_at} />
           {telegramHref(reseller.username, reseller.bot_chat_id) && (
             <TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} />
           )}
         </Stack>
       </TableCell>
-      <TableCell><EnforcementStatus state={reseller.enforcement_state} /></TableCell>
+      <TableCell><EnforcementStatus state={reseller.enforcement_state} registrationBlocked={reseller.registration_blocked} /></TableCell>
       <TableCell>
         {reseller.exclude_from_billing
           ? <Chip size="small" color="warning" variant="outlined" label="معاف" />

@@ -5,6 +5,7 @@ import { statusPillColors } from "../../themeTokens";
 import KeyboardArrowDownIcon from "@mui/icons-material/esm/KeyboardArrowDown";
 import KeyboardArrowLeftIcon from "@mui/icons-material/esm/KeyboardArrowLeft";
 import WarningAmberIcon from "@mui/icons-material/esm/WarningAmber";
+import { fmtDateTime } from "../../format";
 import { ResellerRow, ResellerTreeRow } from "../../api/client";
 
 function StatusPill({
@@ -42,18 +43,20 @@ function StatusPill({
   );
 }
 
-export function ConnectionStatus({ connected }: { connected: boolean }) {
+export function ConnectionStatus({ connected, deadline }: { connected: boolean; deadline?: string | null }) {
   const colors = statusPillColors(useTheme().palette);
   return connected ? (
     <StatusPill color={colors.active}>متصل</StatusPill>
   ) : (
-    <StatusPill color={colors.muted} muted>متصل نیست</StatusPill>
+    <Stack spacing={0.5} alignItems="flex-start"><StatusPill color={colors.muted} muted>ثبت‌نام ناقص</StatusPill>
+      {deadline && <Typography variant="caption" color="text.secondary">مهلت ثبت‌نام: {fmtDateTime(deadline)}</Typography>}
+    </Stack>
   );
 }
 
-export function EnforcementStatus({ state }: { state: string }) {
+export function EnforcementStatus({ state, registrationBlocked }: { state: string; registrationBlocked?: boolean }) {
   const colors = statusPillColors(useTheme().palette);
-  if (state === "enforced") return <StatusPill color={colors.enforced}>مسدود</StatusPill>;
+  if (state === "enforced") return <StatusPill color={colors.enforced}>{registrationBlocked ? "تعلیق؛ ثبت‌نام ناقص" : "سرویس تعلیق‌شده"}</StatusPill>;
   if (state === "frozen") return <StatusPill color={colors.frozen}>محدود</StatusPill>;
   return <StatusPill color={colors.active}>فعال</StatusPill>;
 }

@@ -47,8 +47,8 @@ export default function ResellerMobileCard({
       <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mt: 1.2 }}>
         {telegramHref(reseller.username, reseller.bot_chat_id) && <TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} />}
         <Chip size="small" label={reseller.panel_key} variant="outlined" />
-        <ConnectionStatus connected={reseller.registered} />
-        <EnforcementStatus state={reseller.enforcement_state} />
+        <ConnectionStatus connected={reseller.registered} deadline={reseller.registration_deadline_at} />
+        <EnforcementStatus state={reseller.enforcement_state} registrationBlocked={reseller.registration_blocked} />
         {reseller.exclude_from_billing && (
           <Chip size="small" color="warning" variant="outlined" label="معاف از فاکتور" />
         )}

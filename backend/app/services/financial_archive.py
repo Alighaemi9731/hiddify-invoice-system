@@ -30,6 +30,7 @@ async def record(
     reseller: Reseller | None = None,
     txid: str | None = None,
     commit: bool = False,
+    strict: bool = False,
 ) -> None:
     """Upsert the ledger row for `invoice`. Best-effort: never raises into callers.
 
@@ -92,5 +93,7 @@ async def record(
         if commit:
             await session.commit()
     except Exception:  # noqa: BLE001 — the ledger must never break a billing/payment flow
+        if strict:
+            raise
         log.warning("financial_archive.record failed for invoice %s", getattr(invoice, "id", "?"),
                     exc_info=True)

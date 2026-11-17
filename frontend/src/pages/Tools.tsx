@@ -60,7 +60,7 @@ function RemoveUserTool() {
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           کاربری که به‌اشتباه ساخته شده و مبلغِ فاکتور را افزایش می‌دهد، با نام یا UUID پیدا و حذف کنید.
-          فقط دادهٔ این کاربر از سامانه پاک می‌شود (پنل، فاکتورهای ارسال‌شده و تاریخچهٔ مالی تغییر نمی‌کنند).
+          فقط دادهٔ این کاربر از سامانه پاک می‌شود (پنل، فاکتورهای قطعی و تاریخچهٔ مالی تغییر نمی‌کنند).
         </Typography>
         <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
           <TextField
@@ -144,7 +144,7 @@ function RemoveUserTool() {
                 </Typography>
               )}
               <Typography variant="body2" color="text.secondary">
-                برای اعمال روی فاکتورِ این دوره، پیش‌نویس را دوباره «صدور» یا فاکتورِ ارسال‌شده را «بازمحاسبه» کنید.
+                برای اعمال روی فاکتورِ این دوره، پیش‌نویس را دوباره «صدور» یا فاکتورِ قطعی را «بازمحاسبه» کنید.
               </Typography>
             </DialogContent>
             <DialogActions>

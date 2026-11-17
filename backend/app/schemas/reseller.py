@@ -25,6 +25,8 @@ class ResellerOut(BaseModel):
     link_tag: str | None
     registered: bool
     enforcement_state: str
+    registration_deadline_at: dt.datetime | None = None
+    registration_blocked: bool = False
     panel_max_users: int | None
     panel_max_active_users: int | None
     can_add_admin: bool = False

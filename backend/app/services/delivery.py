@@ -18,15 +18,14 @@ from app.models import DeliveryLog, Invoice, Reseller
 from app.models.enums import (
     DeliveryKind,
     DeliveryStatus,
-    EnforcementState,
     InvoiceStatus,
 )
-from app.services import invoice_pdf, notifier
+from app.services import invoice_pdf, invoice_state, issuance, notifier, periods
 
 log = logging.getLogger("delivery")
 
 # Separate from the scheduler/generation advisory-lock namespaces.
-_DELIVERY_LOCK_BASE = 8_100_000_000
+_DELIVERY_LOCK_BASE = issuance.INVOICE_LOCK_BASE
 
 
 # Call to action at the bottom of the sent invoice. The invoice text itself is kept lean — the
@@ -68,6 +67,13 @@ async def build_invoice_text(session: AsyncSession, inv: Invoice, reseller: Rese
             f"• حداقل مبلغ قابل قبول: {floor:,.0f} تومان\n"
             f"از آنجا که فروش این دوره کمتر از حداقل بود، مبلغِ فاکتور برابرِ حداقل "
             f"({final:,.0f} تومان) برای شما صادر شد. جزئیاتِ دقیقِ مصرفِ واقعیِ شما در فایلِ PDF آمده است."
+        )
+    if inv.issued_at is not None and inv.status in invoice_state.OWED:
+        deadlines = issuance.dates(inv, await issuance.schedule_days(session))
+        text += (
+            f"\n\nتاریخ صدور قطعی: {periods.to_local_date(inv.issued_at).isoformat()}"
+            f"\nسررسید پرداخت: {deadlines['due_on']}"
+            f"\nتعلیق سرویس در صورت عدم پرداخت: {deadlines['enforcement_on']}"
         )
     # Prepend the public 8-digit invoice number (tap-to-copy) at the top.
     return f"🔢 شمارهٔ فاکتور: <code>{invoice_code(inv.id)}</code>\n{text}"
@@ -170,12 +176,12 @@ async def send_invoice(
 async def send_draft_invoice(
     session: AsyncSession, invoice_id: int, *, bot: Bot | None = None
 ) -> DeliveryLog | None:
-    """Re-check draft status AFTER acquiring the shared lock; never resend an issued invoice."""
+    """Re-check status and first successful delivery under the shared lock."""
     from app.services.job_lock import session_lock
 
     async with session_lock(session, _DELIVERY_LOCK_BASE + invoice_id, wait=True):
         inv = await session.get(Invoice, invoice_id, populate_existing=True)
-        if inv is None or inv.status != InvoiceStatus.draft:
+        if inv is None or inv.status not in (InvoiceStatus.draft, *invoice_state.OWED) or inv.sent_at is not None:
             return None
         return await _send_invoice(session, invoice_id, bot=bot)
 
@@ -186,16 +192,23 @@ async def _send_invoice(
     """Deliver the invoice like the «فاکتور علی‌الحساب»: a text message (payable amount +
     payment instructions + a per-node usage breakdown), then a SEPARATE volume-only PDF for
     the reseller's own users and one per sub-reseller. Falls back to text-only on failure."""
-    inv = await session.get(Invoice, invoice_id)
+    from app.services.invoicing import _serialize_billing
+    await _serialize_billing(session)
+    inv = await session.get(Invoice, invoice_id, populate_existing=True, with_for_update=True)
     if inv is None:
         raise ValueError(f"invoice {invoice_id} not found")
     reseller = await session.get(Reseller, inv.reseller_id)
     if reseller is None:
         raise ValueError(f"reseller {inv.reseller_id} not found for invoice {invoice_id}")
+    if inv.status == InvoiceStatus.canceled:
+        raise invoice_state.InvoiceStateError("فاکتور لغوشده قابل ارسال نیست.")
+    first_issue = await issuance.issue_locked(session, inv)
     text = await build_invoice_text(session, inv, reseller)
 
     # Not registered with the bot → log unmatched, nothing to send.
     if reseller.bot_chat_id is None:
+        inv.telegram_delivery_status = "unmatched"
+        inv.delivery_attempted_at = dt.datetime.now(dt.timezone.utc)
         return await notifier.send_to_reseller(
             session, reseller, text, kind=DeliveryKind.invoice, invoice_id=inv.id
         )
@@ -262,28 +275,15 @@ async def _send_invoice(
     )
     session.add(dl)
 
-    notify_abuse = False
-    if status == DeliveryStatus.sent and inv.status == InvoiceStatus.draft:
-        # A reseller who is ALREADY suspended is suspended for this new month too — no fresh
-        # enforcement action will ever run for it (dunning only queues one while the reseller is
-        # `active`), so without this the newest invoice would sit on «ارسال‌شده»/«سررسید گذشته»
-        # next to the older «مسدود» one and read as if only one month were blocked.
-        inv.status = (
-            InvoiceStatus.enforced
-            if reseller.enforcement_state == EnforcementState.enforced
-            else InvoiceStatus.sent
-        )
+    inv.telegram_delivery_status = status.value
+    inv.delivery_attempted_at = dt.datetime.now(dt.timezone.utc)
+    if status == DeliveryStatus.sent and inv.sent_at is None:
         inv.sent_at = dt.datetime.now(dt.timezone.utc)
-        # Now it's a real, delivered invoice → enter the durable financial ledger.
-        from app.services import financial_archive
-
-        await financial_archive.record(session, inv, reseller=reseller)
-        notify_abuse = True
     await session.commit()
 
     # On first delivery, if the invoice includes abuse-metered extra, explain it to the
     # reseller and ping the owner. Best-effort; never blocks delivery.
-    if notify_abuse:
+    if first_issue and status == DeliveryStatus.sent:
         from app.services import metering
 
         await metering.notify_abuse_if_any(session, inv, reseller, bot=bot)
@@ -294,11 +294,13 @@ async def _send_invoice(
 
 
 async def send_period(session: AsyncSession, period_label: str) -> dict:
-    """Send every draft invoice for a period. Reuses one Bot for all sends."""
+    """Issue drafts and deliver all never-successfully-delivered invoices in the period."""
     invoices = (
         await session.execute(
             select(Invoice).where(
-                Invoice.period_label == period_label, Invoice.status == InvoiceStatus.draft
+                Invoice.period_label == period_label,
+                Invoice.status.in_((InvoiceStatus.draft, *invoice_state.OWED)),
+                Invoice.sent_at.is_(None)
             )
         )
     ).scalars().all()
@@ -318,3 +320,36 @@ async def send_period(session: AsyncSession, period_label: str) -> dict:
         if bot is not None:
             await bot.session.close()
     return {"period": period_label, "total": len(invoices), **counts}
+
+
+async def retry_pending(session: AsyncSession, *, reseller_id: int | None = None) -> int:
+    """Bounded catch-up after registration or transient failure; never re-send a success."""
+    now = dt.datetime.now(dt.timezone.utc)
+    query = select(Invoice).join(Reseller, Invoice.reseller_id == Reseller.id).where(
+        Invoice.status.in_(invoice_state.OWED), Invoice.sent_at.is_(None),
+        Reseller.bot_chat_id.is_not(None),
+    )
+    if reseller_id is not None:
+        query = query.where(Invoice.reseller_id == reseller_id)
+    # Order by the last attempt so a few permanent failures cannot starve the backlog.
+    rows = (await session.scalars(query.order_by(
+        Invoice.delivery_attempted_at.asc().nulls_first(), Invoice.id,
+    ).limit(100))).all()
+    attempted = 0
+    bot = await build_bot(session)
+    if bot is None:
+        return 0
+    try:
+        for inv in rows:
+            last = inv.delivery_attempted_at
+            if last and inv.telegram_delivery_status in ("failed", "blocked"):
+                last = last.replace(tzinfo=dt.timezone.utc) if last.tzinfo is None else last
+                if now - last < dt.timedelta(hours=1):
+                    continue
+            await send_draft_invoice(session, inv.id, bot=bot)
+            attempted += 1
+            if attempted >= 20:
+                break
+    finally:
+        await bot.session.close()
+    return attempted

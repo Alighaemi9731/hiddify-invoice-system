@@ -36,7 +36,13 @@ from app.core.security import require_secure_transport
 from app.models import Invoice, Panel, Payment, PortalLoginNonce, Reseller
 from app.models.enums import InvoiceStatus
 from app.services import invoice_pdf as invoice_pdf_service
-from app.services import owner_notify, payment_methods, payments, reseller_report
+from app.services import (
+    issuance,
+    owner_notify,
+    payment_methods,
+    payments,
+    reseller_report,
+)
 from app.services.periods import current_month, parse_period
 
 # Receipt upload safety cap (matches a phone screenshot; refuse anything larger).
@@ -373,12 +379,15 @@ async def invoices(
                Invoice.status != InvoiceStatus.draft)
         .order_by(Invoice.period_start.desc(), Invoice.id.desc())
     )).scalars().all()
+    clock = await issuance.schedule_days(session)
     return [
         {
             "id": i.id, "number": invoice_code(i.id), "period_label": i.period_label,
             "panel_key": panels[i.panel_id].key if i.panel_id in panels else "?",
             "usage_gb": float(i.usage_gb), "amount_toman": float(i.amount_toman),
             "status": i.status.value,
+            "issued_at": i.issued_at.isoformat() if i.issued_at else None,
+            **issuance.dates(i, clock),
             # A deadline never makes an invoice unpayable — it only re-anchors dunning. The date
             # rides along so the portal can show «مهلت تا …» beside the (enabled) pay button.
             "owed": i.status in _OWED,
@@ -1090,7 +1099,7 @@ async def notifications(
         .order_by(Invoice.id.desc()).limit(10)
     )).scalars().all()
     for i in invs:
-        at = i.sent_at or i.created_at
+        at = i.issued_at or i.sent_at or i.created_at
         events.append({
             "key": f"inv-{i.id}", "type": "invoice",
             "at": at.isoformat() if at else None,

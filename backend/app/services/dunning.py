@@ -1,9 +1,9 @@
 """
-Daily dunning: for each unpaid, delivered invoice, send reminders on a schedule and
+Daily dunning: for each unpaid, issued invoice, send reminders on a schedule and
 finally enforce. Idempotent — each step is sent at most once per invoice (deduped via
 the delivery log). Enforcement obeys the global dry-run switch.
 
-Schedule (days after the invoice was sent; all editable in settings):
+Schedule (days after the collection cycle started; all editable in settings):
   reminder1_day → soft reminder
   reminder2_day → reminder
   warning_day   → hard warning (+ mark invoice overdue)
@@ -32,6 +32,7 @@ from app.models.enums import (
 from app.services import (
     enforcement,
     financial_archive,
+    issuance,
     notifier,
     owner_notify,
     periods,
@@ -49,7 +50,7 @@ async def reset_cycle(
     session: AsyncSession, invoice: Invoice, *, restamp_sent_at: bool = False
 ) -> None:
     """Restart the dunning cycle for an invoice: clear its reminder/warning delivery marks
-    so they re-fire. With `restamp_sent_at`, also re-anchor `sent_at` to now — used when a
+    so they re-fire. With the legacy `restamp_sent_at` argument, restart `collection_started_at` — used when a
     CONFIRMED payment is reversed (reject/delete/unmark), so the reseller gets a fresh
     reminder window instead of jumping straight back to overdue/enforcement on the next run.
     Does NOT commit (the caller's transaction does)."""
@@ -59,8 +60,8 @@ async def reset_cycle(
             DeliveryLog.kind.in_(_REMINDER_KINDS),
         )
     )
-    if restamp_sent_at and invoice.sent_at is not None:
-        invoice.sent_at = dt.datetime.now(dt.timezone.utc)
+    if restamp_sent_at:
+        invoice.collection_started_at = dt.datetime.now(dt.timezone.utc)
 
 
 async def _done_kinds(session: AsyncSession, invoice_id: int) -> set[str]:
@@ -156,7 +157,7 @@ async def run_dunning(session: AsyncSession, *, now: dt.datetime | None = None) 
 async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = None) -> dict:
     now = now or dt.datetime.now(dt.timezone.utc)
     # Day counting is TEHRAN-calendar based (like every deadline/eligibility check since B06).
-    # Raw `.date()` here extracted the UTC day: a sent_at in the Tehran 00:00–03:29 window
+    # Raw `.date()` extracted the UTC day: a collection anchor in Tehran 00:00–03:29
     # anchored one day early, firing every reminder/enforcement threshold a day ahead.
     today = periods.to_local_date(now)
 
@@ -165,14 +166,14 @@ async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = 
         ["reminder1_day", "reminder2_day", "warning_day", "enforcement_day",
          "enforcement_enabled", "pending_payment_hold_days"],
     )
-    d1 = int(cfg.get("reminder1_day") or 3)
-    d2 = int(cfg.get("reminder2_day") or 5)
-    dw = int(cfg.get("warning_day") or 10)
-    de = int(cfg.get("enforcement_day") or 30)
+    d1 = int(cfg["reminder1_day"]) if cfg.get("reminder1_day") is not None else 3
+    d2 = int(cfg["reminder2_day"]) if cfg.get("reminder2_day") is not None else 5
+    dw = int(cfg["warning_day"]) if cfg.get("warning_day") is not None else 10
+    de = int(cfg["enforcement_day"]) if cfg.get("enforcement_day") is not None else 30
 
     invoices = (
         await session.execute(
-            select(Invoice).where(Invoice.status.in_(_ACTIVE), Invoice.sent_at.is_not(None))
+            select(Invoice).where(Invoice.status.in_(_ACTIVE))
         )
     ).scalars().all()
 
@@ -216,19 +217,10 @@ async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = 
     bot: Bot | None = await build_bot(session)
     try:
         for inv in invoices:
-            # Dunning anchor: a set payment deadline (deferred_until) RESTARTS the whole
-            # reminder/enforcement cycle from that date — reminders at +d1/+d2, warning &
-            # cutoff at +dw/+de days after the deadline. Otherwise count from sent_at.
-            if inv.deferred_until:
-                anchor = inv.deferred_until
-            else:
-                sent_at = inv.sent_at
-                if sent_at is None:
-                    log.warning("dunning: invoice %s has owed status without sent_at", inv.id)
-                    continue
-                if sent_at.tzinfo is None:
-                    sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
-                anchor = periods.to_local_date(sent_at)
+            anchor = issuance.collection_anchor(inv)
+            if anchor is None:
+                log.warning("dunning: invoice %s has no collection anchor", inv.id)
+                continue
             days = (today - anchor).days
             if days < 0:
                 # Deadline still in the future → fully paused.
@@ -266,17 +258,20 @@ async def _run_dunning_impl(session: AsyncSession, *, now: dt.datetime | None = 
                     session, reseller, await _msg(session, "tpl_warning", inv, reseller),
                     kind=DeliveryKind.warning, invoice_id=inv.id, bot=bot,
                 )
-                if inv.status == InvoiceStatus.sent:
-                    inv.status = InvoiceStatus.overdue
-                    # Mirror the status flip into the ledger so «تاریخچهٔ مالی» doesn't keep
-                    # showing "sent" for an overdue invoice (money facts are unchanged).
-                    await financial_archive.record(session, inv, reseller=reseller)
-                    await session.commit()
                 counts["warning"] += 1
                 if dl.status == DeliveryStatus.sent:
                     counts["warning_sent"] += 1
 
-            if days >= de and reseller.enforcement_state == EnforcementState.active:
+            if days >= dw and inv.status == InvoiceStatus.sent:
+                inv.status = InvoiceStatus.overdue
+                await financial_archive.record(session, inv, reseller=reseller)
+                await session.commit()
+            if days >= de and reseller.enforcement_state == EnforcementState.enforced:
+                # A registration-only suspension may acquire an independent debt reason later.
+                inv.status = InvoiceStatus.enforced
+                await financial_archive.record(session, inv, reseller=reseller)
+                await session.commit()
+            if days >= de and reseller.enforcement_state in (EnforcementState.active, EnforcementState.frozen):
                 # A live enforcement flips enforcement_state away from `active`, so it's
                 # naturally skipped next run. A DRY-RUN doesn't change state, so without a
                 # guard it would log a fresh EnforcementAction every single day. In

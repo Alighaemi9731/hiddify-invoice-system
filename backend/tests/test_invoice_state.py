@@ -185,7 +185,7 @@ def test_revert_clears_ledger_txid_and_resets_dunning(tmp_path):
             FinancialRecord.__table__.select().where(FinancialRecord.invoice_id == inv.id)
         )).first()
         assert fr is not None and fr.txid in (None, "")
-        # dunning cycle reset: the reminder/warning marks are gone + sent_at re-anchored to ~now
+        # dunning cycle reset: the marks are gone + the collection clock restarts; delivery history stays accurate
         from sqlalchemy import select as _select
         kinds = (await s.execute(
             _select(DeliveryLog.kind).where(
@@ -195,8 +195,9 @@ def test_revert_clears_ledger_txid_and_resets_dunning(tmp_path):
             )
         )).scalars().all()
         assert kinds == []
-        # sent_at re-anchored forward (normalize tz: SQLite drops tzinfo on reload).
-        assert inv.sent_at.replace(tzinfo=None) > old_sent.replace(tzinfo=None)
+        # The collection clock moves forward without falsifying the first delivery timestamp.
+        assert inv.collection_started_at.replace(tzinfo=None) > old_sent.replace(tzinfo=None)
+        assert inv.sent_at.replace(tzinfo=None) == old_sent.replace(tzinfo=None)
 
     _run(body, tmp_path, "p2.db")
 

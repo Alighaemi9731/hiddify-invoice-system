@@ -189,3 +189,22 @@ The v12 form hook above remains required for v12. Hiddify 14.2.0 uses the separa
 source-pinned `hiddify-invoice-compat.py` extension. See
 [panel compatibility](../docs/HIDDIFY_COMPATIBILITY.md) and the
 [staged panel upgrade runbook](../docs/HIDDIFY_UPGRADE.md) before installing or upgrading.
+
+## Issuance/registration upgrade
+
+The issuance migration runs automatically on boot. After settings are seeded, a serialized,
+resumable recovery fixes historical positive drafts with failed/unmatched/blocked delivery evidence.
+It never rewrites amounts or first successful delivery timestamps. Recovered invoices and existing
+unregistered main resellers receive a full current collection/enforcement cycle from this upgrade;
+new main resellers receive 72 hours to register. The existing live/dry-run enforcement switch is
+preserved. No production action is taken merely by checking out or building this code.
+
+In Invoices, inspect «گزارش اصلاح فاکتورهای قدیمی». Drafts lacking clear failure evidence remain
+in that report until explicitly issued, canceled, or discarded by the owner. Financial status,
+Telegram status, collection deadlines, and reseller access appear separately. The API keeps the
+legacy status string `sent` for client/backup compatibility; it means issued and unpaid.
+
+Schema downgrade removes the new lifecycle fields. An older application cannot track collection
+for an issued invoice that has never been delivered; use a forward fix, or restore the matching
+pre-upgrade database backup together with old code when rolling back this feature. Do not invent
+`sent_at` timestamps to make the old worker collect undelivered debt.

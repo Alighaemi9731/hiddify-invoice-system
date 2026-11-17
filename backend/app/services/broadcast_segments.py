@@ -25,9 +25,8 @@ OWED = (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.enforced)
 
 
 def debt_age(inv: Invoice) -> int | None:
-    anchor = inv.deferred_until
-    if anchor is None and inv.sent_at is not None:
-        anchor = periods.to_local_date(inv.sent_at)
+    from app.services.issuance import collection_anchor
+    anchor = collection_anchor(inv)
     return (periods.today() - anchor).days if anchor is not None else None
 
 

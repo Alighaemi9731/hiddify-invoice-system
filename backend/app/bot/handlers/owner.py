@@ -476,8 +476,8 @@ async def cb_owner_reseller_invoices(cb: CallbackQuery) -> None:
             await cb.message.answer("فاکتوری برای این نماینده ثبت نشده است.")
             await cb.answer()
             return
-        status_fa = {"draft": "پیش‌نویس", "sent": "ارسال‌شده", "paid": "پرداخت‌شده",
-                     "overdue": "سررسید گذشته", "enforced": "مسدود", "canceled": "لغو"}
+        status_fa = {"draft": "پیش‌نویس", "sent": "صادرشده؛ پرداخت‌نشده", "paid": "پرداخت‌شده",
+                     "overdue": "سررسید گذشته", "enforced": "بدهی معوق؛ تعلیق مالی", "canceled": "لغوشده"}
         for start in range(0, len(rows), 12):
             lines = ["🧾 فاکتورها (از جدید به قدیم):"]
             for period, toman, status in rows[start:start + 12]:

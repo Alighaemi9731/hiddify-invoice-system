@@ -375,8 +375,9 @@ async def _stamp_invoices_enforced(session: AsyncSession, reseller: Reseller) ->
     """
     from app.models import Invoice
     from app.models.enums import InvoiceStatus
-    from app.services import financial_archive, invoice_state
-
+    from app.services import financial_archive, invoice_state, registration_policy
+    if await registration_policy.only_registration_suspension(session, reseller):
+        return 0
     invoices = (
         await session.execute(
             select(Invoice).where(
@@ -407,11 +408,9 @@ async def _unstamp_invoices_enforced(session: AsyncSession, reseller: Reseller) 
     because dunning only flips `sent → overdue` in the warning branch, which never re-fires
     once the warning is in the delivery log.
     """
-    import datetime as dt
-
     from app.models import Invoice
     from app.models.enums import InvoiceStatus
-    from app.services import financial_archive, periods
+    from app.services import financial_archive
 
     invoices = (
         await session.execute(
@@ -424,18 +423,11 @@ async def _unstamp_invoices_enforced(session: AsyncSession, reseller: Reseller) 
     if not invoices:
         return 0
     cfg = await settings_service.get_many(session, ["warning_day"])
-    dw = int(cfg.get("warning_day") or 10)
+    dw = int(cfg["warning_day"]) if cfg.get("warning_day") is not None else 10
     today = tehran_today()
+    from app.services.issuance import collection_anchor
     for inv in invoices:
-        if inv.deferred_until:
-            anchor = inv.deferred_until
-        elif inv.sent_at is not None:
-            sent_at = inv.sent_at
-            if sent_at.tzinfo is None:
-                sent_at = sent_at.replace(tzinfo=dt.timezone.utc)
-            anchor = periods.to_local_date(sent_at)
-        else:
-            anchor = None
+        anchor = collection_anchor(inv)
         inv.status = (
             InvoiceStatus.overdue
             if anchor is not None and (today - anchor).days >= dw
@@ -1184,6 +1176,7 @@ async def queue_enforcement(
     *,
     invoice_id: int | None = None,
     dry_run: bool | None = None,
+    reason: str = "debt",
 ) -> EnforcementAction:
     """Plan an enforcement action without doing panel writes.
 
@@ -1193,11 +1186,15 @@ async def queue_enforcement(
     enabled = await settings_service.get(session, "enforcement_enabled", False)
     is_dry = (not enabled) if dry_run is None else dry_run
 
-    if invoice_id is not None:
-        criteria = [
-            EnforcementAction.invoice_id == invoice_id,
-            EnforcementAction.action == EnforcementActionType.disable_users,
-        ]
+    if invoice_id is not None or reason == "registration":
+        criteria = [EnforcementAction.action == EnforcementActionType.disable_users]
+        if invoice_id is not None:
+            criteria.append(EnforcementAction.invoice_id == invoice_id)
+        else:
+            criteria.extend([
+                EnforcementAction.reseller_id == reseller.id,
+                EnforcementAction.snapshot["restriction_reason"].as_string() == "registration",
+            ])
         if not is_dry:
             # A previous dry-run is only an audit record. It must not block the first
             # real queued enforcement after the operator enables enforcement.
@@ -1258,6 +1255,7 @@ async def queue_enforcement(
             return prior
 
     snapshot = await _queued_snapshot(session, reseller)
+    snapshot["restriction_reason"] = reason
     action = EnforcementAction(
         reseller_id=reseller.id,
         invoice_id=invoice_id,
@@ -1279,7 +1277,7 @@ async def queue_enforcement(
     return action
 
 
-async def reassert_enforced(session: AsyncSession, *, limit: int = 50) -> dict:
+async def reassert_enforced(session: AsyncSession, *, limit: int = 50, registration_only: bool = False) -> dict:
     """Re-apply a suspension whose users have come back online.
 
     THE HOLE THIS CLOSES: dunning only ever triggers enforcement for an `active` reseller
@@ -1302,17 +1300,19 @@ async def reassert_enforced(session: AsyncSession, *, limit: int = 50) -> dict:
     enforcement action was queued against.
     """
     out = {"checked": 0, "requeued": 0, "restamped": 0}
-    rows = (await session.execute(
-        select(Reseller).where(Reseller.enforcement_state == EnforcementState.enforced)
-    )).scalars().all()
+    query = select(Reseller).where(Reseller.enforcement_state == EnforcementState.enforced)
+    if registration_only:
+        query = query.where(Reseller.registration_blocked.is_(True))
+    rows = (await session.execute(query)).scalars().all()
     for reseller in rows:
         out["checked"] += 1
         restamped = await _stamp_invoices_enforced(session, reseller)
         if restamped:
             await session.commit()
             out["restamped"] += restamped
-        if not await _has_due_invoice(session, reseller.id):
-            continue          # debt settled; a restore is that path's job, not ours
+        from app.services import registration_policy
+        if not await _has_due_invoice(session, reseller.id) and not await registration_policy.blocking(session, reseller):
+            continue
         descendants = await _bundle(session, reseller)
         admin_uuids = {d.admin_uuid for d in descendants}
         back_online = await _enabled_present_users(session, reseller.panel_id, admin_uuids)
@@ -1333,6 +1333,7 @@ async def reassert_enforced(session: AsyncSession, *, limit: int = 50) -> dict:
             "limits": {}, "admins": [],      # users-only: never re-capture limits
             "users": {u.user_uuid: (u.added_by_uuid or "") for u in back_online},
             "reassert": True,
+            "restriction_reason": "registration" if reseller.registration_blocked else "debt",
         }
         _progress(snapshot)
         session.add(EnforcementAction(
@@ -1362,6 +1363,12 @@ async def queue_restore(
     reason: str = "manual",
 ) -> EnforcementAction | None:
     """Queue an exact, resumable restore and cancel any still-running suspension."""
+    from app.services import registration_policy
+    if await registration_policy.blocking(session, reseller):
+        log.info("restore held for reseller %s: registration incomplete", reseller.id)
+        return None
+    if reason == "registration-completed" and await registration_policy.financial_blocking(session, reseller):
+        return None
     # A sub-reseller inside a still-suspended subtree must not be re-opened on its own: the branch is
     # off because an ANCESTOR's invoice is unpaid, and lifting one node would put its users back
     # online while the debt stands. The ancestor's own restore cascades down to it instead.
@@ -1427,6 +1434,7 @@ async def queue_restore(
             # so this read waits for the freshest committed progress before copying it (the
             # residual one-chunk window is handled by _merge_into_pending_restore).
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalars().all()
     if not candidates:
@@ -1647,6 +1655,17 @@ async def _notify_owner_obsolete(session: AsyncSession, action: EnforcementActio
 
 # ── worker actions ───────────────────────────────────────────────────────────
 
+async def _automatic_restriction_resolved(
+    session: AsyncSession, action: EnforcementAction, reseller: Reseller,
+) -> bool:
+    from app.services import registration_policy
+    if await registration_policy.blocking(session, reseller):
+        return False
+    if (action.snapshot or {}).get("restriction_reason") == "registration":
+        return not await registration_policy.financial_blocking(session, reseller)
+    return action.invoice_id is not None and not await _has_due_invoice(session, reseller.id)
+
+
 async def _process_enforcement_action(
     session: AsyncSession,
     action: EnforcementAction,
@@ -1673,7 +1692,7 @@ async def _process_enforcement_action(
         await session.commit()
         return {"failed": 1}
 
-    if action.invoice_id is not None and not await _has_due_invoice(session, reseller.id):
+    if await _automatic_restriction_resolved(session, action, reseller):
         restore = await queue_restore(
             session, reseller, require_no_due=False, reason="disable-canceled-no-debt"
         )
@@ -1804,7 +1823,7 @@ async def _process_enforcement_action(
     # Debt can also vanish mid-run WITHOUT a queued restore (auto_restore_on_payment off, or
     # the payment landed between the head check and here) — mirror the head check: hand the
     # applied work to a restore instead of finalizing a suspension nobody owes for.
-    if action.invoice_id is not None and not await _has_due_invoice(session, reseller.id):
+    if await _automatic_restriction_resolved(session, action, reseller):
         restore = await queue_restore(
             session, reseller, require_no_due=False, reason="paid-mid-suspend"
         )
@@ -1901,6 +1920,15 @@ async def _process_restore_action(
         return {"failed": 1}
 
     snapshot = action.snapshot or {}
+    from app.services import registration_policy
+    if await registration_policy.blocking(session, reseller) or (
+        snapshot.get("reason") == "registration-completed"
+        and await registration_policy.financial_blocking(session, reseller)
+    ):
+        action.status = EnforcementActionStatus.failed
+        action.error = "restore held: registration or financial restriction remains"
+        await session.commit()
+        return {"failed": 1}
     if snapshot.get("require_no_due") and await _has_due_invoice(session, reseller.id):
         action.status = EnforcementActionStatus.failed
         action.error = "restore canceled: reseller still has a due invoice"
@@ -2021,6 +2049,11 @@ async def _process_restore_action(
             )
             await _notify_lockout_failures(session, reseller, res, locking=False)
 
+    if await registration_policy.blocking(session, reseller):
+        action.status = EnforcementActionStatus.failed
+        action.error = "restore held: registration deadline expired during restore"
+        await session.commit()
+        return {"failed": 1}
     # ── Finalize ─────────────────────────────────────────────────────────────
     reseller.enforcement_state = EnforcementState.active
     for descendant in descendants:

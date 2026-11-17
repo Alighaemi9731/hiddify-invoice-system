@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,6 +68,8 @@ class Reseller(Base, TimestampMixin):
     registered_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    registration_deadline_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    registration_blocked: Mapped[bool] = mapped_column(default=False, server_default=false())
 
     # Billing
     price_per_gb: Mapped[int | None] = mapped_column(

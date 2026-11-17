@@ -28,8 +28,8 @@ class EnforcementState(str, enum.Enum):
 
 
 class InvoiceStatus(str, enum.Enum):
-    draft = "draft"          # generated, not yet delivered
-    sent = "sent"            # delivered to reseller
+    draft = "draft"          # calculated, not financially issued
+    sent = "sent"            # issued and unpaid (legacy wire value; delivery is separate)
     paid = "paid"
     overdue = "overdue"      # past due, reminders running
     enforced = "enforced"    # panel access suspended

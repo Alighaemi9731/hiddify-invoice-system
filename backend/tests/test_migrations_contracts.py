@@ -32,7 +32,7 @@ from app.services import settings_service
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ALEMBIC = str(Path(sys.executable).with_name("alembic"))
 BASELINE = "18a3b4fd6e33"
-HEAD = "e9b2c4d6f803"
+HEAD = "b8d4f2a6c901"
 
 
 def _alembic(db_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -528,3 +528,35 @@ def test_renewal_target_migration_raises_short_lease_floor(tmp_path):
     conn.close()
     assert {"target_usage_limit_gb", "prior_panel_start_date"} <= columns
     assert int(stored) == 300
+
+
+def test_issuance_migration_preserves_a_late_first_delivery(tmp_path):
+    """A months-old draft sent today keeps TODAY's clock when the new release boots."""
+    db = tmp_path / "late-first-delivery.db"
+    _alembic(db, "upgrade", "e9b2c4d6f803")
+    conn = sqlite3.connect(db)
+    def insert_required(table, overrides):
+        values = {}
+        for _, name, kind, notnull, default, pk in conn.execute(f"PRAGMA table_info({table})"):
+            if notnull and default is None and not pk:
+                values[name] = 0 if any(t in kind for t in ("INT", "NUMERIC", "BOOL")) else "x"
+        values.update(overrides)
+        columns = ",".join(values)
+        placeholders = ",".join("?" for _ in values)
+        conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", list(values.values()))
+    insert_required("panels", {"id": 1, "key": "p"})
+    insert_required("resellers", {"id": 1, "panel_id": 1, "admin_uuid": "r"})
+    first_delivery = "2026-11-17 12:00:00.000000"
+    insert_required("invoices", {
+        "id": 1, "reseller_id": 1, "panel_id": 1, "status": "sent",
+        "period_start": "2026-01-01", "period_end": "2026-01-31",
+        "created_at": "2026-02-01 00:00:00", "sent_at": first_delivery,
+    })
+    conn.commit()
+    conn.close()
+    _alembic(db, "upgrade", "head")
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT issued_at, collection_started_at, sent_at, telegram_delivery_status "
+                        "FROM invoices WHERE id=1").fetchone() == (
+                            first_delivery, first_delivery, first_delivery, "sent")
+    conn.close()

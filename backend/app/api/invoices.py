@@ -39,6 +39,7 @@ from app.services import (
     financial_archive,
     invoice_state,
     invoicing,
+    issuance,
     pricing,
 )
 from app.services import (
@@ -86,6 +87,7 @@ def _ascii_digits(s: str) -> str:
 def _to_out(
     inv: Invoice, reseller_name: str, panel_key: str,
     reseller_chat_id: int | None = None, reseller_username: str | None = None,
+    *, clock: dict[str, int] | None = None, reseller: Reseller | None = None,
 ) -> InvoiceOut:
     return InvoiceOut(
         id=inv.id, number=invoice_code(inv.id),
@@ -99,6 +101,13 @@ def _to_out(
         min_sale_toman=int(inv.min_sale_toman or 0), floor_applied=bool(inv.floor_applied),
         status=inv.status.value,
         sent_at=inv.sent_at, paid_at=inv.paid_at,
+        issued_at=inv.issued_at, collection_started_at=inv.collection_started_at,
+        telegram_delivery_status=inv.telegram_delivery_status or ("sent" if inv.sent_at else "pending"),
+        delivery_attempted_at=inv.delivery_attempted_at, legacy_recovered_at=inv.legacy_recovered_at,
+        reseller_access_state=reseller.enforcement_state.value if reseller else None,
+        registration_deadline_at=reseller.registration_deadline_at if reseller else None,
+        registration_blocked=bool(reseller and reseller.registration_blocked),
+        **issuance.dates(inv, clock or {"warning_day": 10, "enforcement_day": 30}),
         deferred_until=inv.deferred_until, defer_note=inv.defer_note,
         created_at=inv.created_at,
     )
@@ -153,6 +162,37 @@ async def discard_drafts(
     return {"discarded": len(ids), "period": period}
 
 
+@router.get("/recovery-report")
+async def recovery_report(session: AsyncSession = Depends(get_session)) -> dict:
+    from app.services import billing_recovery, settings_service
+    report = await settings_service.get(session, billing_recovery.REPORT_KEY, {})
+    if not isinstance(report, dict):
+        return {}
+    review_ids = {entry["id"] for entry in report.get("review", [])}
+    remaining: set[int] = set()
+    ordered_ids = sorted(review_ids)
+    for offset in range(0, len(ordered_ids), 500):
+        remaining.update((await session.scalars(select(Invoice.id).where(
+            Invoice.id.in_(ordered_ids[offset:offset + 500]), Invoice.status == InvoiceStatus.draft,
+        ))).all())
+    return {**report, "review": [entry for entry in report.get("review", []) if entry["id"] in remaining]}
+
+
+@router.post("/issue-period")
+async def issue_period(period: str, session: AsyncSession = Depends(get_session)) -> dict:
+    try:
+        label = parse_period(period).label
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return await issuance.issue_period(session, label)
+
+
+@router.post("/{invoice_id}/issue")
+async def issue_one(invoice_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    issued = await issuance.issue_invoice(session, invoice_id)
+    return {"id": invoice_id, "issued": issued}
+
+
 @router.get("", response_model=list[InvoiceOut])
 async def list_invoices(
     response: Response,
@@ -160,6 +200,7 @@ async def list_invoices(
     panel_id: int | None = None,
     reseller_id: int | None = None,
     status: InvoiceStatus | None = None,
+    delivery_status: str | None = None,
     q: str | None = Query(None, description="search: invoice number or reseller name"),
     sort: str = Query("date"),
     order: str = Query("desc"),
@@ -179,6 +220,8 @@ async def list_invoices(
         filters.append(Invoice.reseller_id == reseller_id)
     if status is not None:
         filters.append(Invoice.status == status)
+    if isinstance(delivery_status, str) and delivery_status:
+        filters.append(Invoice.telegram_delivery_status == delivery_status)
     if isinstance(q, str) and q.strip():
         needle = _ascii_digits(q.strip())
         ors: list[ColumnElement[bool]] = [Reseller.name.ilike(f"%{q.strip()}%")]
@@ -202,7 +245,7 @@ async def list_invoices(
     response.headers["X-Total-Amount-Toman"] = str(int(total_amount))
 
     query = (
-        select(Invoice, Reseller.name, Panel.key, Reseller.bot_chat_id, BotUser.username)
+        select(Invoice, Reseller, Panel.key, BotUser.username)
         .join(Reseller, Invoice.reseller_id == Reseller.id)
         .join(Panel, Invoice.panel_id == Panel.id)
         .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
@@ -219,14 +262,16 @@ async def list_invoices(
         .offset(offset)
     )
     rows = (await session.execute(query)).all()
-    return [_to_out(inv, name, key, chat_id, username) for inv, name, key, chat_id, username in rows]
+    clock = await issuance.schedule_days(session)
+    return [_to_out(inv, r.name, key, r.bot_chat_id, username, clock=clock, reseller=r)
+            for inv, r, key, username in rows]
 
 
 @router.get("/{invoice_id}", response_model=InvoiceDetail)
 async def get_invoice(invoice_id: int, session: AsyncSession = Depends(get_session)) -> InvoiceDetail:
     row = (
         await session.execute(
-            select(Invoice, Reseller.name, Panel.key)
+            select(Invoice, Reseller, Panel.key)
             .join(Reseller, Invoice.reseller_id == Reseller.id)
             .join(Panel, Invoice.panel_id == Panel.id)
             .where(Invoice.id == invoice_id)
@@ -234,14 +279,15 @@ async def get_invoice(invoice_id: int, session: AsyncSession = Depends(get_sessi
     ).first()
     if not row:
         raise HTTPException(404, "Invoice not found")
-    inv, name, key = row
+    inv, reseller, key = row
     lines = (
         await session.execute(
             select(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id)
             .order_by(InvoiceLine.usage_gb.desc())
         )
     ).scalars().all()
-    out = _to_out(inv, name, key)
+    out = _to_out(inv, reseller.name, key, reseller.bot_chat_id,
+                  clock=await issuance.schedule_days(session), reseller=reseller)
     return InvoiceDetail(
         **out.model_dump(),
         lines=[
@@ -297,7 +343,7 @@ async def mark_paid(invoice_id: int, session: AsyncSession = Depends(get_session
             session, reseller, await _payment_received_text(session, inv.period_label),
             kind=DeliveryKind.payment_ack, invoice_id=inv.id,
         )
-    return _to_out(inv, reseller.name, panel.key)
+    return _to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller)
 
 
 @router.post("/{invoice_id}/unmark-paid", response_model=InvoiceOut)
@@ -318,7 +364,7 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     if not inv:
         raise HTTPException(404, "Invoice not found")
     invoice_state.ensure_can_unmark_paid(inv.status)  # re-validate under the row lock
-    inv.status = InvoiceStatus.sent if inv.sent_at else InvoiceStatus.draft
+    inv.status = InvoiceStatus.sent if inv.issued_at or inv.sent_at else InvoiceStatus.draft
     inv.paid_at = None
     # An un-paid invoice gets a fresh dunning window (reminders restart) instead of jumping
     # straight back to overdue/enforcement on the next run; the txid is cleared from the ledger.
@@ -328,7 +374,7 @@ async def unmark_paid(invoice_id: int, session: AsyncSession = Depends(get_sessi
     reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
-    return _to_out(inv, reseller.name, panel.key)
+    return _to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller)
 
 
 @router.patch("/{invoice_id}", response_model=InvoiceOut)
@@ -357,7 +403,7 @@ async def edit_invoice(
     reseller, panel = await _invoice_context(session, inv)
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
-    return _to_out(inv, reseller.name, panel.key)
+    return _to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller)
 
 
 async def _apply_defer(
@@ -442,7 +488,7 @@ async def defer_invoice(
     reseller, panel = await _invoice_context(session, inv)
     await _apply_defer(session, inv, reseller, panel, body.deferred_until, body.defer_note)
     await session.commit()
-    return _to_out(inv, reseller.name, panel.key)
+    return _to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller)
 
 
 @router.post("/bulk-defer", response_model=BulkDeferResult)
@@ -506,7 +552,7 @@ async def recompute_invoice(
         raise HTTPException(404, "Invoice not found after recompute")
     reseller, panel = await _invoice_context(session, inv)
     return {
-        **_to_out(inv, reseller.name, panel.key).model_dump(),
+        **_to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller).model_dump(),
         "synced": bool(result.get("synced")),
     }
 
@@ -564,7 +610,7 @@ async def cancel(invoice_id: int, session: AsyncSession = Depends(get_session)) 
             except Exception:  # noqa: BLE001 — panel creds may be absent; the cancel still stands
                 log.warning("cancel: queue_restore failed for reseller %s", reseller.id, exc_info=True)
     await session.commit()
-    return _to_out(inv, reseller.name, panel.key)
+    return _to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller)
 
 
 @router.post("/{invoice_id}/revert-to-draft", response_model=InvoiceOut)
@@ -591,10 +637,15 @@ async def revert_to_draft(
     await dunning.reset_cycle(session, inv)
     inv.status = InvoiceStatus.draft
     inv.sent_at = None
+    inv.issued_at = None
+    inv.collection_started_at = None
+    inv.telegram_delivery_status = None
+    inv.delivery_attempted_at = None
+    inv.legacy_recovered_at = None
     inv.deferred_until = None
     inv.defer_note = None
     reseller, panel = await _invoice_context(session, inv)
     # Draft status → financial_archive removes the ledger row.
     await financial_archive.record(session, inv, panel=panel, reseller=reseller)
     await session.commit()
-    return _to_out(inv, reseller.name, panel.key)
+    return _to_out(inv, reseller.name, panel.key, clock=await issuance.schedule_days(session), reseller=reseller)

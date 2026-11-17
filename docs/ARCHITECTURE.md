@@ -223,9 +223,9 @@ retry at five-minute intervals, up to three attempts, then remain visible for op
 Unregistered and bot-blocking recipients are reported without keeping the whole cycle retrying.
 Successful cycles do not replay after restarts or a day/hour edit, and older months are not swept.
 
-Automatic delivery re-checks draft status under an invoice-specific PostgreSQL advisory lock
-shared with explicit sends. Already-issued/paid/canceled invoices are skipped; generation leaves
-issued accounting unchanged. As with any Telegram send, an abrupt crash after Telegram accepts a
+Financial issuance and Telegram delivery share an invoice-specific PostgreSQL advisory lock.
+Automatic delivery rechecks that the invoice is draft/owed and has no successful first delivery;
+paid/canceled/already-delivered invoices are skipped. Generation leaves issued accounting unchanged. As with any Telegram send, an abrupt crash after Telegram accepts a
 message but before the database records it leaves an unavoidable delivery ambiguity; Telegram
 provides no transactional idempotency key. An explicit manual resend remains intentional.
 
@@ -234,3 +234,36 @@ Exempt resellers' descendants are intentionally unbilled and do not count as orp
 subtrees. After repairing a failed cycle, an operator may invoke `monthly_billing.run_due`
 with `retry_failed=True` for one explicit retry. This preserves the cumulative attempt count,
 records `manual_retry` in the result, and never replays a completed cycle.
+
+## Financial issuance and incomplete registration
+
+`draft` means calculated but not financially issued. The legacy database/API value `sent` now
+means issued and unpaid; the UI labels it «صادرشده؛ پرداخت‌نشده». `issued_at` records financial
+issuance, `collection_started_at` starts the collection clock, and `sent_at` records only the first
+successful Telegram delivery. Resends never reset any of these timestamps. Reversing a payment
+restarts only `collection_started_at`; an explicit deferral still restarts the cycle from its date.
+The warning and enforcement day settings determine `due_on` and `enforcement_on` from that clock,
+using the Tehran calendar. Delivery has its own status and attempt timestamp on the invoice.
+
+The monthly job issues drafts into the financial ledger before attempting delivery. Explicit
+«صدور قطعی» issues without sending; «صدور و ارسال تلگرام» issues first even if sending fails.
+Unregistered, blocked, and failed deliveries cannot leave issued debt outside dunning. A bounded
+worker catch-up sends up to 20 undelivered owed invoices per tick, only to registered recipients;
+failed/blocked attempts are throttled to hourly. A successful delivery is never automatically resent.
+
+A resumable, session-locked startup recovery (`billing_issuance_recovery_v1`) issues positive
+historical drafts with invoice delivery failure evidence and no successful invoice delivery.
+It preserves stored amounts/lines and gives the full current collection cycle starting at recovery,
+never the historical billing month. Existing first-successful delivery clocks remain unchanged.
+Unproven drafts and exempt/non-root accounts stay in a review report exposed at
+`GET /api/invoices/recovery-report`; recovery never invents missing months or backdates debt.
+
+Existing unregistered billable roots get one full current enforcement cycle from upgrade for
+registration. Newly discovered roots get `registration_grace_hours` (72 by default), evaluated by
+the enforcement worker only after a healthy panel sync. Owners, exempt roots, and sub-resellers
+are not independently required to register. `registration_enforcement_enabled` controls this
+policy; the existing global real/dry-run switch still controls panel writes. Registration-only
+suspension uses the existing resumable snapshot/restore worker and is stored separately from
+financial delinquency. Payment cannot bypass incomplete registration, and linking a bot cannot
+release an independent financial suspension. The bot and portal remain available for registration
+and payment while panel service is suspended.

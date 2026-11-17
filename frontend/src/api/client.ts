@@ -182,6 +182,8 @@ export interface ResellerRow {
   link_tag: string | null;
   registered: boolean;
   enforcement_state: string;
+  registration_deadline_at?: string | null;
+  registration_blocked?: boolean;
   panel_max_users: number | null;
   panel_max_active_users: number | null;
   can_add_admin: boolean;
@@ -291,6 +293,16 @@ export interface InvoiceListItem {
   floor_applied: boolean;
   status: string;
   sent_at: string | null;
+  issued_at?: string | null;
+  collection_started_at?: string | null;
+  due_on?: string | null;
+  enforcement_on?: string | null;
+  telegram_delivery_status?: string | null;
+  delivery_attempted_at?: string | null;
+  legacy_recovered_at?: string | null;
+  reseller_access_state?: string | null;
+  registration_deadline_at?: string | null;
+  registration_blocked?: boolean;
   paid_at: string | null;
   deferred_until: string | null;
   defer_note: string | null;
@@ -304,6 +316,12 @@ export const generateInvoices = (b: any) =>
   api.post("/api/invoices/generate", b, { timeout: LONG_OP_MS }).then((r) => r.data);
 export const discardDrafts = (period?: string) =>
   api.post("/api/invoices/discard-drafts", null, { params: { period } }).then((r) => r.data);
+export const issueInvoice = (id: number) =>
+  api.post(`/api/invoices/${id}/issue`).then((r) => r.data);
+export const issuePeriod = (period: string) =>
+  api.post("/api/invoices/issue-period", null, { params: { period }, timeout: LONG_OP_MS }).then((r) => r.data);
+export const invoiceRecoveryReport = () =>
+  api.get("/api/invoices/recovery-report").then((r) => r.data);
 export const sendInvoice = (id: number) =>
   api.post(`/api/invoices/${id}/send`, null, { timeout: 60000 }).then((r) => r.data);
 export const sendPeriod = (period: string) =>

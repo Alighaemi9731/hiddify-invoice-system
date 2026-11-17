@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MonthlyBillingRun, Panel
-from app.services import delivery, invoicing, owner_notify, periods
+from app.services import delivery, invoicing, issuance, owner_notify, periods
 from app.services import sync as sync_service
 from app.services.job_lock import session_lock
 
@@ -66,11 +66,12 @@ async def run_due(
         try:
             await sync_service.sync_all(session)
             summary = await invoicing.generate_invoices(session, period)
+            issued = await issuance.issue_period(session, period.label)
             sent = await delivery.send_period(session, period.label)
             result: dict[str, Any] = {
                 "period": period.label, "created": summary.created,
                 "updated": summary.updated, "amount_toman": float(summary.total_amount_toman),
-                "delivery": sent, "skipped_panels": summary.skipped_panels,
+                "issuance": issued, "delivery": sent, "skipped_panels": summary.skipped_panels,
                 "unbilled_subtrees": summary.unbilled_subtrees,
                 "manual_retry": retry_failed,
             }
@@ -107,6 +108,7 @@ async def run_due(
         message = (
             f"🧾 گزارش صدور و ارسال خودکار دورهٔ {period.label}\n"
             f"وضعیت: { {'completed': 'انجام شد', 'retry': 'تلاش مجدد تا ۵ دقیقه دیگر', 'failed': 'نیاز به بررسی'}.get(run.status, run.status) }\n"
+            f"صدور قطعی: {result.get('issuance', {}).get('issued', 0)}\n"
             f"ارسال موفق: {delivered.get('sent', 0)} | ناموفق: {delivered.get('failed', 0)} | "
             f"بدون ربات: {delivered.get('unmatched', 0)} | ربات مسدود: {delivered.get('blocked', 0)}"
         )

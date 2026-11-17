@@ -84,6 +84,7 @@ def _to_out(
         bot_chat_id=r.bot_chat_id, panel_telegram_id=r.panel_telegram_id, link_tag=r.link_tag,
         username=(usernames or {}).get(r.bot_chat_id) if r.bot_chat_id else None,
         registered=r.bot_chat_id is not None, enforcement_state=r.enforcement_state.value,
+        registration_deadline_at=r.registration_deadline_at, registration_blocked=r.registration_blocked,
         panel_max_users=r.panel_max_users, panel_max_active_users=r.panel_max_active_users,
         can_add_admin=r.can_add_admin,
         storefront_enabled=r.storefront_enabled,
