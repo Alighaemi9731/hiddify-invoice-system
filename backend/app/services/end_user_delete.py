@@ -11,11 +11,11 @@ failure. A crash between the panel delete and the commit leaves the local row in
 safe direction (over-billing that a re-run fixes, never lost data); the operation is idempotent, so
 the re-run sees `already_absent` and completes the purge.
 
-TWO KEYS, TWO PURPOSES (`admin_api._headers`: `api_key=None` falls back to the panel's super-admin):
+TWO KEYS, TWO PURPOSES:
   * WRITES always use the OWNING admin's uuid, so Hiddify itself refuses a rowid that isn't theirs —
     the second line of defence after the 2026-07-18 incident, where a stale numeric id executed as
     super-admin hit 305 users belonging to ~20 other resellers.
-  * EXISTENCE CHECKS use the super-admin key, because only it can prove a user is really gone. A 404
+  * EXISTENCE CHECKS explicitly pass `panel.owner_uuid` (not a configured alternate admin key), because only it can prove a user is really gone. A 404
     under the owning admin's key is ambiguous — "absent" OR "no longer owned by that admin" — and
     purging on that alone would drop a row for a user still on the panel, still billed to somebody.
 """
@@ -25,16 +25,18 @@ import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, cast
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    EndUserRemoval,
     EndUserSnapshot,
     Panel,
     StorefrontOrder,
@@ -42,6 +44,7 @@ from app.models import (
     UsageMeterEvent,
 )
 from app.services.panel_client.admin_api import AdminApiClient
+from app.services.panel_maintenance import PanelMaintenanceError, panel_operation
 
 log = logging.getLogger("service.end_user_delete")
 
@@ -208,124 +211,145 @@ async def delete_end_users(
             continue
         work[snap.panel_id].append(snap)
 
-    for panel_id, snaps in work.items():
-        panel = panels[panel_id]
-        protected = await _live_storefront_uuids(
-            session, panel_id, [s.user_uuid for s in snaps if s.user_uuid]
-        )
-        pending = []
-        for snap in snaps:
-            if (snap.user_uuid or "").lower() in protected:
-                rows[snap.id].status = DeleteStatus.skipped_storefront
+    async with AsyncExitStack() as operations:
+        for panel_id in sorted(work):
+            snaps = work[panel_id]
+            panel = panels[panel_id]
+            try:
+                await operations.enter_async_context(panel_operation(panel, session))
+            except PanelMaintenanceError as exc:
+                for snap in snaps:
+                    rows[snap.id].status = DeleteStatus.delete_failed
+                    rows[snap.id].error = str(exc)
                 continue
-            pending.append(snap)
-        if not pending:
-            continue
+            # Share sync's per-panel write lock: an older in-flight backup must not resurrect
+            # a just-deleted user or interleave the snapshot/meter purge.
+            if session.get_bind().dialect.name == "postgresql":
+                from app.services.sync import _SYNC_LOCK_NS
+                await session.execute(text("SELECT pg_advisory_xact_lock(:ns, :pid)"),
+                                      {"ns": _SYNC_LOCK_NS, "pid": panel_id})
+            protected = await _live_storefront_uuids(
+                session, panel_id, [s.user_uuid for s in snaps if s.user_uuid]
+            )
+            pending = []
+            for snap in snaps:
+                if (snap.user_uuid or "").lower() in protected:
+                    rows[snap.id].status = DeleteStatus.skipped_storefront
+                    continue
+                pending.append(snap)
+            if not pending:
+                continue
 
-        sem = asyncio.Semaphore(max(1, concurrency))
+            sem = asyncio.Semaphore(max(1, concurrency))
 
-        # ── A. Resolve ids FRESH and owner-scoped ─────────────────────────────
-        # Never reuse the cached `EndUserSnapshot.panel_user_id`: Hiddify renumbers user ids on a
-        # panel restore/re-import, and a stale id here would delete somebody else's customer.
-        async def _resolve(snap: EndUserSnapshot) -> tuple[int, int | None, DeleteStatus | None, str | None]:
-            async with sem:
-                owner = snap.added_by_uuid
-                try:
-                    uid = await client.get_user_id(panel, snap.user_uuid, api_key=owner)
-                except Exception as exc:  # noqa: BLE001 — panel I/O; isolate this row
-                    return snap.id, None, DeleteStatus.lookup_failed, str(exc)[:300]
-                if uid is not None:
-                    return snap.id, uid, None, None
-                # Ambiguous 404: absent, or simply not owned by that admin any more. Only the
-                # super-admin key can tell those apart, and purging the wrong one loses revenue.
-                try:
-                    confirm = await client.get_user_id(panel, snap.user_uuid)
-                except Exception as exc:  # noqa: BLE001
-                    return snap.id, None, DeleteStatus.lookup_failed, str(exc)[:300]
-                if confirm is None:
-                    return snap.id, None, DeleteStatus.already_absent, None
-                return snap.id, None, DeleteStatus.owner_mismatch, (
-                    "user exists on the panel but is no longer owned by this admin"
-                )
+            # ── A. Resolve ids FRESH and owner-scoped ─────────────────────────────
+            # Never reuse the cached `EndUserSnapshot.panel_user_id`: Hiddify renumbers user ids on a
+            # panel restore/re-import, and a stale id here would delete somebody else's customer.
+            async def _resolve(snap: EndUserSnapshot) -> tuple[int, int | None, DeleteStatus | None, str | None]:
+                async with sem:
+                    owner = snap.added_by_uuid
+                    try:
+                        uid = await client.get_user_id(panel, snap.user_uuid, api_key=owner)
+                    except Exception as exc:  # noqa: BLE001 — panel I/O; isolate this row
+                        return snap.id, None, DeleteStatus.lookup_failed, str(exc)[:300]
+                    if uid is not None:
+                        return snap.id, uid, None, None
+                    # Ambiguous 404: absent, or simply not owned by that admin any more. Only the
+                    # super-admin key can tell those apart, and purging the wrong one loses revenue.
+                    try:
+                        confirm = await client.get_user_id(panel, snap.user_uuid, api_key=panel.owner_uuid)
+                    except Exception as exc:  # noqa: BLE001
+                        return snap.id, None, DeleteStatus.lookup_failed, str(exc)[:300]
+                    if confirm is None:
+                        return snap.id, None, DeleteStatus.already_absent, None
+                    return snap.id, None, DeleteStatus.owner_mismatch, (
+                        "user exists on the panel but is no longer owned by this admin"
+                    )
 
-        resolved = await asyncio.gather(*[_resolve(s) for s in pending])
-        by_sid = {s.id: s for s in pending}
-        ids_by_owner: dict[str, list[tuple[int, int]]] = defaultdict(list)  # owner → [(sid, rowid)]
-        for sid, uid, status, err in resolved:
-            if status is not None:
+            resolved = await asyncio.gather(*[_resolve(s) for s in pending])
+            by_sid = {s.id: s for s in pending}
+            ids_by_owner: dict[str, list[tuple[int, int]]] = defaultdict(list)  # owner → [(sid, rowid)]
+            for sid, uid, status, err in resolved:
+                if status is not None:
+                    rows[sid].status = status
+                    rows[sid].error = err
+                    continue
+                ids_by_owner[by_sid[sid].added_by_uuid or ""].append((sid, cast(int, uid)))
+
+            # ── B. Delete, grouped per owning admin ───────────────────────────────
+            deleted_sids: list[int] = []
+            for owner, pairs in ids_by_owner.items():
+                for start in range(0, len(pairs), _BULK_CHUNK):
+                    chunk = pairs[start:start + _BULK_CHUNK]
+                    try:
+                        await client.bulk_delete_users(
+                            panel, [uid for _sid, uid in chunk], api_key=owner
+                        )
+                    except Exception as exc:  # noqa: BLE001 — only this owner's chunk is affected
+                        for sid, _uid in chunk:
+                            rows[sid].status = DeleteStatus.delete_failed
+                            rows[sid].error = str(exc)[:300]
+                        continue
+                    deleted_sids.extend(sid for sid, _uid in chunk)
+
+            # ── C. Verify EVERY delete (super-admin key) ──────────────────────────
+            # A 200 from the bulk action proves nothing — rowids that match no row also return 200.
+            # Batches here are small and each delete is individually targeted, so per-row proof is cheap
+            # and makes "purge nothing on failure" exact rather than statistical.
+            async def _verify(sid: int) -> tuple[int, DeleteStatus, str | None]:
+                async with sem:
+                    try:
+                        still = await client.get_user_id(panel, by_sid[sid].user_uuid, api_key=panel.owner_uuid)
+                    except Exception as exc:  # noqa: BLE001
+                        return sid, DeleteStatus.verify_failed, f"unverified: {str(exc)[:280]}"
+                    if still is None:
+                        return sid, DeleteStatus.deleted, None
+                    return sid, DeleteStatus.verify_failed, "still present on the panel after delete"
+
+            for sid, status, err in await asyncio.gather(*[_verify(s) for s in deleted_sids]):
                 rows[sid].status = status
                 rows[sid].error = err
-                continue
-            ids_by_owner[by_sid[sid].added_by_uuid or ""].append((sid, cast(int, uid)))
 
-        # ── B. Delete, grouped per owning admin ───────────────────────────────
-        deleted_sids: list[int] = []
-        for owner, pairs in ids_by_owner.items():
-            for start in range(0, len(pairs), _BULK_CHUNK):
-                chunk = pairs[start:start + _BULK_CHUNK]
-                try:
-                    await client.bulk_delete_users(
-                        panel, [uid for _sid, uid in chunk], api_key=owner
+            # ── D. Purge the proven-gone rows ─────────────────────────────────────
+            purge = [
+                by_sid[sid] for sid in by_sid
+                if rows[sid].status in _PURGEABLE
+            ]
+            if purge:
+                uuids = [s.user_uuid for s in purge]
+                # Preserve this deliberate purge across v14 soft-delete backups. Ordinary panel
+                # deletions still keep their billable terminal usage through the normal sync path.
+                for snap in purge:
+                    marker = await session.get(EndUserRemoval, (panel_id, snap.user_uuid))
+                    if marker is None:
+                        session.add(EndUserRemoval(panel_id=panel_id, user_uuid=snap.user_uuid))
+                # All three tables: the snapshot feeds the sold-quota base, the meters feed the
+                # metering extras. Dropping only the snapshot leaves the user billing forever.
+                res = await session.execute(
+                    sa_delete(UsageMeter).where(
+                        UsageMeter.panel_id == panel_id, UsageMeter.user_uuid.in_(uuids)
                     )
-                except Exception as exc:  # noqa: BLE001 — only this owner's chunk is affected
-                    for sid, _uid in chunk:
-                        rows[sid].status = DeleteStatus.delete_failed
-                        rows[sid].error = str(exc)[:300]
-                    continue
-                deleted_sids.extend(sid for sid, _uid in chunk)
-
-        # ── C. Verify EVERY delete (super-admin key) ──────────────────────────
-        # A 200 from the bulk action proves nothing — rowids that match no row also return 200.
-        # Batches here are small and each delete is individually targeted, so per-row proof is cheap
-        # and makes "purge nothing on failure" exact rather than statistical.
-        async def _verify(sid: int) -> tuple[int, DeleteStatus, str | None]:
-            async with sem:
-                try:
-                    still = await client.get_user_id(panel, by_sid[sid].user_uuid)
-                except Exception as exc:  # noqa: BLE001
-                    return sid, DeleteStatus.verify_failed, f"unverified: {str(exc)[:280]}"
-                if still is None:
-                    return sid, DeleteStatus.deleted, None
-                return sid, DeleteStatus.verify_failed, "still present on the panel after delete"
-
-        for sid, status, err in await asyncio.gather(*[_verify(s) for s in deleted_sids]):
-            rows[sid].status = status
-            rows[sid].error = err
-
-        # ── D. Purge the proven-gone rows ─────────────────────────────────────
-        purge = [
-            by_sid[sid] for sid in by_sid
-            if rows[sid].status in _PURGEABLE
-        ]
-        if purge:
-            uuids = [s.user_uuid for s in purge]
-            # All three tables: the snapshot feeds the sold-quota base, the meters feed the
-            # metering extras. Dropping only the snapshot leaves the user billing forever.
-            res = await session.execute(
-                sa_delete(UsageMeter).where(
-                    UsageMeter.panel_id == panel_id, UsageMeter.user_uuid.in_(uuids)
                 )
-            )
-            result.meters_deleted += cast("CursorResult[Any]", res).rowcount or 0
-            await session.execute(
-                sa_delete(UsageMeterEvent).where(
-                    UsageMeterEvent.panel_id == panel_id, UsageMeterEvent.user_uuid.in_(uuids)
+                result.meters_deleted += cast("CursorResult[Any]", res).rowcount or 0
+                await session.execute(
+                    sa_delete(UsageMeterEvent).where(
+                        UsageMeterEvent.panel_id == panel_id, UsageMeterEvent.user_uuid.in_(uuids)
+                    )
                 )
-            )
-            await session.execute(
-                sa_delete(EndUserSnapshot).where(
-                    EndUserSnapshot.id.in_([s.id for s in purge])
+                await session.execute(
+                    sa_delete(EndUserSnapshot).where(
+                        EndUserSnapshot.id.in_([s.id for s in purge])
+                    )
                 )
-            )
-            for snap in purge:
-                rows[snap.id].purged = True
-                # The only forensic record of an irreversible owner action.
-                log.warning(
-                    "end-user purged: snapshot=%s panel=%s uuid=%s owner=%s quota=%sGB status=%s",
-                    snap.id, panel.key, snap.user_uuid, snap.added_by_uuid,
-                    snap.usage_limit_gb, rows[snap.id].status.value,
-                )
+                for snap in purge:
+                    rows[snap.id].purged = True
+                    # The only forensic record of an irreversible owner action.
+                    log.warning(
+                        "end-user purged: snapshot=%s panel=%s uuid=%s owner=%s quota=%sGB status=%s",
+                        snap.id, panel.key, snap.user_uuid, snap.added_by_uuid,
+                        snap.usage_limit_gb, rows[snap.id].status.value,
+                    )
 
-    await session.commit()
+        await session.commit()
     result.rows = [rows[sid] for sid in unique_ids]
     return result

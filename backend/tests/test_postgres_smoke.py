@@ -154,3 +154,81 @@ def test_nonnegative_constraint_enforced_on_postgres():
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_compact_invoice_status_and_verified_removal_on_postgres():
+    """JSON reason projection and removal/sync locks work on the production dialect."""
+    from sqlalchemy import select
+
+    from app.models import (
+        EndUserRemoval,
+        EndUserSnapshot,
+        EnforcementAction,
+        Invoice,
+        Panel,
+        Reseller,
+    )
+    from app.models.enums import EnforcementActionType, EnforcementState, InvoiceStatus
+    from app.services import end_user_delete, invoice_presentation, sync
+    from app.services.panel_client.base import parse_backup
+    from tests.test_high_volume_delete import FakeClient
+
+    async def run():
+        engine, factory = _factory()
+        panel_id, reseller_id, invoice_id, _ = await _seed(factory)
+        try:
+            async with factory() as s:
+                panel = await s.get(Panel, panel_id)
+                reseller = await s.get(Reseller, reseller_id)
+                invoice = await s.get(Invoice, invoice_id)
+                reseller.enforcement_state = EnforcementState.enforced
+                reseller.registration_blocked = True
+                invoice.status = InvoiceStatus.enforced
+                s.add(EnforcementAction(
+                    reseller_id=reseller_id, invoice_id=invoice_id,
+                    action=EnforcementActionType.disable_users, dry_run=False,
+                    snapshot={'restriction_reason': 'debt'},
+                ))
+                await s.flush()
+                display = invoice_presentation.status_expression()
+                assert (await s.execute(select(display).select_from(Invoice).join(Reseller)
+                        .where(Invoice.id == invoice_id))).scalar_one() == 'financial_blocked'
+                reseller.enforcement_state = EnforcementState.active
+                reseller.registration_blocked = False
+                invoice.status = InvoiceStatus.sent
+                invoice.sent_at = None
+                await s.flush()
+                assert (await s.execute(select(Invoice.id).join(Reseller).where(
+                    Invoice.id == invoice_id, display == 'draft',
+                ))).scalar_one() == invoice_id
+                user_uuid = f'removal-{uuid.uuid4().hex}'
+                snapshot = EndUserSnapshot(panel_id=panel_id, user_uuid=user_uuid,
+                                           added_by_uuid=reseller.admin_uuid, usage_limit_gb=1000)
+                s.add(snapshot)
+                await s.commit()
+                fake = FakeClient(resolve=77, verify=None)
+                # This fixture's authoritative owner is unique to this isolated panel.
+                original = fake.get_user_id
+                async def lookup(p, uid, *, api_key=None):
+                    if api_key == p.owner_uuid:
+                        return None
+                    return await original(p, uid, api_key=api_key)
+                fake.get_user_id = lookup
+                result = await end_user_delete.delete_end_users(s, [snapshot.id], client=fake)
+                assert result.deleted == 1
+                assert await s.get(EndUserRemoval, (panel_id, user_uuid)) is not None
+                tombstone = parse_backup({'admin_users': [], 'users': [
+                    {'uuid': user_uuid, 'deleted': True, 'usage_limit_GB': 1000},
+                ]})
+                await sync._upsert_users(s, panel, tombstone, dt.datetime.now(dt.timezone.utc))
+                await s.commit()
+                assert (await s.execute(select(EndUserSnapshot.id).where(
+                    EndUserSnapshot.panel_id == panel_id,
+                ))).all() == []
+        finally:
+            async with factory() as s:
+                panel = await s.get(Panel, panel_id)
+                await s.delete(panel)
+                await s.commit()
+            await engine.dispose()
+    asyncio.run(run())

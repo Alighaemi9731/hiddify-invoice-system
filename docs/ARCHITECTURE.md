@@ -238,15 +238,15 @@ records `manual_retry` in the result, and never replays a completed cycle.
 ## Financial issuance and incomplete registration
 
 `draft` means calculated but not financially issued. The legacy database/API value `sent` now
-means issued and unpaid; the UI labels it «صادرشده؛ پرداخت‌نشده». `issued_at` records financial
+means issued and unpaid. The compact invoice UI projects this separately as described below. `issued_at` records financial
 issuance, `collection_started_at` starts the collection clock, and `sent_at` records only the first
 successful Telegram delivery. Resends never reset any of these timestamps. Reversing a payment
 restarts only `collection_started_at`; an explicit deferral still restarts the cycle from its date.
 The warning and enforcement day settings determine `due_on` and `enforcement_on` from that clock,
 using the Tehran calendar. Delivery has its own status and attempt timestamp on the invoice.
 
-The monthly job issues drafts into the financial ledger before attempting delivery. Explicit
-«صدور قطعی» issues without sending; «صدور و ارسال تلگرام» issues first even if sending fails.
+The monthly job issues drafts into the financial ledger before attempting delivery. The existing
+«ارسال» action issues first even if Telegram delivery fails; the issue-only API stays compatible.
 Unregistered, blocked, and failed deliveries cannot leave issued debt outside dunning. A bounded
 worker catch-up sends up to 20 undelivered owed invoices per tick, only to registered recipients;
 failed/blocked attempts are throttled to hourly. A successful delivery is never automatically resent.
@@ -267,3 +267,25 @@ suspension uses the existing resumable snapshot/restore worker and is stored sep
 financial delinquency. Payment cannot bypass incomplete registration, and linking a bot cannot
 release an independent financial suspension. The bot and portal remain available for registration
 and payment while panel service is suspended.
+
+
+## Compact invoice display and verified end-user removal
+
+Invoice storage and collection rules remain unchanged. `display_status` is the single status shown
+in the owner table, mobile cards and CSV. Undelivered unpaid invoices display «پیش‌نویس»;
+paid/canceled states keep their familiar names. Existing «مسدود» remains for manual suspensions;
+«مسدود مالی» and «مسدود به‌دلیل عدم ثبت ربات» describe the two automatic causes. Original
+suspension actions determine the cause; later users-only reassertions do not replace it. The
+optional `display_status` API filter uses the same SQL projection for pagination, counts and sums;
+the original `status` API filter and stored enum remain backward compatible. Discard-drafts still
+removes only genuinely unissued rows, never issued debt displayed as an undelivered draft. No
+collection or first-delivery timestamps are modified by this presentation change.
+
+Hiddify v14 soft deletes users and retains their records in backups. A successful operator removal
+now stores `(panel_id, user_uuid, removed_at)` in `end_user_removals` atomically with the local
+snapshot/meter purge, after verifying absence with the explicit super-admin key. Malformed success
+responses or missing numeric IDs cannot prove absence. Deletion shares sync's per-panel write lock;
+a backup fetched before removal cannot recreate it. Later tombstones are ignored for deliberately
+purged users. A later live backup proving an actual restore/recreation clears that marker and bills
+the service normally. Ordinary deletions outside this workflow retain the existing terminal-usage
+billing rules. High-volume warnings also honor `panel_deleted`, even on a freshly synced snapshot.

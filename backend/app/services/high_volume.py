@@ -121,7 +121,7 @@ async def high_volume_users(
             # removed user billed on its small consumption (or dropped) is NOT a high-volume risk —
             # its huge SOLD quota is irrelevant — so it must NOT appear here (e.g. a deleted 1000 GB
             # config that used 0.8 GB is billed 0, not 1000 × price).
-            from_deleted = not _present_in_latest_sync(u.last_synced_at, panel.last_synced_at)
+            from_deleted = bool(u.panel_deleted) or not _present_in_latest_sync(u.last_synced_at, panel.last_synced_at)
             if from_deleted:
                 consumed = round(float(u.current_usage_gb or 0), 3)
                 if consumed <= free_threshold:

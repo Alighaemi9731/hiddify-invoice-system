@@ -131,6 +131,7 @@ export interface PortalInvoice {
   usage_gb: number;
   amount_toman: number;
   status: string;
+  display_status?: string;
   owed: boolean;
   deferred_until: string | null;
   created_at: string | null;

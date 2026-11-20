@@ -48,15 +48,15 @@ export function ConnectionStatus({ connected, deadline }: { connected: boolean; 
   return connected ? (
     <StatusPill color={colors.active}>متصل</StatusPill>
   ) : (
-    <Stack spacing={0.5} alignItems="flex-start"><StatusPill color={colors.muted} muted>ثبت‌نام ناقص</StatusPill>
+    <Stack spacing={0.5} alignItems="flex-start"><StatusPill color={colors.muted} muted>ثبت‌نشده</StatusPill>
       {deadline && <Typography variant="caption" color="text.secondary">مهلت ثبت‌نام: {fmtDateTime(deadline)}</Typography>}
     </Stack>
   );
 }
 
-export function EnforcementStatus({ state, registrationBlocked }: { state: string; registrationBlocked?: boolean }) {
+export function EnforcementStatus({ state, registrationBlocked, reason }: { state: string; registrationBlocked?: boolean; reason?: string | null }) {
   const colors = statusPillColors(useTheme().palette);
-  if (state === "enforced") return <StatusPill color={colors.enforced}>{registrationBlocked ? "تعلیق؛ ثبت‌نام ناقص" : "سرویس تعلیق‌شده"}</StatusPill>;
+  if (state === "enforced") return <StatusPill color={colors.enforced}>{reason === "financial_blocked" ? "مسدود مالی" : reason === "registration_blocked" || (!reason && registrationBlocked) ? "مسدود به‌دلیل عدم ثبت ربات" : "مسدود"}</StatusPill>;
   if (state === "frozen") return <StatusPill color={colors.frozen}>محدود</StatusPill>;
   return <StatusPill color={colors.active}>فعال</StatusPill>;
 }

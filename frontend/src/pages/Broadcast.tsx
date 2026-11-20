@@ -203,7 +203,7 @@ export default function Broadcast() {
       setHvDelTargets(null);
       setHvDelAck(false);
       show(
-        `${fmtNum(r.purged)} کاربر از سابقهٔ سامانه پاک شد` +
+        `${fmtNum(r.deleted)} کاربر از پنل حذف شد؛ ${fmtNum(r.already_absent)} مورد قبلاً در پنل حذف شده بود` +
         (r.failed ? ` — ${fmtNum(r.failed)} ناموفق` : "") +
         (r.skipped ? ` — ${fmtNum(r.skipped)} رد شد` : ""),
         r.failed ? "warning" : "success",

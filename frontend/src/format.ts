@@ -38,20 +38,14 @@ export const fmtDateTime = (s?: string | null) => {
 };
 
 export const INVOICE_STATUS_FA: Record<string, string> = {
-  draft: "پیش‌نویس؛ صادر نشده",
-  sent: "صادرشده؛ پرداخت‌نشده",
+  draft: "پیش‌نویس",
+  sent: "ارسال‌شده",
   paid: "پرداخت‌شده",
   overdue: "سررسید گذشته",
-  enforced: "بدهی معوق؛ تعلیق مالی",
+  enforced: "مسدود",
+  financial_blocked: "مسدود مالی",
+  registration_blocked: "مسدود به‌دلیل عدم ثبت ربات",
   canceled: "لغوشده",
-};
-
-export const DELIVERY_STATUS_FA: Record<string, string> = {
-  pending: "در انتظار ارسال تلگرام",
-  sent: "ارسال موفق تلگرام",
-  unmatched: "ارسال‌نشده؛ ثبت‌نام ربات ناقص",
-  blocked: "ارسال‌نشده؛ ربات مسدود شده",
-  failed: "ارسال ناموفق؛ تلاش مجدد لازم است",
 };
 
 export const PAYMENT_STATUS_FA: Record<string, string> = {

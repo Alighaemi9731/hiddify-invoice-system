@@ -24,6 +24,7 @@ class ResellerOut(BaseModel):
     panel_telegram_id: int | None
     link_tag: str | None
     registered: bool
+    restriction_reason: str | None = None
     enforcement_state: str
     registration_deadline_at: dt.datetime | None = None
     registration_blocked: bool = False

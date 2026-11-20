@@ -8,10 +8,11 @@ import { DataState } from "../../components/DataState";
 import { fmtToman, fmtGb, fmtDate, INVOICE_STATUS_FA } from "../../format";
 import { EmptyState } from "../ui";
 import PayDialog from "../PayDialog";
-import { InvoiceDeadlines } from "../../components/InvoiceLifecycle";
 
 const STATUS_COLOR: Record<string, "default" | "info" | "success" | "warning" | "error"> = {
   draft: "default",
+  financial_blocked: "error",
+  registration_blocked: "error",
   sent: "info",
   paid: "success",
   overdue: "warning",
@@ -61,7 +62,7 @@ export default function PortalInvoices() {
                   <TableCell align="left">حجم</TableCell>
                   <TableCell align="left">مبلغ</TableCell>
                   <TableCell>وضعیت</TableCell>
-                  <TableCell>مهلت‌های مالی</TableCell><TableCell>صدور قطعی</TableCell>
+                  <TableCell>تاریخ</TableCell>
                   <TableCell align="center">عملیات</TableCell>
                 </TableRow>
               </TableHead>
@@ -77,9 +78,9 @@ export default function PortalInvoices() {
                       <Stack direction="row" spacing={0.7} alignItems="center">
                         <Chip
                           size="small"
-                          label={INVOICE_STATUS_FA[inv.status] || inv.status}
-                          color={STATUS_COLOR[inv.status] || "default"}
-                          variant={inv.status === "draft" || inv.status === "canceled" ? "outlined" : "filled"}
+                          label={INVOICE_STATUS_FA[inv.display_status || inv.status] || inv.status}
+                          color={STATUS_COLOR[inv.display_status || inv.status] || "default"}
+                          variant={(inv.display_status || inv.status) === "draft" || inv.status === "canceled" ? "outlined" : "filled"}
                         />
                         {inv.owed && <Chip size="small" color="error" variant="outlined" label="بدهکار" />}
                         {/* A deadline only moves the reminder/suspension clock — the invoice stays
@@ -90,8 +91,7 @@ export default function PortalInvoices() {
                         )}
                       </Stack>
                     </TableCell>
-                    <TableCell><InvoiceDeadlines invoice={inv} /></TableCell>
-                    <TableCell dir="ltr">{fmtDate(inv.issued_at)}</TableCell>
+                    <TableCell dir="ltr">{fmtDate(inv.created_at)}</TableCell>
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                         {inv.owed && (

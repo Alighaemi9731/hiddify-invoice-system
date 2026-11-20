@@ -1,6 +1,6 @@
 import { useState, useEffect, useDeferredValue } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Card, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Autocomplete, Box, Button, Card, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
   MenuItem, Select, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, Typography, Divider, TablePagination, useMediaQuery,
 } from "@mui/material";
@@ -27,7 +27,7 @@ import {
   listInvoices, listInvoicesPaged, generateInvoices, sendInvoice, sendPeriod, markInvoicePaid,
   unmarkInvoicePaid, editInvoice, getInvoice, openInvoicePdf, getZeroInvoices, deferInvoice,
   listResellers, bulkDeferInvoices, discardDrafts, recomputeInvoice, revertInvoiceToDraft,
-  cancelInvoice, issueInvoice, issuePeriod, invoiceRecoveryReport,
+  cancelInvoice,
 } from "../api/client";
 import { useToast } from "../components/Toast";
 import { useDialogState } from "../hooks/useDialogState";
@@ -38,16 +38,14 @@ import { MONEY_KEYS } from "../queryKeys";
 import { currentPeriod } from "../components/StatCard";
 import PeriodPicker from "../components/PeriodPicker";
 import LiveRate from "../components/LiveRate";
-import { fmtToman, fmtGb, fmtNum, fmtDate, fmtDateTime, INVOICE_STATUS_FA, DELIVERY_STATUS_FA } from "../format";
+import { fmtToman, fmtGb, fmtNum, fmtDate, INVOICE_STATUS_FA } from "../format";
 import { nestedCardBg } from "../theme";
 import RowActionsMenu, { RowActionIcons, RowAction } from "../components/RowActionsMenu";
 import { downloadCsv } from "../csv";
 import { TABLE_SCROLL_BOUND } from "../themeTokens";
 import { NumberField } from "../components/NumberField";
 
-import { InvoiceAccess, InvoiceDeadlines, InvoiceDelivery } from "../components/InvoiceLifecycle";
-
-const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", canceled: "default" };
+const STATUS_COLOR: any = { draft: "default", sent: "info", paid: "success", overdue: "warning", enforced: "error", financial_blocked: "error", registration_blocked: "error", canceled: "default" };
 // Delivered-but-unpaid states money is collected against (mirrors the backend state machine).
 const OWED_STATES = ["sent", "overdue", "enforced"];
 
@@ -58,9 +56,6 @@ export default function Invoices() {
   const xsFull = useXsFullScreen();
   const [period, setPeriod] = useState(currentPeriod());
   const [status, setStatus] = useState("");
-  const [deliveryStatus, setDeliveryStatus] = useState("");
-  const [showRecovery, setShowRecovery] = useState(false);
-  const recovery = useQuery({ queryKey: ["invoice-recovery"], queryFn: invoiceRecoveryReport });
   const [search, setSearch] = useState("");
   const detailDlg = useDialogState<any>();
   const editDlg = useDialogState<any>();
@@ -98,12 +93,12 @@ export default function Invoices() {
   const q = dq.trim();
   const listParams = (p: number) => ({
     ...(inResellerMode ? { reseller_id: resellerFilter!.id } : { period }),
-    status: status || undefined, delivery_status: deliveryStatus || undefined,
+    display_status: status || undefined,
     q: q || undefined,
     sort: key, order: dir, limit: rowsPerPage, offset: p * rowsPerPage,
   });
   const listKey = (p: number) =>
-    ["invoices", inResellerMode ? `r${resellerFilter!.id}` : period, status, deliveryStatus, q, key, dir, rowsPerPage, p];
+    ["invoices", inResellerMode ? `r${resellerFilter!.id}` : period, status, q, key, dir, rowsPerPage, p];
   const { data: pageData } = useQuery({
     queryKey: listKey(page),
     queryFn: ({ signal }) => listInvoicesPaged(listParams(page), signal),
@@ -129,7 +124,7 @@ export default function Invoices() {
   // Row selection for bulk actions (extend deadline). Cleared whenever the data context changes
   // so a stale selection from another month/reseller can't leak into a bulk action.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  useEffect(() => { setPage(0); setSelectedIds(new Set()); }, [period, status, deliveryStatus, q, tab, key, dir, resellerFilter]);
+  useEffect(() => { setPage(0); setSelectedIds(new Set()); }, [period, status, q, tab, key, dir, resellerFilter]);
   const paged = data;
   const pageIds = paged.map((i: any) => i.id);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
@@ -147,14 +142,14 @@ export default function Invoices() {
   // Money-changing mutations must also refresh Payments/Dashboard/Debts (a mark-paid/unpay
   // here flips state those views show) — the same dependent set Payments.tsx uses.
   const moneyMut = (fn: any, ok: any) =>
-    useToastMutation({ show, mutationFn: fn, success: ok, invalidate: [...MONEY_KEYS, "invoice-recovery"] });
+    useToastMutation({ show, mutationFn: fn, success: ok, invalidate: MONEY_KEYS });
 
   const gen = mut(
     () => generateInvoices({ period }),
     (r: any) => {
       const parts = [`${r.created} فاکتور جدید`];
       if (r.updated) parts.push(`${r.updated} پیش‌نویس بازمحاسبه‌شده`);
-      if (r.skipped_existing) parts.push(`${r.skipped_existing} فاکتور قطعی بدون تغییر`);
+      if (r.skipped_existing) parts.push(`${r.skipped_existing} فاکتور ارسال/پرداخت‌شده بدون تغییر`);
       if (r.reconciled_zero) parts.push(`${r.reconciled_zero} پیش‌نویسِ صفرشده حذف شد`);
       let msg = `${parts.join(" • ")} (${fmtToman(r.total_amount_toman)})`;
       if (r.skipped_panels?.length) {
@@ -167,11 +162,13 @@ export default function Invoices() {
     () => discardDrafts(period),
     (r: any) => (r.discarded ? `${r.discarded} پیش‌نویس حذف شد` : "پیش‌نویسی برای حذف وجود نداشت"),
   );
-  const issueOne = moneyMut((id: number) => issueInvoice(id), "فاکتور قطعی شد؛ مهلت پرداخت آغاز شد");
-  const issueAll = moneyMut(() => issuePeriod(period), (r: any) =>
-    `${fmtNum(r.issued)} فاکتور قطعی شد؛ ${fmtNum(r.skipped?.length || 0)} مورد نیازمند بررسی`);
-  const sendAll = moneyMut(() => sendPeriod(period), (r: any) => `نتیجهٔ ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون اتصال به ربات، ${r.failed || 0} ناموفق`);
-  const sendOne = moneyMut((id: number) => sendInvoice(id), (r: any) => `وضعیت ارسال تلگرام: ${DELIVERY_STATUS_FA[r.delivery_status] || r.delivery_status}`);
+  const sendAll = moneyMut(() => sendPeriod(period), (r: any) => [`نتیجهٔ ارسال: ${r.sent} موفق، ${r.unmatched || 0} بدون اتصال به ربات، ${r.failed || 0} ناموفق`, r.unmatched || r.failed ? "warning" : "success"]);
+  const sendOne = moneyMut((id: number) => sendInvoice(id), (r: any) => {
+    if (r.delivery_status === "sent") return "فاکتور ارسال شد";
+    if (r.delivery_status === "unmatched") return ["ارسال نشد؛ نماینده هنوز ربات را ثبت نکرده است", "warning"];
+    if (r.delivery_status === "blocked") return ["ارسال نشد؛ نماینده ربات را مسدود کرده است", "warning"];
+    return ["ارسال ناموفق بود؛ دوباره تلاش کنید", "warning"];
+  });
   const pay = moneyMut((id: number) => markInvoicePaid(id), "به‌عنوان پرداخت‌شده ثبت شد");
   const recompute = moneyMut(
     (id: number) => recomputeInvoice(id),
@@ -225,7 +222,7 @@ export default function Invoices() {
       ["شماره", "نماینده", "پنل", "دوره", "مصرف (گیگابایت)", "مبلغ (تومان)", "وضعیت", "تاریخ ارسال", "تاریخ پرداخت"],
       rows.map((i: any) => [
         i.number, i.reseller_name, i.panel_key, i.period_label, i.usage_gb, i.amount_toman,
-        INVOICE_STATUS_FA[i.status] || i.status,
+        INVOICE_STATUS_FA[i.display_status || i.status] || i.status,
         i.sent_at ? fmtDate(i.sent_at) : "",
         i.paid_at ? fmtDate(i.paid_at) : "",
       ]),
@@ -243,17 +240,14 @@ export default function Invoices() {
     const acts: RowAction[] = [
       { key: "detail", label: "جزئیات", icon: <VisibilityIcon fontSize="small" />, onClick: () => openDetail(i.id), primary: true },
     ];
-    if (owed) acts.push({ key: "pay", label: "ثبت پرداخت", color: "success", icon: <CheckCircleIcon fontSize="small" />, onClick: () => pay.mutate(i.id), primary: true });
-    else if (i.status === "draft") {
-      acts.push({ key: "issue", label: "صدور قطعی", color: "primary", icon: <ReceiptLongIcon fontSize="small" />, onClick: () => issueOne.mutate(i.id), primary: true });
-      acts.push({ key: "send", label: "صدور و ارسال تلگرام", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id) });
-    }
+    if (owed) acts.push({ key: "pay", label: "ثبت پرداخت", color: "success", icon: <CheckCircleIcon fontSize="small" />, onClick: () => pay.mutate(i.id), primary: (i.display_status || i.status) !== "draft" });
+    if ((i.display_status || i.status) === "draft") acts.push({ key: "send", label: "ارسال", color: "primary", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id), primary: true });
     if (i.status !== "paid" && i.status !== "canceled")
       acts.push({ key: "edit", label: "ویرایش", icon: <EditIcon fontSize="small" />, onClick: () => editDlg.openWith({ ...i }) });
     if (i.status !== "paid")
       acts.push({ key: "recompute", label: "بازمحاسبه", tooltip: "بازمحاسبه از روی پنل (همگام‌سازی + به‌روزرسانی اعداد)", icon: <AutorenewIcon fontSize="small" />, disabled: recompute.isPending, onClick: () => confirm("پنل همگام‌سازی و اعداد این فاکتور از روی دادهٔ فعلی پنل به‌روز شود؟") && recompute.mutate(i.id) });
     acts.push({ key: "pdf", label: "PDF", icon: <PictureAsPdfIcon fontSize="small" />, onClick: () => openInvoicePdf(i.id).catch(() => show("خطا در دریافت PDF", "error")) });
-    if (i.status !== "draft" && i.status !== "canceled") acts.push({ key: "send", label: i.sent_at ? "ارسال مجدد تلگرام" : "ارسال تلگرام", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id) });
+    if ((i.display_status || i.status) !== "draft" && i.status !== "canceled") acts.push({ key: "send", label: i.sent_at ? "ارسال مجدد" : "ارسال", icon: <SendIcon fontSize="small" />, onClick: () => sendOne.mutate(i.id) });
     if (i.status !== "draft" && i.status !== "paid")
       acts.push({ key: "todraft", label: "بازگردانی به پیش‌نویس", tooltip: "بازگردانی به پیش‌نویس (برای آزمایش/اصلاح؛ از تاریخچهٔ مالی هم حذف می‌شود)", color: "warning", icon: <RestartAltIcon fontSize="small" />, disabled: toDraft.isPending, onClick: () => confirm("این فاکتور به «پیش‌نویس» بازگردانده شود؟ (وضعیت ارسال پاک و از تاریخچهٔ مالی حذف می‌شود)") && toDraft.mutate(i.id) });
     if (i.status === "paid")
@@ -274,14 +268,7 @@ export default function Invoices() {
 
   return (
     <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        صدور قطعی، مهلت پرداخت را شروع می‌کند. وضعیت ارسال تلگرام جداست؛ ارسال مجدد، مهلت را تغییر نمی‌دهد.
-      </Typography>
-      {!!(recovery.data?.recovered_ids?.length || recovery.data?.review?.length) && <Alert severity="info" sx={{ mb: 2 }}>
-        {fmtNum(recovery.data?.recovered_ids?.length || 0)} فاکتور قدیمی با مهلت تازه اصلاح شد؛ {fmtNum(recovery.data?.review?.length || 0)} پیش‌نویس نیازمند بررسی است.
-        <Button size="small" onClick={() => setShowRecovery(true)}>گزارش اصلاح فاکتورهای قدیمی</Button>
-      </Alert>}
-      <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2, flexWrap: "wrap", gap: 1 }} alignItems="center">
+      <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }} alignItems="center">
         {!inResellerMode && <PeriodPicker value={period} onChange={setPeriod} />}
         <Autocomplete
           size="small"
@@ -310,11 +297,10 @@ export default function Invoices() {
           value={status}
           displayEmpty
           onChange={(e) => setStatus(e.target.value)}
-          inputProps={{ "aria-label": "وضعیت مالی فاکتور" }}
-          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همه وضعیت‌های مالی"}
+          renderValue={(v) => v ? INVOICE_STATUS_FA[v] : "همهٔ وضعیت‌ها"}
           sx={{ minWidth: 148, "& .MuiSelect-select": { py: "7px !important" } }}
         >
-          <MenuItem value="">همه وضعیت‌های مالی</MenuItem>
+          <MenuItem value="">همهٔ وضعیت‌ها</MenuItem>
           {Object.entries(INVOICE_STATUS_FA).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
         </Select>
         <Button size="small" variant="outlined" startIcon={<DownloadIcon />}
@@ -332,17 +318,15 @@ export default function Invoices() {
               `دورهٔ ${period} هنوز به پایان نرسیده است؛ فاکتورِ این دوره ناقص خواهد بود (فقط سرویس‌های ثبت‌شده تا امروز محاسبه می‌شود). توصیه می‌شود دورهٔ ماه گذشته را صادر کنید. ادامه می‌دهید؟`
             )) return;
             gen.mutate();
-          }} disabled={gen.isPending}>محاسبه پیش‌نویس‌های دوره</Button>
+          }} disabled={gen.isPending}>صدور فاکتورهای دوره</Button>
           <Button variant="outlined" color="warning" onClick={() => {
-            if (confirm(`همهٔ پیش‌نویس‌های دورهٔ ${period} حذف شوند؟ (فاکتورهای قطعی دست‌نخورده باقی می‌مانند)`)) discard.mutate();
+            if (confirm(`همهٔ پیش‌نویس‌های دورهٔ ${period} حذف شوند؟ (فقط پیش‌نویس‌های قطعی‌نشده حذف می‌شوند؛ فاکتورهای دارای بدهی حفظ می‌شوند)`)) discard.mutate();
           }} disabled={discard.isPending}>حذف پیش‌نویس‌ها</Button>
-          <Button variant="contained" startIcon={<ReceiptLongIcon />} disabled={issueAll.isPending}
-            onClick={() => confirm(`پیش‌نویس‌های دورهٔ ${period} به بدهی قطعی تبدیل شوند؟ مهلت پرداخت مستقل از ارسال تلگرام شروع می‌شود.`) && issueAll.mutate()}>صدور قطعی دوره</Button>
-          <Button variant="outlined" startIcon={<SendIcon />} disabled={sendAll.isPending}
+          <Button variant="contained" startIcon={<SendIcon />} disabled={sendAll.isPending}
             onClick={() => {
-              if (confirm(`فاکتورهای ارسال‌نشدهٔ دورهٔ ${period} صادر و در تلگرام ارسال شوند؟ حتی با خطای ارسال، فاکتور قطعی می‌شود و مهلت پرداخت آغاز می‌شود.`))
+              if (confirm(`فاکتورهای پیش‌نویسِ دورهٔ ${period} برای همهٔ نماینده‌ها ارسال شوند؟ این عمل به همهٔ نماینده‌ها پیام می‌فرستد و قابلِ بازگشت نیست.`))
                 sendAll.mutate();
-            }}>صدور و ارسال تلگرام</Button>
+            }}>ارسال همهٔ پیش‌نویس‌ها</Button>
         </>}
       </Stack>
 
@@ -380,13 +364,6 @@ export default function Invoices() {
         )}
       </Stack>
 
-      {(inResellerMode || tab === 0) && <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
-        <TextField select size="small" label="ارسال تلگرام" value={deliveryStatus}
-          onChange={(e) => setDeliveryStatus(e.target.value)} sx={{ minWidth: 260 }}>
-          <MenuItem value="">همه وضعیت‌های ارسال</MenuItem>
-          {Object.entries(DELIVERY_STATUS_FA).map(([value, label]) => <MenuItem key={value} value={value}>{label}</MenuItem>)}
-        </TextField>
-      </Stack>}
       {(!inResellerMode && tab === 1) ? (
         <Card>
           <Typography variant="body2" color="text.secondary" sx={{ p: 2, pb: 0 }}>
@@ -439,7 +416,7 @@ export default function Invoices() {
       <Card>
         {!isMobile ? (
         <TableContainer sx={{ maxHeight: TABLE_SCROLL_BOUND }}>
-        <Table size="small" stickyHeader sx={{ minWidth: 1400 }}>
+        <Table size="small" stickyHeader sx={{ minWidth: 980 }}>
           <TableHead>
             <TableRow>
               <TableCell padding="checkbox">
@@ -454,8 +431,7 @@ export default function Invoices() {
               {inResellerMode && <SortTh id="period_label" label="دوره" sortKey={key} dir={dir} onSort={toggle} />}
               <SortTh id="usage_gb" label="مصرف" sortKey={key} dir={dir} onSort={toggle} />
               <SortTh id="amount_toman" label="مبلغ (تومان)" sortKey={key} dir={dir} onSort={toggle} />
-              <SortTh id="status" label="وضعیت مالی" sortKey={key} dir={dir} onSort={toggle} />
-              <TableCell>ارسال تلگرام</TableCell><TableCell>مهلت‌های مالی</TableCell><TableCell>دسترسی نماینده</TableCell>
+              <SortTh id="status" label="وضعیت" sortKey={key} dir={dir} onSort={toggle} />
               <TableCell align="left">عملیات</TableCell>
             </TableRow>
           </TableHead>
@@ -472,14 +448,11 @@ export default function Invoices() {
                 {inResellerMode && <TableCell dir="ltr">{i.period_label}</TableCell>}
                 <TableCell>{fmtGb(i.usage_gb)}</TableCell>
                 <TableCell>{fmtToman(i.amount_toman)}</TableCell>
-                <TableCell><Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} /></TableCell>
-                <TableCell><InvoiceDelivery invoice={i} /></TableCell>
-                <TableCell><InvoiceDeadlines invoice={i} /></TableCell>
-                <TableCell><InvoiceAccess invoice={i} /></TableCell>
+                <TableCell><Chip size="small" color={STATUS_COLOR[i.display_status || i.status]} label={INVOICE_STATUS_FA[i.display_status || i.status]} /></TableCell>
                 <TableCell align="left" sx={{ whiteSpace: "nowrap" }}><RowActionIcons actions={actionsFor(i)} /></TableCell>
               </TableRow>
             ))}
-            {data.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 13 : 12} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای این جستجو یافت نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "برای این دوره فاکتوری وجود ندارد — «محاسبه پیش‌نویس‌های دوره» را انتخاب کنید"}</TableCell></TableRow>}
+            {data.length === 0 && <TableRow><TableCell colSpan={inResellerMode ? 10 : 9} align="center" sx={{ py: 4, color: "text.secondary" }}>{q ? "نتیجه‌ای برای این جستجو یافت نشد" : inResellerMode ? "این نماینده هیچ فاکتوری ندارد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}</TableCell></TableRow>}
           </TableBody>
         </Table>
         </TableContainer>
@@ -498,7 +471,7 @@ export default function Invoices() {
                     {i.number}
                   </Typography>
                 </Box>
-                <Chip size="small" color={STATUS_COLOR[i.status]} label={INVOICE_STATUS_FA[i.status]} />
+                <Chip size="small" color={STATUS_COLOR[i.display_status || i.status]} label={INVOICE_STATUS_FA[i.display_status || i.status]} />
               </Stack>
               <Stack direction="row" spacing={0.8} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mt: 1 }}>
                 <Chip size="small" variant="outlined" label={i.panel_key} />
@@ -515,9 +488,6 @@ export default function Invoices() {
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>{fmtToman(i.amount_toman)}</Typography>
                 </Box>
               </Box>
-              <Stack spacing={1} sx={{ mt: 1.2 }}>
-                <InvoiceDelivery invoice={i} /><InvoiceDeadlines invoice={i} /><InvoiceAccess invoice={i} />
-              </Stack>
               <Box sx={{ mt: 1.2, pt: 1, borderTop: 1, borderColor: "divider" }}>
                 <RowActionsMenu actions={actionsFor(i)} />
               </Box>
@@ -525,7 +495,7 @@ export default function Invoices() {
           ))}
           {data.length === 0 && (
             <Typography align="center" color="text.secondary" variant="body2" sx={{ py: 5 }}>
-              {q ? "نتیجه‌ای برای این جستجو یافت نشد" : "برای این دوره فاکتوری وجود ندارد — «محاسبه پیش‌نویس‌های دوره» را انتخاب کنید"}
+              {q ? "نتیجه‌ای برای این جستجو یافت نشد" : "برای این دوره فاکتوری وجود ندارد — «صدور فاکتورهای دوره» را انتخاب کنید"}
             </Typography>
           )}
         </Stack>
@@ -577,9 +547,8 @@ export default function Invoices() {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               {deferRow.ids
                 ? "تا تاریخ انتخاب‌شده، یادآوری و مسدودسازیِ همهٔ فاکتورهای انتخاب‌شده متوقف می‌شود. فاکتورهایی که قابلِ تعیین مهلت نیستند (پیش‌نویس/پرداخت‌شده/لغوشده) رد می‌شوند."
-                : "تا تاریخ انتخاب‌شده، یادآوری و مسدودسازی این فاکتور متوقف می‌شود. فاکتورهای دیگر و دادهٔ پنل تغییری نمی‌کنند."}
+                : "مهلت کامل پرداخت از تاریخ انتخاب‌شده دوباره شروع می‌شود. فاکتورهای دیگر و دادهٔ پنل تغییری نمی‌کنند."}
             </Typography>
-            <Typography variant="body2" color="text.secondary">چرخه کامل یادآوری و تعلیق مالی از تاریخ انتخاب‌شده شروع می‌شود؛ این تاریخ زمان تعلیق نیست. محدودیت ثبت‌نام ناقص مهلت جداگانه دارد.</Typography>
             <Stack spacing={2} sx={{ mt: 1 }}>
               <TextField type="date" label="شروع مهلت جدید" InputLabelProps={{ shrink: true }}
                 value={deferRow.deferred_until || ""} onChange={(e) => deferDlg.setData({ ...deferRow, deferred_until: e.target.value })} />
@@ -605,13 +574,6 @@ export default function Invoices() {
               <Typography variant="body2">قیمت هر گیگابایت: <b>{fmtNum(detail.price_per_gb)}</b></Typography>
               <Typography variant="body2">مبلغ: <b>{fmtToman(detail.amount_toman)}</b></Typography>
             </Stack>
-            <Stack spacing={1.5} sx={{ mb: 2 }}>
-              <Typography variant="body2">وضعیت مالی: {INVOICE_STATUS_FA[detail.status]}</Typography>
-              <Typography variant="body2">صدور قطعی: {fmtDateTime(detail.issued_at)}</Typography>
-              <Typography variant="body2">شروع مهلت فعلی: {fmtDateTime(detail.collection_started_at || detail.issued_at || detail.sent_at)}</Typography>
-              <InvoiceDelivery invoice={detail} /><InvoiceDeadlines invoice={detail} /><InvoiceAccess invoice={detail} />
-              {detail.legacy_recovered_at && <Typography variant="body2" color="text.secondary">این فاکتور قدیمی در {fmtDateTime(detail.legacy_recovered_at)} با یک چرخه کامل تازه اصلاح شد.</Typography>}
-            </Stack>
             {detail.floor_applied && (
               <Chip size="small" color="warning" sx={{ mb: 2 }}
                 label={`حداقل فروش اعمال شد (مبلغ واقعی مصرف: ${fmtToman(detail.base_amount_toman)})`} />
@@ -636,17 +598,6 @@ export default function Invoices() {
             <Button onClick={detailDlg.close}>بستن</Button>
           </DialogActions>
         </>)}
-      </Dialog>
-      <Dialog open={showRecovery} onClose={() => setShowRecovery(false)} fullWidth maxWidth="md" fullScreen={xsFull}>
-        <DialogTitle>گزارش اصلاح فاکتورهای قدیمی</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 2 }}>شروع اصلاح خودکار: {fmtDateTime(recovery.data?.started_at)}؛ مهلت هر فاکتور از زمان قطعی‌شدن همان فاکتور محاسبه می‌شود.</Typography>
-          {(recovery.data?.review || []).map((item: any) => <Stack key={item.id} direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="body2" sx={{ flex: 1 }}>{item.reseller_name} — دورهٔ {item.period}: {item.reason}</Typography>
-            <Button size="small" onClick={() => { setShowRecovery(false); openDetail(item.id); }}>مشاهده فاکتور</Button>
-          </Stack>)}
-        </DialogContent>
-        <DialogActions><Button onClick={() => setShowRecovery(false)}>بستن</Button></DialogActions>
       </Dialog>
       {node}
     </Box>

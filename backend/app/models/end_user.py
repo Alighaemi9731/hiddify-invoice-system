@@ -28,6 +28,17 @@ from app.core.db import Base
 from app.models.mixins import TimestampMixin
 
 
+class EndUserRemoval(Base):
+    """An intentional, verified deletion; v14 backups retain deleted user rows."""
+
+    __tablename__ = "end_user_removals"
+    panel_id: Mapped[int] = mapped_column(ForeignKey("panels.id", ondelete="CASCADE"), primary_key=True)
+    user_uuid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    removed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
 class EndUserSnapshot(Base, TimestampMixin):
     __tablename__ = "end_user_snapshots"
     __table_args__ = (

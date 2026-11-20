@@ -77,7 +77,7 @@ function ResellerTableRow({
           )}
         </Stack>
       </TableCell>
-      <TableCell><EnforcementStatus state={reseller.enforcement_state} registrationBlocked={reseller.registration_blocked} /></TableCell>
+      <TableCell><EnforcementStatus state={reseller.enforcement_state} registrationBlocked={reseller.registration_blocked} reason={reseller.restriction_reason} /></TableCell>
       <TableCell>
         {reseller.exclude_from_billing
           ? <Chip size="small" color="warning" variant="outlined" label="معاف" />

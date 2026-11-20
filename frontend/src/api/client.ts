@@ -184,6 +184,7 @@ export interface ResellerRow {
   enforcement_state: string;
   registration_deadline_at?: string | null;
   registration_blocked?: boolean;
+  restriction_reason?: string | null;
   panel_max_users: number | null;
   panel_max_active_users: number | null;
   can_add_admin: boolean;
@@ -297,6 +298,7 @@ export interface InvoiceListItem {
   collection_started_at?: string | null;
   due_on?: string | null;
   enforcement_on?: string | null;
+  display_status?: string;
   telegram_delivery_status?: string | null;
   delivery_attempted_at?: string | null;
   legacy_recovered_at?: string | null;

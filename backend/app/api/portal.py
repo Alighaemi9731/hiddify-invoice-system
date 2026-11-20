@@ -373,19 +373,21 @@ async def invoices(
 ) -> list[dict]:
     """The caller's issued invoices in billing-month order, newest first."""
     panels = await _panel_keys(session, {r.panel_id for r in ctx.resellers})
+    from app.services import invoice_presentation
     rows = (await session.execute(
-        select(Invoice)
+        select(Invoice, invoice_presentation.status_expression())
+        .join(Reseller, Invoice.reseller_id == Reseller.id)
         .where(Invoice.reseller_id.in_(ctx.ids),
                Invoice.status != InvoiceStatus.draft)
         .order_by(Invoice.period_start.desc(), Invoice.id.desc())
-    )).scalars().all()
+    )).all()
     clock = await issuance.schedule_days(session)
     return [
         {
             "id": i.id, "number": invoice_code(i.id), "period_label": i.period_label,
             "panel_key": panels[i.panel_id].key if i.panel_id in panels else "?",
             "usage_gb": float(i.usage_gb), "amount_toman": float(i.amount_toman),
-            "status": i.status.value,
+            "status": i.status.value, "display_status": display_status,
             "issued_at": i.issued_at.isoformat() if i.issued_at else None,
             **issuance.dates(i, clock),
             # A deadline never makes an invoice unpayable — it only re-anchors dunning. The date
@@ -394,7 +396,7 @@ async def invoices(
             "deferred_until": i.deferred_until.isoformat() if i.deferred_until else None,
             "created_at": i.created_at.isoformat() if i.created_at else None,
         }
-        for i in rows
+        for i, display_status in rows
     ]
 
 

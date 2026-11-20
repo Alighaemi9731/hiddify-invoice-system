@@ -34,6 +34,7 @@ class InvoiceOut(BaseModel):
     min_sale_toman: int = 0
     floor_applied: bool = False
     status: str
+    display_status: str | None = None
     sent_at: dt.datetime | None
     issued_at: dt.datetime | None = None
     collection_started_at: dt.datetime | None = None

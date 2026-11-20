@@ -258,13 +258,15 @@ class AdminApiClient(PanelClient):
             raise RuntimeError(f"GET user {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
         if not isinstance(data, dict):
-            return UserIdentity(None, None)
+            raise RuntimeError("GET user returned an invalid record; absence is unconfirmed")
+        if data.get("uuid") != user_uuid:
+            raise RuntimeError("GET user returned a different UUID; refusing ambiguous identity")
         uid = data.get("id")
-        if isinstance(uid, int):
+        if type(uid) is int and uid > 0:
             self._user_targets[(panel.admin_api_base, uid)] = user_uuid
         owner = data.get("added_by_uuid")
         return UserIdentity(
-            panel_user_id=int(uid) if isinstance(uid, int) else None,
+            panel_user_id=uid if type(uid) is int and uid > 0 else None,
             added_by_uuid=str(owner).strip().lower() if owner else None,
         )
 
@@ -273,6 +275,8 @@ class AdminApiClient(PanelClient):
     ) -> int | None:
         """The numeric id alone — see `get_user_identity`."""
         identity = await self.get_user_identity(panel, user_uuid, api_key=api_key)
+        if identity is not None and (identity.panel_user_id is None or identity.panel_user_id <= 0):
+            raise RuntimeError("GET user has no usable numeric id; user is not proven absent")
         return identity.panel_user_id if identity else None
 
     async def admin_exists(  # noqa: ANN001
@@ -312,7 +316,9 @@ class AdminApiClient(PanelClient):
         if resp.status_code >= 400:
             raise RuntimeError(f"GET user {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict) or data.get("uuid") != user_uuid:
+            raise RuntimeError("GET user returned an invalid record; absence is unconfirmed")
+        return data
 
     @writable_panel
     async def patch_user(  # noqa: ANN001

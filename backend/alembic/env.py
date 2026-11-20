@@ -58,6 +58,7 @@ _POST_BASELINE_COLUMNS = {
 # legitimately lacks these — they're created by `upgrade` right after the baseline is stamped — so
 # the adoption validator must not treat them as "missing".
 _POST_BASELINE_TABLES = {
+    "end_user_removals",
     "portal_login_nonce",
     "portal_session_epoch",
     "storefront_bots", "storefront_plans", "storefront_customers",

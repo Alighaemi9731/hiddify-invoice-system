@@ -12,11 +12,11 @@ import datetime as dt
 import logging
 import weakref
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import SessionLocal
-from app.models import EndUserSnapshot, Panel, Reseller, SyncRun
+from app.models import EndUserRemoval, EndUserSnapshot, Panel, Reseller, SyncRun
 from app.models.enums import EnforcementState, PanelStatus, SyncSource, SyncStatus
 from app.services.panel_client import BackupJsonClient, PanelClient, PanelData
 from app.services.panel_maintenance import panel_operation
@@ -161,7 +161,7 @@ async def _sync_panel(
 
             now = _now()
             await _upsert_resellers(session, panel, data, now)
-            await _upsert_users(session, panel, data, now)
+            await _upsert_users(session, panel, data, now, observed_at=attempt_started)
 
             # Capture/refresh the end-user (client) secret path used to build customers' sub
             # links (differs from the admin proxy path in Hiddify v12).
@@ -287,9 +287,10 @@ async def _notify_panel_rollback(session: AsyncSession, panel: Panel, users: int
 
 
 async def _upsert_users(
-    session: AsyncSession, panel: Panel, data: PanelData, now: dt.datetime
+    session: AsyncSession, panel: Panel, data: PanelData, now: dt.datetime,
+    *, observed_at: dt.datetime | None = None,
 ) -> None:
-    from app.models import UsageMeter
+    from app.models import UsageMeter, UsageMeterEvent
     from app.services import metering
 
     existing = {
@@ -318,9 +319,31 @@ async def _upsert_users(
         )
         await _notify_panel_rollback(session, panel, rolled_back)
 
+    removed = {r.user_uuid: r for r in (await session.scalars(
+        select(EndUserRemoval).where(EndUserRemoval.panel_id == panel.id)
+    )).all()}
     keep_from = previous_month(now.date()).start
     for u in data.users:
         s = existing.get(u.uuid)
+        marker = removed.get(u.uuid)
+        observed = observed_at or now
+        recent_removal = marker is not None and (
+            marker.removed_at.replace(tzinfo=dt.timezone.utc) if marker.removed_at.tzinfo is None
+            else marker.removed_at
+        ) >= observed
+        if marker is not None and (u.deleted or recent_removal):
+            # A confirmed operator purge is final, even though Hiddify includes its
+            # tombstone in every backup. Remove a row recreated by an overlapping old sync.
+            if s is not None:
+                await session.delete(s)
+            for model in (UsageMeter, UsageMeterEvent):
+                await session.execute(delete(model).where(
+                    model.panel_id == panel.id, model.user_uuid == u.uuid,
+                ))
+            continue
+        if marker is not None:
+            # A later backup proves this UUID has actually been restored/recreated.
+            await session.delete(marker)
         if s is None and u.deleted and (u.start_date is None or u.start_date < keep_from):
             # Do not resurrect tombstones already eligible for retention cleanup on every sync.
             continue

@@ -48,7 +48,7 @@ export default function ResellerMobileCard({
         {telegramHref(reseller.username, reseller.bot_chat_id) && <TelegramLink username={reseller.username} chatId={reseller.bot_chat_id} />}
         <Chip size="small" label={reseller.panel_key} variant="outlined" />
         <ConnectionStatus connected={reseller.registered} deadline={reseller.registration_deadline_at} />
-        <EnforcementStatus state={reseller.enforcement_state} registrationBlocked={reseller.registration_blocked} />
+        <EnforcementStatus state={reseller.enforcement_state} registrationBlocked={reseller.registration_blocked} reason={reseller.restriction_reason} />
         {reseller.exclude_from_billing && (
           <Chip size="small" color="warning" variant="outlined" label="معاف از فاکتور" />
         )}

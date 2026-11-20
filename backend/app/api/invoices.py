@@ -37,6 +37,7 @@ from app.schemas.invoice import (
 from app.services import (
     delivery,
     financial_archive,
+    invoice_presentation,
     invoice_state,
     invoicing,
     issuance,
@@ -88,6 +89,7 @@ def _to_out(
     inv: Invoice, reseller_name: str, panel_key: str,
     reseller_chat_id: int | None = None, reseller_username: str | None = None,
     *, clock: dict[str, int] | None = None, reseller: Reseller | None = None,
+    display_status: str | None = None,
 ) -> InvoiceOut:
     return InvoiceOut(
         id=inv.id, number=invoice_code(inv.id),
@@ -100,6 +102,7 @@ def _to_out(
         base_amount_toman=float(inv.base_amount_toman or 0),
         min_sale_toman=int(inv.min_sale_toman or 0), floor_applied=bool(inv.floor_applied),
         status=inv.status.value,
+        display_status=display_status or ("draft" if not inv.sent_at and inv.status in invoice_state.OWED else inv.status.value),
         sent_at=inv.sent_at, paid_at=inv.paid_at,
         issued_at=inv.issued_at, collection_started_at=inv.collection_started_at,
         telegram_delivery_status=inv.telegram_delivery_status or ("sent" if inv.sent_at else "pending"),
@@ -201,6 +204,7 @@ async def list_invoices(
     reseller_id: int | None = None,
     status: InvoiceStatus | None = None,
     delivery_status: str | None = None,
+    display_status: str | None = Query(None, pattern="^(draft|sent|paid|overdue|enforced|canceled|financial_blocked|registration_blocked)$"),
     q: str | None = Query(None, description="search: invoice number or reseller name"),
     sort: str = Query("date"),
     order: str = Query("desc"),
@@ -220,6 +224,9 @@ async def list_invoices(
         filters.append(Invoice.reseller_id == reseller_id)
     if status is not None:
         filters.append(Invoice.status == status)
+    display = invoice_presentation.status_expression()
+    if isinstance(display_status, str):
+        filters.append(display == display_status)
     if isinstance(delivery_status, str) and delivery_status:
         filters.append(Invoice.telegram_delivery_status == delivery_status)
     if isinstance(q, str) and q.strip():
@@ -245,13 +252,13 @@ async def list_invoices(
     response.headers["X-Total-Amount-Toman"] = str(int(total_amount))
 
     query = (
-        select(Invoice, Reseller, Panel.key, BotUser.username)
+        select(Invoice, Reseller, Panel.key, BotUser.username, display)
         .join(Reseller, Invoice.reseller_id == Reseller.id)
         .join(Panel, Invoice.panel_id == Panel.id)
         .outerjoin(BotUser, BotUser.telegram_id == Reseller.bot_chat_id)
         .where(*filters)
     )
-    col = _SORT_COLUMNS.get(sort, Invoice.period_start)
+    col = display if sort == "status" else _SORT_COLUMNS.get(sort, Invoice.period_start)
     # Deterministic tiebreaker: equal sort values must not shuffle rows across pages.
     query = (
         query.order_by(
@@ -263,15 +270,15 @@ async def list_invoices(
     )
     rows = (await session.execute(query)).all()
     clock = await issuance.schedule_days(session)
-    return [_to_out(inv, r.name, key, r.bot_chat_id, username, clock=clock, reseller=r)
-            for inv, r, key, username in rows]
+    return [_to_out(inv, r.name, key, r.bot_chat_id, username, clock=clock, reseller=r, display_status=display_status)
+            for inv, r, key, username, display_status in rows]
 
 
 @router.get("/{invoice_id}", response_model=InvoiceDetail)
 async def get_invoice(invoice_id: int, session: AsyncSession = Depends(get_session)) -> InvoiceDetail:
     row = (
         await session.execute(
-            select(Invoice, Reseller, Panel.key)
+            select(Invoice, Reseller, Panel.key, invoice_presentation.status_expression())
             .join(Reseller, Invoice.reseller_id == Reseller.id)
             .join(Panel, Invoice.panel_id == Panel.id)
             .where(Invoice.id == invoice_id)
@@ -279,7 +286,7 @@ async def get_invoice(invoice_id: int, session: AsyncSession = Depends(get_sessi
     ).first()
     if not row:
         raise HTTPException(404, "Invoice not found")
-    inv, reseller, key = row
+    inv, reseller, key, display_status = row
     lines = (
         await session.execute(
             select(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id)
@@ -287,7 +294,8 @@ async def get_invoice(invoice_id: int, session: AsyncSession = Depends(get_sessi
         )
     ).scalars().all()
     out = _to_out(inv, reseller.name, key, reseller.bot_chat_id,
-                  clock=await issuance.schedule_days(session), reseller=reseller)
+                  clock=await issuance.schedule_days(session), reseller=reseller,
+                  display_status=display_status)
     return InvoiceDetail(
         **out.model_dump(),
         lines=[

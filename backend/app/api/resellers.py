@@ -70,6 +70,7 @@ def _to_out(
     r: Reseller, panel_key: str, default_price: int,
     counts: dict[tuple[int, str], tuple[int, int]] | None = None,
     usernames: dict[int, str] | None = None,
+    reasons: dict[int, str] | None = None,
 ) -> ResellerOut:
     total, active = (counts or {}).get((r.panel_id, r.admin_uuid), (0, 0))
     # Fill % of the admin's user quota — what the capacity column sorts by. No limit → 0
@@ -84,6 +85,7 @@ def _to_out(
         bot_chat_id=r.bot_chat_id, panel_telegram_id=r.panel_telegram_id, link_tag=r.link_tag,
         username=(usernames or {}).get(r.bot_chat_id) if r.bot_chat_id else None,
         registered=r.bot_chat_id is not None, enforcement_state=r.enforcement_state.value,
+        restriction_reason=(reasons or {}).get(r.id),
         registration_deadline_at=r.registration_deadline_at, registration_blocked=r.registration_blocked,
         panel_max_users=r.panel_max_users, panel_max_active_users=r.panel_max_active_users,
         can_add_admin=r.can_add_admin,
@@ -276,7 +278,9 @@ async def list_resellers(
                 )
             ).all()
         }
-    return [_to_out(r, key, default_price, counts, usernames) for r, key in rows]
+    from app.services.invoice_presentation import restriction_reasons
+    reasons = await restriction_reasons(session, [r.id for r, _ in rows])
+    return [_to_out(r, key, default_price, counts, usernames, reasons) for r, key in rows]
 
 
 @router.get("/absent", response_model=list[AbsentResellerOut])
@@ -476,6 +480,8 @@ async def reseller_tree(
         if parent_key:
             children.setdefault(parent_key, []).append((r, key))
 
+    from app.services.invoice_presentation import restriction_reasons
+    reasons = await restriction_reasons(session, [r.id for r, _ in rows])
     emitted: set[tuple[int, str]] = set()
 
     def node(r: Reseller, key: str, ancestors: frozenset[tuple[int, str]]) -> dict:
@@ -491,7 +497,7 @@ async def reseller_tree(
                 cycle_detected = True
                 continue
             child_nodes.append(node(child, child_panel_key, next_ancestors))
-        out = _to_out(r, key, default_price, counts).model_dump()
+        out = _to_out(r, key, default_price, counts, reasons=reasons).model_dump()
         out["children"] = child_nodes
         out["descendant_count"] = _count(out["children"])
         out["cycle_detected"] = cycle_detected or any(
@@ -551,7 +557,8 @@ async def get_reseller(reseller_id: int, session: AsyncSession = Depends(get_ses
     panel = await session.get(Panel, r.panel_id)
     if panel is None:
         raise HTTPException(409, "Reseller references a missing panel")
-    return _to_out(r, panel.key, default_price)
+    from app.services.invoice_presentation import restriction_reasons
+    return _to_out(r, panel.key, default_price, reasons=await restriction_reasons(session, [r.id]))
 
 
 @router.patch("/{reseller_id}", response_model=ResellerOut)
@@ -600,7 +607,8 @@ async def update_reseller(
     panel = await session.get(Panel, r.panel_id)
     if panel is None:
         raise HTTPException(409, "Reseller references a missing panel")
-    return _to_out(r, panel.key, default_price)
+    from app.services.invoice_presentation import restriction_reasons
+    return _to_out(r, panel.key, default_price, reasons=await restriction_reasons(session, [r.id]))
 
 
 @router.post("/{reseller_id}/enforce")

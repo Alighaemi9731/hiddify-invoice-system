@@ -296,7 +296,7 @@ def test_get_user_identity_reports_the_live_owner(monkeypatch):
             return None
         async def get(self, url, headers=None):
             if url.endswith("/user/moved/"):
-                return _Response(200, json_data={"id": 5, "added_by_uuid": "AAAA1111-BBBB"})
+                return _Response(200, json_data={"uuid": "moved", "id": 5, "added_by_uuid": "AAAA1111-BBBB"})
             return _Response(404)
 
     monkeypatch.setattr(admin_api.httpx, "AsyncClient", FakeClient)

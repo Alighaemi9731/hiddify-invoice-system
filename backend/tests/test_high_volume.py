@@ -174,3 +174,14 @@ def test_rows_expose_snapshot_id_and_keep_the_uuid_truncated():
             assert len(r["user_uuid"]) <= 8
 
     _run(body)
+
+
+def test_v14_tombstone_is_not_a_live_large_quota_even_after_fresh_sync():
+    async def body(s):
+        p = await _seed(s)
+        tombstone = _user(p.id, 'ROOT', 1000, THIS_MONTH, 'soft-deleted', consumed=0)
+        tombstone.panel_deleted = True
+        s.add(tombstone)
+        await s.commit()
+        assert await hv.high_volume_users(s, threshold=1000) == []
+    _run(body)

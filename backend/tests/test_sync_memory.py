@@ -78,7 +78,7 @@ async def test_only_one_panel_writes_at_a_time(tmp_path, monkeypatch):
     high_water = 0
     real_upsert = sync_service._upsert_users
 
-    async def counting_upsert(session, panel, data, now):  # noqa: ANN001
+    async def counting_upsert(session, panel, data, now, **kwargs):  # noqa: ANN001
         nonlocal inside, high_water
         inside += 1
         high_water = max(high_water, inside)
@@ -86,7 +86,7 @@ async def test_only_one_panel_writes_at_a_time(tmp_path, monkeypatch):
             # Yield control so any other panel that COULD run concurrently would be observed
             # here. Without the gate this reliably reaches 3 (_SYNC_ALL_CONCURRENCY).
             await asyncio.sleep(0)
-            return await real_upsert(session, panel, data, now)
+            return await real_upsert(session, panel, data, now, **kwargs)
         finally:
             inside -= 1
 

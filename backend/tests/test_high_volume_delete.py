@@ -81,7 +81,7 @@ class FakeClient:
         self.lookups.append((user_uuid, api_key))
         if self._lookup_exc is not None:
             raise RuntimeError(self._lookup_exc)
-        if api_key is None:                                  # super-admin oracle
+        if api_key == "super":                               # super-admin oracle
             v = self._verify
             return v(user_uuid, len(self.deletes)) if callable(v) else v
         r = self._resolve
@@ -225,7 +225,7 @@ def test_owning_admin_key_for_writes_super_admin_for_verification(tmp_path):
 
         assert client.lookups[0] == ("uuid-big-1", "A")     # resolve AS the owning admin
         assert client.deletes[0][1] == "A"                  # write AS the owning admin
-        assert client.lookups[-1] == ("uuid-big-1", None)   # verify as super-admin
+        assert client.lookups[-1] == ("uuid-big-1", "super")   # verify as super-admin
 
     _run(body, tmp_path)
 
@@ -484,3 +484,115 @@ def test_endpoint_rejects_an_empty_or_oversized_batch(tmp_path):
     with pytest.raises(ValidationError):
         HighVolumeDeleteBody(snapshot_ids=list(range(201)))
     assert HighVolumeDeleteBody(snapshot_ids=[1, 2]).threshold is None
+
+
+def test_v14_delete_repeated_backups_do_not_resurrect_removed_user(tmp_path, monkeypatch):
+    """Exercise the real HTTP adapter, native UUID bulk delete, purge, and later backup sync."""
+    import datetime as dt
+    import json
+
+    import httpx
+
+    from app.models import EndUserRemoval
+    from app.services import sync
+    from app.services.panel_client.admin_api import AdminApiClient
+    from app.services.panel_client.base import parse_backup
+    from tests.test_panel_compat_reads import transport
+
+    native = {'id': 77, 'uuid': 'uuid-big-1', 'added_by_uuid': 'A',
+              'usage_limit_GB': 1000, 'current_usage_GB': 3,
+              'start_date': dt.date.today().replace(day=1).isoformat(), 'deleted': False}
+    posts = []
+    def handle(request):
+        path = request.url.path
+        if path.endswith('/admin/user/'):
+            return httpx.Response(404)
+        if path.endswith('/user/uuid-big-1/'):
+            assert request.headers['Hiddify-API-Key'] in ('A', 'super')
+            return httpx.Response(404) if native['deleted'] else httpx.Response(200, json=native)
+        if path.endswith('/users/uuid-big-1/'):
+            return httpx.Response(200, json={'user': native})
+        if path.endswith('/users/bulk/'):
+            assert request.headers['Hiddify-API-Key'] == 'A'
+            body = json.loads(request.content)
+            assert body == {'action': 'delete', 'uuids': ['uuid-big-1']}
+            native['deleted'] = True  # v14 keeps the row in the backup
+            posts.append(body)
+            return httpx.Response(200, json={'count': 1})
+        raise AssertionError(path)
+    transport(monkeypatch, handle)
+
+    async def body(s):
+        snap = await _seed(s)
+        panel = await s.get(Panel, 1)
+        panel.proxy_path = 'secret'
+        now = dt.datetime.now(dt.timezone.utc)
+        result = await end_user_delete.delete_end_users(s, [snap.id], client=AdminApiClient())
+        assert result.deleted == 1 and result.purged == 1
+        assert len(posts) == 1 and native['deleted'] is True
+        assert await _counts(s) == (0, 0, 0)
+        assert await s.get(EndUserRemoval, (1, native['uuid'])) is not None
+        data = parse_backup({'admin_users': [], 'users': [native]})
+        for _ in range(2):
+            await sync._upsert_users(s, panel, data, dt.datetime.now(dt.timezone.utc))
+            await s.commit()
+            assert await _counts(s) == (0, 0, 0)
+        # A backup fetched before the deletion cannot resurrect it, even if it says live.
+        native['deleted'] = False
+        live = parse_backup({'admin_users': [], 'users': [native]})
+        await sync._upsert_users(s, panel, live, dt.datetime.now(dt.timezone.utc), observed_at=now)
+        await s.commit()
+        assert await _counts(s) == (0, 0, 0)
+        # A later confirmed recreation is a new live service and is billable again.
+        await sync._upsert_users(s, panel, live, dt.datetime.now(dt.timezone.utc))
+        await s.commit()
+        assert (await _counts(s))[0] == 1
+        assert await s.get(EndUserRemoval, (1, native['uuid'])) is None
+    _run(body, tmp_path)
+
+
+def test_configured_limited_key_cannot_prove_absence(tmp_path, monkeypatch):
+    import httpx
+
+    from app.services.panel_client.admin_api import AdminApiClient
+    from tests.test_panel_compat_reads import transport
+
+    def handle(request):
+        assert request.method == 'GET'
+        if request.headers['Hiddify-API-Key'] == 'super':
+            return httpx.Response(200, json={'id': 77, 'uuid': 'uuid-big-1', 'added_by_uuid': 'other'})
+        return httpx.Response(404)  # both stale owner and configured non-owner key hide the user
+    transport(monkeypatch, handle)
+    async def body(s):
+        snap = await _seed(s)
+        panel = await s.get(Panel, 1)
+        panel.proxy_path = 'secret'
+        panel.admin_api_key = 'limited'
+        result = await end_user_delete.delete_end_users(s, [snap.id], client=AdminApiClient())
+        assert result.rows[0].status == DeleteStatus.owner_mismatch
+        assert result.purged == 0
+        assert await _counts(s) == (1, 1, 1)
+    _run(body, tmp_path)
+
+
+def test_malformed_success_response_never_means_absent(tmp_path, monkeypatch):
+    import httpx
+
+    from app.services.panel_client.admin_api import AdminApiClient
+
+    original = httpx.AsyncClient
+    for index, payload in enumerate(([], {}, {'uuid': 'uuid-big-1'}, {'uuid': 'other', 'id': 77})):
+        def handle(request):
+            assert request.method == 'GET'
+            return httpx.Response(200, json=payload)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: original(
+            **kw, transport=httpx.MockTransport(handle)))
+        async def body(s):
+            snap = await _seed(s)
+            panel = await s.get(Panel, 1)
+            panel.proxy_path = 'secret'
+            result = await end_user_delete.delete_end_users(s, [snap.id], client=AdminApiClient())
+            assert result.rows[0].status == DeleteStatus.lookup_failed
+            assert result.purged == 0
+            assert await _counts(s) == (1, 1, 1)
+        _run(body, tmp_path, name=f'malformed-{index}.db')
