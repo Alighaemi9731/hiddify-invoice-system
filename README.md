@@ -187,13 +187,15 @@ sudo invoice-panel-addon --check
 ### First steps after install
 
 1. **Settings** → set the Telegram bot token; `/start` the bot as owner.
-2. **Panels** → add each Hiddify panel (admin link + API key) and sync.
-3. **Settings** → pricing, payment methods (wallets/card), message templates, schedules.
-4. **Invoices** → generate a period, review drafts, send. The scheduler automates the
-   monthly run, reminders, syncs, rate refresh, and backups thereafter.
-5. Review enforcement before syncing live data: current seed defaults enable enforcement
+2. Review enforcement before syncing live data: current seed defaults enable enforcement
    and the 72-hour registration grace. Set `enforcement_enabled=false` for dry-run and
    review `registration_enforcement_enabled`; existing saved settings survive updates.
+3. **Settings** → pricing, payment methods (wallets/card), message templates, schedules.
+4. **Panels** → add each Hiddify panel (admin link + API key), install/check its host
+   add-on, run preflight, and sync.
+5. **Invoices** → generate a period, review drafts, then issue. Issuance starts collection
+   even if Telegram delivery fails. The scheduler automates the monthly run, reminders,
+   syncs, rate refresh, and backups thereafter.
 
 ---
 
