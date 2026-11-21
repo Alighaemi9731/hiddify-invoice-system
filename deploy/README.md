@@ -1,12 +1,15 @@
 # Production deployment
 
 Production stack: **Caddy** (automatic HTTPS) in front of the **React SPA** and the
-**FastAPI backend**, with **PostgreSQL** and the **Telegram bot** — all in Docker.
+**FastAPI backend**, with **PostgreSQL**, a dedicated **scheduler**, and the
+**Telegram bot** — six services in Docker.
 One domain serves everything (`/api/*` → backend, the rest → SPA).
 
 The invoice application runs on the central server. The **panel add-on** has its own
 installer for each existing Hiddify host; see [PANEL_ADDON.md](../docs/PANEL_ADDON.md).
 The two installers are independent.
+
+راهنمای فارسی مرحله‌به‌مرحله: [نصب و نگهداری](../docs/OPERATIONS_FA.md).
 
 ## Requirements
 - A server running **Ubuntu 24.04 or 26.04** with a public IP.
@@ -163,7 +166,12 @@ be discarded.
 - `relay.sh` — optional nginx SNI **TLS-passthrough relay** template (panel origins +
   optional co-located invoice panel). Edit the map at the top before running.
 
-## Install on a fresh server from the PRIVATE GitHub repo (deploy key)
+## Optional source checkout from a private repository
+
+The published release installer above is the normal installation/update path and does
+not need Git, a GitHub account, or a deploy key for public releases. The legacy bootstrap
+below requires an existing source checkout containing `deploy/bootstrap.sh`; it is not a
+fresh-server download command and follows the repository rather than a verified release.
 
 One-time setup of a read-only key on the server:
 ```bash
@@ -173,7 +181,7 @@ cat ~/.ssh/invoice_deploy.pub
 Add that public key in **GitHub → repo → Settings → Deploy keys → Add deploy key**
 (leave *Allow write access* **unchecked**).
 
-Then clone + install in one go:
+From that existing checkout:
 ```bash
 sudo REPO=git@github.com:Alighaemi9731/hiddify-invoice-system.git \
      KEY=~/.ssh/invoice_deploy \

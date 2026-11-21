@@ -59,7 +59,8 @@ So the fleet stamps its own liveness, mirroring the scheduler pattern:
 2. `cd /opt/hiddify-invoice-system && docker compose --env-file .env -f deploy/docker-compose.prod.yml ps`
    — any container not `healthy`?
 3. `curl -sS https://<domain>/health` from the host: `database` not ok → check `db`
-   container/disk; `scheduler` stale → `docker compose logs --since=30m scheduler`.
+   container/disk; `scheduler` stale → from the project directory run
+   `docker compose --env-file .env -f deploy/docker-compose.prod.yml logs --since=30m scheduler`.
 4. Full-stack restart if needed:
    `docker compose --env-file .env -f deploy/docker-compose.prod.yml restart`.
 5. Rollback path if a fresh deploy caused it: `sudo deploy/rollback.sh <prior-tag>`

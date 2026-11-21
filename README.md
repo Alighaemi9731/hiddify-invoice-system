@@ -10,8 +10,11 @@ suspension cycle through the Hiddify Admin API, restoring service automatically 
 payment. It replaces an error-prone manual desktop workflow with a fully audited,
 self-hosted product.
 
-Runs in production against ~10 panels and ~400 resellers. Owner UI is **Persian (RTL)**;
+Supports a fleet of Hiddify panels and their reseller hierarchies. Owner UI is **Persian (RTL)**;
 all money is Toman with live crypto conversion.
+
+**راهنمای فارسی:** [نصب، تنظیمات، امکانات و نگهداری](docs/OPERATIONS_FA.md) ·
+[نصب مستقل افزونه هیدیفای](docs/PANEL_ADDON.md).
 
 ---
 
@@ -35,7 +38,8 @@ all money is Toman with live crypto conversion.
 - USDT (BEP-20), TON, AVAX and card-to-card — each method individually toggleable.
 - Live Toman rates (Tetherland/Wallex primary, CoinGecko-derived AVAX) with plausibility
   guards and manual fallback; every proof is tied to explicitly selected invoices and
-  confirmed manually, with optional on-chain verification for USDT.
+  reviewed manually or automatically confirmed from a matching, recent on-chain TXID
+  for USDT, TON or AVAX. Card transfers and screenshots require manual review.
 - Confirm/reject is fully reversible, settles exactly the selected invoice set, and
   lifting a suspension on payment is a durable queued operation — not a request-path
   side effect.
@@ -61,12 +65,14 @@ all money is Toman with live crypto conversion.
   so there is no portal-only mutation bypass.
 
 ### Enforcement (dunning)
-- Configurable D+3 / D+5 / D+10 / D+30 reminder → warning → suspension timeline per unpaid
-  invoice, re-anchored automatically when the owner grants a payment deadline.
+- Configurable D+3 / D+5 / D+10 / D+30 reminder → warning → suspension timeline per issued,
+  unpaid invoice, including undelivered invoices. Collection starts at issuance and
+  is re-anchored when the owner grants a payment deadline; Telegram delivery is separate.
 - Suspension and restore are **durable queue actions** processed in bounded, resumable
   chunks using Hiddify's native bulk operations — safe at thousands-of-users scale, with
-  snapshots of prior limits for exact restore. Defaults to **dry-run** until explicitly
-  enabled.
+  snapshots of prior limits for exact restore. `enforcement_enabled=false` selects
+  **dry-run**; the current seed default is **true**. Review this setting before adding
+  live panels; upgrades preserve saved values.
 - A limits-only **freeze** mode stops a sub-reseller from creating/expanding users while
   keeping existing users online.
 
@@ -185,7 +191,9 @@ sudo invoice-panel-addon --check
 3. **Settings** → pricing, payment methods (wallets/card), message templates, schedules.
 4. **Invoices** → generate a period, review drafts, send. The scheduler automates the
    monthly run, reminders, syncs, rate refresh, and backups thereafter.
-5. When ready for real enforcement, flip `enforcement_enabled` (defaults to dry-run).
+5. Review enforcement before syncing live data: current seed defaults enable enforcement
+   and the 72-hour registration grace. Set `enforcement_enabled=false` for dry-run and
+   review `registration_enforcement_enabled`; existing saved settings survive updates.
 
 ---
 
@@ -229,7 +237,12 @@ cd frontend && npx tsc --noEmit && npm test -- --run && npm run build
 
 | Document | Contents |
 |---|---|
+| [راهنمای فارسی](docs/OPERATIONS_FA.md) | نصب، شروع کار، امکانات، تغییر IP، به‌روزرسانی، بکاپ و عیب‌یابی |
 | [Panel add-on](docs/PANEL_ADDON.md) | دستور مستقل افزونه هیدیفای ۱۲/۱۴، بررسی سلامت، بکاپ و حذف |
+| [Panel compatibility](docs/HIDDIFY_COMPATIBILITY.md) | پشتیبانی دقیق نسخه‌ها، preflight و قراردادهای API |
+| [Panel upgrade](docs/HIDDIFY_UPGRADE.md) | ارتقای مرحله‌ای هیدیفای و maintenance |
+| [Broadcast](docs/BROADCAST.md) | فیلتر مخاطبان، پیش‌نمایش و ارسال هدفمند |
+| [Monitoring](docs/MONITORING.md) | سلامت دیتابیس، زمان‌بند، بات‌ها و پایش بیرونی |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Full system design, data model, flows, diagrams |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Schema evolution, migrations, backup/restore semantics |
 | [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) | Release gate, packaging, deploy, smoke, rollback |
