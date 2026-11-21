@@ -6,20 +6,22 @@ Hiddify Reseller Management & Invoicing System — production architecture.
 
 The system automates what was previously a manual monthly process: read every Hiddify
 panel, work out what each reseller sold, bill them, deliver the invoice on Telegram,
-collect owner-confirmed payments, and chase/suspend non-payers.
+collect manually or automatically verified payments, and chase/suspend non-payers.
 
 Design principles:
 
 - **One source of usage truth:** each panel's backup JSON (read), snapshotted into Postgres.
-- **Write only where needed:** enforcement (disable users / zero limits) uses the Hiddify Admin REST API; everything else is read-only.
+- **Separate reads and writes:** sync reads panel backups; enforcement, reseller management,
+  storefront provisioning, renewals and deletion use scoped panel write operations.
 - **Bootstrap vs runtime config:** `.env` only bootstraps; the owner edits everything else from the web panel (stored in DB, secrets encrypted).
-- **Phase-2-ready:** modular services, a `PanelClient` interface, and a scheduler that can move to systemd later — no rewrite.
+- **Separate workers:** API, scheduler and bot run in separate containers using shared
+  application services and PostgreSQL; host systemd manages updating and external monitoring.
 
 ## 2. Components & data flow
 
 ```mermaid
 flowchart LR
-    subgraph Panels["Hiddify panels (~10)"]
+    subgraph Panels["Hiddify panels (12.0.0 / 14.2.0)"]
         P1[(Panel 1)]
         P2[(Panel N)]
     end
@@ -30,7 +32,7 @@ flowchart LR
         ENGINE[Invoice engine<br/>+ pricing Toman→USDT]
         PDF[PDF builder<br/>Persian / RTL]
         DUN[Dunning + enforcement<br/>PanelClient: admin-API adapter]
-        PAY[Payment workflow<br/>manual review + optional BscScan check]
+        PAY[Payment workflow<br/>manual review + on-chain TXID verification]
         API[REST API + JWT auth]
         SCHED[Scheduler<br/>monthly + daily jobs]
     end
@@ -41,7 +43,7 @@ flowchart LR
     end
 
     RESELLER([Reseller])
-    CHAIN[(BSC chain<br/>via BscScan API)]
+    CHAIN[(BSC / TON / Avalanche<br/>chain readers)]
     CHANNEL[[Announcement channel]]
 
     P1 -- backup JSON --> SYNC
@@ -61,7 +63,7 @@ flowchart LR
     BOT -- membership check --> CHANNEL
     RESELLER -- chosen invoice + proof --> BOT
     BOT --> PAY
-    PAY -. optional USDT check .-> CHAIN
+    PAY -. verify TXID .-> CHAIN
     PAY -- mark paid + auto-restore --> DUN
 ```
 
@@ -83,15 +85,17 @@ sequenceDiagram
     SY->>SY: upsert resellers + end_user_snapshots
     S->>E: generate invoices for previous month
     E->>E: bundle sub-resellers; Σ usage_limit_GB of services created in month (skip 1GB); ×price; →USDT
-    E->>B: send invoice
+    E->>E: issue invoice and start collection clock
+    E->>B: attempt invoice delivery
     B->>R: invoice text + exact-invoice payment button
-    Note over S,R: if unpaid → D+3 reminder, D+5 reminder, D+10 warning, D+30 enforcement (dry-run unless enabled)
+    Note over S,R: collection runs from issuance, even without delivery; D+3/5/10/30 (dry-run when enforcement_enabled=false)
     R->>B: choose invoice; submit TXID/receipt
     B->>V: create pending payment for that invoice
-    V->>V: owner reviews manually
-    Note over V: USDT/BSC can optionally be checked through BscScan
-    V-->>B: owner confirms
-    V->>P: (if enforced) re-enable users + restore limits
+    V->>V: review proof or verify recent matching TXID on-chain
+    Note over V: card/screenshots require manual review; TXID auto-confirm follows configured gates
+    V-->>B: payment confirmed
+    V->>S: queue durable restore if enforced
+    S->>P: worker re-enables users and restores limits
     B->>R: payment confirmed
 ```
 
@@ -130,7 +134,8 @@ classDiagram
     PanelClient <|.. AdminApiClient
 ```
 
-Read path = `BackupJsonClient` (the `/admin/backup/backupfile/` endpoint). Write path =
+Read path = `BackupJsonClient` (v12 `/admin/backup/backupfile/`, v14
+`/api/v2/admin/backup/download/`; see [compatibility](HIDDIFY_COMPATIBILITY.md)). Write path =
 `AdminApiClient` (Hiddify Admin REST API, needs the per-panel admin API key). Enforcement
 uses the write path. New read/payment adapters should be introduced only with an implemented
 workflow and migration, not as dormant enum values.
@@ -199,7 +204,7 @@ remaining stable across restarts. Monthly invoicing and daily dunning remain cal
 jobs. All schedule settings, including `rate_refresh_hours`, are live-applied. Each repeating
 job carries its **own** anchor offset so that independent jobs do not fire on the same minute:
 their memory peaks add, and a shared midnight epoch once put the scheduler at ~87% of its cap
-four times a day. See `CLAUDE.md` → Scheduler.
+four times a day. See [monitoring](MONITORING.md) for worker health and applied schedules.
 
 The active enums intentionally contain only values produced by implemented workflows.
 Migration `3f2a7c91b8e4` normalizes obsolete labels from older installations before the

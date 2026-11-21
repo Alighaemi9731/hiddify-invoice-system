@@ -75,8 +75,10 @@ relay first** so Caddy's first ACME attempt can reach it.
   account creation consumes both tokens once. Both are printed by the installer.
 - A failed domain/certificate attempt does not create an owner or consume the token. Correct DNS
   before continuing. If a certificate is still issuing, wait before opening the HTTPS link.
-- **Settings tab** → set the Telegram **bot token**, **USDT wallet** (BEP-20),
-  **BscScan API key**, exchange rate, and (optionally) the **master xpub**.
+- **Settings tab** → set the Telegram **bot token**, enabled payment methods and destination
+  wallets/card, exchange rate, and (optionally) the **master xpub**. Submitted USDT/TON/AVAX
+  TXIDs use chain readers; a BscScan key is only needed for the separate optional legacy
+  BscScan check, not the normal RPC-based automatic confirmation.
 - **Panels tab** → add your real Hiddify panels (paste each admin link) and sync.
 - Certificate **renewal is automatic** (Caddy).
 
@@ -189,7 +191,8 @@ sudo REPO=git@github.com:Alighaemi9731/hiddify-invoice-system.git \
      bash deploy/bootstrap.sh
 ```
 This clones to `/opt/hiddify-invoice-system`, then runs `deploy/install.sh`
-(Docker + secure `.env` + Caddy auto-HTTPS). Updating later: re-run `bootstrap.sh`.
+(Docker + secure `.env` + Caddy auto-HTTPS). For later updates use
+`sudo bash /opt/hiddify-invoice-system/deploy/release-installer.sh`.
 
 ## Hiddify 12/14 compatibility
 
