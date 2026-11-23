@@ -30,7 +30,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Panel, Reseller
-from app.services.panel_client.admin_api import AdminApiClient, AdminExistsError
+from app.services.panel_client.admin_api import (
+    AdminApiClient,
+    AdminExistsError,
+    AdminVerificationError,
+)
 from app.services.testconfig import (
     panel_choices,  # noqa: F401 — same query, re-exported
 )
@@ -53,7 +57,7 @@ class NewResellerResult:
     link: str | None = None
     reseller_id: int | None = None
     saved: bool = True  # False = created on the panel but the local row didn't commit
-    reason: str | None = None  # "no_admin" | "exists" | "error"
+    reason: str | None = None  # "no_admin" | "exists" | "verification" | "error"
 
 
 def clean_name(raw: str | None) -> str:
@@ -82,8 +86,11 @@ async def create(session: AsyncSession, panel: Panel, *, name: str) -> NewResell
         )
     except AdminExistsError:
         return NewResellerResult(False, name=name, reason="exists")
-    except Exception:  # noqa: BLE001 — the bot reports a clean failure, never a traceback
-        log.warning("reseller create failed on panel %s", panel.key, exc_info=True)
+    except AdminVerificationError:
+        log.warning("reseller create unverified on panel %s; inspect before retrying", panel.key)
+        return NewResellerResult(False, name=name, reason="verification")
+    except Exception as exc:  # noqa: BLE001 — remote exceptions can contain credentials
+        log.warning("reseller create failed on panel %s (%s)", panel.key, type(exc).__name__)
         return NewResellerResult(False, name=name, reason="error")
 
     link = panel.admin_link(uid, tag=name)
@@ -94,8 +101,7 @@ async def create(session: AsyncSession, panel: Panel, *, name: str) -> NewResell
         # The admin EXISTS on the panel now; the next sync will pick it up. Losing the link the
         # owner is waiting for would be the worse failure, so report it either way.
         await session.rollback()
-        log.warning("reseller %s created on %s but not saved locally", uid, panel.key,
-                    exc_info=True)
+        log.warning("reseller created on %s but not saved locally", panel.key)
         result.saved = False
     return result
 

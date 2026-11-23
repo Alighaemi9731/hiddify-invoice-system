@@ -1895,6 +1895,7 @@ async def sf_admin_renew(cb: CallbackQuery, bot: Bot) -> None:
         # admins, who would otherwise never learn the service was renewed.
         await storefront_notify.notify_renewal(
             sf_id=sf_id, order_id=oid, automatic=False, bot=bot,
+            operation_id=res.operation_id,
             exclude_chat_id=cb.from_user.id)
 
 

@@ -46,6 +46,7 @@ class SubResult:
     days: int = 0
     short_toman: int = 0
     message: str | None = None
+    operation_id: int | None = None
 
 
 async def _panel_ctx(s: AsyncSession, order: StorefrontOrder):  # noqa: ANN001, ANN202
@@ -71,7 +72,7 @@ def _cached_renew_result(op: StorefrontOperation) -> SubResult:
     """Build the SubResult for an idempotent REPLAY of a terminal renewal operation (no re-charge)."""
     if op.status == "done":
         return SubResult(True, price=(0 if op.by_admin else int(op.price_toman)),
-                         gb=int(op.gb), days=int(op.days))
+                         gb=int(op.gb), days=int(op.days), operation_id=op.id)
     return SubResult(False, "error")   # failed / reversed → the renewal did not ultimately succeed
 
 
@@ -299,7 +300,8 @@ async def renew(
             if op2 is not None:
                 await storefront_ops.finalize(s, op2, "done", result_order_id=order_id)
             await s.commit()
-        return SubResult(True, price=(0 if by_admin else price), gb=gb, days=days)
+        return SubResult(True, price=(0 if by_admin else price), gb=gb, days=days,
+                         operation_id=op_pk)
 
 
 @storefront_write(SubResult)

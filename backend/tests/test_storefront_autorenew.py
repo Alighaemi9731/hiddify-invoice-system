@@ -351,6 +351,10 @@ def test_fire_settles_the_hold_and_is_one_shot(tmp_path, monkeypatch):
 
         res = await storefront_autorenew.fire(Session, order_id=oid)
         assert res.ok, res
+        assert res.operation_id is not None
+        async with Session() as s:
+            operation = await s.get(StorefrontOperation, res.operation_id)
+            assert operation.order_id == oid and operation.price_toman == res.price
         assert calls.get("renew") == 1                  # panel renewed exactly once
         # the hold BECAME the payment — no SECOND debit; balance stays at the arm-time reservation
         assert await _wallet(Session, cid) == 70_000
@@ -395,6 +399,7 @@ def test_fire_replay_same_arm_does_not_double_settle(tmp_path, monkeypatch):
         r2 = await storefront_subscription.renew(
             Session, order_id=oid, op_id=op_id, prepaid_hold_txn_id=hid, locked_price_toman=30_000)
         assert r2.ok
+        assert r2.operation_id == r1.operation_id and r1.operation_id is not None
         assert calls.get("renew") == 1
         assert await _txn_count(Session, cid, "purchase") == 1
         assert await _wallet(Session, cid) == 70_000

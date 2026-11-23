@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+import runpy
+import sys
+from enum import StrEnum
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/rc.db")
 os.environ.setdefault("SECRET_KEY", "k")
 
+import httpx  # noqa: E402
 import pytest  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
@@ -20,8 +25,14 @@ from app.core.db import Base  # noqa: E402
 from app.models import Panel, Reseller  # noqa: E402
 from app.services import resellercreate, sync  # noqa: E402
 from app.services.panel_client import admin_api  # noqa: E402
-from app.services.panel_client.admin_api import AdminExistsError  # noqa: E402
+from app.services.panel_client.admin_api import (  # noqa: E402
+    AGENT_CAPABILITIES,
+    AdminExistsError,
+    AdminVerificationError,
+)
 from app.services.panel_client.base import PanelAdmin, PanelData  # noqa: E402
+from tests.test_panel_compat_reads import panel as api_panel  # noqa: E402
+from tests.test_panel_compat_reads import transport
 
 OWNER_UUID = "11111111-1111-4111-8111-111111111111"
 
@@ -274,69 +285,170 @@ def test_owner_menu_label_opens_the_panel_picker():
 
 # ---------------- the API client's request shape ----------------
 
-def test_create_admin_sends_every_field_the_panel_requires(monkeypatch):
+@pytest.mark.parametrize("generation", [12, 14])
+def test_create_admin_sends_every_field_the_panel_requires(monkeypatch, generation):
     """`AdminSchema` marks name/mode/can_add_admin/lang REQUIRED — a body missing any is rejected."""
     captured: dict = {}
 
-    class _Resp:
-        status_code = 200
-
-        @staticmethod
-        def json() -> dict:
-            return {"uuid": "ABC-DEF"}
-
-    class _Client:
-        def __init__(self, *a, **kw) -> None:  # noqa: ANN002, ANN003
-            pass
-
-        async def __aenter__(self):  # noqa: ANN204
-            return self
-
-        async def __aexit__(self, *a) -> bool:  # noqa: ANN002
-            return False
-
-        async def post(self, url, headers=None, json=None):  # noqa: ANN001, A002
-            captured.update(url=url, headers=headers, body=json)
-            return _Resp()
-
-    monkeypatch.setattr(admin_api.httpx, "AsyncClient", _Client)
-    panel = SimpleNamespace(admin_api_base="https://p/api/v2/admin",
-                            admin_api_key="OTHER", owner_uuid=OWNER_UUID)
+    import json
+    reads = []
+    def handle(request):
+        assert request.headers["Hiddify-API-Key"] == OWNER_UUID
+        if request.method == "POST":
+            captured.update(url=str(request.url), headers=request.headers, body=json.loads(request.content))
+            return httpx.Response(200, json={"uuid": "ignored-response-uuid"})
+        reads.append(request.url.path)
+        if request.url.path.endswith(f"/{OWNER_UUID}/"):
+            owner = {"uuid": OWNER_UUID, "mode": "super_admin"}
+            if generation == 14:
+                owner["capabilities"] = None  # field presence, not truthiness
+            return httpx.Response(200, json=owner)
+        return httpx.Response(200, json=captured["body"])
+    transport(monkeypatch, handle)
+    panel = api_panel()
+    panel.owner_uuid = OWNER_UUID
     uid = asyncio.run(admin_api.AdminApiClient().create_admin(
         panel, name="n", api_key=OWNER_UUID, parent_admin_uuid=OWNER_UUID,
         admin_uuid="AAAA-BBBB",
     ))
     body = captured["body"]
-    assert captured["url"] == "https://p/api/v2/admin/admin_user/"
+    assert captured["url"] == f"{panel.admin_api_base}/admin_user/"
     assert captured["headers"]["Hiddify-API-Key"] == OWNER_UUID
     assert body["mode"] == "agent" and body["can_add_admin"] is False and body["lang"] == "fa"
     assert body["name"] == "n" and body["parent_admin_uuid"] == OWNER_UUID
     assert body["uuid"] == "aaaa-bbbb"  # lowercased: `_norm_uuid` lowercases everything sync sees
     assert "password" not in body and "new_password" not in body
-    assert uid == "abc-def"
+    assert uid == "aaaa-bbbb"  # requested identity, verified by GET; never trust a POST uuid
+    assert reads == [f"/secret/api/v2/admin/admin_user/{OWNER_UUID}/",
+                     "/secret/api/v2/admin/admin_user/aaaa-bbbb/"]
+    if generation == 14:
+        assert body["capabilities"] == AGENT_CAPABILITIES
+    else:
+        # v12 AdminSchema rejects unknown fields; do not send v14-only capabilities.
+        assert set(body) == {"uuid", "name", "mode", "can_add_admin", "lang",
+                             "parent_admin_uuid", "max_users", "max_active_users"}
 
 
 def test_create_admin_maps_the_duplicate_uuid_answer(monkeypatch):
-    class _Resp:
-        status_code = 400
-        text = "The admin exists"
-
-    class _Client:
-        def __init__(self, *a, **kw) -> None:  # noqa: ANN002, ANN003
-            pass
-
-        async def __aenter__(self):  # noqa: ANN204
-            return self
-
-        async def __aexit__(self, *a) -> bool:  # noqa: ANN002
-            return False
-
-        async def post(self, *a, **kw):  # noqa: ANN002, ANN003
-            return _Resp()
-
-    monkeypatch.setattr(admin_api.httpx, "AsyncClient", _Client)
-    panel = SimpleNamespace(admin_api_base="https://p/api/v2/admin",
-                            admin_api_key=None, owner_uuid=OWNER_UUID)
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"uuid": OWNER_UUID, "mode": "super_admin"})
+        return httpx.Response(400, text="The admin exists")
+    transport(monkeypatch, handle)
+    panel = api_panel()
+    panel.owner_uuid = OWNER_UUID
     with pytest.raises(AdminExistsError):
         asyncio.run(admin_api.AdminApiClient().create_admin(
             panel, name="n", api_key=OWNER_UUID, parent_admin_uuid=OWNER_UUID))
+
+
+def _v14_policy(monkeypatch):
+    """Execute the actual panel policy fixture, without importing the running panel/app."""
+    class AdminMode(StrEnum):
+        agent = "agent"
+        admin = "admin"
+        super_admin = "super_admin"
+    monkeypatch.setitem(sys.modules, "hiddifypanel.models.admin", SimpleNamespace(AdminMode=AdminMode))
+    return SimpleNamespace(**runpy.run_path(str(Path(__file__).parent / "fixtures/hiddify14_admin_capabilities.py")))
+
+
+def test_real_v14_merge_grants_agent_customization_without_management(monkeypatch):
+    caps = _v14_policy(monkeypatch)
+    owner = SimpleNamespace(mode="super_admin", capabilities=None)
+    # This is how validate_admin_write_payload expands the OLD request (can_add_admin=False).
+    old = caps.merge_for_actor(owner, {"add_sub_admins": False}, creating=True)
+    assert not any(old.values())
+    effective = caps.merge_for_actor(owner, AGENT_CAPABILITIES, creating=True)
+    assert effective == caps.defaults_for_mode("agent", can_add_admin=False)
+    agent = SimpleNamespace(mode="agent", capabilities=effective, can_add_admin=False)
+    assert caps.has(agent, "modify_user_extra")
+    assert caps.has(agent, "add_extra_sublinks")
+    assert not any(caps.has(agent, k) for k in (
+        "add_sub_admins", "override_preferred_outbound", "modify_domains", "modify_outbounds"))
+
+
+@pytest.mark.parametrize("corruption", [
+    "modify_user_extra", "add_extra_sublinks", "add_sub_admins", "modify_domains",
+    "modify_outbounds", "override_preferred_outbound", "mode", "can_add_admin", "uuid",
+    "parent_admin_uuid", "missing_caps", "read_error", "max_users",
+])
+def test_successful_post_is_not_enough_without_correct_readback(monkeypatch, corruption):
+    import json
+    state = {}
+    def handle(request):
+        if request.url.path.endswith("/admin_user/owner/"):
+            return httpx.Response(200, json={"uuid": "owner", "mode": "super_admin", "capabilities": None})
+        if request.method == "POST":
+            state.update(json.loads(request.content))
+            return httpx.Response(200, json=state)
+        if corruption == "read_error":
+            return httpx.Response(503)
+        row = {**state, "capabilities": dict(state["capabilities"])}
+        if corruption in AGENT_CAPABILITIES:
+            row["capabilities"][corruption] = not AGENT_CAPABILITIES[corruption]
+        elif corruption == "missing_caps":
+            row.pop("capabilities")
+        else:
+            row[corruption] = {"mode": "super_admin", "can_add_admin": True,
+                               "uuid": "another", "parent_admin_uuid": "another", "max_users": 999}[corruption]
+        return httpx.Response(200, json=row)
+    transport(monkeypatch, handle)
+    with pytest.raises(AdminVerificationError):
+        asyncio.run(admin_api.AdminApiClient().create_admin(
+            api_panel(), name="n", api_key="owner", parent_admin_uuid="owner", admin_uuid="new"))
+
+
+@pytest.mark.parametrize("response", [401, 403, 404, 500, "wrong_actor", "invalid_contract"])
+def test_unverified_owner_never_falls_back_to_legacy_creation(monkeypatch, response):
+    def handle(request):
+        assert request.method == "GET"  # no POST on auth, transport, or schema failure
+        if isinstance(response, int):
+            return httpx.Response(response)
+        actor = {"uuid": "owner", "mode": "agent" if response == "wrong_actor" else "super_admin"}
+        if response == "invalid_contract":
+            actor["capabilities"] = []
+        return httpx.Response(200, json=actor)
+    transport(monkeypatch, handle)
+    with pytest.raises(RuntimeError):
+        asyncio.run(admin_api.AdminApiClient().create_admin(
+            api_panel(), name="n", api_key="owner", parent_admin_uuid="owner"))
+
+
+def test_unverified_creation_never_registers_or_returns_a_login_link(monkeypatch, caplog):
+    async def unverified(*args, **kwargs):
+        raise AdminVerificationError("readback mismatch")
+    monkeypatch.setattr(admin_api.AdminApiClient, "create_admin", unverified)
+    async def body(s):
+        panel = _panel(s)
+        await s.commit()
+        result = await resellercreate.create(s, panel, name="n")
+        assert not result.ok and result.reason == "verification" and result.link is None
+        assert (await s.scalars(select(Reseller))).all() == []
+    _run(body)
+    assert OWNER_UUID not in caplog.text
+
+
+@pytest.mark.parametrize("parent_exists", [False, True])
+def test_contract_probe_can_select_only_a_verified_existing_child_parent(monkeypatch, parent_exists):
+    import json
+    state = {}
+    def handle(request):
+        if request.url.path.endswith("/owner/"):
+            return httpx.Response(200, json={"uuid": "owner", "mode": "super_admin", "capabilities": None})
+        if request.url.path.endswith("/parent/"):
+            return httpx.Response(200, json={"uuid": "parent", "mode": "agent"}) if parent_exists else httpx.Response(404)
+        if request.method == "POST":
+            assert parent_exists
+            state.update(json.loads(request.content))
+            return httpx.Response(200, json=state)
+        return httpx.Response(200, json=state)
+    transport(monkeypatch, handle)
+    call = admin_api.AdminApiClient().create_admin(
+        api_panel(), name="n", api_key="owner", parent_admin_uuid="parent", admin_uuid="new")
+    if parent_exists:
+        assert asyncio.run(call) == "new"
+        assert state["parent_admin_uuid"] == "parent"
+    else:
+        with pytest.raises(RuntimeError, match="parent"):
+            asyncio.run(call)
+        assert not state

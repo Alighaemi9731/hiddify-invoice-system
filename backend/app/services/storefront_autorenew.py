@@ -498,6 +498,7 @@ async def sweep(
                 # already-open Bot for the shop; `notify_renewal` reads the shop's own switch.
                 await storefront_notify.notify_renewal(
                     sf_id=bot_id, order_id=order_id, automatic=True, bot=bot,
+                    operation_id=res.operation_id,
                     session_factory=session_factory)
             elif res.reason in ("processing", "maintenance"):
                 counts["skipped"] += 1   # reconciler owns it; the next sweep confirms

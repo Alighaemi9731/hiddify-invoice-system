@@ -13,6 +13,7 @@ generations: [panel add-on installation and checks](PANEL_ADDON.md).
 |---|---|---|
 | Backup | Existing Basic/UUID backup URLs | `/api/v2/admin/backup/download/`, owner key |
 | Single user/admin reads and updates | v2 API | v2 API |
+| Bot-created resellers | Legacy `agent` payload, verified by GET | Explicit agent capabilities, verified by GET |
 | Bulk enable/disable/delete | Scoped legacy action + CSRF | Scoped JSON `users/bulk/`, UUID targets |
 | Password set/clear | Legacy admin form + password-clear hook | Owner-only invoice extension |
 | Removed users | Missing from the next backup | Explicit `deleted=true` tombstones |
@@ -38,6 +39,28 @@ Admin capacity changes verify the live parent before using the configured owner 
 This permits agent parents to manage their own children through existing authorized
 application workflows, without treating a stale local parent assignment as authorization.
 
+Owner-bot reseller creation authenticates and parents the account as the panel's verified
+super-admin, while creating only an `agent` with `can_add_admin=false`. The owner GET
+schema advertises capability support through the presence of `capabilities` (including
+null); v12 does not advertise this field and receives no v14-only fields. A failed owner
+read never selects a fallback write. On v14 the complete policy is explicit:
+
+| Capability | New reseller |
+|---|---|
+| `modify_user_extra` | Enabled: user-page branding, including `branding_site` / subscription `support-url` |
+| `add_extra_sublinks` | Enabled, matching migrated agent defaults |
+| `add_sub_admins` | Disabled |
+| `override_preferred_outbound` | Disabled |
+| `modify_domains` | Disabled |
+| `modify_outbounds` | Disabled |
+
+After POST, a separate GET must confirm the requested account's identity, agent mode,
+parent, limits and all six permissions. A successful POST alone never releases a login
+link. An uncertain write/readback tells the owner to inspect the account before retrying;
+it does not silently create another account or broaden permissions. Existing restricted
+accounts require a read-only inventory and evidence of bot creation versus deliberate
+restriction before any targeted correction. No bulk capability grant runs on upgrade.
+
 ## Application call coverage
 
 The public adapter methods and their application consumers are listed below. Direct
@@ -60,7 +83,7 @@ wrappers are retained for existing callers; the bulk queue resolves each UUID af
 | `get_user_ids` | Retained compatibility helper; hot bulk path uses individual lookups |
 | `bulk_set_users_enabled` | Suspend, reassert, restore, including old queue targets |
 | `bulk_delete_users` | End-user and descendant cascade deletion |
-| `create_admin` | Sub-reseller provisioning with verified parent |
+| `create_admin` | Owner-bot top-level reseller creation, explicit agent permissions and readback |
 | `get_admin` | Parent/permission/capacity validation and live probe readback |
 | `get_server_status` | Reseller traffic audit; unchanged v2 status contract |
 | `get_admin_limits` | Enforcement snapshots, parent capacity management |

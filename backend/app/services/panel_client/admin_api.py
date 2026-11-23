@@ -40,6 +40,26 @@ class AdminExistsError(RuntimeError):
     """The panel already has an admin with the uuid we tried to create ("The admin exists")."""
 
 
+class AdminVerificationError(RuntimeError):
+    """A create may have committed, but its identity/permissions were not verified.
+
+    Callers must not invite a blind retry or hand out an unverified account's login link.
+    Messages contain no remote payloads, URLs or credentials.
+    """
+
+
+# Match Hiddify 14's migrated agent defaults. These two subscription customizations are
+# normal reseller actions; creating sub-admins or managing infrastructure is not.
+AGENT_CAPABILITIES = {
+    "add_sub_admins": False,
+    "override_preferred_outbound": False,
+    "add_extra_sublinks": True,
+    "modify_user_extra": True,
+    "modify_domains": False,
+    "modify_outbounds": False,
+}
+
+
 class PanelAuthError(RuntimeError):
     """The panel refused the credentials we authenticated a WEB-UI request with.
 
@@ -570,8 +590,10 @@ class AdminApiClient(PanelClient):
     ) -> str:
         """Create ONE admin (a reseller) via `POST /api/v2/admin/admin_user/` and return its uuid.
 
-        `api_key` and `parent_admin_uuid` are REQUIRED and must both be the panel's super-admin
-        (`panel.owner_uuid`). Hiddify's `AdminUser.add_or_update` parents the new admin on the
+        `api_key` is REQUIRED and must be the panel's verified super-admin (`panel.owner_uuid`).
+        The owner-bot passes that same identity as `parent_admin_uuid`; the isolated contract
+        probe can explicitly select an existing child parent, which is verified before POST.
+        Hiddify's `AdminUser.add_or_update` parents the new admin on the
         uuid we send — and, when we send none, on whatever account the API key belongs to. The
         header fallback in `_headers` is `panel.admin_api_key`, which may be a DIFFERENT admin;
         parenting a new reseller under it would make it a SUB-reseller (barred from registering in
@@ -581,7 +603,11 @@ class AdminApiClient(PanelClient):
 
         `name`, `mode`, `can_add_admin` and `lang` are all REQUIRED by the panel's `AdminSchema`;
         a body missing any of them is rejected. We supply our own uuid4 so the caller can write
-        the local row (and the admin link) without trusting the response shape.
+        the local row (and the admin link) without trusting the response shape. Before POST,
+        read the owner schema: presence of `capabilities` advertises the v14 contract (even
+        when null); v12 has no such field and receives only legacy fields. A failed probe
+        never falls back to a legacy write. After POST, re-read the requested account and
+        require its identity, hierarchy, limits and permissions to match before returning.
 
         NOTE — deliberately no password. A fresh admin's password is empty (Hiddify's own
         `gen_password` is commented out in `before_insert`), and `auth_before_request` logs out any
@@ -589,6 +615,21 @@ class AdminApiClient(PanelClient):
         panel link that cannot open. Passwords stay the enforcement lockout's business
         (`set_admin_password`)."""
         uid = (admin_uuid or str(uuidlib.uuid4())).strip().lower()
+        owner = (panel.owner_uuid or "").strip().lower()
+        parent = parent_admin_uuid.strip().lower()
+        if not owner or api_key.strip().lower() != owner or not parent or parent == uid:
+            raise RuntimeError("Admin creation requires the panel owner and an explicit parent")
+        actor = await self.get_admin(panel, owner, api_key=api_key)
+        if (not isinstance(actor, dict) or str(actor.get("uuid", "")).lower() != owner
+                or actor.get("mode") != "super_admin"):
+            raise RuntimeError("Cannot verify the admin creation actor")
+        has_capabilities = "capabilities" in actor
+        if has_capabilities and actor["capabilities"] is not None and not isinstance(actor["capabilities"], dict):
+            raise RuntimeError("Invalid admin capabilities contract")
+        if parent != owner:
+            parent_row = await self.get_admin(panel, parent, api_key=api_key)
+            if not isinstance(parent_row, dict) or str(parent_row.get("uuid", "")).lower() != parent:
+                raise RuntimeError("Cannot verify the admin creation parent")
         url = f"{panel.admin_api_base}/admin_user/"
         body = {
             "uuid": uid,
@@ -596,24 +637,41 @@ class AdminApiClient(PanelClient):
             "mode": "agent",
             "can_add_admin": False,
             "lang": "fa",
-            "parent_admin_uuid": parent_admin_uuid,
+            "parent_admin_uuid": parent,
             "max_users": int(max_users),
             "max_active_users": int(max_active_users),
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, headers=self._headers(panel, api_key), json=body)
-        if resp.status_code < 400:
-            try:
-                data = resp.json()
-                if isinstance(data, dict) and data.get("uuid"):
-                    return str(data["uuid"]).strip().lower()
-            except Exception:  # noqa: BLE001 — response may not be JSON; our uuid is authoritative
-                pass
-            return uid
-        text = resp.text[:300]
-        if resp.status_code in (400, 409) and "exist" in text.lower():
-            raise AdminExistsError(text)
-        raise RuntimeError(f"POST admin_user {resp.status_code}: {text}")
+        if has_capabilities:
+            body["capabilities"] = dict(AGENT_CAPABILITIES)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(url, headers=self._headers(panel, api_key), json=body)
+        except httpx.HTTPError:
+            raise AdminVerificationError("Admin creation response unconfirmed; inspect before retrying") from None
+        if not 200 <= resp.status_code < 300:
+            if resp.status_code in (400, 409) and "exist" in resp.text[:300].lower():
+                raise AdminExistsError("The admin already exists")
+            # A server error/redirect can follow a committed write. Do not suggest a retry.
+            raise AdminVerificationError(f"Admin creation unconfirmed (HTTP {resp.status_code})")
+        try:
+            created = await self.get_admin(panel, uid, api_key=api_key)
+        except Exception:  # noqa: BLE001 — the write may already have committed
+            raise AdminVerificationError("Admin creation readback failed") from None
+        expected = {**body, "uuid": uid}
+        if not isinstance(created, dict) or any(created.get(k) != v for k, v in expected.items()
+                                                if k not in ("capabilities", "lang")):
+            raise AdminVerificationError("Created admin identity, hierarchy or limits did not match")
+        if created.get("can_add_admin") is not False:
+            raise AdminVerificationError("Created admin management restriction did not match")
+        if has_capabilities:
+            capabilities = created.get("capabilities")
+            if not isinstance(capabilities, dict) or any(
+                capabilities.get(k) is not v for k, v in AGENT_CAPABILITIES.items()
+            ):
+                raise AdminVerificationError("Created admin capabilities did not match")
+        elif "capabilities" in created:
+            raise AdminVerificationError("Admin capabilities contract changed during creation")
+        return uid
 
     async def get_admin(  # noqa: ANN001
         self, panel, admin_uuid: str, *, api_key: str | None = None

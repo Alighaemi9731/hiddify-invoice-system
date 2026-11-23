@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.db import Base
@@ -17,6 +18,7 @@ from app.models import (
     Reseller,
     StorefrontBot,
     StorefrontCustomer,
+    StorefrontOperation,
     StorefrontOrder,
     StorefrontPlan,
 )
@@ -83,6 +85,17 @@ async def _seed(session, *, notify: bool = True, co_admins: str | None = "222,33
     return shop, customer, order
 
 
+async def _renewal(session, shop, customer, order, *, price=600_000, gb=60, days=45, by_admin=False):
+    operation = StorefrontOperation(
+        op_id=f"renewal-{order.id}-{price}-{by_admin}", op_type="renewal", status="done",
+        storefront_bot_id=shop.id, customer_id=customer.id, order_id=order.id,
+        plan_id=order.plan_id, price_toman=price, gb=gb, days=days, by_admin=by_admin,
+    )
+    session.add(operation)
+    await session.commit()
+    return operation
+
+
 def test_a_sale_reaches_the_owner_and_every_co_admin_with_the_plan_name():
     async def body(session, factory):  # noqa: ANN001
         shop, _customer, order = await _seed(session)
@@ -106,11 +119,13 @@ def test_the_switch_silences_every_kind_of_event():
     partially — the whole point of keeping the check in one place."""
     async def body(session, factory):  # noqa: ANN001
         shop, customer, order = await _seed(session, notify=False)
+        operation = await _renewal(session, shop, customer, order)
         bot = _Bot()
         await storefront_notify.notify_purchase(
             sf_id=shop.id, order_id=order.id, bot=bot, session_factory=factory)
         await storefront_notify.notify_renewal(
-            sf_id=shop.id, order_id=order.id, automatic=True, bot=bot, session_factory=factory)
+            sf_id=shop.id, order_id=order.id, operation_id=operation.id,
+            automatic=True, bot=bot, session_factory=factory)
         await storefront_notify.notify_topup(
             sf_id=shop.id, customer_id=customer.id, amount_toman=90_000, bot=bot,
             session_factory=factory)
@@ -162,16 +177,71 @@ def test_the_acting_admin_is_excluded_so_the_message_is_for_everyone_else():
 
 def test_a_renewal_names_how_it_happened():
     async def body(session, factory):  # noqa: ANN001
-        shop, _customer, order = await _seed(session)
+        shop, customer, order = await _seed(session)
         bot = _Bot()
+        automatic = await _renewal(session, shop, customer, order)
         await storefront_notify.notify_renewal(
-            sf_id=shop.id, order_id=order.id, automatic=True, bot=bot, session_factory=factory)
+            sf_id=shop.id, order_id=order.id, operation_id=automatic.id,
+            automatic=True, bot=bot, session_factory=factory)
         assert "تمدیدِ خودکار" in bot.sent[0][1]
         bot.sent.clear()
+        admin = await _renewal(session, shop, customer, order, price=0, by_admin=True)
         await storefront_notify.notify_renewal(
-            sf_id=shop.id, order_id=order.id, automatic=False, bot=bot, session_factory=factory)
+            sf_id=shop.id, order_id=order.id, operation_id=admin.id,
+            automatic=False, bot=bot, session_factory=factory)
         assert "تمدید توسطِ مدیر" in bot.sent[0][1]
+        assert "مبلغ: 0 تومان" in bot.sent[0][1]
+        assert "— 0 تومان" in bot.sent[0][1]
 
+    _run(body)
+
+
+@pytest.mark.parametrize("price", [550_000, 650_000])
+def test_renewal_reports_its_own_charge_even_after_repricing_or_another_cycle(price):
+    """Purchase snapshot, locked renewal, current plan and later renewal can all differ."""
+    async def body(session, factory):
+        shop, customer, order = await _seed(session)
+        operation = await _renewal(session, shop, customer, order, price=price)
+        plan = await session.get(StorefrontPlan, order.plan_id)
+        plan.price_toman, plan.gb, plan.days = 900_000, 90, 90
+        order.gb, order.days = 70, 60  # subsequent renewal rewrites the order
+        await _renewal(session, shop, customer, order, price=700_000, gb=70, days=60)
+        bot = _Bot()
+        await storefront_notify.notify_renewal(
+            sf_id=shop.id, order_id=order.id, operation_id=operation.id,
+            automatic=True, bot=bot, session_factory=factory)
+        assert len(bot.sent) == 3
+        text = bot.sent[0][1]
+        assert f"مبلغ: {price:,} تومان" in text
+        assert f"60 گیگابایت · 45 روزه — {price:,} تومان" in text
+        assert all(stale not in text for stale in ("500,000", "700,000", "900,000"))
+        assert order.price_toman == 500_000  # original purchase history stays intact
+    _run(body)
+
+
+@pytest.mark.parametrize("invalid", ["missing", "failed", "purchase", "other_shop", "other_order", "other_customer", "admin"])
+def test_renewal_never_guesses_a_price_for_an_unrelated_or_uncommitted_operation(invalid):
+    async def body(session, factory):
+        shop, customer, order = await _seed(session)
+        operation = await _renewal(session, shop, customer, order)
+        if invalid == "failed":
+            operation.status = "failed"
+        elif invalid == "purchase":
+            operation.op_type = "purchase"
+        elif invalid == "other_shop":
+            operation.storefront_bot_id += 100
+        elif invalid == "other_order":
+            operation.order_id += 100
+        elif invalid == "other_customer":
+            operation.customer_id += 100
+        elif invalid == "admin":
+            operation.by_admin = True
+        await session.commit()
+        bot = _Bot()
+        await storefront_notify.notify_renewal(
+            sf_id=shop.id, order_id=order.id, operation_id=None if invalid == "missing" else operation.id,
+            automatic=True, bot=bot, session_factory=factory)
+        assert bot.sent == []
     _run(body)
 
 

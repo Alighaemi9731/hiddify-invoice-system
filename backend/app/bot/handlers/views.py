@@ -210,6 +210,12 @@ async def _send_new_reseller(answer, session, panel, name: str) -> None:  # noqa
     await answer(rtl("⏳ در حال ساختِ نماینده…"))
     result = await resellercreate.create(session, panel, name=name)
     if not result.ok or not result.link:
+        if result.reason == "verification":
+            await answer(rtl(
+                "⚠️ نتیجهٔ ساخت یا مجوزهای نماینده تأیید نشد؛ ممکن است حساب روی پنل ساخته شده باشد. "
+                "پیش از تلاش دوباره، حساب را در پنل بررسی کنید. لینک ورود صادر نشد."
+            ))
+            return
         problem = {
             "no_admin": "شناسهٔ ادمینِ این پنل ثبت نشده است.",
             "exists": "این شناسه از قبل روی پنل وجود دارد؛ دوباره تلاش کنید.",

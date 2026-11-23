@@ -1760,6 +1760,7 @@ async def renew_order(
         from app.services import storefront_notify
         await storefront_notify.notify_renewal(
             sf_id=shop.id, order_id=order_id, automatic=False,
+            operation_id=result.operation_id,
             exclude_chat_id=ctx.actor_telegram_id)
         return CommandResult(200, body, current)
     reason = result.reason or "error"

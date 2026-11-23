@@ -57,6 +57,9 @@ all money is Toman with live crypto conversion.
   cancel exit and the correct menu always returns when the flow ends.
 - The main bot drains its previous polling task before rebuilding a failed Telegram
   session, keeping reconnects from leaving competing update receivers running.
+- Storefront renewal notifications show the amount and package from that renewal's
+  committed operation, including locked-price reservations and free admin renewals.
+  The original purchase snapshot and later plan prices do not determine the receipt.
 
 ### Reseller web portal
 - One-tap login from the bot via strictly single-use tokens (no passwords), RTL Persian

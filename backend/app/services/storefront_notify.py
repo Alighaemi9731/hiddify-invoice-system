@@ -32,6 +32,7 @@ from app.models import (
     Reseller,
     StorefrontBot,
     StorefrontCustomer,
+    StorefrontOperation,
     StorefrontOrder,
     StorefrontPlan,
 )
@@ -197,12 +198,12 @@ async def _fan_out(bot: object, chat_ids: list[int], text: str) -> None:
 # Each one loads its own facts, so a call site is a single line that cannot get the wording — or
 # the switch — wrong. All of them swallow every error: they run AFTER the money is committed.
 
-def _order_label(order: StorefrontOrder, plan: StorefrontPlan | None) -> str:
+def _order_label(order: StorefrontOrder | StorefrontOperation, plan: StorefrontPlan | None) -> str:
     """What was actually sold, named the way the shop names it.
 
     The NAME comes from the live plan row (it is the shop's own vocabulary and may have been
-    edited since), but quota/duration/price come from the ORDER — that is what this customer
-    bought, and a renewal or a repricing must not rewrite history in a notification.
+    edited since), but quota/duration/price come from the purchase ORDER or the specific
+    renewal OPERATION. A repricing or later renewal must not rewrite this event's money facts.
     """
     from app.bot.storefront import keyboards
 
@@ -259,10 +260,15 @@ async def notify_purchase(
 
 
 async def notify_renewal(
-    *, sf_id: int, order_id: int | None, automatic: bool, bot: object | None = None,
+    *, sf_id: int, order_id: int | None, operation_id: int | None, automatic: bool,
+    bot: object | None = None,
     exclude_chat_id: int | None = None, session_factory: object | None = None,
 ) -> None:
-    """A service was renewed — by the auto-renew sweep, or by an admin from the bot or the portal."""
+    """Announce the committed renewal operation, including its actual charge (free for admins).
+
+    Never infer the event from the original purchase, the live plan, or the latest operation:
+    any of those can belong to a different price/cycle by the time this notification runs.
+    """
     from app.core.db import SessionLocal
 
     factory = session_factory or SessionLocal
@@ -272,10 +278,16 @@ async def notify_renewal(
             if facts is None:
                 return
             order, customer, plan = facts
+            operation = await session.get(StorefrontOperation, operation_id) if operation_id else None
+            if (operation is None or operation.status != "done" or operation.op_type != "renewal"
+                    or operation.order_id != order.id or operation.customer_id != customer.id
+                    or operation.storefront_bot_id != sf_id or customer.storefront_bot_id != sf_id
+                    or operation.by_admin == automatic):
+                return
             text = renewal_text(
-                plan_label=_order_label(order, plan),
+                plan_label=_order_label(operation, plan),
                 customer=_customer_line(customer.name, customer.username, customer.telegram_id),
-                price_toman=order.price_toman,
+                price_toman=operation.price_toman,
                 automatic=automatic,
             )
     except Exception:  # noqa: BLE001
