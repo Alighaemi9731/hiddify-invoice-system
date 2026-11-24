@@ -7,6 +7,7 @@ import asyncio
 import datetime as dt
 import os
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/sfcredit.db")
 os.environ.setdefault("SECRET_KEY", "k")
@@ -175,6 +176,32 @@ def test_helpers_and_stats():
         assert n == 1 and total == 10_000
         st = await sf_svc.stats_for_bot(s, bot.id)
         assert st.credit_redemptions_month == 1 and st.credit_bonus_month_toman == 10_000
+    _run(body)
+
+
+def test_admin_menu_opens_with_legacy_codes_missing_bonus_values():
+    from app.bot.storefront import handlers
+
+    async def body(s):
+        bot, _ = await _seed(s)
+        fixed = await cc.create_code(s, bot.id, code="OLD_FIXED", kind="fixed")
+        await cc.set_enabled(s, fixed, enabled=False)
+        await cc.create_code(s, bot.id, code="OLD_GIFT", kind="fixed", is_gift=True)
+        await cc.create_code(s, bot.id, code="OLD_PERCENT", kind="percent")
+        await cc.create_code(s, bot.id, code="VALID", kind="fixed", amount_toman=25_000)
+
+        message = AsyncMock()
+        await handlers._admin_action("credits", message, None, s, bot, None)
+
+        message.answer.assert_awaited_once()
+        rows = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        labels = [row[0].text for row in rows if row[0].callback_data == "sfnoop"]
+        assert any("OLD_FIXED" in label and "مبلغ تعیین نشده" in label for label in labels)
+        assert any("OLD_GIFT" in label and "مبلغ تعیین نشده" in label for label in labels)
+        assert any("OLD_PERCENT" in label and "درصد تعیین نشده" in label for label in labels)
+        assert any("VALID" in label and "25,000" in label for label in labels)
+        assert any(button.callback_data == f"sfcreddel:{fixed.id}" for row in rows for button in row)
+
     _run(body)
 
 

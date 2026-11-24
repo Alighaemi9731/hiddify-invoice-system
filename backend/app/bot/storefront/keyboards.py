@@ -14,6 +14,7 @@ from app.core.tg_links import (
 )
 from app.models import (
     StorefrontBot,
+    StorefrontCreditCode,
     StorefrontCustomer,
     StorefrontOrder,
     StorefrontPlan,
@@ -338,19 +339,21 @@ def wallet_kb(*, gift: bool = False) -> InlineKeyboardMarkup:
 
 
 # ── credit codes (کد شارژ/هدیه) ────────────────────────────────────────────────
-def credit_label(c) -> str:  # noqa: ANN001 — StorefrontCreditCode
-    if c.is_gift:
-        kind = f"🎁 هدیه {c.amount_toman:,}ت"
-    elif c.kind == "percent":
+def credit_label(c: StorefrontCreditCode) -> str:
+    if c.kind == "percent" and not c.is_gift:
         cap = f" (سقف {c.max_bonus_toman:,}ت)" if c.max_bonus_toman else ""
-        kind = f"+{c.percent_off}٪{cap}"
+        kind = f"+{c.percent_off}٪{cap}" if c.percent_off is not None else "⚠️ درصد تعیین نشده"
+    elif c.amount_toman is None:
+        kind = "⚠️ مبلغ تعیین نشده"
+    elif c.is_gift:
+        kind = f"🎁 هدیه {c.amount_toman:,}ت"
     else:
         kind = f"+{c.amount_toman:,}ت"
     used = f"{c.used_count}" + (f"/{c.max_uses}" if c.max_uses else "")
     return f"{c.code} · {kind} · {used} · {'فعال ✅' if c.enabled else 'غیرفعال ❌'}"
 
 
-def credit_codes_manage_kb(codes) -> InlineKeyboardMarkup:  # noqa: ANN001
+def credit_codes_manage_kb(codes: list[StorefrontCreditCode]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for c in codes:
         rows.append([InlineKeyboardButton(text=rtl(credit_label(c)), callback_data="sfnoop")])
